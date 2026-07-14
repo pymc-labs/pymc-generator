@@ -896,6 +896,7 @@ def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
         structural = sample_structure(g_act, cfg, rng)
         model, out_names, _param_names = build_world_model(g_act, cfg, structural, T)
         accepted: list[dict] = []
+        last_draw_error: str | None = None
         for _round in range(MAX_TOPUPS_PER_CELL):
             if len(accepted) == cfg.draws_per_cell:
                 break
@@ -904,12 +905,15 @@ def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
             draw_seed = int(rng.integers(2**31 - 1))
             try:
                 drawn_b = draw_worlds(model, _ADDITIVE_OUT_NAMES, draw_seed, draws=n_req)
-            except Exception:
-                # py-linker evaluation crash (observed sporadically on large
-                # graphs) — treat as a rejected round and resample with a new
-                # seed next round.
-                n_rejected += 1
-                n_evaluated += 1
+            except Exception as exc:
+                # A sporadic pytensor py-linker evaluation crash on large graphs
+                # (or any draw failure) — count the whole batch as rejected and
+                # retry with a new seed; keep the error so a genuine, repeatable
+                # failure surfaces in the RuntimeError below instead of being
+                # disguised as filter strictness.
+                last_draw_error = repr(exc)
+                n_rejected += n_req
+                n_evaluated += n_req
                 continue
 
             for b in range(n_req):
@@ -971,8 +975,9 @@ def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
         if len(accepted) < cfg.draws_per_cell:
             raise RuntimeError(
                 f"cell {cell}: only {len(accepted)}/{cfg.draws_per_cell} tasks "
-                f"accepted after {MAX_TOPUPS_PER_CELL} rounds — additive "
-                f"post-filter too strict for this G-cell"
+                f"accepted after {MAX_TOPUPS_PER_CELL} rounds — the realism filter "
+                f"rejected the rest for this G-cell"
+                + (f"; last draw error: {last_draw_error}" if last_draw_error else "")
             )
         tasks.extend(accepted)
 

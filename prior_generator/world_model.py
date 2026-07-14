@@ -277,10 +277,11 @@ def draw_worlds(
 ) -> dict[str, np.ndarray]:
     """Draw ``draws`` worlds from a built model, seeded for reproducibility.
 
-    Returns ``{name: array}`` where each array has a leading ``draws`` axis when
-    ``draws > 1`` (``pm.draw`` drops it when ``draws == 1``). ``mode`` defaults to
-    the python-backend ``FAST_COMPILE``: each world is a small one-off graph, so
-    the C-backend compile cost of ``FAST_RUN`` dominates end-to-end.
+    Returns ``{name: array}`` where each array ALWAYS has a leading ``draws``
+    axis — even at ``draws == 1`` (``pm.draw`` drops it, which we restore) — so
+    callers can index world ``i`` as ``arr[i]`` regardless of ``draws``. ``mode``
+    defaults to the python-backend ``FAST_COMPILE``: each world is a small
+    one-off graph, so the C-backend compile cost of ``FAST_RUN`` dominates.
     """
     with model:
         vals = pm.draw(
@@ -289,4 +290,9 @@ def draw_worlds(
             random_seed=np.random.default_rng(seed),
             mode=mode,
         )
-    return {name: np.asarray(v) for name, v in zip(out_names, vals)}
+    # pm.draw drops the leading axis when draws == 1; restore it for a uniform
+    # (draws, *shape) contract.
+    return {
+        name: (np.asarray(v)[None] if draws == 1 else np.asarray(v))
+        for name, v in zip(out_names, vals)
+    }

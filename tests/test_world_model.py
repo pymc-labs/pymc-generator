@@ -42,7 +42,7 @@ def test_model_is_pm_model_with_priors_and_outputs(built):
 
 def test_pm_draw_preserves_additive_identity(built):
     model, out_names = built
-    d = draw_worlds(model, out_names, seed=123, draws=1)
+    d = {k: v[0] for k, v in draw_worlds(model, out_names, seed=123, draws=1).items()}
     s = d["sales"]
     identity = np.abs(s - (d["baseline"] + d["contributions"].sum(1) + d["indirect_effects"])).max()
     telescoping = np.abs(d["indirect_effects_by_source"].sum(1) - d["indirect_effects"]).max()
@@ -83,7 +83,15 @@ def test_batched_draws_have_leading_axis(built):
 
 def test_diverse_texture_gives_nonflat_targets(built):
     model, out_names = built
-    d = draw_worlds(model, out_names, seed=3, draws=1)
-    contrib = d["contributions"]
+    contrib = draw_worlds(model, out_names, seed=3, draws=1)["contributions"][0]  # (T, K)
     cv = contrib.std(0) / (np.abs(contrib.mean(0)) + 1e-9)
     assert cv.max() > 0.05
+
+
+def test_single_draw_has_leading_axis(built):
+    # regression: draw_worlds always keeps a leading draws axis, so
+    # sample_world(max_eps_draws=1) can index candidate 0 without hitting time.
+    model, out_names = built
+    d = draw_worlds(model, out_names, seed=9, draws=1)
+    assert d["sales"].shape == (1, 48)
+    assert d["contributions"].shape == (1, 48, 4)
