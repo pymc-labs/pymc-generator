@@ -27,12 +27,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      # Canonical stack the generator was validated against.
-      - name: Install canonical pytensor
-        run: |
-          python -m pip install --upgrade pip
-          pip install "pytensor==3.0.7"
-
+      # The pinned modeling stack comes from [project.dependencies].
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

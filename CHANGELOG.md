@@ -15,9 +15,14 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - Initial extraction of the synthetic-MMM world generator from
   `pymc-labs/structural-pfn` at commit `d5fd09f` (plan-05 merge).
 - Core generation: `CorpusConfig` + `generate_corpus` (additive structural
-  causal models with exact interventional decompositions), `make_l1_additive_cfg`
-  preset, PyTensor mechanism library (adstock + saturation families),
-  smoothed random-walk latents, DAG sampling with per-edge-type budgets.
+  causal models with exact interventional decompositions) and the
+  `make_world_config` preset, with DAG sampling and per-edge-type budgets.
+- The world is a drawable **PyMC model** (`build_world_model`): continuous
+  priors are PyMC distributions, noise is `pm.Normal` / `pm.Bernoulli` RVs, and
+  the media response uses **pymc-marketing**'s adstock/saturation transforms;
+  one `pm.draw` yields parameters, series, and the full decomposition. Both
+  `generate_corpus` and `sample_world` draw from this model. Discrete structure
+  (DAG, mechanism family, walk smoothness) is drawn concretely per world.
 - Signal diagnostics: per-channel signal metrics, corpus-level summary, and
   quality gate (`prior_generator.signal_diagnostics`).
 - `DataGenerator` facade and `save_corpus`/`load_corpus` (compressed `.npz`,
@@ -31,6 +36,6 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 - The deprecated L0/L1 PyMC generation path, legacy channel texture, and the
   deprecated `create_generator`/`create_variable_size_generator` constructors.
-  The one supported prior is `make_l1_additive_cfg(texture="diverse")`.
+  The one supported prior is `make_world_config(texture="diverse")`.
 - Dead modules with zero importers (`cdag_catalog`, `spec_to_adjacency`,
   `corpus_provider`).

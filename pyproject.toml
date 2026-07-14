@@ -5,8 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prior-generator"
 version = "0.0.1"
-description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor."
-requires-python = ">=3.11"
+description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor / PyMC / pymc-marketing."
+# pymc 6.0.1 (the pinned modeling stack) requires Python >= 3.12.
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "PyMC Labs"},
@@ -19,7 +20,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -75,7 +75,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 exclude = [
     ".git",
     ".venv",

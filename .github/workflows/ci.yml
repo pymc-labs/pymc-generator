@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13']
+        python-version: ['3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
@@ -51,15 +51,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # The canonical stack this generator was validated against in
-      # structural-pfn (pytensor==3.0.7). The 3.11 job tests the unpinned
-      # PyPI resolution instead.
-      - name: Install canonical pytensor
-        if: matrix.python-version != '3.11'
-        run: |
-          python -m pip install --upgrade pip
-          pip install "pytensor==3.0.7"
-
+      # The pinned modeling stack (pytensor==3.0.7, pymc==6.0.1, pymc-marketing
+      # @ v1.0.0 branch) comes from [project.dependencies], so an editable
+      # install pulls it — including the git-URL pymc-marketing.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
