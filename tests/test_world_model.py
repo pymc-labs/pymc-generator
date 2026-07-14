@@ -28,7 +28,7 @@ def built():
     g = sample_g_additive(rng, cfg, cfg.layout)
     g_act = _slice_g_active(g, 4, 2, 1)
     structural = sample_structure(g_act, cfg, rng)
-    model, out_names = build_world_model(g_act, cfg, structural, cfg.T)
+    model, out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.T)
     return model, out_names
 
 

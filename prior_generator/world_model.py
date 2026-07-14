@@ -76,8 +76,12 @@ def _uniform(name: str, lo: float, hi: float, shape):
 
 def build_world_model(
     g_active: dict, cfg: CorpusConfig, structural: dict, T: int
-) -> tuple[pm.Model, tuple[str, ...]]:
-    """Build the ``pm.Model`` for one world structure; return (model, output_names).
+) -> tuple[pm.Model, tuple[str, ...], tuple[str, ...]]:
+    """Build the ``pm.Model`` for one world structure.
+
+    Returns ``(model, output_names, param_names)`` — the graph outputs and the
+    ``param_*`` reporting deterministics, both drawable by name via
+    :func:`draw_worlds`.
 
     Parameters
     ----------
@@ -234,7 +238,34 @@ def build_world_model(
         for name in out_names:
             pm.Deterministic(name, graph["outputs"][name])
 
-    return model, out_names
+        # Register the continuous params that world descriptions / bundles
+        # report (edge coefficients + per-channel mechanism/texture params) as
+        # "param_*" deterministics, so a single draw yields their concrete
+        # per-world values alongside the series. Families / smoothness are
+        # concrete already (from `structural`) and are not drawn here.
+        report_specs = {
+            "beta": params["beta"],
+            "w_dc": params["w_dc"],
+            "u_dz": params["u_dz"],
+            "v_zc": params["v_zc"],
+            "alpha_cc": params["alpha_cc"],
+            "gamma_zz": params["gamma_zz"],
+            "delta_db": params["delta_db"],
+            "rho_zb": params["rho_zb"],
+            "adstock_alpha": params["adstock_alpha"],
+            "weibull_lam": params["weibull_lam"],
+            "weibull_k": params["weibull_k"],
+            "hf_sigma": params["hf_sigma"],
+            "pulse_amp": params["pulse_amp"],
+            "pulse_prob": params["pulse_prob"],
+            "rw_c_mean": rw_c["mean"],
+            "rw_c_std": rw_c["std"],
+        }
+        param_names = tuple(f"param_{k}" for k in report_specs)
+        for key, tensor in report_specs.items():
+            pm.Deterministic(f"param_{key}", tensor)
+
+    return model, out_names, param_names
 
 
 def draw_worlds(

@@ -288,13 +288,7 @@ def sample_world(
     -------
     World
     """
-    from .symbolic_graph import (
-        _INPUT_ORDER,
-        build_symbolic_graph,
-        compile_graph,
-        draw_eps,
-        sample_scm_params,
-    )
+    from .world_model import build_world_model, draw_worlds, sample_structure
 
     cfg.validate()
     rng = np.random.default_rng(seed)
@@ -315,47 +309,17 @@ def sample_world(
             f"world {name!r}: no DAG satisfying the connectivity rule in {max_graph_rounds} draws"
         )
 
-    for _params_round in range(max_param_rounds):
-        params = sample_scm_params(
-            g_act,
-            T,
-            K,
-            M,
-            J,
-            rng,
-            l_max=cfg.l_max,
-            dc_coeff_range=cfg.dc_coeff_range,
-            dz_coeff_range=cfg.dz_coeff_range,
-            zc_coeff_range=cfg.zc_coeff_range,
-            cc_coeff_range=cfg.cc_coeff_range,
-            zz_coeff_range=cfg.zz_coeff_range,
-            db_coeff_range=cfg.db_coeff_range,
-            zb_coeff_range=cfg.zb_coeff_range,
-            beta_range=cfg.beta_additive_range,
-            rw_mean_range=cfg.rw_mean_range,
-            rw_positive_mean_range=cfg.rw_positive_mean_range,
-            rw_baseline_mean_range=cfg.rw_baseline_mean_range,
-            rw_std_sigma=cfg.rw_std_sigma,
-            rw_channel_std_sigma=cfg.rw_channel_std_sigma,
-            rw_sales_std_sigma=cfg.rw_sales_std_sigma,
-            rw_smoothness_alpha=cfg.rw_smoothness_alpha,
-            rw_smoothness_beta=cfg.rw_smoothness_beta,
-            rw_channel_std_range=cfg.rw_channel_std_range,
-            channel_hf_sigma_range=cfg.channel_hf_sigma_range,
-            channel_pulse_prob_range=cfg.channel_pulse_prob_range,
-            channel_pulse_amp_range=cfg.channel_pulse_amp_range,
-            adstock_family_probs=cfg.adstock_family_probs,
-            saturation_family_probs=cfg.saturation_family_probs,
-            adstock_alpha_range=cfg.adstock_alpha_range,
-            weibull_lam_range=cfg.weibull_lam_range,
-            weibull_k_range=cfg.weibull_k_range,
-        )
-        graph = build_symbolic_graph(g_act, params, T, K, M, J, burn_in=cfg.adstock_burn_in)
-        fn = compile_graph(graph, WORLD_OUT_NAMES)
-        for _ in range(max_eps_draws):
-            eps = draw_eps(graph, rng)
-            values = fn(*[eps[nm] for nm in _INPUT_ORDER])
-            d = dict(zip(WORLD_OUT_NAMES, [np.asarray(v) for v in values]))
+    # Structure (families / smoothness / texture flags) is drawn once; the
+    # continuous priors and noise are the pm.Model's RVs, drawn per candidate
+    # and filtered by the realism gate. build the model once, draw in batches.
+    structural = sample_structure(g_act, cfg, rng)
+    model, out_names, param_names = build_world_model(g_act, cfg, structural, T)
+
+    for _round in range(max_param_rounds):
+        draw_seed = int(rng.integers(2**31 - 1))
+        drawn = draw_worlds(model, out_names + param_names, draw_seed, draws=max_eps_draws)
+        for b in range(max_eps_draws):
+            d = {nm: drawn[nm][b] for nm in out_names}
             check = {
                 k: v for k, v in d.items() if k not in ("channels_base", "contributions_observed")
             }
@@ -369,10 +333,41 @@ def sample_world(
                 return World(
                     data=d,
                     g=g_act,
-                    params=params,
+                    params=_assemble_params(drawn, b, structural),
                     cfg=cfg,
                     name=name,
                     purpose=purpose,
                     seed=seed,
                 )
-    raise RuntimeError(f"world {name!r}: no accepted draw in {max_param_rounds} params rounds")
+    raise RuntimeError(f"world {name!r}: no accepted draw in {max_param_rounds} rounds")
+
+
+def _assemble_params(drawn: dict, b: int, structural: dict) -> dict:
+    """Assemble the per-world reported params (candidate ``b``) into the shape
+    descriptions / bundles expect: drawn ``param_*`` values plus the concrete
+    structural families and per-channel walk smoothness."""
+    keys = (
+        "beta",
+        "w_dc",
+        "u_dz",
+        "v_zc",
+        "alpha_cc",
+        "gamma_zz",
+        "delta_db",
+        "rho_zb",
+        "adstock_alpha",
+        "weibull_lam",
+        "weibull_k",
+        "hf_sigma",
+        "pulse_amp",
+        "pulse_prob",
+    )
+    params = {k: drawn[f"param_{k}"][b] for k in keys}
+    params["adstock_family"] = structural["adstock_family"]
+    params["sat_family"] = structural["sat_family"]
+    params["rw_c"] = {
+        "mean": drawn["param_rw_c_mean"][b],
+        "std": drawn["param_rw_c_std"][b],
+        "smoothness": structural["smoothness_c"],
+    }
+    return params
