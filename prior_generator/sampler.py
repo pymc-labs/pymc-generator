@@ -861,15 +861,7 @@ def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
     semantics) and builds/evaluates its own PyTensor graph at the cell's
     active sizes; outputs are zero-padded to max sizes.
     """
-    from .symbolic_graph import (
-        _INPUT_ORDER as _EPS_INPUT_ORDER,
-    )
-    from .symbolic_graph import (
-        build_symbolic_graph,
-        compile_graph,
-        draw_eps,
-        sample_scm_params,
-    )
+    from .world_model import build_world_model, draw_worlds, sample_structure
 
     t_start = time.perf_counter()
     rng = np.random.default_rng(cfg.seed)
@@ -899,83 +891,35 @@ def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
         cell_gs.append(g)
         g_act = _slice_g_active(g, K_active, M_active, J_active)
 
-        # Round-based generation: one params + compiled graph per round,
-        # reused across many eps draws. Graph build+compile dominates at
-        # large (K, M) — ~9s vs ~25ms/eval at K=M=20 — so compiling per task
-        # would be ~40x slower. θ still refreshes every round, and every
-        # draw keeps its own noise; cells keep their own θ streams.
+        # One pm.Model per cell (fixed structure: DAG + families + smoothness);
+        # the continuous params and noise are the model's RVs, drawn in batches
+        # and filtered by the realism gate. Building/compiling the graph
+        # dominates at large (K, M), so a model per cell (not per draw) is key;
+        # FAST_COMPILE (the draw_worlds default) keeps the one-off compile cheap.
+        structural = sample_structure(g_act, cfg, rng)
+        model, out_names, _param_names = build_world_model(g_act, cfg, structural, T)
         accepted: list[dict] = []
         for _round in range(MAX_TOPUPS_PER_CELL):
             if len(accepted) == cfg.draws_per_cell:
                 break
-            params = sample_scm_params(
-                g_act,
-                T,
-                K_active,
-                M_active,
-                J_active,
-                rng,
-                l_max=cfg.l_max,
-                dc_coeff_range=cfg.dc_coeff_range,
-                dz_coeff_range=cfg.dz_coeff_range,
-                zc_coeff_range=cfg.zc_coeff_range,
-                cc_coeff_range=cfg.cc_coeff_range,
-                zz_coeff_range=cfg.zz_coeff_range,
-                db_coeff_range=cfg.db_coeff_range,
-                zb_coeff_range=cfg.zb_coeff_range,
-                beta_range=cfg.beta_additive_range,
-                rw_mean_range=cfg.rw_mean_range,
-                rw_positive_mean_range=cfg.rw_positive_mean_range,
-                rw_baseline_mean_range=cfg.rw_baseline_mean_range,
-                rw_std_sigma=cfg.rw_std_sigma,
-                rw_channel_std_sigma=cfg.rw_channel_std_sigma,
-                rw_sales_std_sigma=cfg.rw_sales_std_sigma,
-                rw_smoothness_alpha=cfg.rw_smoothness_alpha,
-                rw_smoothness_beta=cfg.rw_smoothness_beta,
-                rw_channel_std_range=cfg.rw_channel_std_range,
-                channel_hf_sigma_range=cfg.channel_hf_sigma_range,
-                channel_pulse_prob_range=cfg.channel_pulse_prob_range,
-                channel_pulse_amp_range=cfg.channel_pulse_amp_range,
-                adstock_family_probs=cfg.adstock_family_probs,
-                saturation_family_probs=cfg.saturation_family_probs,
-                adstock_alpha_range=cfg.adstock_alpha_range,
-                weibull_lam_range=cfg.weibull_lam_range,
-                weibull_k_range=cfg.weibull_k_range,
-            )
+            n_missing = cfg.draws_per_cell - len(accepted)
+            n_req = n_missing + max(2, int(np.ceil(0.5 * n_missing)))
+            draw_seed = int(rng.integers(2**31 - 1))
             try:
-                graph = build_symbolic_graph(
-                    g_act,
-                    params,
-                    T,
-                    K_active,
-                    M_active,
-                    J_active,
-                    burn_in=cfg.adstock_burn_in,
-                )
-                fn = compile_graph(graph, _ADDITIVE_OUT_NAMES)
+                drawn_b = draw_worlds(model, _ADDITIVE_OUT_NAMES, draw_seed, draws=n_req)
             except Exception:
-                # Rare pytensor compile failure for a specific params draw —
-                # count as one rejection and resample params next round.
+                # py-linker evaluation crash (observed sporadically on large
+                # graphs) — treat as a rejected round and resample with a new
+                # seed next round.
                 n_rejected += 1
                 n_evaluated += 1
                 continue
 
-            n_missing = cfg.draws_per_cell - len(accepted)
-            n_req = n_missing + max(2, int(np.ceil(0.5 * n_missing)))
-            for _ in range(n_req):
+            for b in range(n_req):
                 if len(accepted) == cfg.draws_per_cell:
                     break
-                eps = draw_eps(graph, rng)
+                drawn = {name: drawn_b[name][b] for name in _ADDITIVE_OUT_NAMES}
                 n_evaluated += 1
-                try:
-                    values = fn(*[eps[name] for name in _EPS_INPUT_ORDER])
-                except Exception:
-                    # py-linker evaluation crash (observed sporadically on
-                    # large graphs) — treat as a rejection, break to resample
-                    # params (the crash is usually graph-specific).
-                    n_rejected += 1
-                    break
-                drawn = dict(zip(_ADDITIVE_OUT_NAMES, [np.asarray(v) for v in values]))
 
                 if not _additive_task_ok(
                     spend=drawn["channels"],

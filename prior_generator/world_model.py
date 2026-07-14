@@ -269,17 +269,24 @@ def build_world_model(
 
 
 def draw_worlds(
-    model: pm.Model, out_names: tuple[str, ...], seed: int, draws: int = 1
+    model: pm.Model,
+    out_names: tuple[str, ...],
+    seed: int,
+    draws: int = 1,
+    mode: str = "FAST_COMPILE",
 ) -> dict[str, np.ndarray]:
     """Draw ``draws`` worlds from a built model, seeded for reproducibility.
 
     Returns ``{name: array}`` where each array has a leading ``draws`` axis when
-    ``draws > 1`` (``pm.draw`` drops it when ``draws == 1``).
+    ``draws > 1`` (``pm.draw`` drops it when ``draws == 1``). ``mode`` defaults to
+    the python-backend ``FAST_COMPILE``: each world is a small one-off graph, so
+    the C-backend compile cost of ``FAST_RUN`` dominates end-to-end.
     """
     with model:
         vals = pm.draw(
             [model[name] for name in out_names],
             draws=draws,
             random_seed=np.random.default_rng(seed),
+            mode=mode,
         )
     return {name: np.asarray(v) for name, v in zip(out_names, vals)}
