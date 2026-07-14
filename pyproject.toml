@@ -29,12 +29,15 @@ dependencies = [
     # Validated modeling stack (matches pymc-labs/structural-pfn's canonical
     # env). The generator builds the SCM as a pytensor/pymc graph and draws
     # from it, using pymc-marketing's adstock/saturation transformers.
-    # pymc-marketing 1.0 is not on PyPI yet, so it is pinned to the v1.0.0
-    # branch by git URL; swap to "pymc-marketing>=1.0.0" once released (a git
-    # URL in dependencies blocks PyPI upload of this package until then).
+    # pymc-marketing 1.0 is not on PyPI yet, so it is installed by git URL,
+    # pinned to the exact tested COMMIT (the `v1.0.0` ref is a mutable branch,
+    # not a tag — pinning it would make installs non-reproducible and could
+    # break CI when the branch advances). Bump this SHA deliberately, and swap
+    # to "pymc-marketing>=1.0.0" once a PyPI release exists. (A git-URL dep also
+    # blocks PyPI upload of this package until then — fine, we install from git.)
     "pytensor==3.0.7",
     "pymc==6.0.1",
-    "pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@v1.0.0",
+    "pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@ff70aae62dea1933b758a55885c24a76a3e7a9a5",
     "scipy",
     "pandas",
     "matplotlib",
@@ -117,8 +120,8 @@ known-first-party = ["prior_generator"]
 
 [tool.mypy]
 # No pinned python_version: check at the running interpreter so modern stub
-# syntax (e.g. numpy's PEP 695 `type` statements) parses. 3.11 runtime
-# compatibility is guarded by the CI test matrix and ruff's target-version.
+# syntax (e.g. numpy's PEP 695 `type` statements) parses. The 3.12 floor
+# (requires-python) is guarded by the CI test matrix and ruff's target-version.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

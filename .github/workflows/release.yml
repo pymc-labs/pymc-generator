@@ -82,6 +82,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [build]
+    # DISABLED: PyPI upload rejects any distribution whose Requires-Dist has a
+    # direct URL, and this package depends on pymc-marketing by git URL (1.0 is
+    # not on PyPI yet). Distribution is internal git clone + install, so PyPI is
+    # not a target. Re-enable (drop this `if: false`) once pymc-marketing 1.0 is
+    # on PyPI and its dependency becomes a normal version spec.
+    if: false
     environment: pypi
     permissions:
       id-token: write   # OIDC trusted publishing
@@ -103,7 +109,9 @@ jobs:
 
   github-release:
     runs-on: ubuntu-latest
-    needs: [publish]
+    # Depends on build (not publish): a v* tag cuts a GitHub Release with the
+    # built wheel/sdist for internal git-install, without the disabled PyPI step.
+    needs: [build]
     permissions:
       contents: write
     steps:
