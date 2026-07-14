@@ -1,11 +1,13 @@
-"""Media-response mechanism families (adstock + saturation), pure PyTensor.
+"""Media-response mechanism families (adstock + saturation).
 
-The adstock and saturation transforms are implemented directly in pytensor
-with documented math parity to ``pymc_marketing.mmm.transformers``
-(``geometric_adstock``/``weibull_adstock`` with ``ConvMode.After``, and the
-standard saturation curves) — keeping them local avoids depending on
-pymc-marketing's tensor-API compatibility layer while staying faithful to its
-definitions. κ-relative wrappers make every family scale-free.
+Thin κ-relative wrappers over ``pymc_marketing.mmm.transformers``: the
+adstock and saturation math is provided by pymc-marketing (``geometric_adstock``
+/ ``weibull_adstock`` and the standard saturation curves), not hand-rolled here.
+pymc-marketing 1.0's transformers are xtensor/named-dim based, so each wrapper
+bridges a plain ``(T,)`` time column through ``as_xtensor(dims=("time",))``,
+applies the library function along the time dim, and returns the underlying
+tensor via ``.values``. Parameters may be concrete floats or symbolic
+(pytensor / PyMC RV) scalars — both compose into the graph.
 
 κ-relative parameterization (FINDINGS D7, the ``kappa_adstock_adjusted``
 lesson): every family's half-point / scale parameter is expressed *relative to
@@ -38,184 +40,58 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytensor.tensor as pt
+from pymc_marketing.mmm import transformers as _pmm
 from pytensor.tensor import TensorVariable
-
-# --------------------------------------------------------------------------
-# Adstock transformers (direct pytensor — no pymc-marketing dependency)
-#
-# These are faithful to the math of pymc-marketing's
-# geometric_adstock / weibull_adstock with axis=0, normalise=True/False.
-# Keeping them local avoids the fragile pymc-marketing XTensor/dim API
-# compatibility layer.
-# --------------------------------------------------------------------------
+from pytensor.xtensor import as_xtensor
 
 
-def _conv1d_right(x: TensorVariable, w: TensorVariable) -> TensorVariable:
-    """Causal 1-D convolution along axis 0 (ConvMode.After semantics).
-
-    Matches pymc-marketing ``batched_convolution(..., mode=ConvMode.After)``:
-    ``y[t] = sum_{l=0}^{l_max-1} w[l] * x[t - l]`` with ``x[negative] = 0``.
-
-    Parameters
-    ----------
-    x : (T, K)
-    w : (l_max,) or (K, l_max)
-        If 2-D, kernel w[k, :] applies to channel k.
-
-    Returns
-    -------
-    (T, K) — same shape as x, with trailing time convolved.
-    """
-    l_max = w.type.shape[-1]
-    if l_max is None:
-        raise ValueError("w must have a static l_max on its last axis")
-    # Left-pad x with (l_max - 1) zeros along the time axis
-    pad_shape = list(x.type.shape)
-    pad_shape[0] = l_max - 1
-    pad = pt.zeros(pad_shape, dtype=x.dtype)
-    x_pad = pt.concatenate([pad, x], axis=0)  # (T + l_max - 1, K)
-
-    # Sliding windows with the kernel reversed: y[t] = sum_l w[l] * x[t - l]
-    # x_pad[n] = x[n - (l_max - 1)] (padding zeros occupy indices < l_max - 1)
-    # Want windows[t, l] such that w[l] multiplies x[t - l]:
-    #   windows[t, l] = x_pad[t - l + (l_max - 1)] = x_pad[(l_max - 1 - l) + t]
-    # Indexing: idx[t, l] = (l_max - 1 - l) + t
-    idx = pt.arange(l_max - 1, -1, -1)[None, :] + pt.arange(x.type.shape[0])[:, None]
-    windows = x_pad[idx]  # (T, l_max, K)
-
-    # Apply kernel — w: (l_max,) broadcasts against (T, l_max, K)
-    if w.type.ndim == 1:
-        return (windows * w[None, :, None]).sum(axis=1)
-    # w: (K, l_max) — transpose to (l_max, K) for broadcast
-    return (windows * w.T[None, :, :]).sum(axis=1)
-
-
-def geometric_adstock(
-    x: TensorVariable, alpha: TensorVariable, l_max: int, normalize: bool = True
-) -> TensorVariable:
-    """Geometric adstock with weights ``w_l = alpha^l``, optional normalisation.
-
-    Matches pymc-marketing geometric_adstock (ConvMode.After): adstock peaks
-    at the exposure period and decays geometrically over l_max lags.
-
-    Parameters
-    ----------
-    x : (T, K) — input time series (e.g. spend), time on axis 0.
-    alpha : (K,) or scalar — retention rate in [0, 1].
-    l_max : int — number of lags.
-    normalize : bool — if True, divide weights by their sum so the total
-        adstocked mass equals the sum of x (useful for interpreting
-        alpha as "how spread out" the effect is, not a gain term).
-    """
-    alpha = pt.as_tensor_variable(alpha)
-    lags = pt.arange(l_max, dtype=x.dtype)  # (l_max,)
-    # Broadcast: alpha (K,) ** lags (l_max,) -> (K, l_max) when alpha has trailing dim
-    if alpha.type.ndim == 0:
-        w = alpha**lags  # (l_max,)
-    else:
-        w = alpha[:, None] ** lags[None, :]  # (K, l_max)
-    if normalize:
-        w = w / w.sum(axis=-1, keepdims=True)
-    return _conv1d_right(x, w)
-
-
-def weibull_adstock_pdf(
-    x: TensorVariable, lam: TensorVariable, k: TensorVariable, l_max: int, normalize: bool = True
-) -> TensorVariable:
-    """Weibull-PDF adstock with weights ``w_l = Weibull.pdf(l; k, lam)``.
-
-    Matches pymc-marketing ``weibull_adstock(type="PDF")``: kernel is the PDF
-    of a Weibull(k, lam) evaluated at integer lags 1..l_max. pymc-marketing
-    unconditionally rescales the raw PDF to [0, 1] via min-max before optional
-    normalisation — that is replicated here so outputs match bit-for-bit.
-
-    Parameters
-    ----------
-    x : (T, K) — input time series, time on axis 0.
-    lam : (K,) or scalar — Weibull scale (>0).
-    k : (K,) or scalar — Weibull shape (>0).
-    l_max : int — number of lags.
-    normalize : bool — rescale weights to sum to 1 (after min-max).
-    """
-    lam = pt.as_tensor_variable(lam)
-    k = pt.as_tensor_variable(k)
-    lags = pt.arange(1, l_max + 1, dtype=x.dtype)  # (l_max,)
-    # Weibull PDF at integer lags: f(l) = (k/lam) * (l/lam)^(k-1) * exp(-(l/lam)^k)
-    if lam.type.ndim == 0 and k.type.ndim == 0:
-        ratio = lags / lam
-        pdf_raw = (k / lam) * ratio ** (k - 1) * pt.exp(-(ratio**k))
-    else:
-        ratio = lags[None, :] / lam[:, None]  # (K, l_max)
-        pdf_raw = (
-            (k[:, None] / lam[:, None]) * ratio ** (k[:, None] - 1) * pt.exp(-(ratio ** k[:, None]))
-        )
-    # pymc-marketing applies min-max rescaling unconditionally for PDF type:
-    # w in [0, 1] before normalization (helps with numerical stability)
-    pdf_min = pdf_raw.min(axis=-1, keepdims=True)
-    pdf_max = pdf_raw.max(axis=-1, keepdims=True)
-    pdf = (pdf_raw - pdf_min) / (pdf_max - pdf_min + 1e-12)
-    if normalize:
-        pdf = pdf / (pdf.sum(axis=-1, keepdims=True) + 1e-12)
-    return _conv1d_right(x, pdf)
+def _as_time(x: TensorVariable) -> TensorVariable:
+    """Wrap a ``(T,)`` time column as an xtensor with a named ``time`` dim."""
+    return as_xtensor(pt.as_tensor_variable(x), dims=("time",))
 
 
 # --------------------------------------------------------------------------
-# Saturation transformers (direct pytensor — pymc-marketing-free)
+# Saturation transformers (pymc-marketing, bridged to time-column tensors)
 # --------------------------------------------------------------------------
 
 
-def hill_function(
-    x: TensorVariable, slope: TensorVariable, kappa: TensorVariable
-) -> TensorVariable:
+def hill_function(x: TensorVariable, slope: TensorVariable, kappa: TensorVariable) -> TensorVariable:
     """Hill saturation: 1 - kappa^slope / (kappa^slope + x^slope).
 
     Property: f(kappa) = 0.5 for any slope; asymptote 1 as x -> inf.
+    Delegates to ``pymc_marketing.mmm.transformers.hill_function``.
     """
-    x = pt.as_tensor_variable(x)
-    slope = pt.as_tensor_variable(slope)
-    kappa = pt.as_tensor_variable(kappa)
-    return 1.0 - kappa**slope / (kappa**slope + x**slope)
+    return _pmm.hill_function(_as_time(x), slope=slope, kappa=kappa).values
 
 
 def logistic_saturation(x: TensorVariable, lam: TensorVariable) -> TensorVariable:
-    """Logistic saturation: (1 - exp(-lam*x)) / (1 + exp(-lam*x)); asymptote 1."""
-    x = pt.as_tensor_variable(x)
-    lam = pt.as_tensor_variable(lam)
-    e = pt.exp(-lam * x)
-    return (1.0 - e) / (1.0 + e)
+    """Logistic saturation (asymptote 1); ``pymc_marketing`` ``logistic_saturation``."""
+    return _pmm.logistic_saturation(_as_time(x), lam=lam).values
 
 
 def michaelis_menten(
     x: TensorVariable, alpha: TensorVariable, lam: TensorVariable
 ) -> TensorVariable:
-    """Michaelis–Menten: alpha * x / (lam + x); asymptote alpha."""
-    x = pt.as_tensor_variable(x)
-    alpha = pt.as_tensor_variable(alpha)
-    lam = pt.as_tensor_variable(lam)
-    return alpha * x / (lam + x)
+    """Michaelis–Menten: alpha * x / (lam + x); ``pymc_marketing`` ``michaelis_menten``."""
+    return _pmm.michaelis_menten(_as_time(x), alpha=alpha, lam=lam).values
 
 
 def tanh_saturation(x: TensorVariable, b: TensorVariable, c: TensorVariable) -> TensorVariable:
-    """Tanh saturation: b * tanh(x / (b * c)); asymptote b, initial slope 1/c."""
-    x = pt.as_tensor_variable(x)
-    b = pt.as_tensor_variable(b)
-    c = pt.as_tensor_variable(c)
-    return b * pt.tanh(x / (b * c))
+    """Tanh saturation: b * tanh(x / (b * c)); ``pymc_marketing`` ``tanh_saturation``."""
+    return _pmm.tanh_saturation(_as_time(x), b=b, c=c).values
 
 
 def root_saturation(x: TensorVariable, alpha: TensorVariable) -> TensorVariable:
-    """Root saturation: x^alpha; no finite asymptote; monotone concave for alpha<1."""
-    x = pt.as_tensor_variable(x)
-    alpha = pt.as_tensor_variable(alpha)
-    return x**alpha
+    """Root saturation: x^alpha; ``pymc_marketing`` ``root_saturation``."""
+    return _pmm.root_saturation(_as_time(x), alpha=alpha).values
 
 
 # --------------------------------------------------------------------------
 # Saturation families — κ-relative wrappers (FINDINGS D7)
 # --------------------------------------------------------------------------
 
-#: Canonical family order — index in this tuple is the family id used with
-#: `select_family` (e.g. a per-channel Categorical over families).
+#: Canonical family order — index in this tuple is the family id used per
+#: channel (e.g. a per-channel categorical over families).
 SATURATION_FAMILY_ORDER: tuple[str, ...] = (
     "hill",
     "logistic",
@@ -278,24 +154,35 @@ SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
 
 
 # --------------------------------------------------------------------------
-# Adstock — convenience wrappers over the pytensor implementations above
-# (normalized, time axis 0)
+# Adstock — pymc-marketing transformers over a single time column (axis 0)
 # --------------------------------------------------------------------------
 
 
 def apply_geometric_adstock(x, alpha, l_max: int) -> TensorVariable:
-    """Normalized geometric adstock over the time axis (axis=0)."""
-    return geometric_adstock(
-        pt.as_tensor_variable(x), pt.as_tensor_variable(alpha), l_max=int(l_max), normalize=True
+    """Normalized geometric adstock of a ``(T, 1)`` column over the time axis.
+
+    Delegates to ``pymc_marketing.mmm.transformers.geometric_adstock`` (ConvMode
+    ``After``, ``normalize=True``). ``alpha`` may be a float or a symbolic scalar.
+    """
+    out = _pmm.geometric_adstock(
+        _as_time(x[:, 0]), alpha=alpha, l_max=int(l_max), dim="time", normalize=True
     )
+    return out.values[:, None]
 
 
 def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
-    """Normalized Weibull-PDF adstock over the time axis (axis=0)."""
-    return weibull_adstock_pdf(
-        pt.as_tensor_variable(x),
-        pt.as_tensor_variable(lam),
-        pt.as_tensor_variable(k),
+    """Normalized Weibull-PDF adstock of a ``(T, 1)`` column over the time axis.
+
+    Delegates to ``pymc_marketing.mmm.transformers.weibull_adstock`` with
+    ``type="PDF"``, ``normalize=True``. ``lam``/``k`` may be floats or symbolic.
+    """
+    out = _pmm.weibull_adstock(
+        _as_time(x[:, 0]),
+        lam=lam,
+        k=k,
         l_max=int(l_max),
+        dim="time",
+        type="PDF",
         normalize=True,
     )
+    return out.values[:, None]

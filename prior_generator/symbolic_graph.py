@@ -294,7 +294,7 @@ def _dot_terms(cols: list, weights: np.ndarray, T: int) -> TensorVariable:
     weights = np.asarray(weights, dtype="float64").ravel()
     nz = [i for i in range(len(cols)) if weights[i] != 0.0]
     if not nz:
-        return cast(TensorVariable, pt.zeros(T))
+        return pt.zeros(T)
     if len(nz) == 1:
         return cast(TensorVariable, float(weights[nz[0]]) * cols[nz[0]])
     mat = pt.stack([cols[i] for i in nz], axis=1)  # (T, n)
