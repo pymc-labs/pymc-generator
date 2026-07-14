@@ -7,7 +7,7 @@ interactions as one symbolic PyTensor graph:
 
     D_j = RW_j                                        (confounder, signed)
     Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + RW_m   (control, signed)
-    E_k = RW_k + σ_k·ε_tk + a_k·1[ε'_tk > z_k]            (channel own drive)
+    E_k = RW_k + σ_k·ε_tk + a_k·b_tk,  b_tk ~ Bernoulli(p_k)  (channel own drive)
     C_k = softplus( Σ_j w_jk·D_j + Σ_m v_mk·Z_m
                     + Σ_{k'<k} α_{k'k}·C_{k'} + E_k )     (channel, positive)
     B   = Σ_j δ_j·D_j + Σ_m ρ_m·Z_m + RW_B                (baseline, signed)
@@ -19,7 +19,7 @@ module); node means are folded into the walks. The channel own drive
 campaign pulses (amplitude a_k, per-week probability P(ε' > z_k)) — the
 high-frequency exogenous variation that lets spend sweep its response
 curve (without it, contribution targets degenerate to flat lines; the
-legacy-neutral defaults σ_k = a_k = 0 disable both). C→C and Z→Z edges
+neutral defaults σ_k = 0, p_k = 0 disable both). C→C and Z→Z edges
 are restricted to the strict upper triangle (src index < dst index) which
 guarantees acyclicity. The nonlinear transform ``f_k`` (adstock +
 saturation, from ``mechanisms``) applies only on the direct C→Y path;
@@ -244,8 +244,6 @@ def sample_scm_params(
     if not 0.0 <= hf_lo <= hf_hi:
         raise ValueError(f"channel_hf_sigma_range must satisfy 0 <= lo <= hi, got {(hf_lo, hf_hi)}")
     if not 0.0 <= p_lo <= p_hi < 1.0:
-        # p = 1.0 would give pulse_z = -inf, which the graph gate reads as
-        # "pulse disabled" — reject rather than silently generate no pulses.
         raise ValueError(
             f"channel_pulse_prob_range must satisfy 0 <= lo <= hi < 1, got {(p_lo, p_hi)}"
         )
@@ -255,25 +253,14 @@ def sample_scm_params(
     else:
         hf_sigma = np.zeros(K)
     if p_hi > 0.0:
-        from scipy.special import ndtri  # lazy: keep numpy-only imports light
-
+        # The pulse fires each week as Bernoulli(pulse_prob); build_symbolic_graph
+        # adds pulse_amp * fire (fires drawn by draw_eps / a pm.Bernoulli RV).
         pulse_prob = _unif((p_lo, p_hi), K)
         pulse_amp = _unif(channel_pulse_amp_range, K) * c_level
-        # pulse fires when eps_c_pulse > z, so P(fire) = 1 - Phi(z) = p
-        with np.errstate(divide="ignore"):  # ndtri(1.0) = +inf for p = 0
-            pulse_z = np.asarray(ndtri(1.0 - pulse_prob))
     else:
         pulse_prob = np.zeros(K)
         pulse_amp = np.zeros(K)
-        pulse_z = np.full(K, np.inf)
-    params.update(
-        {
-            "hf_sigma": hf_sigma,
-            "pulse_prob": pulse_prob,
-            "pulse_amp": pulse_amp,
-            "pulse_z": pulse_z,
-        }
-    )
+    params.update({"hf_sigma": hf_sigma, "pulse_prob": pulse_prob, "pulse_amp": pulse_amp})
     return params
 
 
@@ -401,6 +388,7 @@ def build_symbolic_graph(
     J: int,
     *,
     burn_in: int = 0,
+    eps: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the symbolic PyTensor graph for the additive causal DAG.
 
@@ -471,35 +459,66 @@ def build_symbolic_graph(
     g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(K, K)
     g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(M, M)
 
-    # Channel texture params (legacy params dicts may predate these keys).
-    # ONE enable predicate per texture term, shared by the graph wiring below
-    # and by the per-array texture_noise flags that gate draw_eps: if they
-    # ever disagreed, a config could consume RNG for an eps array no graph
-    # node references, silently forking the stream from an equivalent
-    # texture-off config.
-    hf_sigma = np.asarray(params.get("hf_sigma", np.zeros(K)), dtype="float64").reshape(K)
-    pulse_amp = np.asarray(params.get("pulse_amp", np.zeros(K)), dtype="float64").reshape(K)
-    pulse_z = np.asarray(params.get("pulse_z", np.full(K, np.inf)), dtype="float64").reshape(K)
-    use_hf = hf_sigma > 0.0  # (K,)
-    use_pulse = np.isfinite(pulse_z) & (pulse_amp != 0.0)  # (K,)
+    # Channel texture. Magnitudes (hf_sigma, pulse_amp) may be symbolic (RV)
+    # params; the per-channel ENABLE flags are concrete structure. On the
+    # concrete-draw path the flags are derived from the magnitudes; the
+    # RV / pm.Model path passes them explicitly (a symbolic magnitude has no
+    # concrete truth value). The pulse enters as a 0/1 FIRE indicator
+    # (eps_c_pulse), so no threshold lives in the graph — the fires are drawn
+    # as a Bernoulli(pulse_prob) upstream (numpy in draw_eps, pm.Bernoulli on
+    # the RV path). pulse_prob is carried on the graph dict for draw_eps.
+    hf_sigma = _arr(params.get("hf_sigma", np.zeros(K)), (K,))
+    pulse_amp = _arr(params.get("pulse_amp", np.zeros(K)), (K,))
+    use_hf = params.get("use_hf")
+    if use_hf is None:
+        use_hf = np.asarray(params.get("hf_sigma", np.zeros(K)), dtype="float64").reshape(K) > 0.0
+    use_hf = np.asarray(use_hf).reshape(K)
+    use_pulse = params.get("use_pulse")
+    if use_pulse is None:
+        _pa = np.asarray(params.get("pulse_amp", np.zeros(K)), dtype="float64").reshape(K)
+        _pp = np.asarray(params.get("pulse_prob", np.zeros(K)), dtype="float64").reshape(K)
+        use_pulse = (_pa != 0.0) & (_pp > 0.0)
+    use_pulse = np.asarray(use_pulse).reshape(K)
+    _pp_raw = params.get("pulse_prob")
+    pulse_prob_concrete = (
+        np.asarray(_pp_raw, dtype="float64").reshape(K)
+        if isinstance(_pp_raw, np.ndarray)
+        else np.zeros(K)
+    )
 
     # Nodes are simulated over T_full = burn_in + T weeks; every output is
     # sliced to the last T (the reported window).
     T_full = T + burn_in
     W = slice(burn_in, None)
 
-    # Static shapes are required: the adstock convolution
-    # (mechanisms._conv1d_right) builds its sliding-window index from the
-    # static time length.
-    eps_d = pt.tensor("eps_d", shape=(T_full, J), dtype="float64")
-    eps_z = pt.tensor("eps_z", shape=(T_full, M), dtype="float64")
-    eps_c = pt.tensor("eps_c", shape=(T_full, K), dtype="float64")
-    eps_b = pt.tensor("eps_b", shape=(T_full,), dtype="float64")
-    eps_y = pt.tensor("eps_y", shape=(T_full,), dtype="float64")
-    # Channel-texture noise: iid weekly jitter + pulse triggers. Always graph
-    # inputs (compile ignores unused); zeros when the texture is disabled.
-    eps_c_hf = pt.tensor("eps_c_hf", shape=(T_full, K), dtype="float64")
-    eps_c_pulse = pt.tensor("eps_c_pulse", shape=(T_full, K), dtype="float64")
+    # Noise inputs. When ``eps`` is None (concrete-draw path) they are free
+    # pt.tensor inputs the compiled function is fed via draw_eps. When provided
+    # (RV / pm.Model path) they are the caller's noise RVs — pm.Normal walks and
+    # a pm.Bernoulli 0/1 pulse — so the whole graph is drawn with no free inputs.
+    # Static shapes are required: the adstock convolution builds its
+    # sliding-window index from the static time length.
+    if eps is None:
+        eps_d = pt.tensor("eps_d", shape=(T_full, J), dtype="float64")
+        eps_z = pt.tensor("eps_z", shape=(T_full, M), dtype="float64")
+        eps_c = pt.tensor("eps_c", shape=(T_full, K), dtype="float64")
+        eps_b = pt.tensor("eps_b", shape=(T_full,), dtype="float64")
+        eps_y = pt.tensor("eps_y", shape=(T_full,), dtype="float64")
+        eps_c_hf = pt.tensor("eps_c_hf", shape=(T_full, K), dtype="float64")
+        eps_c_pulse = pt.tensor("eps_c_pulse", shape=(T_full, K), dtype="float64")
+        inputs = {
+            "eps_d": eps_d,
+            "eps_z": eps_z,
+            "eps_c": eps_c,
+            "eps_b": eps_b,
+            "eps_y": eps_y,
+            "eps_c_hf": eps_c_hf,
+            "eps_c_pulse": eps_c_pulse,
+        }
+    else:
+        eps_d, eps_z, eps_c = eps["eps_d"], eps["eps_z"], eps["eps_c"]
+        eps_b, eps_y = eps["eps_b"], eps["eps_y"]
+        eps_c_hf, eps_c_pulse = eps["eps_c_hf"], eps["eps_c_pulse"]
+        inputs = eps
 
     hooks: dict[str, list[TensorVariable]] = {name: [] for name in INTERVENTION_HOOK_GROUPS}
 
@@ -547,14 +566,13 @@ def build_symbolic_graph(
         # Own exogenous drive = slow walk + iid weekly execution noise +
         # campaign pulses (plan doc 05 fix: without the high-frequency terms
         # the channel never sweeps its response curve and the contribution
-        # target degenerates to a flat line). The pulse fires where a unit
-        # normal exceeds z_k, i.e. with per-week probability pulse_prob[k].
+        # target degenerates to a flat line). eps_c_pulse[:, k] is a 0/1 fire
+        # indicator (Bernoulli(pulse_prob[k])); magnitudes may be symbolic.
         own = walk
         if use_hf[k]:
-            own = own + float(hf_sigma[k]) * eps_c_hf[:, k]
+            own = own + hf_sigma[k] * eps_c_hf[:, k]
         if use_pulse[k]:
-            fires = pt.gt(eps_c_pulse[:, k], float(pulse_z[k])).astype("float64")
-            own = own + float(pulse_amp[k]) * fires
+            own = own + pulse_amp[k] * eps_c_pulse[:, k]
         term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], T_full)
         term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], T_full)
         term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], T_full)
@@ -652,15 +670,7 @@ def build_symbolic_graph(
     #           + contributions.sum(1) + indirect_effects_by_source.sum(1)
 
     return {
-        "inputs": {
-            "eps_d": eps_d,
-            "eps_z": eps_z,
-            "eps_c": eps_c,
-            "eps_b": eps_b,
-            "eps_y": eps_y,
-            "eps_c_hf": eps_c_hf,
-            "eps_c_pulse": eps_c_pulse,
-        },
+        "inputs": inputs,
         "outputs": {
             "demand": D[W],
             "controls": Z[W],
@@ -685,6 +695,9 @@ def build_symbolic_graph(
         # info/compat with older graph dicts.
         "texture_noise": {"hf": bool(use_hf.any()), "pulse": bool(use_pulse.any())},
         "extended_noise": bool(use_hf.any() or use_pulse.any()),
+        # Per-channel Bernoulli fire probability for draw_eps (concrete path);
+        # zeros on the RV path, where pulses are drawn as pm.Bernoulli RVs.
+        "pulse_prob": pulse_prob_concrete,
         "sizes": {"T": T, "K": K, "M": M, "J": J, "burn_in": burn_in},
     }
 
@@ -745,8 +758,14 @@ def draw_eps(graph: dict[str, Any], rng: np.random.Generator) -> dict[str, np.nd
     if tex is None:  # older graph dicts predate the per-array flags
         any_tex = bool(graph.get("extended_noise", False))
         tex = {"hf": any_tex, "pulse": any_tex}
-    for name, used in (("eps_c_hf", tex["hf"]), ("eps_c_pulse", tex["pulse"])):
-        eps[name] = rng.standard_normal((T_full, K)) if used else np.zeros((T_full, K))
+    # hf jitter is iid normal; the pulse is a 0/1 Bernoulli(pulse_prob) fire
+    # indicator (the graph adds pulse_amp * fire — no threshold in the graph).
+    eps["eps_c_hf"] = rng.standard_normal((T_full, K)) if tex["hf"] else np.zeros((T_full, K))
+    if tex["pulse"]:
+        pulse_prob = np.asarray(graph.get("pulse_prob", np.zeros(K)), dtype="float64").reshape(K)
+        eps["eps_c_pulse"] = (rng.random((T_full, K)) < pulse_prob[None, :]).astype("float64")
+    else:
+        eps["eps_c_pulse"] = np.zeros((T_full, K))
     return eps
 
 
