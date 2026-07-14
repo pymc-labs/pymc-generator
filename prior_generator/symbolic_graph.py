@@ -277,28 +277,42 @@ def sample_scm_params(
     return params
 
 
-def _dot_terms(cols: list, weights: np.ndarray, T: int) -> TensorVariable:
-    """Weighted sum of (T,) parent columns via a single Dot.
+def _arr(x, shape):
+    """Reshape a param to ``shape``, preserving symbolic (RV) params.
 
-    A python ``sum()`` of scaled columns builds nested Elemwise Adds that
-    the canonicalizer flattens into ONE wide Add (and it does the same to
-    ``Sum(Stack(...))`` via reduce-join); past ~32 inputs numpy cannot
-    build the ufunc and the py-backend crashes ("'Scratchpad' object has
-    no attribute 'ufunc'"). ``Dot((T, n), (n,))`` is a single BLAS op the
-    rewriter never flattens, so K/M up to 20+ parents stay safe — and it
-    is faster.
-
-    Zero-weight parents (absent edges) are dropped so the graph only wires
-    actual parents.
+    Concrete numpy params are cast to float64; symbolic tensors (params as
+    PyMC distributions) are reshaped via pytensor so they compose into the
+    graph. This is what lets :func:`build_symbolic_graph` serve both the
+    concrete-draw path and the RV / ``pm.Model`` path from one code path.
     """
-    weights = np.asarray(weights, dtype="float64").ravel()
-    nz = [i for i in range(len(cols)) if weights[i] != 0.0]
+    if isinstance(x, TensorVariable):
+        return cast(TensorVariable, pt.as_tensor_variable(x).reshape(shape))
+    return np.asarray(x, dtype="float64").reshape(shape)
+
+
+def _dot_terms(cols: list, g_mask, coeff, T: int) -> TensorVariable:
+    """``Σ_i coeff[i]·cols[i]`` over structurally-present parents (``g_mask[i] != 0``).
+
+    ``g_mask`` is the CONCRETE 0/1 edge indicator (graph structure); ``coeff``
+    is the per-parent coefficient, either a numpy array (concrete params) or a
+    symbolic RV vector (params-as-distributions). Only parents with an edge are
+    wired, so absent edges add nothing and the graph stays sparse. Because
+    ``g_mask ∈ {0, 1}``, filtering on it and multiplying by ``coeff`` equals the
+    old ``Σ (g·coeff)·cols`` exactly.
+
+    A single ``Dot((T, n), (n,))`` is used rather than a python ``sum()`` of
+    scaled columns: the latter builds nested Adds the canonicalizer flattens
+    into one wide Add, and past ~32 inputs the py-backend crashes building the
+    ufunc. Dot is one BLAS op the rewriter never flattens (and is faster).
+    """
+    g_mask = np.asarray(g_mask, dtype="float64").ravel()
+    nz = [i for i in range(len(cols)) if g_mask[i] != 0.0]
     if not nz:
         return pt.zeros(T)
     if len(nz) == 1:
-        return cast(TensorVariable, float(weights[nz[0]]) * cols[nz[0]])
+        return cast(TensorVariable, coeff[nz[0]] * cols[nz[0]])
     mat = pt.stack([cols[i] for i in nz], axis=1)  # (T, n)
-    w = pt.constant(weights[nz])
+    w = pt.stack([coeff[i] for i in nz])  # (n,) — numpy scalars or symbolic
     return cast(TensorVariable, pt.dot(mat, w))
 
 
@@ -308,8 +322,11 @@ def _walk_column(eps_col, rw_group: dict, i: int, T: int) -> TensorVariable:
         TensorVariable,
         symbolic_random_walk(
             T,
-            mean=float(rw_group["mean"][i]),
-            std=float(rw_group["std"][i]),
+            # mean / std may be symbolic (RV) params; smoothness must stay a
+            # concrete float — it sets the moving-average kernel width, a
+            # structural property of the graph.
+            mean=rw_group["mean"][i],
+            std=rw_group["std"][i],
             smoothness=float(rw_group["smoothness"][i]),
             positive_only=bool(rw_group["positive_only"]),
             eps=eps_col,
@@ -320,13 +337,13 @@ def _walk_column(eps_col, rw_group: dict, i: int, T: int) -> TensorVariable:
 def _adstock_col(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
     """Adstock transform of a single (T,) channel column for channel k."""
     l_max = params["l_max"]
-    ad_fam = int(params["adstock_family"][k])
+    ad_fam = int(params["adstock_family"][k])  # family is concrete/structural
     x2d = c_col[:, None]
     if ad_fam == 1:
-        out = mechanisms.apply_geometric_adstock(x2d, float(params["adstock_alpha"][k]), l_max)
+        out = mechanisms.apply_geometric_adstock(x2d, params["adstock_alpha"][k], l_max)
     elif ad_fam == 2:
         out = mechanisms.apply_weibull_pdf_adstock(
-            x2d, float(params["weibull_lam"][k]), float(params["weibull_k"][k]), l_max
+            x2d, params["weibull_lam"][k], params["weibull_k"][k], l_max
         )
     else:
         out = x2d
@@ -344,35 +361,35 @@ def _saturate_col(
     variants — with an identical, pinned saturation scale. This is what makes
     the decomposition and the per-source indirect split exact.
     """
-    name = _SAT_FAMILY_NAMES[int(params["sat_family"][k])]
+    name = _SAT_FAMILY_NAMES[int(params["sat_family"][k])]  # family is concrete/structural
+    # Shape params may be symbolic (RV) or concrete — passed straight through
+    # to the pymc-marketing-backed wrappers, which accept either.
     if name == "none":
         return cast(TensorVariable, ad_col / mean_ad)
     if name == "hill":
         return mechanisms.hill_kappa_relative(
             ad_col,
             mean_ad,
-            slope=float(params["hill_slope"][k]),
-            kappa_mult=float(params["hill_kappa_mult"][k]),
+            slope=params["hill_slope"][k],
+            kappa_mult=params["hill_kappa_mult"][k],
         )
     if name == "logistic":
-        return mechanisms.logistic_kappa_relative(
-            ad_col, mean_ad, lam=float(params["logistic_lam"][k])
-        )
+        return mechanisms.logistic_kappa_relative(ad_col, mean_ad, lam=params["logistic_lam"][k])
     if name == "michaelis_menten":
         return mechanisms.michaelis_menten_kappa_relative(
             ad_col,
             mean_ad,
-            alpha=float(params["mm_alpha"][k]),
-            kappa_mult=float(params["mm_kappa_mult"][k]),
+            alpha=params["mm_alpha"][k],
+            kappa_mult=params["mm_kappa_mult"][k],
         )
     if name == "tanh":
         return mechanisms.tanh_kappa_relative(
             ad_col,
             mean_ad,
-            b=float(params["tanh_b"][k]),
-            c=float(params["tanh_c"][k]),
+            b=params["tanh_b"][k],
+            c=params["tanh_c"][k],
         )
-    return mechanisms.root_kappa_relative(ad_col, mean_ad, alpha=float(params["root_alpha"][k]))
+    return mechanisms.root_kappa_relative(ad_col, mean_ad, alpha=params["root_alpha"][k])
 
 
 def build_symbolic_graph(
@@ -496,13 +513,13 @@ def build_symbolic_graph(
     D = pt.stack(d_cols, axis=1) if J > 0 else pt.zeros((T_full, 0))
 
     # -- controls Z (T_full, M): D->Z + upstream Z->Z + own walk --------------
-    u_dz = np.asarray(params["u_dz"], dtype="float64").reshape(J, M)
-    gamma_zz = np.asarray(params["gamma_zz"], dtype="float64").reshape(M, M)
+    u_dz = _arr(params["u_dz"], (J, M))
+    gamma_zz = _arr(params["gamma_zz"], (M, M))
     z_cols: list[TensorVariable] = []
     for m in range(M):
         walk = _walk_column(eps_z[:, m], params["rw_z"], m, T_full)
-        term_d = _dot_terms(d_cols, g_dz[:, m] * u_dz[:, m], T_full)
-        term_z = _dot_terms(z_cols[:m], g_zz[:m, m] * gamma_zz[:m, m], T_full)
+        term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], T_full)
+        term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], T_full)
         term_d = _hook("z_from_d", term_d, f"z{m}_from_d")
         term_z = _hook("z_from_z", term_z, f"z{m}_from_z")
         z_cols.append(term_d + term_z + walk)
@@ -511,9 +528,9 @@ def build_symbolic_graph(
     # -- channels C (T_full, K): D->C + Z->C + upstream C->C + own drive -----
     # C_base: same walks, all incoming interaction terms zeroed (the
     # "no upstream" intervention used for the exact decomposition).
-    w_dc = np.asarray(params["w_dc"], dtype="float64").reshape(J, K)
-    v_zc = np.asarray(params["v_zc"], dtype="float64").reshape(M, K)
-    alpha_cc = np.asarray(params["alpha_cc"], dtype="float64").reshape(K, K)
+    w_dc = _arr(params["w_dc"], (J, K))
+    v_zc = _arr(params["v_zc"], (M, K))
+    alpha_cc = _arr(params["alpha_cc"], (K, K))
     c_cols: list[TensorVariable] = []
     c_base_cols: list[TensorVariable] = []
     # Telescoping intervention variants (see indirect_effects_by_source, below):
@@ -538,9 +555,9 @@ def build_symbolic_graph(
         if use_pulse[k]:
             fires = pt.gt(eps_c_pulse[:, k], float(pulse_z[k])).astype("float64")
             own = own + float(pulse_amp[k]) * fires
-        term_d = _dot_terms(d_cols, g_dc[:, k] * w_dc[:, k], T_full)
-        term_z = _dot_terms(z_cols, g_zc[:, k] * v_zc[:, k], T_full)
-        term_c = _dot_terms(c_cols[:k], g_cc[:k, k] * alpha_cc[:k, k], T_full)
+        term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], T_full)
+        term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], T_full)
+        term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], T_full)
         term_d = _hook("c_from_d", term_d, f"c{k}_from_d")
         term_z = _hook("c_from_z", term_z, f"c{k}_from_z")
         term_c = _hook("c_from_c", term_c, f"c{k}_from_c")
@@ -554,11 +571,11 @@ def build_symbolic_graph(
     C_base = pt.stack(c_base_cols, axis=1)
 
     # -- baseline B (T_full,): D->B + Z->B + own walk --------------------------
-    delta_db = np.asarray(params["delta_db"], dtype="float64").reshape(J)
-    rho_zb = np.asarray(params["rho_zb"], dtype="float64").reshape(M)
+    delta_db = _arr(params["delta_db"], (J,))
+    rho_zb = _arr(params["rho_zb"], (M,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, T_full)
-    term_bd = _dot_terms(d_cols, g_db * delta_db, T_full)
-    term_bz = _dot_terms(z_cols, g_zb * rho_zb, T_full)
+    term_bd = _dot_terms(d_cols, g_db, delta_db, T_full)
+    term_bz = _dot_terms(z_cols, g_zb, rho_zb, T_full)
     term_bd = _hook("b_from_d", term_bd, "b_from_d")
     term_bz = _hook("b_from_z", term_bz, "b_from_z")
     B = term_bd + term_bz + walk_b
@@ -566,17 +583,17 @@ def build_symbolic_graph(
     # -- per-node direct baseline terms (exact split of term_bd / term_bz) ----
     # column m of control_contribution   = g_zb[m]·ρ[m]·Z[:,m]  (sums to term_bz)
     # column j of confounder_contribution = g_db[j]·δ[j]·D[:,j] (sums to term_bd)
-    control_contrib_cols = [float(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(M)]
+    control_contrib_cols = [(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(M)]
     control_contribution = (
         pt.stack(control_contrib_cols, axis=1) if M > 0 else pt.zeros((T_full, 0))
     )  # (T_full, M)
-    confounder_contrib_cols = [float(g_db[j] * delta_db[j]) * d_cols[j] for j in range(J)]
+    confounder_contrib_cols = [(g_db[j] * delta_db[j]) * d_cols[j] for j in range(J)]
     confounder_contribution = (
         pt.stack(confounder_contrib_cols, axis=1) if J > 0 else pt.zeros((T_full, 0))
     )  # (T_full, J)
 
     # -- direct nonlinear responses + exact decomposition --------------------
-    beta = np.asarray(params["beta"], dtype="float64").reshape(K)
+    beta = _arr(params["beta"], (K,))
     contrib_obs_cols, contrib_base_cols, sat_scales = [], [], []
     # Telescoping 3-way indirect split (LOCKED order cc -> zc -> dc). Because the
     # direct response f_k is nonlinear, naive one-at-a-time interventions do not
@@ -607,7 +624,7 @@ def build_symbolic_graph(
         f_base = _f(_adstock_col(c_base_cols[k], params, k)[W])
         f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k)[W])
         f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k)[W])
-        gate = float(g_cy[k] * beta[k])
+        gate = g_cy[k] * beta[k]  # g concrete, beta possibly symbolic
         contrib_obs_cols.append(gate * f_obs)
         contrib_base_cols.append(gate * f_base)
         ie_cc_cols.append(gate * (f_obs - f_no_cc))
