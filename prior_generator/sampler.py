@@ -3,12 +3,12 @@
 Each world (task) is an additive structural causal model over latent demand
 factors D, observed controls Z, media channels C, a baseline B and sales Y.
 The DAG is drawn per cell by :func:`sample_g_additive` (per-edge-type
-Bernoulli rates or "pot" budgets over the extended 8-block layout), then each
-task samples fresh SCM parameters and evaluates a compiled PyTensor graph
-(:mod:`prior_generator.symbolic_graph`) with exact interventional
-decomposition targets — direct contributions, per-control / per-confounder
-contributions, ``baseline_intrinsic`` and the telescoping 3-source indirect
-split ``(cc, zc, dc)``.
+Bernoulli rates or "pot" budgets over the extended 8-block layout). Each world
+is then a PyMC model (:mod:`prior_generator.world_model`) whose continuous
+priors are pm distributions and whose noise is pm RVs; drawing it yields the
+series with exact interventional decomposition targets — direct contributions,
+per-control / per-confounder contributions, ``baseline_intrinsic`` and the
+telescoping 3-source indirect split ``(cc, zc, dc)``.
 
 The corpus schema is the dict-of-ndarrays documented in
 :func:`generate_corpus` — the same format the structural-pfn training
@@ -87,8 +87,8 @@ class CorpusConfig:
     J_active_range: tuple[int, int] = (1, 5)
 
     # -- prior-range constants -------------------------------------------
-    # Per-channel media-response mechanism (drawn per task in
-    # symbolic_graph.sample_scm_params):
+    # Per-channel media-response mechanism priors (realized as PyMC
+    # distributions in prior_generator.world_model.build_world_model):
     adstock_alpha_range: tuple[float, float] = (0.2, 0.8)
     # Adstock families: 0=none, 1=geometric, 2=weibull
     adstock_family_probs: tuple[float, ...] = (0.15, 0.425, 0.425)
@@ -133,10 +133,8 @@ class CorpusConfig:
     # texture is scale-free across small and large channels — like L1's
     # log-space spend noise. adstock_burn_in simulates extra leading weeks and
     # drops them so the adstock zero-padding warmup never reaches the reported
-    # window. Defaults are legacy-neutral: no extra RNG is consumed and
-    # generated corpora are byte-identical to before these knobs existed.
-    # `make_world_config` (presets) enables the diverse texture for new
-    # corpora.
+    # window. Defaults disable the texture (flat targets); `make_world_config`
+    # enables the diverse texture, which is the supported prior.
     rw_channel_std_range: tuple[float, float] | None = None
     channel_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     channel_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
@@ -711,10 +709,9 @@ def _warn_flat_texture(cfg: CorpusConfig) -> None:
     The blessed path is ``make_world_config(texture="diverse")`` — the
     additive rung with high-frequency channel texture and adstock burn-in.
     A config with the flat (smooth-walk-only) channel prior still generates
-    (byte-identical to the pre-fix structural-pfn corpora) but warns: its
-    contribution targets degenerate to near-flat lines (measured: ~49% of
-    direct-channel targets without week-to-week variation; see
-    ``signal_diagnostics``).
+    but warns: its contribution targets degenerate to near-flat lines
+    (measured on the reference config: ~49% of direct-channel targets without
+    week-to-week variation; see ``signal_diagnostics``).
     """
     if (
         float(cfg.channel_hf_sigma_range[1]) == 0.0

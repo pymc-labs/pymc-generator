@@ -6,10 +6,11 @@ max sizes and keeps everything a human (or exporter) needs: the active-size
 DAG blocks, the drawn SCM parameters, and the 13 named output series
 including the interventional decomposition truth.
 
-The sampling path mirrors ``sampler._generate_corpus_additive`` (DAG →
-params → compiled PyTensor graph → eps draws → realism filter) and is fully
-deterministic given (cfg, seed): one RNG drives the DAG, parameter and eps
-draws sequentially.
+The sampling path mirrors ``sampler._generate_corpus_additive``: draw the DAG
++ structure, build the world's PyMC model (``world_model.build_world_model``),
+``pm.draw`` candidate worlds, and keep the first that passes the realism
+filter. Deterministic given (cfg, seed): one numpy RNG drives the DAG +
+structure draws and the per-round pm.draw seeds.
 """
 
 from __future__ import annotations
@@ -265,12 +266,12 @@ def sample_world(
 
     Resamples the DAG until it satisfies the connectivity rule — dead-end
     nodes (edges that never reach Y) are NEVER allowed; fully-isolated null
-    nodes are allowed only when ``connect_all=False`` — then draws SCM
-    parameters and noise until a draw passes the realism filter
+    nodes are allowed only when ``connect_all=False`` — then builds the world's
+    PyMC model and ``pm.draw``s candidates until one passes the realism filter
     (finite arrays, non-negative sales, spend-CV floor, spike guards).
 
-    Fully deterministic given ``(cfg, seed)``: one RNG drives the DAG,
-    parameter and eps draws sequentially.
+    Fully deterministic given ``(cfg, seed)``: one numpy RNG drives the DAG +
+    structure draws and the per-round pm.draw seeds.
 
     Parameters
     ----------
