@@ -12,9 +12,7 @@ from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 @pytest.fixture(scope="module")
 def corpus():
-    cfg = pg.make_l1_additive_cfg(
-        K_max=4, M_max=2, J_max=1, T=40, n_cells=2, draws_per_cell=3, seed=7
-    )
+    cfg = pg.make_world_config(K_max=4, M_max=2, J_max=1, T=40, n_cells=2, draws_per_cell=3, seed=7)
     return pg.generate_corpus(cfg)
 
 
@@ -83,7 +81,7 @@ def test_save_load_roundtrip(tmp_path, corpus):
 
 
 def test_datagenerator_generate_n_tasks():
-    cfg = pg.make_l1_additive_cfg(K_max=4, M_max=2, J_max=1, T=32, draws_per_cell=5, seed=1)
+    cfg = pg.make_world_config(K_max=4, M_max=2, J_max=1, T=32, draws_per_cell=5, seed=1)
     gen = DataGenerator(cfg)
     corpus = gen.generate(n_tasks=7, seed=1)
     assert corpus["spend_raw"].shape[0] == 7
@@ -91,5 +89,7 @@ def test_datagenerator_generate_n_tasks():
 
 
 def test_sales_norm_matches_scale(corpus):
-    expected = corpus["sales_raw"].astype(np.float64) / corpus["sales_scale"].astype(np.float64)[:, None]
+    expected = (
+        corpus["sales_raw"].astype(np.float64) / corpus["sales_scale"].astype(np.float64)[:, None]
+    )
     assert np.allclose(corpus["sales_norm"].astype(np.float64), expected, rtol=1e-5)

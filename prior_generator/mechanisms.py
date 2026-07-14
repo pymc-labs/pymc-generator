@@ -55,7 +55,9 @@ def _as_time(x: TensorVariable) -> TensorVariable:
 # --------------------------------------------------------------------------
 
 
-def hill_function(x: TensorVariable, slope: TensorVariable, kappa: TensorVariable) -> TensorVariable:
+def hill_function(
+    x: TensorVariable, slope: TensorVariable, kappa: TensorVariable
+) -> TensorVariable:
     """Hill saturation: 1 - kappa^slope / (kappa^slope + x^slope).
 
     Property: f(kappa) = 0.5 for any slope; asymptote 1 as x -> inf.

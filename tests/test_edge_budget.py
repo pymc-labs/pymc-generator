@@ -15,9 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prior_generator import generate_corpus, make_l1_additive_cfg
+from prior_generator import generate_corpus, make_world_config
 from prior_generator.sampler import CorpusConfig, sample_g_additive
-from prior_generator.slots import EDGE_TYPES_EXTENDED
 
 
 def _cfg(edge_budget=None, *, K=5, M=5, J=2, **kw) -> CorpusConfig:
@@ -115,7 +114,7 @@ def test_validate_accepts_numpy_ints():
 
 
 def test_generate_corpus_honors_pot_end_to_end():
-    cfg = make_l1_additive_cfg(
+    cfg = make_world_config(
         K_max=4, M_max=2, J_max=1, edge_budget={"zc": 3}, T=52, n_cells=3, draws_per_cell=2, seed=0
     )
     corpus = generate_corpus(cfg)

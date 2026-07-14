@@ -16,7 +16,7 @@ from prior_generator.scenarios import SCENARIOS
 
 @pytest.fixture(scope="module")
 def corpus():
-    cfg = pg.make_l1_additive_cfg(
+    cfg = pg.make_world_config(
         K_max=4,
         M_max=2,
         J_max=1,
@@ -80,7 +80,7 @@ def test_channels_positive_and_finite(corpus):
 
 def test_inactive_channels_zero_padded():
     """Channels beyond the active count contribute nothing and carry no spend."""
-    cfg = pg.make_l1_additive_cfg(
+    cfg = pg.make_world_config(
         K_max=6,
         M_max=3,
         J_max=2,
@@ -102,16 +102,24 @@ def test_inactive_channels_zero_padded():
 
 
 def test_determinism_same_seed():
-    kw = dict(K_max=4, M_max=2, J_max=1, T=40, n_cells=2, draws_per_cell=3, seed=99)
-    a = pg.generate_corpus(pg.make_l1_additive_cfg(**kw))
-    b = pg.generate_corpus(pg.make_l1_additive_cfg(**kw))
+    kw = {
+        "K_max": 4,
+        "M_max": 2,
+        "J_max": 1,
+        "T": 40,
+        "n_cells": 2,
+        "draws_per_cell": 3,
+        "seed": 99,
+    }
+    a = pg.generate_corpus(pg.make_world_config(**kw))
+    b = pg.generate_corpus(pg.make_world_config(**kw))
     for key in ("spend_raw", "sales_raw", "g", "contributions_raw", "indirect_effects"):
         assert np.array_equal(a[key], b[key]), f"{key} not reproducible"
 
 
 def test_different_seed_differs():
-    a = pg.generate_corpus(pg.make_l1_additive_cfg(K_max=4, M_max=2, J_max=1, T=40, seed=1))
-    b = pg.generate_corpus(pg.make_l1_additive_cfg(K_max=4, M_max=2, J_max=1, T=40, seed=2))
+    a = pg.generate_corpus(pg.make_world_config(K_max=4, M_max=2, J_max=1, T=40, seed=1))
+    b = pg.generate_corpus(pg.make_world_config(K_max=4, M_max=2, J_max=1, T=40, seed=2))
     assert not np.array_equal(a["sales_raw"], b["sales_raw"])
 
 
@@ -126,7 +134,7 @@ def test_direct_only_scenario_has_negligible_indirect():
 def test_diverse_texture_targets_not_flat():
     """The supported (diverse) texture must give contribution targets real variation."""
     world = pg.sample_world(
-        pg.make_l1_additive_cfg(K_max=4, M_max=2, J_max=1, T=104, seed=3, edge_budget={"cy": (4, 4)}),
+        pg.make_world_config(K_max=4, M_max=2, J_max=1, T=104, seed=3, edge_budget={"cy": (4, 4)}),
         seed=3,
         connect_all=True,
     )

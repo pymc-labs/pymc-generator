@@ -10,14 +10,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prior_generator import make_l1_additive_cfg
+from prior_generator import make_world_config
 from prior_generator.sampler import _slice_g_active, sample_g_additive
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
 @pytest.fixture(scope="module")
 def built():
-    cfg = make_l1_additive_cfg(
+    cfg = make_world_config(
         K_max=4,
         M_max=2,
         J_max=1,

@@ -16,7 +16,7 @@ pipeline consumes (persist with ``prior_generator.save_corpus``).
 
 Extraction note: the legacy L0/L1 PyMC-model rungs from structural-pfn were
 deprecated there (plan-05) and deliberately NOT migrated; the one supported
-world prior is ``make_l1_additive_cfg(texture="diverse")``.
+world prior is ``make_world_config(texture="diverse")``.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class CorpusConfig:
         K_active_range, M_active_range, J_active_range: Ranges for random active counts per cell
 
     Prefer building configs through
-    :func:`prior_generator.presets.make_l1_additive_cfg`, which pins the
+    :func:`prior_generator.presets.make_world_config`, which pins the
     layout and enables the supported "diverse" channel texture.
     """
 
@@ -135,7 +135,7 @@ class CorpusConfig:
     # drops them so the adstock zero-padding warmup never reaches the reported
     # window. Defaults are legacy-neutral: no extra RNG is consumed and
     # generated corpora are byte-identical to before these knobs existed.
-    # `make_l1_additive_cfg` (presets) enables the diverse texture for new
+    # `make_world_config` (presets) enables the diverse texture for new
     # corpora.
     rw_channel_std_range: tuple[float, float] | None = None
     channel_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
@@ -708,7 +708,7 @@ def _make_support_mask(
 def _warn_flat_texture(cfg: CorpusConfig) -> None:
     """Steer every caller to the ONE supported world prior.
 
-    The blessed path is ``make_l1_additive_cfg(texture="diverse")`` — the
+    The blessed path is ``make_world_config(texture="diverse")`` — the
     additive rung with high-frequency channel texture and adstock burn-in.
     A config with the flat (smooth-walk-only) channel prior still generates
     (byte-identical to the pre-fix structural-pfn corpora) but warns: its
@@ -724,7 +724,7 @@ def _warn_flat_texture(cfg: CorpusConfig) -> None:
             "L1_additive with the legacy (smooth-walk-only) channel texture is "
             "deprecated: it produces near-flat contribution targets the model cannot "
             "learn attribution from. Build configs with "
-            "make_l1_additive_cfg(texture='diverse').",
+            "make_world_config(texture='diverse').",
             FutureWarning,
             stacklevel=3,
         )
@@ -741,7 +741,7 @@ def generate_corpus(cfg: CorpusConfig) -> dict:
 
     Configs with the flat (texture-free) channel prior emit a
     ``FutureWarning`` — build configs with
-    ``make_l1_additive_cfg(texture="diverse")`` instead.
+    ``make_world_config(texture="diverse")`` instead.
     """
     _warn_flat_texture(cfg)
     cfg.validate()

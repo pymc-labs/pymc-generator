@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .presets import make_l1_additive_cfg
+from .presets import make_world_config
 from .sampler import CorpusConfig
 
 
@@ -50,7 +50,7 @@ class Scenario:
         goes through :func:`prior_generator.worlds.sample_world`, which
         bypasses the corpus loop — but they keep ``validate()`` happy.
         """
-        return make_l1_additive_cfg(
+        return make_world_config(
             K_max=self.K,
             M_max=self.M,
             J_max=self.J,

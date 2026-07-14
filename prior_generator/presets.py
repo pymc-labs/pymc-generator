@@ -52,7 +52,7 @@ _DIVERSE_TEXTURE: dict[str, Any] = {
 }
 
 
-def make_l1_additive_cfg(
+def make_world_config(
     *,
     K_max: int,
     M_max: int,

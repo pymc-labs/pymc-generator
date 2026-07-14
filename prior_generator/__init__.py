@@ -23,7 +23,7 @@ _LAZY_IMPORTS = {
     # config + generation
     "CorpusConfig": (".sampler", "CorpusConfig"),
     "generate_corpus": (".sampler", "generate_corpus"),
-    "make_l1_additive_cfg": (".presets", "make_l1_additive_cfg"),
+    "make_world_config": (".presets", "make_world_config"),
     # high-level facade + persistence (the PFN-consumable .npz format)
     "DataGenerator": (".data_generator", "DataGenerator"),
     "save_corpus": (".data_generator", "save_corpus"),
@@ -56,7 +56,7 @@ __all__ = [
     "describe_world",
     "generate_corpus",
     "load_corpus",
-    "make_l1_additive_cfg",
+    "make_world_config",
     "sample_world",
     "save_corpus",
     "write_world_bundle",

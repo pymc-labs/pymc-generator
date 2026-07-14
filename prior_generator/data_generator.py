@@ -11,9 +11,9 @@ Design Principles:
 4. Modular - generate in batches or all at once
 
 Usage:
-    from prior_generator import DataGenerator, make_l1_additive_cfg
+    from prior_generator import DataGenerator, make_world_config
 
-    cfg = make_l1_additive_cfg(K_max=4, M_max=2, J_max=1, n_cells=10, draws_per_cell=10)
+    cfg = make_world_config(K_max=4, M_max=2, J_max=1, n_cells=10, draws_per_cell=10)
     generator = DataGenerator(cfg)
     corpus = generator.generate(n_tasks=100, seed=42)
 
