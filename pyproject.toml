@@ -1,0 +1,147 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prior-generator"
+version = "0.0.1"
+description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor."
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "PyMC Labs"},
+    {name = "Carlos Trujillo"},
+]
+readme = "README.md"
+keywords = ["marketing-mix-model", "synthetic-data", "structural-causal-models", "simulation", "prior-predictive", "pytensor", "bayesian", "machine-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy",
+    "pytensor",
+    "scipy",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    # Pinned so local, pre-commit, and CI formatting agree; keep in sync
+    # with .github/workflows/ci.yml and .pre-commit-config.yaml.
+    "ruff==0.15.18",
+    "mypy",
+    "pre-commit",
+]
+
+[project.scripts]
+prior-generator = "prior_generator.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["prior_generator*"]
+
+[project.urls]
+Homepage = "https://github.com/pymc-labs/prior-generator"
+Repository = "https://github.com/pymc-labs/prior-generator.git"
+Issues = "https://github.com/pymc-labs/prior-generator/issues"
+Changelog = "https://github.com/pymc-labs/prior-generator/blob/main/CHANGELOG.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["--strict-markers", "-ra"]
+markers = [
+    "slow: marks tests as slow (>5s; large-N statistical). Gated by --runslow.",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "N802",   # function name should be lowercase (allow K_max_effective etc.)
+    "N803",   # argument name should be lowercase (allow X, Y for data)
+    "N806",   # variable in function should be lowercase (allow X, Y)
+    "N812",   # lowercase imported as non-lowercase (allow np)
+    "B007",   # loop control variable not used (common in graph setup)
+    "B011",   # assert False (OK in test contexts / assertion guards)
+    "B904",   # raise from err (acceptable for optional-dependency re-raise)
+    "B905",   # zip strict (not a correctness bug)
+    "E741",   # ambiguous variable name (l is fine in local scope)
+    "E402",   # module level import not at top of file (some tests use conditional imports)
+    "F841",   # local variable assigned but never used (some intentional)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["prior_generator"]
+
+[tool.mypy]
+# No pinned python_version: check at the running interpreter so modern stub
+# syntax (e.g. numpy's PEP 695 `type` statements) parses. 3.11 runtime
+# compatibility is guarded by the CI test matrix and ruff's target-version.
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+exclude = [
+    "tests/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "pytensor.*",
+    "scipy.*",
+    "pandas.*",
+    "matplotlib.*",
+]
+ignore_missing_imports = true
+
+# Type-error backlog inherited from the structural-pfn extraction (these
+# modules were mypy-grandfathered there too). MyPy is BLOCKING in CI; these
+# modules are grandfathered with ignore_errors until each is burned down.
+# Do NOT add new modules here — new code must type-check clean. Remove a
+# module from this list once its errors are fixed.
+[[tool.mypy.overrides]]
+module = [
+    "prior_generator.data_generator",
+    "prior_generator.mechanisms",
+    "prior_generator.sampler",
+]
+ignore_errors = true

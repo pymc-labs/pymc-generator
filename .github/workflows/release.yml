@@ -1,0 +1,127 @@
+name: Release
+
+# Publishes to PyPI on tag push (v0.0.1, v1.2.3, ...). Uses PyPI trusted
+# publishing (OIDC) — configure the publisher at
+# https://pypi.org/manage/project/prior-generator/settings/publishing/
+# (owner: pymc-labs, repo: prior-generator, workflow: release.yml,
+# environment: pypi). No API token secrets needed.
+#
+# First-release dry run: uncomment the TestPyPI step, push a test tag, and
+# verify at https://test.pypi.org/project/prior-generator/ before relying on
+# the PyPI step.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    # A tag on a red commit must never become an immutable PyPI release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # Canonical stack the generator was validated against.
+      - name: Install canonical pytensor
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pytensor==3.0.7"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run tests
+        run: pytest tests/ -q
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Verify tag matches package version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pyproject version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package
+        run: twine check dist/*
+
+      - name: Smoke-install wheel in a clean venv
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          /tmp/smoke/bin/python -c "import prior_generator; print(prior_generator.__version__)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [build]
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC trusted publishing
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+
+      # --- TestPyPI dry run (uncomment for the first release) ---
+      # - name: Publish to TestPyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    runs-on: ubuntu-latest
+    needs: [publish]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
