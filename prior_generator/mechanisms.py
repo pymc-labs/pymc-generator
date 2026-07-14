@@ -37,7 +37,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import numpy as np
 import pytensor.tensor as pt
 from pytensor.tensor import TensorVariable
 

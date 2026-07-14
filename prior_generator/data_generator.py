@@ -405,5 +405,3 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
             corpus["diagnostics"] = json.loads(str(diag_str))
 
     return corpus
-
-
