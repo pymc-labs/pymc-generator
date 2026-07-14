@@ -26,7 +26,15 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
-    "pytensor",
+    # Validated modeling stack (matches pymc-labs/structural-pfn's canonical
+    # env). The generator builds the SCM as a pytensor/pymc graph and draws
+    # from it, using pymc-marketing's adstock/saturation transformers.
+    # pymc-marketing 1.0 is not on PyPI yet, so it is pinned to the v1.0.0
+    # branch by git URL; swap to "pymc-marketing>=1.0.0" once released (a git
+    # URL in dependencies blocks PyPI upload of this package until then).
+    "pytensor==3.0.7",
+    "pymc==6.0.1",
+    "pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@v1.0.0",
     "scipy",
     "pandas",
     "matplotlib",
@@ -127,6 +135,8 @@ exclude = [
 [[tool.mypy.overrides]]
 module = [
     "pytensor.*",
+    "pymc.*",
+    "pymc_marketing.*",
     "scipy.*",
     "pandas.*",
     "matplotlib.*",
