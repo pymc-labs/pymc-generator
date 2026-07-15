@@ -33,6 +33,7 @@ _LAZY_IMPORTS = {
     "World": (".worlds", "World"),
     "describe_world": (".describe", "describe_world"),
     "write_world_bundle": (".bundles", "write_world_bundle"),
+    "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
     "SCENARIOS": (".scenarios", "SCENARIOS"),
 }
 
@@ -59,5 +60,6 @@ __all__ = [
     "make_world_config",
     "sample_world",
     "save_corpus",
+    "write_scenario_bundles",
     "write_world_bundle",
 ]

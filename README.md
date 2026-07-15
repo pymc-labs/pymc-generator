@@ -101,12 +101,13 @@ signal.
 
 | Symbol | Purpose |
 | --- | --- |
-| `make_world_config` | Build a validated additive-rung `CorpusConfig`. |
+| `make_world_config` | Build a validated additive-SCM `CorpusConfig`. |
 | `generate_corpus` / `DataGenerator` | Generate an N-world corpus (dict of arrays). |
 | `save_corpus` / `load_corpus` | Compressed `.npz` persistence (PFN-consumable). |
 | `sample_world` / `World` | Draw one accepted world with its full ground truth. |
 | `describe_world` | Plain-text description of a world. |
-| `write_world_bundle` | Write the per-world auditable folder. |
+| `write_world_bundle` | Write one world's auditable folder (CSVs + description + DAG). |
+| `write_scenario_bundles` | Write the full inspection set (the CLI's datasets) from Python. |
 | `SCENARIOS` | Five named audit scenarios, each isolating a pathway. |
 
 ## Development
