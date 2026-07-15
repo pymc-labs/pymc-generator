@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .presets import make_world_config
-from .sampler import CorpusConfig
+from .presets import make_scm_prior
+from .sampler import SCMPrior
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class Scenario:
         nulls). When False, fully-isolated null nodes are allowed as
         deliberate zero-attribution traps; dead-ends are never allowed.
     edge_budget : dict
-        Per-edge-type arrow budgets (see ``CorpusConfig.edge_budget``).
+        Per-edge-type arrow budgets (see ``SCMPrior.edge_budget``).
     """
 
     name: str
@@ -43,14 +43,14 @@ class Scenario:
     connect_all: bool
     edge_budget: dict[str, int | tuple[int, int]] = field(default_factory=dict)
 
-    def cfg(self, T: int = 104, seed: int = 0) -> CorpusConfig:
-        """Build the scenario's validated ``CorpusConfig``.
+    def prior(self, T: int = 104, seed: int = 0) -> SCMPrior:
+        """Build the scenario's validated ``SCMPrior``.
 
-        ``n_cells``/``draws_per_cell`` are placebo values — world sampling
-        goes through :func:`prior_generator.worlds.sample_world`, which
+        ``n_cells``/``draws_per_cell`` are placebo values — single-SCM sampling
+        goes through :func:`prior_generator.worlds.sample_scm`, which
         bypasses the corpus loop — but they keep ``validate()`` happy.
         """
-        return make_world_config(
+        return make_scm_prior(
             K_max=self.K,
             M_max=self.M,
             J_max=self.J,

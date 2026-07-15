@@ -26,11 +26,11 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from . import mechanisms
-from .sampler import CorpusConfig
+from .sampler import SCMPrior
 from .symbolic_graph import build_symbolic_graph
 
 
-def sample_structure(g_active: dict, cfg: CorpusConfig, rng: np.random.Generator) -> dict:
+def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) -> dict:
     """Draw the concrete per-world structure (families, smoothness, texture flags).
 
     These are the discrete/structural choices that set the graph's shape, drawn
@@ -75,7 +75,7 @@ def _uniform(name: str, lo: float, hi: float, shape):
 
 
 def build_world_model(
-    g_active: dict, cfg: CorpusConfig, structural: dict, T: int
+    g_active: dict, cfg: SCMPrior, structural: dict, T: int
 ) -> tuple[pm.Model, tuple[str, ...], tuple[str, ...]]:
     """Build the ``pm.Model`` for one world structure.
 
@@ -87,7 +87,7 @@ def build_world_model(
     ----------
     g_active : dict
         Active-size DAG blocks (from ``sample_g_additive`` + ``_slice_g_active``).
-    cfg : CorpusConfig
+    cfg : SCMPrior
         Supplies every prior range.
     structural : dict
         Output of :func:`sample_structure` (concrete families / smoothness /

@@ -1,7 +1,7 @@
 """Single-world sampling: one accepted task, with its full ground truth.
 
-Where :func:`prior_generator.generate_corpus` produces a padded N-task corpus
-for training, :func:`sample_world` draws ONE accepted world at the config's
+Where :func:`prior_generator.sample_prior_predictive` produces a padded N-task corpus
+for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
 DAG blocks, the drawn SCM parameters, and the 13 named output series
 including the interventional decomposition truth.
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .sampler import CorpusConfig, _additive_task_ok, _slice_g_active, sample_g_additive
+from .sampler import SCMPrior, _additive_task_ok, _slice_g_active, sample_g_additive
 from .signal_diagnostics import per_channel_signal
 
 #: Adstock family names, indexed by ``params["adstock_family"]``.
@@ -32,7 +32,7 @@ SATURATION_NAMES = ("linear", "hill", "logistic", "michaelis_menten", "tanh", "r
 #: audit-only series (``channels_base``: channels with all upstream inputs
 #: surgically removed; ``contributions_observed``: observed-path
 #: contributions). Order must match ``build_symbolic_graph``'s outputs.
-WORLD_OUT_NAMES = (
+SCM_OUT_NAMES = (
     "demand",
     "controls",
     "channels",
@@ -50,13 +50,13 @@ WORLD_OUT_NAMES = (
 
 
 @dataclass
-class World:
+class SCM:
     """One simulated world: outputs + DAG + drawn parameters + config.
 
     Attributes
     ----------
     data : dict
-        The :data:`WORLD_OUT_NAMES` series at active sizes — e.g.
+        The :data:`SCM_OUT_NAMES` series at active sizes — e.g.
         ``channels (T, K)``, ``sales (T,)``, ``contributions (T, K)``,
         ``indirect_effects_by_source (T, 3)`` in the locked (cc, zc, dc)
         order.
@@ -66,18 +66,18 @@ class World:
     params : dict
         Drawn SCM parameters (edge coefficients, per-node random-walk
         params, per-channel mechanism families and texture).
-    cfg : CorpusConfig
+    cfg : SCMPrior
         The config the world was drawn from.
     name, purpose : str
         Optional labels (set from a :class:`~prior_generator.scenarios.Scenario`)
-        used by ``describe_world`` and the bundle writer.
+        used by ``describe_scm`` and the bundle writer.
     """
 
     data: dict[str, np.ndarray]
     g: dict[str, np.ndarray]
     params: dict
-    cfg: CorpusConfig
-    name: str = "world"
+    cfg: SCMPrior
+    name: str = "scm"
     purpose: str = ""
     seed: int | None = None
     extras: dict = field(default_factory=dict)
@@ -251,17 +251,17 @@ def mechanism_label(params: dict, k: int) -> str:
     return f"{sat}·{ad}"
 
 
-def sample_world(
-    cfg: CorpusConfig,
+def sample_scm(
+    cfg: SCMPrior,
     seed: int = 0,
     *,
     connect_all: bool = False,
-    name: str = "world",
+    name: str = "scm",
     purpose: str = "",
     max_graph_rounds: int = 2000,
     max_param_rounds: int = 6,
     max_eps_draws: int = 40,
-) -> World:
+) -> SCM:
     """Draw ONE accepted world at the config's max sizes.
 
     Resamples the DAG until it satisfies the connectivity rule — dead-end
@@ -275,8 +275,8 @@ def sample_world(
 
     Parameters
     ----------
-    cfg : CorpusConfig
-        An additive-SCM config (see ``make_world_config`` or
+    cfg : SCMPrior
+        An additive-SCM config (see ``make_scm_prior`` or
         ``Scenario.cfg``). All ``K_max/M_max/J_max`` nodes are active.
     seed : int
         Seed for the world's RNG stream.
@@ -287,7 +287,7 @@ def sample_world(
 
     Returns
     -------
-    World
+    SCM
     """
     from .world_model import build_world_model, draw_worlds, sample_structure
 
@@ -331,7 +331,7 @@ def sample_world(
                 g_cy_active=g_act["g_cy"],
                 cv_floor=cfg.spend_cv_floor,
             ):
-                return World(
+                return SCM(
                     data=d,
                     g=g_act,
                     params=_assemble_params(drawn, b, structural),

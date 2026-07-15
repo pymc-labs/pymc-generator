@@ -11,19 +11,19 @@ per-control / per-confounder contributions, ``baseline_intrinsic`` and the
 telescoping 3-source indirect split ``(cc, zc, dc)``.
 
 The corpus schema is the dict-of-ndarrays documented in
-:func:`generate_corpus` — the same format the structural-pfn training
+:func:`sample_prior_predictive` — the same format the structural-pfn training
 pipeline consumes (persist with ``prior_generator.save_corpus``).
 
 Extraction note: the legacy L0/L1 PyMC-model rungs from structural-pfn were
 deprecated there (plan-05) and deliberately NOT migrated; the one supported
-world prior is ``make_world_config(texture="diverse")``.
+world prior is ``make_scm_prior(texture="diverse")``.
 """
 
 from __future__ import annotations
 
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -43,7 +43,7 @@ MAX_TOPUPS_PER_CELL = 8
 
 
 @dataclass
-class CorpusConfig:
+class SCMPrior:
     """Corpus generation knobs + prior-range constants for the additive SCM.
 
     Supports variable-size DAGs via padding to max sizes. Each cell draws
@@ -56,7 +56,7 @@ class CorpusConfig:
         K_active_range, M_active_range, J_active_range: Ranges for random active counts per cell
 
     Prefer building configs through
-    :func:`prior_generator.presets.make_world_config`, which pins the
+    :func:`prior_generator.presets.make_scm_prior`, which pins the
     layout and enables the supported "diverse" channel texture.
     """
 
@@ -130,7 +130,7 @@ class CorpusConfig:
     # texture is scale-free across small and large channels — like L1's
     # log-space spend noise. adstock_burn_in simulates extra leading weeks and
     # drops them so the adstock zero-padding warmup never reaches the reported
-    # window. Defaults disable the texture (flat targets); `make_world_config`
+    # window. Defaults disable the texture (flat targets); `make_scm_prior`
     # enables the diverse texture, which is the supported prior.
     rw_channel_std_range: tuple[float, float] | None = None
     channel_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
@@ -553,7 +553,7 @@ def sample_g(
 
 def sample_g_additive(
     rng: np.random.Generator,
-    cfg: CorpusConfig,
+    cfg: SCMPrior,
     layout: SlotLayout,
     K_active: int | None = None,
     M_active: int | None = None,
@@ -644,7 +644,7 @@ def sample_g_additive(
 
 
 def _signal_block(
-    cfg: CorpusConfig,
+    cfg: SCMPrior,
     layout: SlotLayout,
     spend_raw: np.ndarray,
     contributions_raw: np.ndarray,
@@ -692,10 +692,10 @@ def _make_support_mask(
     return support, split_type
 
 
-def _warn_flat_texture(cfg: CorpusConfig) -> None:
+def _warn_flat_texture(cfg: SCMPrior) -> None:
     """Steer every caller to the ONE supported world prior.
 
-    The blessed path is ``make_world_config(texture="diverse")`` — the
+    The blessed path is ``make_scm_prior(texture="diverse")`` — the
     additive SCM with high-frequency channel texture and adstock burn-in.
     A config with the flat (smooth-walk-only) channel prior still generates
     but warns: its contribution targets degenerate to near-flat lines
@@ -710,28 +710,52 @@ def _warn_flat_texture(cfg: CorpusConfig) -> None:
             "The flat (smooth-walk-only) channel texture is "
             "deprecated: it produces near-flat contribution targets the model cannot "
             "learn attribution from. Build configs with "
-            "make_world_config(texture='diverse').",
+            "make_scm_prior(texture='diverse').",
             FutureWarning,
             stacklevel=3,
         )
 
 
-def generate_corpus(cfg: CorpusConfig) -> dict:
-    """Generate the stratified task corpus (dict of ndarrays).
+def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
+    """Draw a prior-predictive corpus: N SCMs and their data (dict of ndarrays).
 
-    Routes to :func:`_generate_corpus_additive` — the additive causal SCM
-    with the extended g-vector layout and exact interventional decomposition
-    targets (``indirect_effects``, ``indirect_effects_by_source``,
-    ``control_contribution``, ``confounder_contribution``,
-    ``baseline_intrinsic``) plus ``channel_active``.
+    Each world routes through :func:`_generate_corpus_additive` — the additive
+    causal SCM with the extended g-vector layout and exact interventional
+    decomposition targets (``indirect_effects``, ``indirect_effects_by_source``,
+    ``control_contribution``, ``confounder_contribution``, ``baseline_intrinsic``)
+    plus ``channel_active``.
 
-    Configs with the flat (texture-free) channel prior emit a
-    ``FutureWarning`` — build configs with
-    ``make_world_config(texture="diverse")`` instead.
+    Parameters
+    ----------
+    prior : SCMPrior
+        The prior over SCMs (see :func:`prior_generator.make_scm_prior`).
+    n : int, optional
+        Number of worlds to return. If ``None`` (default), returns
+        ``prior.n_cells * prior.draws_per_cell`` worlds. Otherwise the cell
+        count is raised to cover ``n`` and the corpus is truncated to exactly
+        ``n``.
+
+    Notes
+    -----
+    Priors with the flat (texture-free) channel prior emit a ``FutureWarning``
+    — build with ``make_scm_prior(texture="diverse")`` instead.
     """
-    _warn_flat_texture(cfg)
-    cfg.validate()
-    return _generate_corpus_additive(cfg)
+    _warn_flat_texture(prior)
+    prior.validate()
+    if n is not None:
+        if n <= 0:
+            raise ValueError(f"n must be positive, got {n}")
+        dpc = prior.draws_per_cell
+        prior = replace(prior, n_cells=max(2, (n + dpc - 1) // dpc))
+    corpus = _generate_corpus_additive(prior)
+    if n is not None and corpus["spend_raw"].shape[0] > n:
+        actual = corpus["spend_raw"].shape[0]
+        for key, val in list(corpus.items()):
+            if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == actual:
+                corpus[key] = val[:n]
+        if "is_val" in corpus and corpus["is_val"].sum() == 0:
+            corpus["is_val"][0] = 1  # keep at least one val world after truncation
+    return corpus
 
 
 # --------------------------------------------------------------------------
@@ -805,10 +829,10 @@ def _additive_task_ok(
     return True
 
 
-def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
+def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     """Generate the Phase-4 additive-SCM corpus (plan doc 03, task 4.4).
 
-    Same schema as :func:`generate_corpus` (CONTRACTS §1) with the extended
+    Same schema as :func:`sample_prior_predictive` (CONTRACTS §1) with the extended
     g-vector layout plus two new keys:
 
     * ``indirect_effects`` (N, T) float32 — total indirect effect on sales

@@ -37,21 +37,21 @@ Requires Python ≥ 3.12 (the pinned `pymc` needs it). Core dependencies:
 ```python
 import prior_generator as pg
 
-# A named audit scenario (isolates one causal pathway), or build your own cfg.
+# A named audit scenario (isolates one causal pathway), or build your own prior.
 scenario = pg.SCENARIOS[1]                       # "confounded_spend"
-world = pg.sample_world(scenario.cfg(T=104, seed=0), seed=0,
-                        name=scenario.name, purpose=scenario.purpose)
+scm = pg.sample_scm(scenario.prior(T=104, seed=0), seed=0,
+                    name=scenario.name, purpose=scenario.purpose)
 
-print(pg.describe_world(world))                  # DAG edges + coefficients,
+print(pg.describe_scm(scm))                    # DAG edges + coefficients,
                                                  # mechanisms, decomposition
                                                  # identity, signal metrics
-print("decomposition error:", world.identity_error())   # ~1e-15
+print("decomposition error:", scm.identity_error())   # ~1e-15
 ```
 
 ### Write an auditable bundle (CSVs + figures + description)
 
 ```python
-pg.write_world_bundle(world, "my_world/")
+pg.write_scm_bundle(scm, "my_world/")
 # dataset.csv, true_components.csv, true_contribution.csv, description.txt,
 # dag.dot, dag.png, timeseries.png, decomposition.png, channels.png
 ```
@@ -65,9 +65,9 @@ prior-generator --out inspection-datasets --seed 20260712
 ### Generate a corpus for PFN training
 
 ```python
-cfg = pg.make_world_config(K_max=8, M_max=4, J_max=2,
+cfg = pg.make_scm_prior(K_max=8, M_max=4, J_max=2,
                               n_cells=50, draws_per_cell=20, seed=42)
-corpus = pg.generate_corpus(cfg)                 # dict of numpy arrays
+corpus = pg.sample_prior_predictive(cfg)                 # dict of numpy arrays
 pg.save_corpus(corpus, "corpus.npz")             # the PFN-consumable format
 loaded = pg.load_corpus("corpus.npz")
 ```
@@ -92,7 +92,7 @@ campaign pulses. The direct media response uses pymc-marketing's `geometric_adst
 the series, and the full interventional decomposition together, reproducibly from a
 seed.
 
-Complexity is dialed within a fixed schema via `make_world_config`
+Complexity is dialed within a fixed schema via `make_scm_prior`
 (graph size, edge budgets, `nonlinearity`, coefficient/noise ranges), and
 `prior_generator.signal_diagnostics` gates whether a corpus carries learnable
 signal.
@@ -101,12 +101,12 @@ signal.
 
 | Symbol | Purpose |
 | --- | --- |
-| `make_world_config` | Build a validated additive-SCM `CorpusConfig`. |
-| `generate_corpus` / `DataGenerator` | Generate an N-world corpus (dict of arrays). |
+| `make_scm_prior` | Build a validated additive-SCM `SCMPrior`. |
+| `sample_prior_predictive` / `DataGenerator` | Generate an N-world corpus (dict of arrays). |
 | `save_corpus` / `load_corpus` | Compressed `.npz` persistence (PFN-consumable). |
-| `sample_world` / `World` | Draw one accepted world with its full ground truth. |
-| `describe_world` | Plain-text description of a world. |
-| `write_world_bundle` | Write one world's auditable folder (CSVs + description + DAG). |
+| `sample_scm` / `SCM` | Draw one accepted world with its full ground truth. |
+| `describe_scm` | Plain-text description of a world. |
+| `write_scm_bundle` | Write one world's auditable folder (CSVs + description + DAG). |
 | `write_scenario_bundles` | Write the full inspection set (the CLI's datasets) from Python. |
 | `SCENARIOS` | Five named audit scenarios, each isolating a pathway. |
 

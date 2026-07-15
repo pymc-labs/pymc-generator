@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .sampler import CorpusConfig
+from .sampler import SCMPrior
 
 # Media-response family mixes for the ``nonlinearity`` axis.
 # Adstock:    (none, geometric, weibull)
@@ -52,7 +52,7 @@ _DIVERSE_TEXTURE: dict[str, Any] = {
 }
 
 
-def make_world_config(
+def make_scm_prior(
     *,
     K_max: int,
     M_max: int,
@@ -64,8 +64,8 @@ def make_world_config(
     nonlinearity: str = "diverse",
     texture: str = "diverse",
     **overrides: Any,
-) -> CorpusConfig:
-    """Build a validated additive-SCM :class:`CorpusConfig` with a pinned max-layout.
+) -> SCMPrior:
+    """Build a validated additive-SCM :class:`SCMPrior` with a pinned max-layout.
 
     Parameters
     ----------
@@ -79,14 +79,14 @@ def make_world_config(
         for exactly 5, or ``{"zc": (2, 5)}`` for a custom range. Each type's pot
         is independent — budgeting ``zc`` leaves ``zb`` (controls' effect on the
         outcome) alone. Types omitted from the dict keep their Bernoulli base
-        rate. See :class:`CorpusConfig.edge_budget`.
+        rate. See :class:`SCMPrior.edge_budget`.
     K_active_range, M_active_range, J_active_range : tuple, optional
         Active-count ranges (the graph-size axis). Default to ``(max, max)``
         (every node always active) so size is fixed unless you widen it.
     nonlinearity : {"diverse", "linear"}
         ``"linear"`` forces a purely linear media response (no adstock, no
         saturation) for the simplest additive graph; ``"diverse"`` keeps the
-        full family mix from ``CorpusConfig`` defaults.
+        full family mix from ``SCMPrior`` defaults.
     texture : {"diverse"}
         Channel-texture axis. ``"diverse"`` (the only supported value) gives
         channels high-frequency exogenous drive — iid weekly noise, campaign
@@ -102,13 +102,13 @@ def make_world_config(
         structural-pfn was not migrated; reproducing pre-fix corpora requires
         structural-pfn itself.
     **overrides
-        Any other :class:`CorpusConfig` field (e.g. ``T``, ``n_cells``,
+        Any other :class:`SCMPrior` field (e.g. ``T``, ``n_cells``,
         ``rw_sales_std_sigma`` for the noise axis, coefficient ranges).
         Explicit overrides win over the values set here.
 
     Returns
     -------
-    CorpusConfig
+    SCMPrior
         A validated additive-SCM config.
     """
     if nonlinearity not in ("diverse", "linear"):
@@ -136,9 +136,9 @@ def make_world_config(
         kwargs["saturation_family_probs"] = _LINEAR_SATURATION
     kwargs.update(_DIVERSE_TEXTURE)
     # burn-in follows the (possibly overridden) adstock length
-    kwargs["adstock_burn_in"] = int(overrides.get("l_max", CorpusConfig.l_max))
+    kwargs["adstock_burn_in"] = int(overrides.get("l_max", SCMPrior.l_max))
 
     kwargs.update(overrides)  # caller's explicit fields win
-    cfg = CorpusConfig(**kwargs)
+    cfg = SCMPrior(**kwargs)
     cfg.validate()
     return cfg

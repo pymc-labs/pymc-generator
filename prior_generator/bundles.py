@@ -1,4 +1,4 @@
-"""World bundles: one folder per world that a human can audit end-to-end.
+"""SCM bundles: one folder per world that a human can audit end-to-end.
 
 Each bundle contains:
 
@@ -28,13 +28,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .describe import describe_world, world_to_dot
+from .describe import describe_scm, world_to_dot
 from .scenarios import SCENARIOS, Scenario
-from .worlds import World, sample_world
+from .worlds import SCM, sample_scm
 
 
-def write_world_bundle(
-    world: World,
+def write_scm_bundle(
+    world: SCM,
     out_dir: str | Path,
     *,
     title: str | None = None,
@@ -44,8 +44,8 @@ def write_world_bundle(
 
     Parameters
     ----------
-    world : World
-        A sampled world (see :func:`prior_generator.sample_world`).
+    world : SCM
+        A sampled world (see :func:`prior_generator.sample_scm`).
     out_dir : path-like
         Target directory (created if missing).
     title : str, optional
@@ -95,7 +95,7 @@ def write_world_bundle(
     legacy["baseline_B"] = d["baseline"]
     pd.DataFrame(legacy).to_csv(out / "true_contribution.csv", index=False)
 
-    (out / "description.txt").write_text(describe_world(world))
+    (out / "description.txt").write_text(describe_scm(world))
     (out / "dag.dot").write_text(world_to_dot(world))
 
     if plots:
@@ -151,15 +151,15 @@ def write_scenario_bundles(
     out_root.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for idx, sc in enumerate(scenarios):
-        cfg = sc.cfg(T=T, seed=seed + idx)
-        world = sample_world(
+        cfg = sc.prior(T=T, seed=seed + idx)
+        world = sample_scm(
             cfg,
             seed=seed + idx,
             connect_all=True if require_path_to_y else sc.connect_all,
             name=sc.name,
             purpose=sc.purpose,
         )
-        out = write_world_bundle(world, out_root / str(idx), title=f"{idx}: {sc.name}", plots=plots)
+        out = write_scm_bundle(world, out_root / str(idx), title=f"{idx}: {sc.name}", plots=plots)
         if verbose:
             print(f"[{idx}] {sc.name}: identity err {world.identity_error():.1e} -> {out}")
         written.append(out)

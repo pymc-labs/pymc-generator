@@ -15,15 +15,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prior_generator import generate_corpus, make_world_config
-from prior_generator.sampler import CorpusConfig, sample_g_additive
+from prior_generator import make_scm_prior, sample_prior_predictive
+from prior_generator.sampler import SCMPrior, sample_g_additive
 
 
-def _cfg(edge_budget=None, *, K=5, M=5, J=2, **kw) -> CorpusConfig:
-    return CorpusConfig(K=K, M=M, J=J, edge_budget=edge_budget, **kw)
+def _cfg(edge_budget=None, *, K=5, M=5, J=2, **kw) -> SCMPrior:
+    return SCMPrior(K=K, M=M, J=J, edge_budget=edge_budget, **kw)
 
 
-def _draw(cfg: CorpusConfig, seed: int) -> dict[str, np.ndarray]:
+def _draw(cfg: SCMPrior, seed: int) -> dict[str, np.ndarray]:
     """One all-active extended DAG cell (K_active=M_active=J_active = max)."""
     return sample_g_additive(np.random.default_rng(seed), cfg, cfg.layout)
 
@@ -114,10 +114,10 @@ def test_validate_accepts_numpy_ints():
 
 
 def test_generate_corpus_honors_pot_end_to_end():
-    cfg = make_world_config(
+    cfg = make_scm_prior(
         K_max=4, M_max=2, J_max=1, edge_budget={"zc": 3}, T=52, n_cells=3, draws_per_cell=2, seed=0
     )
-    corpus = generate_corpus(cfg)
+    corpus = sample_prior_predictive(cfg)
     per_task_zc = corpus["g"][:, cfg.layout.slices["zc"]].sum(axis=1)
     assert np.all(per_task_zc <= 3)
     assert corpus["diagnostics"]["edge_budget"] == {"zc": 3}

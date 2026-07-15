@@ -10,14 +10,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prior_generator import make_world_config
+from prior_generator import make_scm_prior
 from prior_generator.sampler import _slice_g_active, sample_g_additive
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
 @pytest.fixture(scope="module")
 def built():
-    cfg = make_world_config(
+    cfg = make_scm_prior(
         K_max=4,
         M_max=2,
         J_max=1,
@@ -90,7 +90,7 @@ def test_diverse_texture_gives_nonflat_targets(built):
 
 def test_single_draw_has_leading_axis(built):
     # regression: draw_worlds always keeps a leading draws axis, so
-    # sample_world(max_eps_draws=1) can index candidate 0 without hitting time.
+    # sample_scm(max_eps_draws=1) can index candidate 0 without hitting time.
     model, out_names = built
     d = draw_worlds(model, out_names, seed=9, draws=1)
     assert d["sales"].shape == (1, 48)

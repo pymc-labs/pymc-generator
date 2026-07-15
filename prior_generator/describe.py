@@ -1,6 +1,6 @@
 """Plain-text world descriptions — "get a description of the world".
 
-:func:`describe_world` renders everything a human needs to audit one world:
+:func:`describe_scm` renders everything a human needs to audit one world:
 the DAG edges with their drawn coefficients, node connectivity, per-channel
 mechanism and texture parameters, the prior ranges the draw came from, the
 exact decomposition-identity check, and per-channel signal metrics.
@@ -18,7 +18,7 @@ from .mechanisms import SATURATION_PRIOR_RANGES
 from .worlds import (
     ADSTOCK_NAMES,
     SATURATION_NAMES,
-    World,
+    SCM,
     channel_role,
     edges_with_coeffs,
     mechanism_label,
@@ -52,8 +52,8 @@ def _channel_lines(g: dict, params: dict) -> list[str]:
     return lines
 
 
-def describe_world(world: World) -> str:
-    """Render the full plain-text description of one :class:`World`.
+def describe_scm(world: SCM) -> str:
+    """Render the full plain-text description of one :class:`SCM`.
 
     Sections: title + purpose, sizes, edge budget, edge census, active edges
     with drawn coefficients, node connectivity, per-channel mechanism +
@@ -115,7 +115,7 @@ def describe_world(world: World) -> str:
     return f.getvalue()
 
 
-def world_to_dot(world: World) -> str:
+def world_to_dot(world: SCM) -> str:
     """Graphviz DOT source for the world's DAG (text only — the ``graphviz``
     library/binary is never invoked; renderable with any external tool)."""
     g, params = world.g, world.params

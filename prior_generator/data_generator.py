@@ -11,9 +11,9 @@ Design Principles:
 4. Modular - generate in batches or all at once
 
 Usage:
-    from prior_generator import DataGenerator, make_world_config
+    from prior_generator import DataGenerator, make_scm_prior
 
-    cfg = make_world_config(K_max=4, M_max=2, J_max=1, n_cells=10, draws_per_cell=10)
+    cfg = make_scm_prior(K_max=4, M_max=2, J_max=1, n_cells=10, draws_per_cell=10)
     generator = DataGenerator(cfg)
     corpus = generator.generate(n_tasks=100, seed=42)
 
@@ -30,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .sampler import CorpusConfig, generate_corpus
+from .sampler import SCMPrior, sample_prior_predictive
 
 # ---------------------------------------------------------------------------
 # Data generator
@@ -43,11 +43,11 @@ class DataGenerator:
 
     Parameters
     ----------
-    config : CorpusConfig
+    config : SCMPrior
         Corpus generation configuration.
     """
 
-    config: CorpusConfig
+    config: SCMPrior
 
     def generate(
         self,
@@ -77,7 +77,7 @@ class DataGenerator:
         cfg = self._make_config(n_tasks, seed)
 
         # Generate corpus
-        corpus = generate_corpus(cfg)
+        corpus = sample_prior_predictive(cfg)
 
         # Truncate to requested n_tasks
         if n_tasks is not None:
@@ -185,8 +185,8 @@ class DataGenerator:
         self,
         n_tasks: int | None = None,
         seed: int | None = None,
-    ) -> CorpusConfig:
-        """Create a CorpusConfig with overrides."""
+    ) -> SCMPrior:
+        """Create a SCMPrior with overrides."""
         cfg = self.config
         overrides = {}
 

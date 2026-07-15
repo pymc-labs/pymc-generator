@@ -193,7 +193,7 @@ def signal_summary(
     """Corpus-level signal report: metric quantiles + degenerate fractions.
 
     JSON-serializable; embedded under ``diagnostics["signal"]`` by
-    ``generate_corpus`` so weak-signal priors are visible in every corpus /
+    ``sample_prior_predictive`` so weak-signal priors are visible in every corpus /
     shard manifest. Interpretation guide:
 
     * ``frac_contrib_cv_lt_010`` — share of direct channels whose true

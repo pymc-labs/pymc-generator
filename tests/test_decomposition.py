@@ -1,7 +1,7 @@
 """Decomposition invariants — the correctness contract of the generator.
 
-These assert behaviour at the public level (``generate_corpus`` /
-``sample_world``), so they hold regardless of how the SCM graph is built or
+These assert behaviour at the public level (``sample_prior_predictive`` /
+``sample_scm``), so they hold regardless of how the SCM graph is built or
 drawn internally. They are the regression net for any engine refactor.
 """
 
@@ -16,7 +16,7 @@ from prior_generator.scenarios import SCENARIOS
 
 @pytest.fixture(scope="module")
 def corpus():
-    cfg = pg.make_world_config(
+    cfg = pg.make_scm_prior(
         K_max=4,
         M_max=2,
         J_max=1,
@@ -26,7 +26,7 @@ def corpus():
         seed=11,
         edge_budget={"cy": (3, 4), "cc": (1, 2), "zc": (1, 2), "dc": (1, 2)},
     )
-    return pg.generate_corpus(cfg)
+    return pg.sample_prior_predictive(cfg)
 
 
 def test_additive_identity(corpus):
@@ -80,7 +80,7 @@ def test_channels_positive_and_finite(corpus):
 
 def test_inactive_channels_zero_padded():
     """Channels beyond the active count contribute nothing and carry no spend."""
-    cfg = pg.make_world_config(
+    cfg = pg.make_scm_prior(
         K_max=6,
         M_max=3,
         J_max=2,
@@ -92,7 +92,7 @@ def test_inactive_channels_zero_padded():
         draws_per_cell=2,
         seed=5,
     )
-    corpus = pg.generate_corpus(cfg)
+    corpus = pg.sample_prior_predictive(cfg)
     acm = corpus["active_c_mask"]
     # padded (inactive) channel slots are exactly zero in spend and contribution
     pad = acm == 0
@@ -111,15 +111,15 @@ def test_determinism_same_seed():
         "draws_per_cell": 3,
         "seed": 99,
     }
-    a = pg.generate_corpus(pg.make_world_config(**kw))
-    b = pg.generate_corpus(pg.make_world_config(**kw))
+    a = pg.sample_prior_predictive(pg.make_scm_prior(**kw))
+    b = pg.sample_prior_predictive(pg.make_scm_prior(**kw))
     for key in ("spend_raw", "sales_raw", "g", "contributions_raw", "indirect_effects"):
         assert np.array_equal(a[key], b[key]), f"{key} not reproducible"
 
 
 def test_different_seed_differs():
-    a = pg.generate_corpus(pg.make_world_config(K_max=4, M_max=2, J_max=1, T=40, seed=1))
-    b = pg.generate_corpus(pg.make_world_config(K_max=4, M_max=2, J_max=1, T=40, seed=2))
+    a = pg.sample_prior_predictive(pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=40, seed=1))
+    b = pg.sample_prior_predictive(pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=40, seed=2))
     assert not np.array_equal(a["sales_raw"], b["sales_raw"])
 
 
@@ -127,14 +127,14 @@ def test_direct_only_scenario_has_negligible_indirect():
     """direct_only isolates C->Y with no channel-input interactions -> indirect ~ 0."""
     sc = SCENARIOS[0]
     assert sc.name == "direct_only"
-    world = pg.sample_world(sc.cfg(T=52, seed=0), seed=0, connect_all=True, name=sc.name)
+    world = pg.sample_scm(sc.prior(T=52, seed=0), seed=0, connect_all=True, name=sc.name)
     assert np.abs(world.data["indirect_effects"]).max() < 1e-6
 
 
 def test_diverse_texture_targets_not_flat():
     """The supported (diverse) texture must give contribution targets real variation."""
-    world = pg.sample_world(
-        pg.make_world_config(K_max=4, M_max=2, J_max=1, T=104, seed=3, edge_budget={"cy": (4, 4)}),
+    world = pg.sample_scm(
+        pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=104, seed=3, edge_budget={"cy": (4, 4)}),
         seed=3,
         connect_all=True,
     )

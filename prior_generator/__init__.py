@@ -15,24 +15,24 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .data_generator import DataGenerator
-    from .sampler import CorpusConfig
+    from .sampler import SCMPrior
 
 __version__ = "0.0.1"
 
 _LAZY_IMPORTS = {
     # config + generation
-    "CorpusConfig": (".sampler", "CorpusConfig"),
-    "generate_corpus": (".sampler", "generate_corpus"),
-    "make_world_config": (".presets", "make_world_config"),
+    "SCMPrior": (".sampler", "SCMPrior"),
+    "sample_prior_predictive": (".sampler", "sample_prior_predictive"),
+    "make_scm_prior": (".presets", "make_scm_prior"),
     # high-level facade + persistence (the PFN-consumable .npz format)
     "DataGenerator": (".data_generator", "DataGenerator"),
     "save_corpus": (".data_generator", "save_corpus"),
     "load_corpus": (".data_generator", "load_corpus"),
     # single-world API + human-readable bundles
-    "sample_world": (".worlds", "sample_world"),
-    "World": (".worlds", "World"),
-    "describe_world": (".describe", "describe_world"),
-    "write_world_bundle": (".bundles", "write_world_bundle"),
+    "sample_scm": (".worlds", "sample_scm"),
+    "SCM": (".worlds", "SCM"),
+    "describe_scm": (".describe", "describe_scm"),
+    "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
     "SCENARIOS": (".scenarios", "SCENARIOS"),
 }
@@ -50,16 +50,16 @@ def __getattr__(name: str):
 
 __all__ = [
     "SCENARIOS",
-    "CorpusConfig",
+    "SCMPrior",
     "DataGenerator",
-    "World",
+    "SCM",
     "__version__",
-    "describe_world",
-    "generate_corpus",
+    "describe_scm",
+    "sample_prior_predictive",
     "load_corpus",
-    "make_world_config",
-    "sample_world",
+    "make_scm_prior",
+    "sample_scm",
     "save_corpus",
     "write_scenario_bundles",
-    "write_world_bundle",
+    "write_scm_bundle",
 ]

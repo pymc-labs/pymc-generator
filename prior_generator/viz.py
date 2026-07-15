@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .worlds import World, channel_role, edges_with_coeffs, mechanism_label, node_status
+from .worlds import SCM, channel_role, edges_with_coeffs, mechanism_label, node_status
 
 # Validated categorical palette — slots are assigned in FIXED order per entity
 # and reused consistently across every figure of a bundle.
@@ -40,7 +40,7 @@ def _style_ax(ax) -> None:
     ax.tick_params(colors=MUTED, labelsize=8)
 
 
-def plot_dag(world: World, path: str, title: str | None = None) -> None:
+def plot_dag(world: SCM, path: str, title: str | None = None) -> None:
     """Column-layout DAG render (pure matplotlib — no graphviz required)."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
@@ -135,7 +135,7 @@ def plot_dag(world: World, path: str, title: str | None = None) -> None:
     plt.close(fig)
 
 
-def plot_timeseries(world: World, path: str, title: str | None = None) -> None:
+def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
     """Model-input series: per-channel spend, controls + latent demand, sales."""
     import matplotlib.pyplot as plt
 
@@ -181,7 +181,7 @@ def plot_timeseries(world: World, path: str, title: str | None = None) -> None:
     plt.close(fig)
 
 
-def plot_decomposition(world: World, path: str, title: str | None = None) -> None:
+def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     """Every true effect on Y + the reconstruction identity check."""
     import matplotlib.pyplot as plt
 
@@ -260,7 +260,7 @@ def plot_decomposition(world: World, path: str, title: str | None = None) -> Non
     plt.close(fig)
 
 
-def plot_channels(world: World, path: str, title: str | None = None) -> None:
+def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
     """Per-channel spend vs true contribution, both indexed to mean 1."""
     import matplotlib.pyplot as plt
 

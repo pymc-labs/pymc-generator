@@ -12,8 +12,8 @@ from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 @pytest.fixture(scope="module")
 def corpus():
-    cfg = pg.make_world_config(K_max=4, M_max=2, J_max=1, T=40, n_cells=2, draws_per_cell=3, seed=7)
-    return pg.generate_corpus(cfg)
+    cfg = pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=40, n_cells=2, draws_per_cell=3, seed=7)
+    return pg.sample_prior_predictive(cfg)
 
 
 def test_required_keys_and_shapes(corpus):
@@ -81,7 +81,7 @@ def test_save_load_roundtrip(tmp_path, corpus):
 
 
 def test_datagenerator_generate_n_tasks():
-    cfg = pg.make_world_config(K_max=4, M_max=2, J_max=1, T=32, draws_per_cell=5, seed=1)
+    cfg = pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=32, draws_per_cell=5, seed=1)
     gen = DataGenerator(cfg)
     corpus = gen.generate(n_tasks=7, seed=1)
     assert corpus["spend_raw"].shape[0] == 7
