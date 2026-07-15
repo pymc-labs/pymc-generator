@@ -18,9 +18,9 @@ from prior_generator.world_model import build_world_model, draw_worlds, sample_s
 @pytest.fixture(scope="module")
 def built():
     cfg = make_scm_prior(
-        K_max=4,
-        M_max=2,
-        J_max=1,
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
         T=48,
         edge_budget={"cy": (4, 4), "cc": (1, 2), "zc": (1, 2), "dc": (1, 2)},
     )

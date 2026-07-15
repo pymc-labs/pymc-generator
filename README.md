@@ -65,7 +65,7 @@ prior-generator --out inspection-datasets --seed 20260712
 ### Generate a corpus for PFN training
 
 ```python
-cfg = pg.make_scm_prior(K_max=8, M_max=4, J_max=2,
+cfg = pg.make_scm_prior(n_treatments=8, n_covariates=4, n_latent=2,
                               n_cells=50, draws_per_cell=20, seed=42)
 corpus = pg.sample_prior_predictive(cfg)                 # dict of numpy arrays
 pg.save_corpus(corpus, "corpus.npz")             # the PFN-consumable format

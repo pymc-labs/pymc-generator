@@ -277,7 +277,7 @@ def sample_scm(
     ----------
     cfg : SCMPrior
         An additive-SCM config (see ``make_scm_prior`` or
-        ``Scenario.cfg``). All ``K_max/M_max/J_max`` nodes are active.
+        ``Scenario.prior``). All ``n_treatments/n_covariates/n_latent`` nodes are active.
     seed : int
         Seed for the world's RNG stream.
     connect_all : bool
@@ -294,7 +294,7 @@ def sample_scm(
     cfg.validate()
     rng = np.random.default_rng(seed)
     layout = cfg.layout
-    K, M, J, T = cfg.K_max_effective, cfg.M_max_effective, cfg.J_max_effective, cfg.T
+    K, M, J, T = cfg.n_treatments, cfg.n_covariates, cfg.n_latent, cfg.T
 
     for _g_round in range(max_graph_rounds):
         g = sample_g_additive(rng, cfg, layout, K_active=K, M_active=M, J_active=J)

@@ -11,8 +11,8 @@ so one model / eval harness serves every complexity level:
 * **nonlinearity**  — media response family mix (``nonlinearity``)
 * **signal / noise** — coefficient and noise ranges (via ``**overrides``)
 
-The schema is pinned by ``K_max / M_max / J_max``: inactive nodes are
-zero-padded and masked, so a model trained at ``K_max=20`` sees the same slot
+The schema is pinned by ``n_treatments / n_covariates / n_latent``: inactive nodes are
+zero-padded and masked, so a model trained at ``n_treatments=20`` sees the same slot
 layout whether a task has 3 or 20 live channels.
 """
 
@@ -54,13 +54,13 @@ _DIVERSE_TEXTURE: dict[str, Any] = {
 
 def make_scm_prior(
     *,
-    K_max: int,
-    M_max: int,
-    J_max: int,
+    n_treatments: int,
+    n_covariates: int,
+    n_latent: int,
     edge_budget: dict[str, int | tuple[int, int]] | None = None,
-    K_active_range: tuple[int, int] | None = None,
-    M_active_range: tuple[int, int] | None = None,
-    J_active_range: tuple[int, int] | None = None,
+    n_treatments_active_range: tuple[int, int] | None = None,
+    n_covariates_active_range: tuple[int, int] | None = None,
+    n_latent_active_range: tuple[int, int] | None = None,
     nonlinearity: str = "diverse",
     texture: str = "diverse",
     **overrides: Any,
@@ -69,9 +69,10 @@ def make_scm_prior(
 
     Parameters
     ----------
-    K_max, M_max, J_max : int
-        Padded layout sizes — pin these to hold the schema (and tensor shapes)
-        fixed across complexity levels.
+    n_treatments, n_covariates, n_latent : int
+        Padded graph sizes — media channels (the treatments/interventions),
+        observed covariates, and hidden confounders. Pin these to hold the
+        schema (and tensor shapes) fixed across complexity levels.
     edge_budget : dict, optional
         Per-edge-type arrow budget ("pot"), an "up to N" cap: ``{"zc": 5}``
         places up to 5 control->channel arrows over the eligible pairs (count
@@ -80,9 +81,10 @@ def make_scm_prior(
         is independent — budgeting ``zc`` leaves ``zb`` (controls' effect on the
         outcome) alone. Types omitted from the dict keep their Bernoulli base
         rate. See :class:`SCMPrior.edge_budget`.
-    K_active_range, M_active_range, J_active_range : tuple, optional
-        Active-count ranges (the graph-size axis). Default to ``(max, max)``
-        (every node always active) so size is fixed unless you widen it.
+    n_treatments_active_range, n_covariates_active_range, n_latent_active_range : tuple, optional
+        Per-cell active-count ranges (the graph-size axis). Default to
+        ``(size, size)`` (every node always active) so size is fixed unless you
+        widen it.
     nonlinearity : {"diverse", "linear"}
         ``"linear"`` forces a purely linear media response (no adstock, no
         saturation) for the simplest additive graph; ``"diverse"`` keeps the
@@ -120,15 +122,22 @@ def make_scm_prior(
         )
 
     kwargs: dict[str, Any] = {
-        "K": K_max,
-        "M": M_max,
-        "J": J_max,
-        "K_max": K_max,
-        "M_max": M_max,
-        "J_max": J_max,
-        "K_active_range": K_active_range if K_active_range is not None else (K_max, K_max),
-        "M_active_range": M_active_range if M_active_range is not None else (M_max, M_max),
-        "J_active_range": J_active_range if J_active_range is not None else (J_max, J_max),
+        "n_treatments": n_treatments,
+        "n_covariates": n_covariates,
+        "n_latent": n_latent,
+        "n_treatments_active_range": (
+            n_treatments_active_range
+            if n_treatments_active_range is not None
+            else (n_treatments, n_treatments)
+        ),
+        "n_covariates_active_range": (
+            n_covariates_active_range
+            if n_covariates_active_range is not None
+            else (n_covariates, n_covariates)
+        ),
+        "n_latent_active_range": (
+            n_latent_active_range if n_latent_active_range is not None else (n_latent, n_latent)
+        ),
         "edge_budget": edge_budget,
     }
     if nonlinearity == "linear":

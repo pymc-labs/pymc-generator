@@ -51,9 +51,10 @@ class SCMPrior:
     ranges. Inactive nodes are zero-padded and masked via active_channel_mask.
 
     Key fields:
-        K, M, J: Default sizes for backward compatibility (used as K_max etc. if *_max not set)
-        K_max, M_max, J_max: Maximum sizes for variable-size DAGs
-        K_active_range, M_active_range, J_active_range: Ranges for random active counts per cell
+        n_treatments / n_covariates / n_latent: padded graph sizes (media
+            channels / observed controls / hidden confounders).
+        n_treatments_active_range / ...: per-cell active-count ranges; inactive
+            nodes are zero-padded to the sizes above and masked.
 
     Prefer building configs through
     :func:`prior_generator.presets.make_scm_prior`, which pins the
@@ -61,9 +62,9 @@ class SCMPrior:
     """
 
     T: int = T_DEMO
-    K: int = K_DEMO
-    M: int = M_DEMO
-    J: int = J_DEMO
+    n_treatments: int = K_DEMO  # media channels (the interventions / treatments)
+    n_covariates: int = M_DEMO  # observed controls
+    n_latent: int = J_DEMO  # hidden confounders (latent demand factors)
     n_cells: int = 50
     draws_per_cell: int = 20
     val_cell_frac: float = 0.2
@@ -74,14 +75,13 @@ class SCMPrior:
     seed: int = 0
 
     # -- variable-size DAG support ----------------------------------------
-    # Maximum sizes for padding (K_max >= K, etc.)
-    K_max: int = 0  # 0 means "use K" (backward compat)
-    M_max: int = 0  # 0 means "use M"
-    J_max: int = 0  # 0 means "use J"
-    # Ranges for random active counts per cell (inclusive)
-    K_active_range: tuple[int, int] = (4, 20)
-    M_active_range: tuple[int, int] = (2, 10)
-    J_active_range: tuple[int, int] = (1, 5)
+    # Per-cell active-count ranges (inclusive). Each cell draws a random number
+    # of active nodes in these ranges; nodes beyond the active count are
+    # zero-padded to the fixed n_treatments/n_covariates/n_latent sizes and
+    # masked. Default to the full size (fixed-size graphs) via the factory.
+    n_treatments_active_range: tuple[int, int] = (4, 20)
+    n_covariates_active_range: tuple[int, int] = (2, 10)
+    n_latent_active_range: tuple[int, int] = (1, 5)
 
     # -- prior-range constants -------------------------------------------
     # Per-channel media-response mechanism priors (realized as PyMC
@@ -161,46 +161,31 @@ class SCMPrior:
     @property
     def layout(self) -> SlotLayout:
         return SlotLayout(
-            K=self.K_max_effective,
-            M=self.M_max_effective,
-            J=self.J_max_effective,
+            K=self.n_treatments,
+            M=self.n_covariates,
+            J=self.n_latent,
             edge_types=EDGE_TYPES_EXTENDED,
         )
 
     @property
-    def K_max_effective(self) -> int:
-        """K_max if set, else K (backward compat)."""
-        return self.K_max if self.K_max > 0 else self.K
-
-    @property
-    def M_max_effective(self) -> int:
-        """M_max if set, else M (backward compat)."""
-        return self.M_max if self.M_max > 0 else self.M
-
-    @property
-    def J_max_effective(self) -> int:
-        """J_max if set, else J (backward compat)."""
-        return self.J_max if self.J_max > 0 else self.J
-
-    @property
-    def K_active_range_effective(self) -> tuple[int, int]:
-        """K_active_range clamped to K_max_effective."""
-        lo = min(self.K_active_range[0], self.K_max_effective)
-        hi = min(self.K_active_range[1], self.K_max_effective)
+    def n_treatments_active_range_effective(self) -> tuple[int, int]:
+        """n_treatments_active_range clamped to n_treatments."""
+        lo = min(self.n_treatments_active_range[0], self.n_treatments)
+        hi = min(self.n_treatments_active_range[1], self.n_treatments)
         return (lo, hi)
 
     @property
-    def M_active_range_effective(self) -> tuple[int, int]:
-        """M_active_range clamped to M_max_effective."""
-        lo = min(self.M_active_range[0], self.M_max_effective)
-        hi = min(self.M_active_range[1], self.M_max_effective)
+    def n_covariates_active_range_effective(self) -> tuple[int, int]:
+        """n_covariates_active_range clamped to n_covariates."""
+        lo = min(self.n_covariates_active_range[0], self.n_covariates)
+        hi = min(self.n_covariates_active_range[1], self.n_covariates)
         return (lo, hi)
 
     @property
-    def J_active_range_effective(self) -> tuple[int, int]:
-        """J_active_range clamped to J_max_effective."""
-        lo = min(self.J_active_range[0], self.J_max_effective)
-        hi = min(self.J_active_range[1], self.J_max_effective)
+    def n_latent_active_range_effective(self) -> tuple[int, int]:
+        """n_latent_active_range clamped to n_latent."""
+        lo = min(self.n_latent_active_range[0], self.n_latent)
+        hi = min(self.n_latent_active_range[1], self.n_latent)
         return (lo, hi)
 
     @property
@@ -208,12 +193,12 @@ class SCMPrior:
         return int(round(self.query_frac * self.T))
 
     def validate(self) -> None:
-        if self.K < 1:
-            raise ValueError(f"K must be >= 1, got {self.K}")
-        if self.M < 1:
-            raise ValueError(f"M must be >= 1, got {self.M}")
-        if self.J < 1:
-            raise ValueError(f"J must be >= 1, got {self.J}")
+        if self.n_treatments < 1:
+            raise ValueError(f"n_treatments must be >= 1, got {self.n_treatments}")
+        if self.n_covariates < 1:
+            raise ValueError(f"n_covariates must be >= 1, got {self.n_covariates}")
+        if self.n_latent < 1:
+            raise ValueError(f"n_latent must be >= 1, got {self.n_latent}")
         if not 0 < self.n_query < self.T:
             raise ValueError(
                 f"query_frac={self.query_frac} gives {self.n_query} query weeks "
@@ -362,30 +347,35 @@ class SCMPrior:
                 "has zero amplitude — disable pulses via the prob range instead"
             )
         # Validate variable-size DAG ranges
-        K_max_eff = self.K_max_effective
-        M_max_eff = self.M_max_effective
-        J_max_eff = self.J_max_effective
-        # Clamp active ranges to effective max (backward compat: if K_max not set, use K)
-        k_act_max = min(self.K_active_range[1], K_max_eff)
-        m_act_max = min(self.M_active_range[1], M_max_eff)
-        j_act_max = min(self.J_active_range[1], J_max_eff)
-        if self.K_active_range[0] < 1:
-            raise ValueError(f"K_active_range[0] must be >= 1, got {self.K_active_range[0]}")
-        if self.M_active_range[0] < 1:
-            raise ValueError(f"M_active_range[0] must be >= 1, got {self.M_active_range[0]}")
-        if self.J_active_range[0] < 1:
-            raise ValueError(f"J_active_range[0] must be >= 1, got {self.J_active_range[0]}")
-        if k_act_max < self.K_active_range[0]:
+        k_act_max = min(self.n_treatments_active_range[1], self.n_treatments)
+        m_act_max = min(self.n_covariates_active_range[1], self.n_covariates)
+        j_act_max = min(self.n_latent_active_range[1], self.n_latent)
+        if self.n_treatments_active_range[0] < 1:
             raise ValueError(
-                f"K_max ({K_max_eff}) must be >= K_active_range[0] ({self.K_active_range[0]})"
+                f"n_treatments_active_range[0] must be >= 1, got {self.n_treatments_active_range[0]}"
             )
-        if m_act_max < self.M_active_range[0]:
+        if self.n_covariates_active_range[0] < 1:
             raise ValueError(
-                f"M_max ({M_max_eff}) must be >= M_active_range[0] ({self.M_active_range[0]})"
+                f"n_covariates_active_range[0] must be >= 1, got {self.n_covariates_active_range[0]}"
             )
-        if j_act_max < self.J_active_range[0]:
+        if self.n_latent_active_range[0] < 1:
             raise ValueError(
-                f"J_max ({J_max_eff}) must be >= J_active_range[0] ({self.J_active_range[0]})"
+                f"n_latent_active_range[0] must be >= 1, got {self.n_latent_active_range[0]}"
+            )
+        if k_act_max < self.n_treatments_active_range[0]:
+            raise ValueError(
+                f"n_treatments ({self.n_treatments}) must be >= "
+                f"n_treatments_active_range[0] ({self.n_treatments_active_range[0]})"
+            )
+        if m_act_max < self.n_covariates_active_range[0]:
+            raise ValueError(
+                f"n_covariates ({self.n_covariates}) must be >= "
+                f"n_covariates_active_range[0] ({self.n_covariates_active_range[0]})"
+            )
+        if j_act_max < self.n_latent_active_range[0]:
+            raise ValueError(
+                f"n_latent ({self.n_latent}) must be >= "
+                f"n_latent_active_range[0] ({self.n_latent_active_range[0]})"
             )
 
 
@@ -886,15 +876,12 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     n_rejected = 0
 
     for cell in range(cfg.n_cells):
-        K_active = int(
-            rng.integers(cfg.K_active_range_effective[0], cfg.K_active_range_effective[1] + 1)
-        )
-        M_active = int(
-            rng.integers(cfg.M_active_range_effective[0], cfg.M_active_range_effective[1] + 1)
-        )
-        J_active = int(
-            rng.integers(cfg.J_active_range_effective[0], cfg.J_active_range_effective[1] + 1)
-        )
+        tr = cfg.n_treatments_active_range_effective
+        cv = cfg.n_covariates_active_range_effective
+        lt = cfg.n_latent_active_range_effective
+        K_active = int(rng.integers(tr[0], tr[1] + 1))
+        M_active = int(rng.integers(cv[0], cv[1] + 1))
+        J_active = int(rng.integers(lt[0], lt[1] + 1))
         g = sample_g_additive(
             rng, cfg, layout, K_active=K_active, M_active=M_active, J_active=J_active
         )

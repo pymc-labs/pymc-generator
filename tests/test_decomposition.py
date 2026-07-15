@@ -17,9 +17,9 @@ from prior_generator.scenarios import SCENARIOS
 @pytest.fixture(scope="module")
 def corpus():
     cfg = pg.make_scm_prior(
-        K_max=4,
-        M_max=2,
-        J_max=1,
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
         T=48,
         n_cells=2,
         draws_per_cell=4,
@@ -81,12 +81,12 @@ def test_channels_positive_and_finite(corpus):
 def test_inactive_channels_zero_padded():
     """Channels beyond the active count contribute nothing and carry no spend."""
     cfg = pg.make_scm_prior(
-        K_max=6,
-        M_max=3,
-        J_max=2,
-        K_active_range=(3, 3),
-        M_active_range=(2, 2),
-        J_active_range=(1, 1),
+        n_treatments=6,
+        n_covariates=3,
+        n_latent=2,
+        n_treatments_active_range=(3, 3),
+        n_covariates_active_range=(2, 2),
+        n_latent_active_range=(1, 1),
         T=40,
         n_cells=2,
         draws_per_cell=2,
@@ -103,9 +103,9 @@ def test_inactive_channels_zero_padded():
 
 def test_determinism_same_seed():
     kw = {
-        "K_max": 4,
-        "M_max": 2,
-        "J_max": 1,
+        "n_treatments": 4,
+        "n_covariates": 2,
+        "n_latent": 1,
         "T": 40,
         "n_cells": 2,
         "draws_per_cell": 3,
@@ -118,8 +118,12 @@ def test_determinism_same_seed():
 
 
 def test_different_seed_differs():
-    a = pg.sample_prior_predictive(pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=40, seed=1))
-    b = pg.sample_prior_predictive(pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=40, seed=2))
+    a = pg.sample_prior_predictive(
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=40, seed=1)
+    )
+    b = pg.sample_prior_predictive(
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=40, seed=2)
+    )
     assert not np.array_equal(a["sales_raw"], b["sales_raw"])
 
 
@@ -134,7 +138,9 @@ def test_direct_only_scenario_has_negligible_indirect():
 def test_diverse_texture_targets_not_flat():
     """The supported (diverse) texture must give contribution targets real variation."""
     world = pg.sample_scm(
-        pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=104, seed=3, edge_budget={"cy": (4, 4)}),
+        pg.make_scm_prior(
+            n_treatments=4, n_covariates=2, n_latent=1, T=104, seed=3, edge_budget={"cy": (4, 4)}
+        ),
         seed=3,
         connect_all=True,
     )

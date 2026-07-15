@@ -12,17 +12,17 @@ from prior_generator.slots import EDGE_TYPES_EXTENDED
 
 
 def test_factory_pins_additive_schema():
-    cfg = pg.make_scm_prior(K_max=8, M_max=4, J_max=3)
-    assert (cfg.K_max_effective, cfg.M_max_effective, cfg.J_max_effective) == (8, 4, 3)
+    cfg = pg.make_scm_prior(n_treatments=8, n_covariates=4, n_latent=3)
+    assert (cfg.n_treatments, cfg.n_covariates, cfg.n_latent) == (8, 4, 3)
     assert cfg.layout.edge_types == EDGE_TYPES_EXTENDED
     # default active ranges pin every node active
-    assert cfg.K_active_range == (8, 8)
-    assert cfg.M_active_range == (4, 4)
-    assert cfg.J_active_range == (3, 3)
+    assert cfg.n_treatments_active_range == (8, 8)
+    assert cfg.n_covariates_active_range == (4, 4)
+    assert cfg.n_latent_active_range == (3, 3)
 
 
 def test_factory_diverse_texture_defaults():
-    cfg = pg.make_scm_prior(K_max=4, M_max=2, J_max=1, l_max=8)
+    cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, l_max=8)
     assert cfg.channel_hf_sigma_range[1] > 0
     assert cfg.channel_pulse_prob_range[1] > 0
     assert cfg.rw_channel_std_range is not None
@@ -30,43 +30,45 @@ def test_factory_diverse_texture_defaults():
 
 
 def test_factory_linear_nonlinearity():
-    cfg = pg.make_scm_prior(K_max=4, M_max=2, J_max=1, nonlinearity="linear")
+    cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="linear")
     assert cfg.adstock_family_probs == (1.0, 0.0, 0.0)
     assert cfg.saturation_family_probs == (1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 def test_factory_overrides_win():
-    cfg = pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=200, spend_cv_floor=0.2)
+    cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=200, spend_cv_floor=0.2)
     assert cfg.T == 200
     assert cfg.spend_cv_floor == 0.2
 
 
 def test_legacy_texture_rejected():
     with pytest.raises(ValueError, match="texture"):
-        pg.make_scm_prior(K_max=4, M_max=2, J_max=1, texture="legacy")
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, texture="legacy")
 
 
 def test_bad_nonlinearity_rejected():
     with pytest.raises(ValueError, match="nonlinearity"):
-        pg.make_scm_prior(K_max=4, M_max=2, J_max=1, nonlinearity="quadratic")
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="quadratic")
 
 
 def test_edge_budget_unknown_key_rejected():
     with pytest.raises(ValueError, match="edge_budget"):
-        pg.make_scm_prior(K_max=4, M_max=2, J_max=1, edge_budget={"xy": 3})
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, edge_budget={"xy": 3})
 
 
 @pytest.mark.parametrize("spec", [-1, (2, 1), (1, 2, 3), 1.5, True])
 def test_edge_budget_bad_spec_rejected(spec):
     with pytest.raises(ValueError):
-        pg.make_scm_prior(K_max=4, M_max=2, J_max=1, edge_budget={"cc": spec})
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, edge_budget={"cc": spec})
 
 
 # --- deprecation / steering policy -----------------------------------------
 
 
 def test_diverse_texture_does_not_warn():
-    cfg = pg.make_scm_prior(K_max=4, M_max=2, J_max=1, T=32, n_cells=2, draws_per_cell=1)
+    cfg = pg.make_scm_prior(
+        n_treatments=4, n_covariates=2, n_latent=1, T=32, n_cells=2, draws_per_cell=1
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("error", FutureWarning)
         pg.sample_prior_predictive(cfg)  # must not raise
@@ -77,12 +79,12 @@ def test_flat_texture_warns():
     # the deprecated smooth-walk-only prior and must warn.
     cfg = SCMPrior(
         T=32,
-        K=4,
-        M=2,
-        J=1,
-        K_active_range=(4, 4),
-        M_active_range=(2, 2),
-        J_active_range=(1, 1),
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        n_treatments_active_range=(4, 4),
+        n_covariates_active_range=(2, 2),
+        n_latent_active_range=(1, 1),
         n_cells=2,
         draws_per_cell=1,
     )

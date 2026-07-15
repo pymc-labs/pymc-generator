@@ -19,8 +19,14 @@ from prior_generator import make_scm_prior, sample_prior_predictive
 from prior_generator.sampler import SCMPrior, sample_g_additive
 
 
-def _cfg(edge_budget=None, *, K=5, M=5, J=2, **kw) -> SCMPrior:
-    return SCMPrior(K=K, M=M, J=J, edge_budget=edge_budget, **kw)
+def _cfg(edge_budget=None, *, n_treatments=5, n_covariates=5, n_latent=2, **kw) -> SCMPrior:
+    return SCMPrior(
+        n_treatments=n_treatments,
+        n_covariates=n_covariates,
+        n_latent=n_latent,
+        edge_budget=edge_budget,
+        **kw,
+    )
 
 
 def _draw(cfg: SCMPrior, seed: int) -> dict[str, np.ndarray]:
@@ -43,14 +49,14 @@ def test_exact_count_via_equal_bounds():
 
 
 def test_pot_capped_at_eligible_pairs():
-    cfg = _cfg({"cc": 99}, K=3)  # strict-upper C->C eligible = 3
+    cfg = _cfg({"cc": 99}, n_treatments=3)  # strict-upper C->C eligible = 3
     counts = {int(_draw(cfg, s)["g_cc"].sum()) for s in range(30)}
     assert counts <= {0, 1, 2, 3}
     assert max(counts) == 3
 
 
 def test_range_pot_varies_within_bounds():
-    cfg = _cfg({"cc": (0, 3)}, K=6)
+    cfg = _cfg({"cc": (0, 3)}, n_treatments=6)
     counts = {int(_draw(cfg, s)["g_cc"].sum()) for s in range(60)}
     assert counts <= {0, 1, 2, 3}
     assert len(counts) > 1
@@ -81,7 +87,7 @@ def test_fan_out_variety():
 
 
 def test_cc_pot_is_strict_upper_triangular():
-    cfg = _cfg({"cc": (4, 4)}, K=5)
+    cfg = _cfg({"cc": (4, 4)}, n_treatments=5)
     for seed in range(10):
         g_cc = _draw(cfg, seed)["g_cc"]
         assert g_cc.sum() == 4
@@ -115,7 +121,14 @@ def test_validate_accepts_numpy_ints():
 
 def test_generate_corpus_honors_pot_end_to_end():
     cfg = make_scm_prior(
-        K_max=4, M_max=2, J_max=1, edge_budget={"zc": 3}, T=52, n_cells=3, draws_per_cell=2, seed=0
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        edge_budget={"zc": 3},
+        T=52,
+        n_cells=3,
+        draws_per_cell=2,
+        seed=0,
     )
     corpus = sample_prior_predictive(cfg)
     per_task_zc = corpus["g"][:, cfg.layout.slices["zc"]].sum(axis=1)

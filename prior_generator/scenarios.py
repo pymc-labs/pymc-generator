@@ -25,7 +25,7 @@ class Scenario:
         Short identifier (used as the bundle folder title).
     purpose : str
         What the scenario isolates — written into ``description.txt``.
-    K, M, J : int
+    n_treatments, n_covariates, n_latent : int
         Channels / controls / demand factors (all active).
     connect_all : bool
         When True, every node must have a directed path to Y (no isolated
@@ -37,9 +37,9 @@ class Scenario:
 
     name: str
     purpose: str
-    K: int
-    M: int
-    J: int
+    n_treatments: int
+    n_covariates: int
+    n_latent: int
     connect_all: bool
     edge_budget: dict[str, int | tuple[int, int]] = field(default_factory=dict)
 
@@ -51,9 +51,9 @@ class Scenario:
         bypasses the corpus loop — but they keep ``validate()`` happy.
         """
         return make_scm_prior(
-            K_max=self.K,
-            M_max=self.M,
-            J_max=self.J,
+            n_treatments=self.n_treatments,
+            n_covariates=self.n_covariates,
+            n_latent=self.n_latent,
             edge_budget=dict(self.edge_budget),
             T=T,
             n_cells=2,
@@ -71,9 +71,9 @@ SCENARIOS: tuple[Scenario, ...] = (
             "everything to direct contributions + baseline; indirect effects are "
             "exactly zero."
         ),
-        K=4,
-        M=2,
-        J=1,
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
         connect_all=True,
         edge_budget={
             "cy": (4, 4),
@@ -93,9 +93,9 @@ SCENARIOS: tuple[Scenario, ...] = (
             "baseline (D→B). The dc indirect column carries the demand-through-spend "
             "effect; naive attribution overcredits channels."
         ),
-        K=4,
-        M=2,
-        J=2,
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=2,
         connect_all=True,
         edge_budget={
             "cy": (4, 4),
@@ -115,9 +115,9 @@ SCENARIOS: tuple[Scenario, ...] = (
             "AND the baseline (Z→B), with demand also moving the controls (D→Z). "
             "The zc indirect column carries the control-through-spend effect."
         ),
-        K=4,
-        M=3,
-        J=1,
+        n_treatments=4,
+        n_covariates=3,
+        n_latent=1,
         connect_all=True,
         edge_budget={
             "cy": (4, 4),
@@ -141,9 +141,9 @@ SCENARIOS: tuple[Scenario, ...] = (
             "zero-attribution traps; dead-ends are never generated — see 'Node "
             "connectivity' in description.txt."
         ),
-        K=5,
-        M=2,
-        J=1,
+        n_treatments=5,
+        n_covariates=2,
+        n_latent=1,
         connect_all=False,
         edge_budget={
             "cy": (3, 3),
@@ -167,9 +167,9 @@ SCENARIOS: tuple[Scenario, ...] = (
             "Y and dead-ends are never generated. See 'Node connectivity' in "
             "description.txt."
         ),
-        K=6,
-        M=4,
-        J=2,
+        n_treatments=6,
+        n_covariates=4,
+        n_latent=2,
         connect_all=False,
         edge_budget={
             "cy": (4, 4),
