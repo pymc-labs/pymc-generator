@@ -1,4 +1,4 @@
-"""Stratified corpus sampler for the additive causal rung (``L1_additive``).
+"""Stratified corpus sampler for the additive causal SCM.
 
 Each world (task) is an additive structural causal model over latent demand
 factors D, observed controls Z, media channels C, a baseline B and sales Y.
@@ -38,15 +38,13 @@ from .slots import (
     SlotLayout,
 )
 
-RUNGS = ("L1_additive",)
-
 #: Maximum draw rounds per cell before giving up (post-filter top-up loop).
 MAX_TOPUPS_PER_CELL = 8
 
 
 @dataclass
 class CorpusConfig:
-    """Corpus generation knobs + prior-range constants for the additive rung.
+    """Corpus generation knobs + prior-range constants for the additive SCM.
 
     Supports variable-size DAGs via padding to max sizes. Each cell draws
     random active counts (K_active, M_active, J_active) from configured
@@ -62,7 +60,6 @@ class CorpusConfig:
     layout and enables the supported "diverse" channel texture.
     """
 
-    rung: str = "L1_additive"
     T: int = T_DEMO
     K: int = K_DEMO
     M: int = M_DEMO
@@ -123,7 +120,7 @@ class CorpusConfig:
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
 
-    # -- L1_additive channel texture (plan doc 05 signal fix) ----------------
+    # -- Channel texture (plan doc 05 signal fix) --------------------------
     # High-frequency exogenous drive on the channel's own pre-softplus input:
     # iid weekly noise (sigma ~ U(range)) and campaign pulses (per-week
     # probability ~ U(prob_range), amplitude ~ U(amp_range)). Optional uniform
@@ -147,7 +144,7 @@ class CorpusConfig:
     # The Phase-4 rates (dz/zc/cc/zz) have their own config fields above.
     edge_rate_overrides: dict[str, float] | None = None
 
-    # Per-edge-type arrow budget ("pot"), L1_additive only. Maps edge type ->
+    # Per-edge-type arrow budget ("pot"). Maps edge type ->
     # "up to N" cap (int) or (lo, hi) inclusive range; the per-task count is
     # drawn uniformly (int N => {0..N}; use (N, N) for exactly N) and capped at
     # the number of eligible pairs. When a type is present, its arrows are
@@ -211,12 +208,6 @@ class CorpusConfig:
         return int(round(self.query_frac * self.T))
 
     def validate(self) -> None:
-        if self.rung not in RUNGS:
-            raise ValueError(
-                f"rung must be 'L1_additive', got {self.rung!r}. The legacy "
-                f"L0/L1 rungs were deprecated in structural-pfn (plan-05) and "
-                f"were not migrated to prior-generator."
-            )
         if self.K < 1:
             raise ValueError(f"K must be >= 1, got {self.K}")
         if self.M < 1:
@@ -318,7 +309,7 @@ class CorpusConfig:
                     raise ValueError(
                         f"edge_budget[{et!r}] must be an int or (lo, hi) tuple, got {type(spec)}"
                     )
-        # Phase 4: additive-rung priors
+        # Phase 4: additive-SCM priors
         for name in ("dz_base_rate", "zc_base_rate", "cc_base_rate", "zz_base_rate"):
             rate = getattr(self, name)
             if not 0.0 <= rate <= 1.0:
@@ -337,7 +328,7 @@ class CorpusConfig:
                 f"rw_positive_mean_range must be positive (channel walks stay positive "
                 f"after softplus), got {self.rw_positive_mean_range}"
             )
-        # Channel texture (additive rung)
+        # Channel texture
         if self.adstock_burn_in < 0:
             raise ValueError(f"adstock_burn_in must be >= 0, got {self.adstock_burn_in}")
         if 0 < self.adstock_burn_in < self.l_max:
@@ -568,7 +559,7 @@ def sample_g_additive(
     M_active: int | None = None,
     J_active: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Draw one extended DAG cell for the additive rung (Phase 4).
+    """Draw one extended DAG cell for the additive SCM (Phase 4).
 
     Extends :func:`sample_g` with the four new edge types. C->C and Z->Z
     edges are restricted to the strict upper triangle (src index < dst
@@ -662,11 +653,9 @@ def _signal_block(
     active_c_mask: np.ndarray,
     sales_scale: np.ndarray,
 ) -> dict:
-    """``diagnostics["signal"]`` for a corpus — used by BOTH generator paths.
+    """``diagnostics["signal"]`` for a corpus.
 
-    One definition of "direct active channel" (cy edge present AND channel not
-    padding) so the legacy and additive rungs' signal blocks always measure
-    the same population and stay comparable across rungs.
+    "Direct active channel" = cy edge present AND channel not padding.
     """
     cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (active_c_mask == 1)
     return signal_summary(
@@ -707,7 +696,7 @@ def _warn_flat_texture(cfg: CorpusConfig) -> None:
     """Steer every caller to the ONE supported world prior.
 
     The blessed path is ``make_world_config(texture="diverse")`` — the
-    additive rung with high-frequency channel texture and adstock burn-in.
+    additive SCM with high-frequency channel texture and adstock burn-in.
     A config with the flat (smooth-walk-only) channel prior still generates
     but warns: its contribution targets degenerate to near-flat lines
     (measured on the reference config: ~49% of direct-channel targets without
@@ -718,7 +707,7 @@ def _warn_flat_texture(cfg: CorpusConfig) -> None:
         and float(cfg.channel_pulse_prob_range[1]) == 0.0
     ):
         warnings.warn(
-            "L1_additive with the legacy (smooth-walk-only) channel texture is "
+            "The flat (smooth-walk-only) channel texture is "
             "deprecated: it produces near-flat contribution targets the model cannot "
             "learn attribution from. Build configs with "
             "make_world_config(texture='diverse').",
@@ -730,7 +719,7 @@ def _warn_flat_texture(cfg: CorpusConfig) -> None:
 def generate_corpus(cfg: CorpusConfig) -> dict:
     """Generate the stratified task corpus (dict of ndarrays).
 
-    Routes to :func:`_generate_corpus_additive` — the additive causal rung
+    Routes to :func:`_generate_corpus_additive` — the additive causal SCM
     with the extended g-vector layout and exact interventional decomposition
     targets (``indirect_effects``, ``indirect_effects_by_source``,
     ``control_contribution``, ``confounder_contribution``,
@@ -746,7 +735,7 @@ def generate_corpus(cfg: CorpusConfig) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Additive causal graph corpus (rung "L1_additive")
+# Additive causal graph corpus
 # --------------------------------------------------------------------------
 
 _ADDITIVE_OUT_NAMES = (
@@ -789,7 +778,7 @@ def _additive_task_ok(
     sales_spike_ratio: float = 8.0,
     spend_spike_ratio: float = 50.0,
 ) -> bool:
-    """Single-task realism filter for the additive rung.
+    """Single-task realism filter for the additive SCM.
 
     Realism checks on the additive scale: finite
     arrays, non-negative sales, spend-CV floor on direct (C->Y) channels,
@@ -817,7 +806,7 @@ def _additive_task_ok(
 
 
 def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
-    """Generate the Phase-4 additive-rung corpus (plan doc 03, task 4.4).
+    """Generate the Phase-4 additive-SCM corpus (plan doc 03, task 4.4).
 
     Same schema as :func:`generate_corpus` (CONTRACTS §1) with the extended
     g-vector layout plus two new keys:
@@ -1090,7 +1079,6 @@ def _generate_corpus_additive(cfg: CorpusConfig) -> dict:
         - baseline_raw
     ).max()
     diagnostics = {
-        "rung": cfg.rung,
         "edge_types": list(layout.edge_types),
         "n_tasks": int(n_tasks),
         "n_cells": int(cfg.n_cells),

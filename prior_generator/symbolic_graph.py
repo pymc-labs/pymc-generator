@@ -1,4 +1,4 @@
-"""PyTensor symbolic causal-graph builder for the Phase-4 additive rung.
+"""PyTensor symbolic causal-graph builder for the additive causal SCM.
 
 Builds a Pearlian additive SCM (plan doc 03, D1/D5) with inter-variable
 interactions as one symbolic PyTensor graph:

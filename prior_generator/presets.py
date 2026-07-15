@@ -1,6 +1,6 @@
-"""Complexity presets for the L1_additive corpus.
+"""Complexity presets for the additive-SCM corpus.
 
-The L1_additive rung fixes the *structure* — the 8-block extended edge layout
+The additive SCM fixes the *structure* — the 8-block extended edge layout
 (cy, dc, dz, db, zb, zc, cc, zz), the additive structural equations, and the
 ``indirect_effects`` outputs. This module dials *complexity* within that fixed
 structure along orthogonal axes, keeping the schema (tensor shapes) identical
@@ -65,7 +65,7 @@ def make_world_config(
     texture: str = "diverse",
     **overrides: Any,
 ) -> CorpusConfig:
-    """Build an ``L1_additive`` :class:`CorpusConfig` with a pinned max-layout.
+    """Build a validated additive-SCM :class:`CorpusConfig` with a pinned max-layout.
 
     Parameters
     ----------
@@ -109,7 +109,7 @@ def make_world_config(
     Returns
     -------
     CorpusConfig
-        A validated additive-rung config.
+        A validated additive-SCM config.
     """
     if nonlinearity not in ("diverse", "linear"):
         raise ValueError(f"nonlinearity must be 'diverse' or 'linear', got {nonlinearity!r}")
@@ -120,7 +120,6 @@ def make_world_config(
         )
 
     kwargs: dict[str, Any] = {
-        "rung": "L1_additive",
         "K": K_max,
         "M": M_max,
         "J": J_max,

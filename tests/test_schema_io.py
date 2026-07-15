@@ -75,7 +75,7 @@ def test_save_load_roundtrip(tmp_path, corpus):
     loaded = pg.load_corpus(path)
     for key, val in corpus.items():
         if key == "diagnostics":
-            assert loaded[key]["rung"] == "L1_additive"
+            assert loaded[key]["edge_types"] == list(EDGE_TYPES_EXTENDED)
         else:
             assert np.array_equal(loaded[key], val), f"{key} changed across roundtrip"
 

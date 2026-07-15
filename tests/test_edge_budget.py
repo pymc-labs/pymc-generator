@@ -1,4 +1,4 @@
-"""Per-edge-type arrow budgets ("pots") for the additive rung.
+"""Per-edge-type arrow budgets ("pots") for the additive SCM.
 
 A budget caps the arrow count for an edge type ("up to N"): the per-task count
 is drawn uniformly in {0..N} (or {lo..hi} for a tuple; (N, N) for exactly N)
@@ -20,7 +20,7 @@ from prior_generator.sampler import CorpusConfig, sample_g_additive
 
 
 def _cfg(edge_budget=None, *, K=5, M=5, J=2, **kw) -> CorpusConfig:
-    return CorpusConfig(rung="L1_additive", K=K, M=M, J=J, edge_budget=edge_budget, **kw)
+    return CorpusConfig(K=K, M=M, J=J, edge_budget=edge_budget, **kw)
 
 
 def _draw(cfg: CorpusConfig, seed: int) -> dict[str, np.ndarray]:

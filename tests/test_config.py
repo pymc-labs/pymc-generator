@@ -13,7 +13,6 @@ from prior_generator.slots import EDGE_TYPES_EXTENDED
 
 def test_factory_pins_additive_schema():
     cfg = pg.make_world_config(K_max=8, M_max=4, J_max=3)
-    assert cfg.rung == "L1_additive"
     assert (cfg.K_max_effective, cfg.M_max_effective, cfg.J_max_effective) == (8, 4, 3)
     assert cfg.layout.edge_types == EDGE_TYPES_EXTENDED
     # default active ranges pin every node active
@@ -50,12 +49,6 @@ def test_legacy_texture_rejected():
 def test_bad_nonlinearity_rejected():
     with pytest.raises(ValueError, match="nonlinearity"):
         pg.make_world_config(K_max=4, M_max=2, J_max=1, nonlinearity="quadratic")
-
-
-@pytest.mark.parametrize("rung", ["L0", "L1", "nonsense"])
-def test_non_additive_rung_rejected(rung):
-    with pytest.raises(ValueError, match="L1_additive"):
-        CorpusConfig(rung=rung).validate()
 
 
 def test_edge_budget_unknown_key_rejected():

@@ -66,7 +66,7 @@ def describe_world(world: World) -> str:
     signal = world.signal()
 
     f = io.StringIO()
-    f.write(f"Dataset: {world.name} (L1_additive, texture=diverse)\n")
+    f.write(f"Dataset: {world.name} (additive SCM, texture=diverse)\n")
     f.write("=" * 70 + "\n\n")
     f.write(f"Purpose:\n  {world.purpose}\n\n")
     f.write(f"Sizes: T={cfg.T}, K={world.K}, M={world.M}, J={world.J}, ")

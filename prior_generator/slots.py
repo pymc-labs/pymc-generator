@@ -11,7 +11,7 @@ Node types:
     Y         sales/revenue         (sink)
 
 Base edge set = {C->Y, D->C, D->B, Z->B} (`EDGE_TYPES`, the legacy 4-block
-layout); the additive rung uses the extended 8-block layout
+layout); the additive SCM uses the extended 8-block layout
 (`EDGE_TYPES_EXTENDED`), which adds {D->Z, Z->C, C->C, Z->Z}.
 
 Canonical g-vector ordering (LOCKED):

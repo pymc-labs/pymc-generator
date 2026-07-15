@@ -276,7 +276,7 @@ def sample_world(
     Parameters
     ----------
     cfg : CorpusConfig
-        An additive-rung config (see ``make_world_config`` or
+        An additive-SCM config (see ``make_world_config`` or
         ``Scenario.cfg``). All ``K_max/M_max/J_max`` nodes are active.
     seed : int
         Seed for the world's RNG stream.
