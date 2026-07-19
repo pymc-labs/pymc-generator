@@ -8,6 +8,15 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Documentation site (`docs/`, MkDocs Material) at
+  <https://pymc-labs.github.io/prior-generator/>: docstring-driven API reference
+  (mkdocstrings), guide pages whose figures are produced by executing real code
+  at build time (markdown-exec), and a runnable examples notebook executed by
+  mkdocs-jupyter. Added a `docs` extra, a GitHub Pages workflow
+  (`.github/workflows/docs.yml`), and build instructions in `CONTRIBUTING.md`.
+
 ## [0.0.1] - 2026-07-14
 
 ### Added

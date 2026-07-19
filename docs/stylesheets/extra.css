@@ -1,0 +1,259 @@
+/* ==========================================================================
+   prior-generator docs — modern theme layer over Material for MkDocs
+   ========================================================================== */
+
+:root {
+  --pg-teal: #0ea5e9;
+  --pg-emerald: #10b981;
+  --pg-indigo: #6366f1;
+  --pg-amber: #f59e0b;
+  --pg-grad: linear-gradient(100deg, #0ea5e9 0%, #14b8a6 45%, #6366f1 100%);
+
+  --md-primary-fg-color: #0d9488;
+  --md-primary-fg-color--light: #14b8a6;
+  --md-primary-fg-color--dark: #0f766e;
+  --md-accent-fg-color: #0ea5e9;
+  --md-accent-fg-color--transparent: rgba(14, 165, 233, 0.1);
+
+  --md-code-font: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+/* Keep the top app bar on a deep neutral so the gradient accents pop. */
+.md-header {
+  background: #0b1220;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #0b1120;
+  --md-code-bg-color: #0f172a;
+}
+.md-tabs {
+  background: #0b1220;
+}
+
+/* Slightly airier body text. */
+.md-typeset {
+  font-feature-settings: "kern", "liga", "calt", "ss01";
+}
+
+/* --- Links & headings ---------------------------------------------------- */
+.md-typeset h1 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.md-typeset h2 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-top: 2.4em;
+}
+
+/* Gradient text utility (used on the hero). */
+.pg-gradient-text {
+  background: var(--pg-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ==========================================================================
+   Hero (landing page)
+   ========================================================================== */
+.pg-hero {
+  position: relative;
+  margin: -1rem -0.8rem 2.5rem;
+  padding: 4rem 1.6rem 3.2rem;
+  border-radius: 0 0 28px 28px;
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 420px at 15% -10%, rgba(14, 165, 233, 0.22), transparent 60%),
+    radial-gradient(900px 380px at 90% 0%, rgba(99, 102, 241, 0.20), transparent 55%),
+    linear-gradient(180deg, #0b1220 0%, #0e1729 100%);
+  color: #e6edf6;
+  text-align: center;
+}
+.pg-hero__eyebrow {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  border-radius: 999px;
+  margin-bottom: 1.2rem;
+}
+.pg-hero h1 {
+  font-size: 2.7rem;
+  line-height: 1.08;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 auto 0.6rem;
+  max-width: 16ch;
+  color: #f4f8fc;
+}
+.pg-hero p {
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: #b7c4d6;
+  max-width: 62ch;
+  margin: 0 auto 1.8rem;
+}
+.pg-hero__cta {
+  display: flex;
+  gap: 0.7rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.pg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.62rem 1.25rem;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.82rem;
+  text-decoration: none !important;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.pg-btn--primary {
+  background: var(--pg-grad);
+  color: #04121f !important;
+  box-shadow: 0 8px 24px rgba(14, 165, 233, 0.35);
+}
+.pg-btn--primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px rgba(14, 165, 233, 0.45);
+}
+.pg-btn--ghost {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6edf6 !important;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.pg-btn--ghost:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ==========================================================================
+   Feature cards grid
+   ========================================================================== */
+.pg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 1.6rem 0 2.4rem;
+}
+.pg-card {
+  padding: 1.35rem 1.3rem;
+  border-radius: 16px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  background: var(--md-default-bg-color);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+.pg-card:hover {
+  transform: translateY(-3px);
+  border-color: transparent;
+  box-shadow: 0 14px 40px rgba(2, 12, 27, 0.14);
+}
+[data-md-color-scheme="slate"] .pg-card:hover {
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.pg-card__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  font-size: 1.25rem;
+  margin-bottom: 0.7rem;
+  background: rgba(14, 165, 233, 0.12);
+}
+.pg-card h3 {
+  margin: 0.2rem 0 0.4rem !important;
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+.pg-card p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color--light);
+}
+
+/* ==========================================================================
+   Executable-block plot cards (markdown-exec html output)
+   ========================================================================== */
+.md-typeset figure.scm-plot {
+  margin: 0.4rem 0 0;
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 0 6px 22px rgba(2, 12, 27, 0.08);
+  overflow-x: auto;
+}
+.md-typeset figure.scm-plot svg,
+.md-typeset figure.scm-plot img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.md-typeset figure.scm-plot figcaption {
+  margin-top: 0.5rem;
+  text-align: center;
+  font-size: 0.74rem;
+  color: #64748b;
+}
+
+/* Material "block" result rendering: tuck the plot right under its source. */
+.md-typeset .exec-result {
+  margin-top: 0.4rem;
+}
+
+/* ==========================================================================
+   Misc polish
+   ========================================================================== */
+.md-typeset table:not([class]) {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 0 var(--md-default-fg-color--lightest);
+}
+.md-typeset table:not([class]) th {
+  font-weight: 700;
+}
+
+/* Inline "pill" for the mathematical vocabulary (treatments / covariates …). */
+.pg-pill {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--md-accent-fg-color--transparent);
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 12px;
+}
+
+/* Wide display equations scroll instead of clipping their annotations. */
+.md-typeset div.arithmatex {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding: 0.2rem 0;
+}
+.md-typeset mjx-container[display="true"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* mkdocstrings signatures a touch calmer */
+.md-typeset .doc-signature {
+  border-radius: 10px;
+}

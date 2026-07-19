@@ -53,6 +53,21 @@ dev = [
     "mypy",
     "pre-commit",
 ]
+docs = [
+    # MkDocs Material site with docstring-driven API pages (mkdocstrings),
+    # executable code blocks that render plots inline (markdown-exec), and the
+    # examples notebook executed at build time (mkdocs-jupyter). The notebook
+    # runs in a registered Jupyter kernel named "prior-generator" — register it
+    # once with `python -m ipykernel install --user --name prior-generator`.
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.6",
+    "mkdocstrings[python]>=1.0.6",
+    "markdown-exec>=1.12.3",
+    "mkdocs-jupyter>=0.26.3",
+    "pymdown-extensions>=11.0.1",
+    "nbformat>=5.10.4",
+    "ipykernel>=7.3.0",
+]
 
 [project.scripts]
 prior-generator = "prior_generator.cli:main"
@@ -87,6 +102,10 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    # Docs notebook: cell-scoped conventions (re-imports per cell so each cell
+    # runs standalone) intentionally trip ruff's cross-cell import rules. It is
+    # generated from docs_gen/build_examples_nb.py, which IS linted.
+    "docs/examples.ipynb",
 ]
 
 [tool.ruff.lint]
