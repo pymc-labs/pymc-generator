@@ -1,0 +1,31 @@
+CONTRIBUTING.md
+  s_88935ddaffbf6a::t_a997ce848a81f7 29
+docs/examples/index.ipynb
+  s_88935ddaffbf6a::t_f2ab164df0ba25 5,10,18,37,48,63,74,90,104,115,124,135,150,161,170,181,197,208,217,228,245,254,265,288,299,320,331,348,361,372,384,395,414
+docs/getting-started.md
+  s_88935ddaffbf6a::t_5d20ffbe41ccc9 156
+docs/index.md
+  s_88935ddaffbf6a::t_6d6afb26ff8982 109
+docs_gen/build_examples_nb.py
+  s_88935ddaffbf6a::t_b0e440f285c49b 1,25,278-281
+mkdocs.yml
+  s_88935ddaffbf6a::t_659bad613b9a10 158
+pyproject.toml
+  s_88935ddaffbf6a::t_e2080689ed10a5 108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ae12743a860b2ff7adadfa0516f8224d8b56ad21",
+  "prompts": {},
+  "sessions": {
+    "s_88935ddaffbf6a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ef7021e-9cc4-4cbc-b2dd-516019411c3e",
+        "model": "unknown"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
