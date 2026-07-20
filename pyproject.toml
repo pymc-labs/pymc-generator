@@ -105,7 +105,7 @@ exclude = [
     # Docs notebook: cell-scoped conventions (re-imports per cell so each cell
     # runs standalone) intentionally trip ruff's cross-cell import rules. It is
     # generated from docs_gen/build_examples_nb.py, which IS linted.
-    "docs/examples.ipynb",
+    "docs/examples/index.ipynb",
 ]
 
 [tool.ruff.lint]

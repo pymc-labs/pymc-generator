@@ -155,7 +155,7 @@ nav:
       - Audit bundles: guide/bundles.md
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
-  - Examples: examples.ipynb
+  - Examples: examples/index.ipynb
   - API reference:
       - Overview: reference/index.md
       - Configuration: reference/config.md

@@ -26,7 +26,7 @@ not add new modules to that list.
 
 The docs are a MkDocs Material site under `docs/`. The API pages are generated
 from docstrings (mkdocstrings), the guide pages execute real Python and render
-plots inline at build time (markdown-exec), and `docs/examples.ipynb` is executed
+plots inline at build time (markdown-exec), and `docs/examples/index.ipynb` is executed
 by mkdocs-jupyter — so the docs need the full modeling stack **and** a Jupyter
 kernel named `prior-generator`:
 

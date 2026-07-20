@@ -153,7 +153,7 @@ how to verify it yourself.
 
 <div class="pg-card" markdown>
 <div class="pg-card__icon">📓</div>
-### [Examples notebook](examples.ipynb)
+### [Examples notebook](examples/index.ipynb)
 A runnable end-to-end tour, including several time series and a full validation
 pass.
 </div>

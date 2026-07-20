@@ -1,4 +1,4 @@
-"""Assemble ``docs/examples.ipynb`` from ordered cells with nbformat.
+"""Assemble ``docs/examples/index.ipynb`` from ordered cells with nbformat.
 
 Run from the repo root:  python docs_gen/build_examples_nb.py
 
@@ -22,7 +22,7 @@ cells = [
         "This notebook samples synthetic marketing worlds, inspects everything "
         "inside them, plots several time series, and **validates** that the "
         "reported decomposition is exact. It only needs `prior_generator`, so you "
-        "can [download it](examples.ipynb) and run it yourself.\n"
+        "can [download it](index.ipynb) and run it yourself.\n"
         "\n"
         "> Every cell below is executed when the docs are built — the outputs and "
         "figures you see are real."
@@ -275,7 +275,10 @@ nb.metadata = {
 }
 
 out = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "examples.ipynb"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "docs",
+    "examples",
+    "index.ipynb",
 )
 with open(out, "w") as fh:
     nbf.write(nb, fh)

@@ -106,7 +106,7 @@ The five node families, eight edge types, and structural equations.
 
 <div class="pg-card" markdown>
 <div class="pg-card__icon">📓</div>
-### [Examples notebook](examples.ipynb)
+### [Examples notebook](examples/index.ipynb)
 An end-to-end tour: sample, inspect, plot, validate.
 </div>
 
