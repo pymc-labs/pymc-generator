@@ -92,6 +92,18 @@ def describe_scm(world: SCM) -> str:
         )
     f.write("\nChannels (mechanism + own-drive texture):\n")
     f.write("\n".join(_channel_lines(g, params)) + "\n\n")
+    prior_cond = world.extras.get("prior_cond")
+    if prior_cond:
+        spec = cfg.prior_cond_spec()
+        f.write("Prior conditioning (ACE): narrowed per-cell prior intervals\n")
+        f.write("  (mechanism shape params above were drawn from these):\n")
+        for q, (lo, width) in prior_cond.items():
+            s_lo, s_hi = spec[q]["support"]
+            f.write(
+                f"  {q}: U({lo:.3f}, {lo + width:.3f})  width={width:.3f}  "
+                f"support=({s_lo}, {s_hi})\n"
+            )
+        f.write("\n")
     f.write("Texture prior (diverse):\n")
     f.write(f"  rw_channel_std_range={cfg.rw_channel_std_range} (relative)\n")
     f.write(f"  channel_hf_sigma_range={cfg.channel_hf_sigma_range} (relative)\n")

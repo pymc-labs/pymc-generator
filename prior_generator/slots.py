@@ -95,6 +95,26 @@ EDGE_BASE_RATES: dict[str, float] = {
 # (structurally zero) diagonal dropped: type -> which size attr is the side.
 _SQUARE_TYPES: dict[str, str] = {"cc": "K", "zz": "M"}
 
+# --------------------------------------------------------------------------
+# Prior-conditioning (ACE) layout — design-freeze constants (to-do 01)
+# --------------------------------------------------------------------------
+# Conditioned quantities, canonical order. Each contributes a packed
+# ``(low, width)`` pair to the corpus ``prior_cond`` key. APPEND-ONLY: later
+# quantities (e.g. Weibull lam/k, other saturation families) extend the tail;
+# consumers index columns by name via PRIOR_COND_LAYOUT, never by position
+# literals.
+PRIOR_COND_QUANTITIES: tuple[str, ...] = ("adstock_alpha", "hill_shape")
+
+#: Column names of the corpus ``prior_cond`` key, shape (N, P) — the packed
+#: ``(low, width)`` pairs per conditioned quantity, canonical order (LOCKED,
+#: append-only).
+PRIOR_COND_LAYOUT: tuple[str, ...] = (
+    "adstock_alpha_low",
+    "adstock_alpha_width",
+    "hill_shape_low",
+    "hill_shape_width",
+)
+
 
 @dataclass(frozen=True)
 class SlotLayout:

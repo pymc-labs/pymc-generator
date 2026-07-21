@@ -66,6 +66,41 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     }
 
 
+def sample_prior_cond(
+    cfg: SCMPrior, rng: np.random.Generator
+) -> dict[str, tuple[float, float]] | None:
+    """Draw one cell's prior-conditioning intervals (stage-1 concrete numpy).
+
+    For each conditioned quantity ``q`` with support ``[S_lo, S_hi]`` and
+    width range ``[w_lo, w_hi]`` (see :meth:`SCMPrior.prior_cond_spec`):
+
+    .. code-block:: text
+
+        w  ~ U(w_lo, w_hi)
+        lo ~ U(S_lo, S_hi - w)
+        I_q = [lo, lo + w]            (subset of [S_lo, S_hi] by construction)
+
+    Stage 2 (:func:`build_world_model`) then draws that cell's parameter as
+    ``pm.Uniform(lo, lo + w)`` instead of the global support. Interval bounds
+    become ``pm.Uniform`` constants, so a cell is exactly one model build —
+    worlds within a cell share their intervals; cells differ.
+
+    Returns ``None`` — WITHOUT consuming any RNG state — when
+    ``cfg.prior_conditioning`` is False, so the disabled path reproduces
+    unconditioned corpora bit-for-bit.
+    """
+    if not cfg.prior_conditioning:
+        return None
+    out: dict[str, tuple[float, float]] = {}
+    for q, spec in cfg.prior_cond_spec().items():
+        s_lo, s_hi = spec["support"]
+        w_lo, w_hi = spec["width_range"]
+        w = float(rng.uniform(w_lo, w_hi))
+        lo = float(rng.uniform(s_lo, s_hi - w))
+        out[q] = (lo, w)
+    return out
+
+
 def _uniform(name: str, lo: float, hi: float, shape):
     """A ``pm.Uniform`` prior, or a constant when the range is degenerate (lo == hi)."""
     lo, hi = float(lo), float(hi)
@@ -75,7 +110,11 @@ def _uniform(name: str, lo: float, hi: float, shape):
 
 
 def build_world_model(
-    g_active: dict, cfg: SCMPrior, structural: dict, T: int
+    g_active: dict,
+    cfg: SCMPrior,
+    structural: dict,
+    T: int,
+    prior_cond: dict[str, tuple[float, float]] | None = None,
 ) -> tuple[pm.Model, tuple[str, ...], tuple[str, ...]]:
     """Build the ``pm.Model`` for one world structure.
 
@@ -94,6 +133,13 @@ def build_world_model(
         texture-enable flags).
     T : int
         Reported weeks (the graph simulates ``T + cfg.adstock_burn_in``).
+    prior_cond : dict, optional
+        Output of :func:`sample_prior_cond` — per-cell narrowed prior
+        intervals ``{quantity: (low, width)}``. When given, the conditioned
+        quantities (``adstock_alpha`` → the geometric decay,
+        ``hill_shape`` → the Hill slope) are drawn as
+        ``pm.Uniform(low, low + width)`` instead of their global supports.
+        ``None`` (default) keeps the unconditioned priors.
 
     Returns
     -------
@@ -107,6 +153,17 @@ def build_world_model(
     burn_in = cfg.adstock_burn_in
     T_full = T + burn_in
     spr = mechanisms.SATURATION_PRIOR_RANGES
+
+    # Prior-conditioning: narrowed per-cell supports for the conditioned set.
+    adstock_alpha_range = cfg.adstock_alpha_range
+    hill_shape_range = spr["hill"]["slope"]
+    if prior_cond is not None:
+        if "adstock_alpha" in prior_cond:
+            lo, width = prior_cond["adstock_alpha"]
+            adstock_alpha_range = (lo, lo + width)
+        if "hill_shape" in prior_cond:
+            lo, width = prior_cond["hill_shape"]
+            hill_shape_range = (lo, lo + width)
 
     with pm.Model() as model:
 
@@ -174,15 +231,13 @@ def build_world_model(
             "adstock_family": structural["adstock_family"],
             "sat_family": structural["sat_family"],
             "adstock_alpha": _uniform(
-                "adstock_alpha", cfg.adstock_alpha_range[0], cfg.adstock_alpha_range[1], K
+                "adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], K
             ),
             "weibull_lam": _uniform(
                 "weibull_lam", cfg.weibull_lam_range[0], cfg.weibull_lam_range[1], K
             ),
             "weibull_k": _uniform("weibull_k", cfg.weibull_k_range[0], cfg.weibull_k_range[1], K),
-            "hill_slope": _uniform(
-                "hill_slope", spr["hill"]["slope"][0], spr["hill"]["slope"][1], K
-            ),
+            "hill_slope": _uniform("hill_slope", hill_shape_range[0], hill_shape_range[1], K),
             "hill_kappa_mult": _uniform(
                 "hill_kappa_mult", spr["hill"]["kappa_mult"][0], spr["hill"]["kappa_mult"][1], K
             ),

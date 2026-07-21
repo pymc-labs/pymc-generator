@@ -34,12 +34,22 @@ from .slots import (
     J_DEMO,
     K_DEMO,
     M_DEMO,
+    PRIOR_COND_LAYOUT,
+    PRIOR_COND_QUANTITIES,
     T_DEMO,
     SlotLayout,
 )
 
 #: Maximum draw rounds per cell before giving up (post-filter top-up loop).
 MAX_TOPUPS_PER_CELL = 8
+
+#: Default per-quantity width ranges for the prior-conditioning hyperprior
+#: (ACE). Mirrors the pymc-pfn precedent (``MMMv0Config``:
+#: ``adstock_alpha_width_range=(0.05, 0.45)``, ``hill_n_width_range=(0.2, 1.6)``).
+PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
+    "adstock_alpha": (0.05, 0.45),
+    "hill_shape": (0.2, 1.6),
+}
 
 
 @dataclass
@@ -138,6 +148,20 @@ class SCMPrior:
     channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
     adstock_burn_in: int = 0
 
+    # -- Prior-conditioning hyperprior (ACE, plan doc to-do/01) -------------
+    # When enabled, each CELL draws a narrowed prior interval per conditioned
+    # quantity (stage-1 concrete numpy, like the rest of the structure):
+    #   w  ~ U(w_lo, w_hi);  lo ~ U(S_lo, S_hi - w);  I_q = [lo, lo + w]
+    # and stage 2 draws that cell's parameter as pm.Uniform(lo, lo + w)
+    # instead of the global support. The draws are recorded in the corpus
+    # under the ``prior_cond`` key (see PRIOR_COND_LAYOUT) so consumers can
+    # expose them as conditioning features. False (default) => byte-identical
+    # unconditioned corpora (the interval draws consume no RNG when disabled).
+    prior_conditioning: bool = False
+    # Per-quantity (w_lo, w_hi) overrides; keys must be in
+    # PRIOR_COND_QUANTITIES. None => PRIOR_COND_DEFAULT_WIDTH_RANGES.
+    prior_cond_width_ranges: dict[str, tuple[float, float]] | None = None
+
     # Prior-shift eval support: optional overrides for the LEGACY edge base
     # rates ("cy", "dc", "db", "zb") which otherwise come from the slots.py
     # module constants. None (default) => byte-identical legacy behaviour.
@@ -191,6 +215,41 @@ class SCMPrior:
     @property
     def n_query(self) -> int:
         return int(round(self.query_frac * self.T))
+
+    def prior_cond_spec(self) -> dict[str, dict[str, tuple[float, float]]]:
+        """Effective ``{quantity: {"support": (lo, hi), "width_range": (w_lo, w_hi)}}``.
+
+        Quantities iterate in the LOCKED ``PRIOR_COND_QUANTITIES`` order (the
+        order both the interval RNG draws and the ``prior_cond`` columns
+        follow). Supports come from the same constants the unconditioned
+        priors use — ``adstock_alpha_range`` for the geometric adstock decay,
+        ``SATURATION_PRIOR_RANGES["hill"]["slope"]`` for the Hill shape — so
+        the conditioned interval is nested in the exact global prior by
+        construction. Width ranges default to
+        :data:`PRIOR_COND_DEFAULT_WIDTH_RANGES`, overridable per quantity via
+        ``prior_cond_width_ranges``.
+        """
+        # Deferred: mechanisms pulls the pytensor / pymc-marketing stack.
+        from .mechanisms import SATURATION_PRIOR_RANGES
+
+        supports: dict[str, tuple[float, float]] = {
+            "adstock_alpha": (
+                float(self.adstock_alpha_range[0]),
+                float(self.adstock_alpha_range[1]),
+            ),
+            "hill_shape": (
+                float(SATURATION_PRIOR_RANGES["hill"]["slope"][0]),
+                float(SATURATION_PRIOR_RANGES["hill"]["slope"][1]),
+            ),
+        }
+        widths = {**PRIOR_COND_DEFAULT_WIDTH_RANGES, **(self.prior_cond_width_ranges or {})}
+        return {
+            q: {
+                "support": supports[q],
+                "width_range": (float(widths[q][0]), float(widths[q][1])),
+            }
+            for q in PRIOR_COND_QUANTITIES
+        }
 
     def validate(self) -> None:
         if self.n_treatments < 1:
@@ -246,6 +305,24 @@ class SCMPrior:
             raise ValueError(
                 f"saturation_family_probs must sum to 1.0, got {sum(self.saturation_family_probs)}"
             )
+        # Prior-conditioning hyperprior (ACE)
+        if self.prior_cond_width_ranges is not None:
+            unknown = sorted(set(self.prior_cond_width_ranges) - set(PRIOR_COND_QUANTITIES))
+            if unknown:
+                raise ValueError(
+                    f"prior_cond_width_ranges keys must be in the conditioned set "
+                    f"{PRIOR_COND_QUANTITIES}, got {unknown}"
+                )
+        if self.prior_conditioning or self.prior_cond_width_ranges is not None:
+            for q, spec in self.prior_cond_spec().items():
+                s_lo, s_hi = spec["support"]
+                w_lo, w_hi = spec["width_range"]
+                if not 0.0 < w_lo <= w_hi <= s_hi - s_lo:
+                    raise ValueError(
+                        f"prior conditioning for {q!r} needs "
+                        f"0 < w_lo <= w_hi <= support width; got width range "
+                        f"({w_lo}, {w_hi}) against support ({s_lo}, {s_hi})"
+                    )
         # Prior-shift eval: legacy edge-rate overrides
         if self.edge_rate_overrides is not None:
             unknown = sorted(set(self.edge_rate_overrides) - {"cy", "dc", "db", "zb"})
@@ -767,6 +844,20 @@ _ADDITIVE_OUT_NAMES = (
 )
 
 
+def _pack_prior_cond(prior_cond: dict[str, tuple[float, float]]) -> np.ndarray:
+    """Pack one cell's ``{quantity: (low, width)}`` draw into a ``(P,)`` row.
+
+    Columns follow the LOCKED ``PRIOR_COND_LAYOUT`` order — consumers index
+    by name via the layout, never by position literals.
+    """
+    vals: list[float] = []
+    for name in PRIOR_COND_LAYOUT:
+        q, part = name.rsplit("_", 1)
+        lo, width = prior_cond[q]
+        vals.append(lo if part == "low" else width)
+    return np.asarray(vals, dtype="float64")
+
+
 def _slice_g_active(
     g: dict[str, np.ndarray], K_act: int, M_act: int, J_act: int
 ) -> dict[str, np.ndarray]:
@@ -829,6 +920,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
       from all upstream influences flowing through channels.
     * ``channel_active`` (N, K) uint8 — the D1b activation rule
       (C->Y or outgoing C->C).
+    * ``prior_cond`` (N, P) float32 — present IFF ``cfg.prior_conditioning``:
+      the per-cell narrowed prior intervals as packed ``(low, width)`` pairs
+      in ``PRIOR_COND_LAYOUT`` order, broadcast to worlds;
+      ``diagnostics["prior_cond"]`` echoes layout, supports and width ranges.
 
     Phase-5 per-node decomposition targets (float32, zero-padded to max sizes),
     emitted unconditionally. They are deterministic given the same eps inputs,
@@ -861,7 +956,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     semantics) and builds/evaluates its own PyTensor graph at the cell's
     active sizes; outputs are zero-padded to max sizes.
     """
-    from .world_model import build_world_model, draw_worlds, sample_structure
+    from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
     t_start = time.perf_counter()
     rng = np.random.default_rng(cfg.seed)
@@ -872,6 +967,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
 
     tasks: list[dict] = []
     cell_gs: list[dict[str, np.ndarray]] = []
+    cell_prior_rows: list[np.ndarray] = []
     n_evaluated = 0
     n_rejected = 0
 
@@ -894,7 +990,15 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         # dominates at large (K, M), so a model per cell (not per draw) is key;
         # FAST_COMPILE (the draw_worlds default) keeps the one-off compile cheap.
         structural = sample_structure(g_act, cfg, rng)
-        model, out_names, _param_names = build_world_model(g_act, cfg, structural, T)
+        # Prior-conditioning interval draw (per cell — one model build). Returns
+        # None and consumes NO RNG when cfg.prior_conditioning is False, so the
+        # disabled path reproduces unconditioned corpora bit-for-bit.
+        prior_cond = sample_prior_cond(cfg, rng)
+        if prior_cond is not None:
+            cell_prior_rows.append(_pack_prior_cond(prior_cond))
+        model, out_names, _param_names = build_world_model(
+            g_act, cfg, structural, T, prior_cond=prior_cond
+        )
         accepted: list[dict] = []
         last_draw_error: str | None = None
         for _round in range(MAX_TOPUPS_PER_CELL):
@@ -1007,6 +1111,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     K_active_arr = np.array([cell_gs[c]["K_active"] for c in cell_id], dtype=np.int32)
     M_active_arr = np.array([cell_gs[c]["M_active"] for c in cell_id], dtype=np.int32)
     J_active_arr = np.array([cell_gs[c]["J_active"] for c in cell_id], dtype=np.int32)
+    # Per-world prior-conditioning rows, broadcast from the cell draw (N, P).
+    prior_cond_arr = (
+        np.stack([cell_prior_rows[c] for c in cell_id]) if cfg.prior_conditioning else None
+    )
 
     spend_means = spend_raw.mean(axis=1)  # (N,K)
     spend_norm = spend_raw / (spend_means[:, None, :] + 1e-8)
@@ -1138,8 +1246,18 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             sales_scale,
         ),
     }
+    if cfg.prior_conditioning:
+        # Self-describing .npz (as with the signal block): echo the layout,
+        # the supports, and the width ranges so consumers derive feature
+        # scaling from the corpus instead of duplicating constants.
+        spec = cfg.prior_cond_spec()
+        diagnostics["prior_cond"] = {
+            "layout": list(PRIOR_COND_LAYOUT),
+            "supports": {q: list(s["support"]) for q, s in spec.items()},
+            "width_ranges": {q: list(s["width_range"]) for q, s in spec.items()},
+        }
 
-    return {
+    corpus = {
         "spend_raw": spend_raw.astype(np.float32),
         "spend_norm": spend_norm.astype(np.float32),
         "spend_share": spend_share.astype(np.float32),
@@ -1172,3 +1290,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "indirect_effects_by_source": indirect_effects_by_source.astype(np.float32),
         "diagnostics": diagnostics,
     }
+    if prior_cond_arr is not None:
+        # Present IFF prior_conditioning=True — an unconditioned corpus stays
+        # byte-identical to the pre-feature format (consumers treat absence
+        # as "no conditioning features").
+        corpus["prior_cond"] = prior_cond_arr.astype(np.float32)
+    return corpus

@@ -71,6 +71,11 @@ class SCM:
     name, purpose : str
         Optional labels (set from a :class:`~prior_generator.scenarios.Scenario`)
         used by ``describe_scm`` and the bundle writer.
+    extras : dict
+        Extra per-world records. With ``cfg.prior_conditioning`` enabled,
+        ``extras["prior_cond"]`` holds the drawn ACE intervals
+        ``{quantity: (low, width)}`` the mechanism shape priors were narrowed
+        to (printed by ``describe_scm``).
     """
 
     data: dict[str, np.ndarray]
@@ -289,7 +294,7 @@ def sample_scm(
     -------
     SCM
     """
-    from .world_model import build_world_model, draw_worlds, sample_structure
+    from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
     cfg.validate()
     rng = np.random.default_rng(seed)
@@ -314,7 +319,13 @@ def sample_scm(
     # continuous priors and noise are the pm.Model's RVs, drawn per candidate
     # and filtered by the realism gate. build the model once, draw in batches.
     structural = sample_structure(g_act, cfg, rng)
-    model, out_names, param_names = build_world_model(g_act, cfg, structural, T)
+    # Prior-conditioning intervals (same draw as the corpus path; None — and
+    # no RNG consumed — when cfg.prior_conditioning is False).
+    prior_cond = sample_prior_cond(cfg, rng)
+    model, out_names, param_names = build_world_model(
+        g_act, cfg, structural, T, prior_cond=prior_cond
+    )
+    extras: dict = {"prior_cond": prior_cond} if prior_cond is not None else {}
 
     for _round in range(max_param_rounds):
         draw_seed = int(rng.integers(2**31 - 1))
@@ -339,6 +350,7 @@ def sample_scm(
                     name=name,
                     purpose=purpose,
                     seed=seed,
+                    extras=extras,
                 )
     raise RuntimeError(f"world {name!r}: no accepted draw in {max_param_rounds} rounds")
 
