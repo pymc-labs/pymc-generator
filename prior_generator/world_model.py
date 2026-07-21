@@ -138,29 +138,42 @@ def _rw_prior_group(
 def _walk_priors(
     cfg: SCMPrior,
     structural: dict,
-    K: int,
-    M: int,
-    J: int,
+    n_treatments: int,
+    n_covariates: int,
+    n_latent: int,
     include: tuple[str, ...] = ("d", "z", "c", "b", "y"),
 ) -> dict[str, dict]:
     """Walk-prior groups per node type, registered in the LOCKED d/z/c/b/y order.
 
-    ``include`` selects the groups a model needs (the oracle skips the ones
-    replaced by observed data); relative order is always preserved.
+    Sizes follow the :class:`SCMPrior` vocabulary — ``n_treatments`` media
+    channels, ``n_covariates`` observed controls, ``n_latent`` hidden
+    confounders. ``include`` selects the groups a model needs (the oracle
+    skips the ones replaced by observed data); relative order is always
+    preserved.
     """
     out: dict[str, dict] = {}
     if "d" in include:
         out["rw_d"] = _rw_prior_group(
-            "rw_d", J, False, cfg.rw_mean_range, cfg.rw_std_sigma, structural["smoothness_d"]
+            "rw_d",
+            n_latent,
+            False,
+            cfg.rw_mean_range,
+            cfg.rw_std_sigma,
+            structural["smoothness_d"],
         )
     if "z" in include:
         out["rw_z"] = _rw_prior_group(
-            "rw_z", M, False, cfg.rw_mean_range, cfg.rw_std_sigma, structural["smoothness_z"]
+            "rw_z",
+            n_covariates,
+            False,
+            cfg.rw_mean_range,
+            cfg.rw_std_sigma,
+            structural["smoothness_z"],
         )
     if "c" in include:
         out["rw_c"] = _rw_prior_group(
             "rw_c",
-            K,
+            n_treatments,
             True,
             cfg.rw_positive_mean_range,
             cfg.rw_channel_std_sigma,
@@ -202,9 +215,9 @@ _MECHANISM_PARAM_NAMES: tuple[str, ...] = (
 
 def _uniform_prior_specs(
     cfg: SCMPrior,
-    K: int,
-    M: int,
-    J: int,
+    n_treatments: int,
+    n_covariates: int,
+    n_latent: int,
     prior_cond: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, tuple[str, float, float, Any]]:
     """``{param: (name, lo, hi, shape)}`` for every ``pm.Uniform`` prior.
@@ -214,8 +227,11 @@ def _uniform_prior_specs(
     (:func:`build_oracle_model`) create their RVs as ``_uniform(*spec)`` from
     this table, so the priors cannot drift between the two. Also resolves the
     prior-conditioning narrowing (``prior_cond``) for the conditioned set.
+    Sizes follow the :class:`SCMPrior` vocabulary (``n_treatments`` media
+    channels / ``n_covariates`` controls / ``n_latent`` hidden confounders).
     """
     spr = mechanisms.SATURATION_PRIOR_RANGES
+    n_t, n_c, n_l = n_treatments, n_covariates, n_latent
     adstock_alpha_range = cfg.adstock_alpha_range
     hill_shape_range = spr["hill"]["slope"]
     if prior_cond is not None:
@@ -227,54 +243,64 @@ def _uniform_prior_specs(
             hill_shape_range = (lo, lo + width)
     return {
         # linear edge coefficients
-        "w_dc": ("w_dc", cfg.dc_coeff_range[0], cfg.dc_coeff_range[1], (J, K)),
-        "u_dz": ("u_dz", cfg.dz_coeff_range[0], cfg.dz_coeff_range[1], (J, M)),
-        "v_zc": ("v_zc", cfg.zc_coeff_range[0], cfg.zc_coeff_range[1], (M, K)),
-        "alpha_cc": ("alpha_cc", cfg.cc_coeff_range[0], cfg.cc_coeff_range[1], (K, K)),
-        "gamma_zz": ("gamma_zz", cfg.zz_coeff_range[0], cfg.zz_coeff_range[1], (M, M)),
-        "delta_db": ("delta_db", cfg.db_coeff_range[0], cfg.db_coeff_range[1], J),
-        "rho_zb": ("rho_zb", cfg.zb_coeff_range[0], cfg.zb_coeff_range[1], M),
-        "beta": ("beta", cfg.beta_additive_range[0], cfg.beta_additive_range[1], K),
+        "w_dc": ("w_dc", cfg.dc_coeff_range[0], cfg.dc_coeff_range[1], (n_l, n_t)),
+        "u_dz": ("u_dz", cfg.dz_coeff_range[0], cfg.dz_coeff_range[1], (n_l, n_c)),
+        "v_zc": ("v_zc", cfg.zc_coeff_range[0], cfg.zc_coeff_range[1], (n_c, n_t)),
+        "alpha_cc": ("alpha_cc", cfg.cc_coeff_range[0], cfg.cc_coeff_range[1], (n_t, n_t)),
+        "gamma_zz": ("gamma_zz", cfg.zz_coeff_range[0], cfg.zz_coeff_range[1], (n_c, n_c)),
+        "delta_db": ("delta_db", cfg.db_coeff_range[0], cfg.db_coeff_range[1], n_l),
+        "rho_zb": ("rho_zb", cfg.zb_coeff_range[0], cfg.zb_coeff_range[1], n_c),
+        "beta": ("beta", cfg.beta_additive_range[0], cfg.beta_additive_range[1], n_t),
         # per-channel mechanism shape priors (adstock + saturation families)
-        "adstock_alpha": ("adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], K),
-        "weibull_lam": ("weibull_lam", cfg.weibull_lam_range[0], cfg.weibull_lam_range[1], K),
-        "weibull_k": ("weibull_k", cfg.weibull_k_range[0], cfg.weibull_k_range[1], K),
-        "hill_slope": ("hill_slope", hill_shape_range[0], hill_shape_range[1], K),
+        "adstock_alpha": ("adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], n_t),
+        "weibull_lam": ("weibull_lam", cfg.weibull_lam_range[0], cfg.weibull_lam_range[1], n_t),
+        "weibull_k": ("weibull_k", cfg.weibull_k_range[0], cfg.weibull_k_range[1], n_t),
+        "hill_slope": ("hill_slope", hill_shape_range[0], hill_shape_range[1], n_t),
         "hill_kappa_mult": (
             "hill_kappa_mult",
             spr["hill"]["kappa_mult"][0],
             spr["hill"]["kappa_mult"][1],
-            K,
+            n_t,
         ),
-        "logistic_lam": ("logistic_lam", spr["logistic"]["lam"][0], spr["logistic"]["lam"][1], K),
+        "logistic_lam": (
+            "logistic_lam",
+            spr["logistic"]["lam"][0],
+            spr["logistic"]["lam"][1],
+            n_t,
+        ),
         "mm_alpha": (
             "mm_alpha",
             spr["michaelis_menten"]["alpha"][0],
             spr["michaelis_menten"]["alpha"][1],
-            K,
+            n_t,
         ),
         "mm_kappa_mult": (
             "mm_kappa_mult",
             spr["michaelis_menten"]["kappa_mult"][0],
             spr["michaelis_menten"]["kappa_mult"][1],
-            K,
+            n_t,
         ),
-        "tanh_b": ("tanh_b", spr["tanh"]["b"][0], spr["tanh"]["b"][1], K),
-        "tanh_c": ("tanh_c", spr["tanh"]["c"][0], spr["tanh"]["c"][1], K),
-        "root_alpha": ("root_alpha", spr["root"]["alpha"][0], spr["root"]["alpha"][1], K),
+        "tanh_b": ("tanh_b", spr["tanh"]["b"][0], spr["tanh"]["b"][1], n_t),
+        "tanh_c": ("tanh_c", spr["tanh"]["c"][0], spr["tanh"]["c"][1], n_t),
+        "root_alpha": ("root_alpha", spr["root"]["alpha"][0], spr["root"]["alpha"][1], n_t),
         # channel texture factors (relative to the channel level)
-        "hf_sigma": ("hf_sigma", cfg.channel_hf_sigma_range[0], cfg.channel_hf_sigma_range[1], K),
+        "hf_sigma": (
+            "hf_sigma",
+            cfg.channel_hf_sigma_range[0],
+            cfg.channel_hf_sigma_range[1],
+            n_t,
+        ),
         "pulse_amp": (
             "pulse_amp",
             cfg.channel_pulse_amp_range[0],
             cfg.channel_pulse_amp_range[1],
-            K,
+            n_t,
         ),
         "pulse_prob": (
             "pulse_prob",
             cfg.channel_pulse_prob_range[0],
             cfg.channel_pulse_prob_range[1],
-            K,
+            n_t,
         ),
     }
 
@@ -482,17 +508,18 @@ def build_oracle_model(
     (zero-padded start) while generation used ``adstock_burn_in`` weeks of
     real history — drop the first ``l_max`` weeks from comparisons.
     """
-    K = len(g_active["g_cy"])
-    M = len(g_active["g_zb"])
-    J = len(g_active["g_db"])
+    n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
+    n_covariates = len(g_active["g_zb"])  # observed controls
+    n_latent = len(g_active["g_db"])  # hidden confounders
     channels = np.asarray(data["channels"], dtype="float64")
     controls = np.asarray(data["controls"], dtype="float64")
     sales = np.asarray(data["sales"], dtype="float64")
     T = int(sales.shape[0])
-    if channels.shape != (T, K) or controls.shape != (T, M):
+    if channels.shape != (T, n_treatments) or controls.shape != (T, n_covariates):
         raise ValueError(
-            f"data shapes must be channels (T, K)={T, K}, controls (T, M)={T, M}, "
-            f"sales (T,)={(T,)}; got channels {channels.shape}, controls {controls.shape}"
+            f"data shapes must be channels (T, n_treatments)={T, n_treatments}, "
+            f"controls (T, n_covariates)={T, n_covariates}, sales (T,)={(T,)}; "
+            f"got channels {channels.shape}, controls {controls.shape}"
         )
     burn_in = cfg.adstock_burn_in
     T_full = T + burn_in
@@ -500,12 +527,14 @@ def build_oracle_model(
     g_cy = np.asarray(g_active["g_cy"], dtype="float64")
     g_db = np.asarray(g_active["g_db"], dtype="float64")
     g_zb = np.asarray(g_active["g_zb"], dtype="float64")
-    specs = _uniform_prior_specs(cfg, K, M, J, prior_cond)
+    specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
 
     with pm.Model() as model:
         # Shared prior definitions — identical names, ranges and shapes to the
         # generative model (the drift-guard tests compare them one by one).
-        rw = _walk_priors(cfg, structural, K, M, J, include=("d", "b", "y"))
+        rw = _walk_priors(
+            cfg, structural, n_treatments, n_covariates, n_latent, include=("d", "b", "y")
+        )
         beta = _uniform(*specs["beta"])
         delta_db = _uniform(*specs["delta_db"])
         rho_zb = _uniform(*specs["rho_zb"])
@@ -523,10 +552,10 @@ def build_oracle_model(
 
         # Latent demand + baseline walks: the SAME transform generation uses,
         # simulated over T_full and sliced to the reported window.
-        eps_d = pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, J))
+        eps_d = pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, n_latent))
         eps_b = pm.Normal("eps_b", 0.0, 1.0, shape=(T_full,))
-        d_cols = [_walk_column(eps_d[:, j], rw["rw_d"], j, T_full) for j in range(J)]
-        D_full = pt.stack(d_cols, axis=1)  # (T_full, J)
+        d_cols = [_walk_column(eps_d[:, j], rw["rw_d"], j, T_full) for j in range(n_latent)]
+        D_full = pt.stack(d_cols, axis=1)  # (T_full, n_latent)
         walk_b = _walk_column(eps_b, rw["rw_b"], 0, T_full)
         pm.Deterministic("demand", D_full[W])
 
@@ -537,7 +566,7 @@ def build_oracle_model(
         # Media response on the OBSERVED spend: same adstock / κ-relative
         # saturation code as generation (window-only history — see Notes).
         contrib_cols = []
-        for k in range(K):
+        for k in range(n_treatments):
             ad_obs = _adstock_col(channels_t[:, k], mech_params, k)
             scale_k = pt.maximum(ad_obs.mean(), 1e-8)
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
