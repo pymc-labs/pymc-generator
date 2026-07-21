@@ -155,11 +155,13 @@ nav:
       - Audit bundles: guide/bundles.md
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
+      - The posterior oracle: guide/oracle.md
   - Examples: examples/index.ipynb
   - API reference:
       - Overview: reference/index.md
       - Configuration: reference/config.md
       - Sampling one world: reference/sampling.md
+      - World model: reference/world-model.md
       - Corpus generation: reference/corpus.md
       - Audit bundles: reference/bundles.md
       - Descriptions: reference/describe.md

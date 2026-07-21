@@ -11,6 +11,8 @@ it.
 | [`make_scm_prior`](config.md#prior_generator.presets.make_scm_prior) | [Configuration](config.md) | Build a validated additive-SCM prior. |
 | [`SCMPrior`](config.md#prior_generator.sampler.SCMPrior) | [Configuration](config.md) | The config: sizes, edge budgets, coefficient/noise ranges. |
 | [`sample_scm`](sampling.md#prior_generator.worlds.sample_scm) / [`SCM`](sampling.md#prior_generator.worlds.SCM) | [Sampling one world](sampling.md) | Draw one accepted world with its full ground truth. |
+| [`build_world_model`](world-model.md#prior_generator.world_model.build_world_model) / [`draw_worlds`](world-model.md#prior_generator.world_model.draw_worlds) | [World model](world-model.md) | The world as a drawable `pm.Model`. |
+| [`build_oracle_model`](world-model.md#prior_generator.world_model.build_oracle_model) | [World model](world-model.md) | Observed-data variant: the NUTS posterior oracle. |
 | [`sample_prior_predictive`](corpus.md) / [`DataGenerator`](corpus.md) | [Corpus generation](corpus.md) | Generate an N-world corpus (dict of arrays). |
 | [`save_corpus`](corpus.md) / [`load_corpus`](corpus.md) | [Corpus generation](corpus.md) | Compressed `.npz` persistence. |
 | [`describe_scm`](describe.md) | [Descriptions](describe.md) | Plain-text description of a world. |
@@ -25,6 +27,11 @@ import prior_generator as pg
 pg.make_scm_prior            # build a config
 pg.SCMPrior                  # the config dataclass
 pg.sample_scm, pg.SCM        # one world + its object
+pg.build_world_model         # the world as a drawable pm.Model
+pg.build_oracle_model        # observed-data variant (NUTS posterior oracle)
+pg.sample_structure          # the concrete per-world structure draw
+pg.sample_prior_cond         # ACE prior-conditioning interval draw
+pg.draw_worlds               # seeded pm.draw over a built model
 pg.describe_scm              # a world's story, as text
 pg.write_scm_bundle          # a world's audit folder
 pg.write_scenario_bundles    # the five-scenario inspection set

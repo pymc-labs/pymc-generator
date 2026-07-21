@@ -177,3 +177,51 @@ cfg = pg.make_scm_prior(
 
 See the full configuration surface in the
 [API reference](../reference/config.md).
+
+## Prior conditioning (ACE)
+
+A PFN checkpoint distills the prior it was trained on. **ACE-style prior
+conditioning** makes the prior an *input*: with
+`make_scm_prior(..., prior_conditioning=True)`, each **cell** draws a narrowed
+prior interval per conditioned quantity —
+
+```text
+w  ~ U(w_lo, w_hi)            # interval width
+lo ~ U(S_lo, S_hi − w)        # interval start
+I  = [lo, lo + w]             # ⊆ the global support, by construction
+```
+
+— and that cell's parameter is drawn as `pm.Uniform(lo, lo + w)` instead of the
+global support. The v1 conditioned set is `adstock_alpha` (geometric decay) and
+`hill_shape` (Hill slope); width ranges are overridable per quantity via
+`prior_cond_width_ranges`.
+
+The draws are recorded in the corpus so consumers can expose them as
+conditioning features:
+
+```python exec="1" source="material-block" result="text"
+import numpy as np
+import prior_generator as pg
+from prior_generator.slots import PRIOR_COND_LAYOUT
+
+cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=40,
+                        n_cells=2, draws_per_cell=2, seed=7,
+                        prior_conditioning=True)
+c = pg.sample_prior_predictive(cfg)
+
+print("prior_cond:", c["prior_cond"].shape, "— columns:", list(PRIOR_COND_LAYOUT))
+print("first world:", np.round(c["prior_cond"][0], 3))
+print("echo:", c["diagnostics"]["prior_cond"]["supports"])
+```
+
+- `prior_cond` `(N, P)` holds packed `(low, width)` pairs in the **locked,
+  append-only** `PRIOR_COND_LAYOUT` order — index columns by name, never by
+  position literals.
+- The key is present **iff** `prior_conditioning=True`; an unconditioned corpus
+  is byte-identical to before the feature existed.
+- `diagnostics["prior_cond"]` echoes the layout, the supports, and the width
+  ranges, so feature standardization can be derived from the corpus instead of
+  duplicated in the consumer.
+- The single-world path honors the same draw: `sample_scm` records the
+  intervals in `SCM.extras["prior_cond"]` and `describe_scm` prints them
+  alongside the mechanisms they bound.

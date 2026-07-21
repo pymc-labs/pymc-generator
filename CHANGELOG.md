@@ -10,6 +10,32 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **ACE prior-conditioning hyperprior** (`prior_conditioning=True`): each cell
+  draws a narrowed prior interval per conditioned quantity (`adstock_alpha`,
+  `hill_shape`) — `w ~ U(w_lo, w_hi)`, `lo ~ U(S_lo, S_hi − w)` — and its
+  parameters are drawn as `pm.Uniform(lo, lo + w)` instead of the global
+  support. Intervals are recorded in the corpus under the new `prior_cond`
+  `(N, P)` key (packed `(low, width)` pairs in the locked, append-only
+  `PRIOR_COND_LAYOUT` order; present iff enabled) with a self-describing
+  `diagnostics["prior_cond"]` echo of layout, supports, and width ranges.
+  `sample_scm` honors the same draw (`SCM.extras["prior_cond"]`) and
+  `describe_scm` prints the intervals. Unconditioned corpora stay
+  byte-identical (the interval draws consume no RNG when disabled).
+- **World model promoted to public API**: `build_world_model`,
+  `sample_structure`, `sample_prior_cond`, and `draw_worlds` are now exported
+  and documented (new [World model](docs/reference/world-model.md) reference
+  page).
+- **Posterior oracle** (`build_oracle_model` / `SCM.oracle_model()`): the
+  observed-data variant of the world model — same structure, same prior
+  definitions (shared spec helpers, so draw and oracle cannot drift), with the
+  world's spend/controls/sales attached — so `pm.sample` yields the
+  structure-known posterior on any drawn world. The generator's normalized
+  walks (`walk * std / walk.std()`) admit no closed-form sales-noise density,
+  so the oracle keeps the latent demand/baseline walks exact and represents
+  the `RW_Y` sales noise as iid Normal with the same HalfNormal scale prior;
+  all concessions are documented in the docstring and the new
+  [posterior-oracle guide](docs/guide/oracle.md).
+
 - Documentation site (`docs/`, MkDocs Material) at
   <https://pymc-labs.github.io/prior-generator/>: docstring-driven API reference
   (mkdocstrings), guide pages whose figures are produced by executing real code
