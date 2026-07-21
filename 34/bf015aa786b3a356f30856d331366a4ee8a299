@@ -1,0 +1,23 @@
+prior_generator/world_model.py
+  s_018865bb869693::t_79d7602d5cc4f3 218-220,230-231,234,246-253,255-258,263-269,275,281,283-285,287-292,297,303
+  s_018865bb869693::t_2d2c5690059b6b 555,557-558
+  s_018865bb869693::t_99be0507e5eaa3 511-513,518,520-522,530,535-537
+  s_018865bb869693::t_6d8b0d5f77e16c 141-143,148-152,157-162,166-171,176
+  s_018865bb869693::t_e19a0a834305bd 569
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "34bf015aa786b3a356f30856d331366a4ee8a299",
+  "prompts": {},
+  "sessions": {
+    "s_018865bb869693": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9dc0a5e-e1eb-42e0-b1a7-544c9ab853bc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
