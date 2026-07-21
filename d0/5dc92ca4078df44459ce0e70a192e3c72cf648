@@ -1,0 +1,31 @@
+docs/guide/corpus.md
+  s_018865bb869693::t_4464196704c271 203,213
+  s_018865bb869693::t_b855a53d957578 180-202,204-212,214-227
+mkdocs.yml
+  s_018865bb869693::t_1e7a8dfc08cd5d 158,164
+docs/reference/index.md
+  s_018865bb869693::t_f54a550576f8f3 14-15
+  s_018865bb869693::t_0c4919e86c3bf9 30-34
+CHANGELOG.md
+  s_018865bb869693::t_ed68975bdb4d78 13-38
+docs/reference/world-model.md
+  s_018865bb869693::t_565892abf61292 1-19
+docs/guide/oracle.md
+  s_018865bb869693::t_d7d376814e4686 1-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "d05dc92ca4078df44459ce0e70a192e3c72cf648",
+  "prompts": {},
+  "sessions": {
+    "s_018865bb869693": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9dc0a5e-e1eb-42e0-b1a7-544c9ab853bc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
