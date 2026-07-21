@@ -118,6 +118,35 @@ class SCM:
         """Max |Σ true components − sales| (float64; ~1e-15 in practice)."""
         return float(np.abs(self.reconstruction() - self.data["sales"]).max())
 
+    def oracle_model(self):
+        """The observed-data (NUTS oracle) ``pm.Model`` for THIS world.
+
+        Rebuilds :func:`prior_generator.world_model.build_oracle_model` from
+        the world's own structure, config, observables and (when present)
+        prior-conditioning intervals, so ``pm.sample(model=world.oracle_model())``
+        yields the structure-known posterior on the world's dataset. Requires
+        an SCM produced by ``sample_scm`` (which records the structural draw
+        in ``extras``). See the oracle guide for caveats.
+        """
+        from .world_model import build_oracle_model
+
+        if "structural" not in self.extras:
+            raise ValueError(
+                "this SCM does not carry its structural draw (extras['structural']); "
+                "oracle_model() needs a world produced by sample_scm"
+            )
+        return build_oracle_model(
+            self.g,
+            self.cfg,
+            self.extras["structural"],
+            data={
+                "channels": self.data["channels"],
+                "controls": self.data["controls"],
+                "sales": self.data["sales"],
+            },
+            prior_cond=self.extras.get("prior_cond"),
+        )
+
     def signal(self) -> dict[str, np.ndarray]:
         """Per-direct-channel signal metrics (see ``signal_diagnostics``).
 
@@ -325,7 +354,11 @@ def sample_scm(
     model, out_names, param_names = build_world_model(
         g_act, cfg, structural, T, prior_cond=prior_cond
     )
-    extras: dict = {"prior_cond": prior_cond} if prior_cond is not None else {}
+    # structural is recorded so the world's oracle model (SCM.oracle_model)
+    # can be rebuilt from the SCM alone.
+    extras: dict = {"structural": structural}
+    if prior_cond is not None:
+        extras["prior_cond"] = prior_cond
 
     for _round in range(max_param_rounds):
         draw_seed = int(rng.integers(2**31 - 1))

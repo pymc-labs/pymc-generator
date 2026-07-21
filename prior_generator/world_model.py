@@ -15,6 +15,13 @@ Discrete/structural choices — which edges exist, each channel's adstock and
 saturation family, and each node's walk smoothness — are drawn concretely per
 world by :func:`sample_structure` (they set the graph's shape), matching the
 design: continuous priors are distributions; structure is drawn per world.
+
+:func:`build_oracle_model` is the observed-data variant: the same structure
+and the same prior definitions with the world's dataset attached, so
+``pm.sample`` yields the structure-known posterior on any drawn world — the
+identification floor amortized models (PFNs) are judged against. The prior
+definitions (:func:`_uniform_prior_specs`, :func:`_walk_priors`) are shared
+between the generative and oracle builders so they cannot drift.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ import pytensor.tensor as pt
 
 from . import mechanisms
 from .sampler import SCMPrior
-from .symbolic_graph import build_symbolic_graph
+from .symbolic_graph import _adstock_col, _saturate_col, _walk_column, build_symbolic_graph
 
 
 def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) -> dict:
@@ -109,6 +116,169 @@ def _uniform(name: str, lo: float, hi: float, shape):
     return pm.Uniform(name, lo, hi, shape=shape)
 
 
+def _rw_prior_group(
+    name, n, positive, mean_range, std_sigma, smoothness, std_range=None, relative=False
+):
+    """One node group's random-walk priors (mean + std RVs, concrete smoothness).
+
+    Must be called inside a ``pm.Model`` context. This is THE single
+    definition of the walk priors — the generative draw and the posterior
+    oracle both build their walk parameters here, so they cannot drift.
+    """
+    mean = _uniform(f"{name}_mean", mean_range[0], mean_range[1], n)
+    if std_range is not None:
+        std = _uniform(f"{name}_std", std_range[0], std_range[1], n)
+        if relative:  # scale-free: amplitude relative to the walk's level
+            std = std * pt.softplus(mean)
+    else:
+        std = pm.HalfNormal(f"{name}_std", sigma=std_sigma, shape=n)
+    return {"mean": mean, "std": std, "smoothness": smoothness, "positive_only": positive}
+
+
+def _walk_priors(
+    cfg: SCMPrior,
+    structural: dict,
+    K: int,
+    M: int,
+    J: int,
+    include: tuple[str, ...] = ("d", "z", "c", "b", "y"),
+) -> dict[str, dict]:
+    """Walk-prior groups per node type, registered in the LOCKED d/z/c/b/y order.
+
+    ``include`` selects the groups a model needs (the oracle skips the ones
+    replaced by observed data); relative order is always preserved.
+    """
+    out: dict[str, dict] = {}
+    if "d" in include:
+        out["rw_d"] = _rw_prior_group(
+            "rw_d", J, False, cfg.rw_mean_range, cfg.rw_std_sigma, structural["smoothness_d"]
+        )
+    if "z" in include:
+        out["rw_z"] = _rw_prior_group(
+            "rw_z", M, False, cfg.rw_mean_range, cfg.rw_std_sigma, structural["smoothness_z"]
+        )
+    if "c" in include:
+        out["rw_c"] = _rw_prior_group(
+            "rw_c",
+            K,
+            True,
+            cfg.rw_positive_mean_range,
+            cfg.rw_channel_std_sigma,
+            structural["smoothness_c"],
+            std_range=cfg.rw_channel_std_range,
+            relative=cfg.rw_channel_std_range is not None,
+        )
+    if "b" in include:
+        out["rw_b"] = _rw_prior_group(
+            "rw_b",
+            1,
+            False,
+            cfg.rw_baseline_mean_range,
+            cfg.rw_std_sigma,
+            structural["smoothness_b"],
+        )
+    if "y" in include:
+        out["rw_y"] = _rw_prior_group(
+            "rw_y", 1, False, (0.0, 0.0), cfg.rw_sales_std_sigma, structural["smoothness_y"]
+        )
+    return out
+
+
+#: The per-channel media-response shape params (spec keys), canonical order.
+_MECHANISM_PARAM_NAMES: tuple[str, ...] = (
+    "adstock_alpha",
+    "weibull_lam",
+    "weibull_k",
+    "hill_slope",
+    "hill_kappa_mult",
+    "logistic_lam",
+    "mm_alpha",
+    "mm_kappa_mult",
+    "tanh_b",
+    "tanh_c",
+    "root_alpha",
+)
+
+
+def _uniform_prior_specs(
+    cfg: SCMPrior,
+    K: int,
+    M: int,
+    J: int,
+    prior_cond: dict[str, tuple[float, float]] | None = None,
+) -> dict[str, tuple[str, float, float, Any]]:
+    """``{param: (name, lo, hi, shape)}`` for every ``pm.Uniform`` prior.
+
+    THE single definition of the uniform prior ranges — both the generative
+    draw (:func:`build_world_model`) and the posterior oracle
+    (:func:`build_oracle_model`) create their RVs as ``_uniform(*spec)`` from
+    this table, so the priors cannot drift between the two. Also resolves the
+    prior-conditioning narrowing (``prior_cond``) for the conditioned set.
+    """
+    spr = mechanisms.SATURATION_PRIOR_RANGES
+    adstock_alpha_range = cfg.adstock_alpha_range
+    hill_shape_range = spr["hill"]["slope"]
+    if prior_cond is not None:
+        if "adstock_alpha" in prior_cond:
+            lo, width = prior_cond["adstock_alpha"]
+            adstock_alpha_range = (lo, lo + width)
+        if "hill_shape" in prior_cond:
+            lo, width = prior_cond["hill_shape"]
+            hill_shape_range = (lo, lo + width)
+    return {
+        # linear edge coefficients
+        "w_dc": ("w_dc", cfg.dc_coeff_range[0], cfg.dc_coeff_range[1], (J, K)),
+        "u_dz": ("u_dz", cfg.dz_coeff_range[0], cfg.dz_coeff_range[1], (J, M)),
+        "v_zc": ("v_zc", cfg.zc_coeff_range[0], cfg.zc_coeff_range[1], (M, K)),
+        "alpha_cc": ("alpha_cc", cfg.cc_coeff_range[0], cfg.cc_coeff_range[1], (K, K)),
+        "gamma_zz": ("gamma_zz", cfg.zz_coeff_range[0], cfg.zz_coeff_range[1], (M, M)),
+        "delta_db": ("delta_db", cfg.db_coeff_range[0], cfg.db_coeff_range[1], J),
+        "rho_zb": ("rho_zb", cfg.zb_coeff_range[0], cfg.zb_coeff_range[1], M),
+        "beta": ("beta", cfg.beta_additive_range[0], cfg.beta_additive_range[1], K),
+        # per-channel mechanism shape priors (adstock + saturation families)
+        "adstock_alpha": ("adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], K),
+        "weibull_lam": ("weibull_lam", cfg.weibull_lam_range[0], cfg.weibull_lam_range[1], K),
+        "weibull_k": ("weibull_k", cfg.weibull_k_range[0], cfg.weibull_k_range[1], K),
+        "hill_slope": ("hill_slope", hill_shape_range[0], hill_shape_range[1], K),
+        "hill_kappa_mult": (
+            "hill_kappa_mult",
+            spr["hill"]["kappa_mult"][0],
+            spr["hill"]["kappa_mult"][1],
+            K,
+        ),
+        "logistic_lam": ("logistic_lam", spr["logistic"]["lam"][0], spr["logistic"]["lam"][1], K),
+        "mm_alpha": (
+            "mm_alpha",
+            spr["michaelis_menten"]["alpha"][0],
+            spr["michaelis_menten"]["alpha"][1],
+            K,
+        ),
+        "mm_kappa_mult": (
+            "mm_kappa_mult",
+            spr["michaelis_menten"]["kappa_mult"][0],
+            spr["michaelis_menten"]["kappa_mult"][1],
+            K,
+        ),
+        "tanh_b": ("tanh_b", spr["tanh"]["b"][0], spr["tanh"]["b"][1], K),
+        "tanh_c": ("tanh_c", spr["tanh"]["c"][0], spr["tanh"]["c"][1], K),
+        "root_alpha": ("root_alpha", spr["root"]["alpha"][0], spr["root"]["alpha"][1], K),
+        # channel texture factors (relative to the channel level)
+        "hf_sigma": ("hf_sigma", cfg.channel_hf_sigma_range[0], cfg.channel_hf_sigma_range[1], K),
+        "pulse_amp": (
+            "pulse_amp",
+            cfg.channel_pulse_amp_range[0],
+            cfg.channel_pulse_amp_range[1],
+            K,
+        ),
+        "pulse_prob": (
+            "pulse_prob",
+            cfg.channel_pulse_prob_range[0],
+            cfg.channel_pulse_prob_range[1],
+            K,
+        ),
+    }
+
+
 def build_world_model(
     g_active: dict,
     cfg: SCMPrior,
@@ -152,125 +322,40 @@ def build_world_model(
     J = len(g_active["g_db"])
     burn_in = cfg.adstock_burn_in
     T_full = T + burn_in
-    spr = mechanisms.SATURATION_PRIOR_RANGES
-
-    # Prior-conditioning: narrowed per-cell supports for the conditioned set.
-    adstock_alpha_range = cfg.adstock_alpha_range
-    hill_shape_range = spr["hill"]["slope"]
-    if prior_cond is not None:
-        if "adstock_alpha" in prior_cond:
-            lo, width = prior_cond["adstock_alpha"]
-            adstock_alpha_range = (lo, lo + width)
-        if "hill_shape" in prior_cond:
-            lo, width = prior_cond["hill_shape"]
-            hill_shape_range = (lo, lo + width)
+    specs = _uniform_prior_specs(cfg, K, M, J, prior_cond)
 
     with pm.Model() as model:
-
-        def _rw(
-            name, n, positive, mean_range, std_sigma, smoothness, std_range=None, relative=False
-        ):
-            mean = _uniform(f"{name}_mean", mean_range[0], mean_range[1], n)
-            if std_range is not None:
-                std = _uniform(f"{name}_std", std_range[0], std_range[1], n)
-                if relative:  # scale-free: amplitude relative to the walk's level
-                    std = std * pt.softplus(mean)
-            else:
-                std = pm.HalfNormal(f"{name}_std", sigma=std_sigma, shape=n)
-            return {"mean": mean, "std": std, "smoothness": smoothness, "positive_only": positive}
-
-        rw_d = _rw(
-            "rw_d", J, False, cfg.rw_mean_range, cfg.rw_std_sigma, structural["smoothness_d"]
-        )
-        rw_z = _rw(
-            "rw_z", M, False, cfg.rw_mean_range, cfg.rw_std_sigma, structural["smoothness_z"]
-        )
-        rw_c = _rw(
-            "rw_c",
-            K,
-            True,
-            cfg.rw_positive_mean_range,
-            cfg.rw_channel_std_sigma,
-            structural["smoothness_c"],
-            std_range=cfg.rw_channel_std_range,
-            relative=cfg.rw_channel_std_range is not None,
-        )
-        rw_b = _rw(
-            "rw_b",
-            1,
-            False,
-            cfg.rw_baseline_mean_range,
-            cfg.rw_std_sigma,
-            structural["smoothness_b"],
-        )
-        rw_y = _rw("rw_y", 1, False, (0.0, 0.0), cfg.rw_sales_std_sigma, structural["smoothness_y"])
+        rw = _walk_priors(cfg, structural, K, M, J)
+        rw_c = rw["rw_c"]
 
         c_level = pt.softplus(rw_c["mean"])  # per-channel level anchor for texture
-        pulse_prob = _uniform(
-            "pulse_prob", cfg.channel_pulse_prob_range[0], cfg.channel_pulse_prob_range[1], K
-        )
+        pulse_prob = _uniform(*specs["pulse_prob"])
 
         params: dict[str, Any] = {
             "l_max": cfg.l_max,
             # linear edge coefficients
-            "w_dc": _uniform("w_dc", cfg.dc_coeff_range[0], cfg.dc_coeff_range[1], (J, K)),
-            "u_dz": _uniform("u_dz", cfg.dz_coeff_range[0], cfg.dz_coeff_range[1], (J, M)),
-            "v_zc": _uniform("v_zc", cfg.zc_coeff_range[0], cfg.zc_coeff_range[1], (M, K)),
-            "alpha_cc": _uniform("alpha_cc", cfg.cc_coeff_range[0], cfg.cc_coeff_range[1], (K, K)),
-            "gamma_zz": _uniform("gamma_zz", cfg.zz_coeff_range[0], cfg.zz_coeff_range[1], (M, M)),
-            "delta_db": _uniform("delta_db", cfg.db_coeff_range[0], cfg.db_coeff_range[1], J),
-            "rho_zb": _uniform("rho_zb", cfg.zb_coeff_range[0], cfg.zb_coeff_range[1], M),
-            "beta": _uniform("beta", cfg.beta_additive_range[0], cfg.beta_additive_range[1], K),
+            "w_dc": _uniform(*specs["w_dc"]),
+            "u_dz": _uniform(*specs["u_dz"]),
+            "v_zc": _uniform(*specs["v_zc"]),
+            "alpha_cc": _uniform(*specs["alpha_cc"]),
+            "gamma_zz": _uniform(*specs["gamma_zz"]),
+            "delta_db": _uniform(*specs["delta_db"]),
+            "rho_zb": _uniform(*specs["rho_zb"]),
+            "beta": _uniform(*specs["beta"]),
             # per-node random walks
-            "rw_d": rw_d,
-            "rw_z": rw_z,
+            "rw_d": rw["rw_d"],
+            "rw_z": rw["rw_z"],
             "rw_c": rw_c,
-            "rw_b": rw_b,
-            "rw_y": rw_y,
+            "rw_b": rw["rw_b"],
+            "rw_y": rw["rw_y"],
             # per-channel mechanism families (concrete) + shape priors
             "adstock_family": structural["adstock_family"],
             "sat_family": structural["sat_family"],
-            "adstock_alpha": _uniform(
-                "adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], K
-            ),
-            "weibull_lam": _uniform(
-                "weibull_lam", cfg.weibull_lam_range[0], cfg.weibull_lam_range[1], K
-            ),
-            "weibull_k": _uniform("weibull_k", cfg.weibull_k_range[0], cfg.weibull_k_range[1], K),
-            "hill_slope": _uniform("hill_slope", hill_shape_range[0], hill_shape_range[1], K),
-            "hill_kappa_mult": _uniform(
-                "hill_kappa_mult", spr["hill"]["kappa_mult"][0], spr["hill"]["kappa_mult"][1], K
-            ),
-            "logistic_lam": _uniform(
-                "logistic_lam", spr["logistic"]["lam"][0], spr["logistic"]["lam"][1], K
-            ),
-            "mm_alpha": _uniform(
-                "mm_alpha",
-                spr["michaelis_menten"]["alpha"][0],
-                spr["michaelis_menten"]["alpha"][1],
-                K,
-            ),
-            "mm_kappa_mult": _uniform(
-                "mm_kappa_mult",
-                spr["michaelis_menten"]["kappa_mult"][0],
-                spr["michaelis_menten"]["kappa_mult"][1],
-                K,
-            ),
-            "tanh_b": _uniform("tanh_b", spr["tanh"]["b"][0], spr["tanh"]["b"][1], K),
-            "tanh_c": _uniform("tanh_c", spr["tanh"]["c"][0], spr["tanh"]["c"][1], K),
-            "root_alpha": _uniform(
-                "root_alpha", spr["root"]["alpha"][0], spr["root"]["alpha"][1], K
-            ),
+            **{name: _uniform(*specs[name]) for name in _MECHANISM_PARAM_NAMES},
             # channel texture: magnitudes relative to the channel level; fires
             # are Bernoulli(pulse_prob)
-            "hf_sigma": _uniform(
-                "hf_sigma", cfg.channel_hf_sigma_range[0], cfg.channel_hf_sigma_range[1], K
-            )
-            * c_level,
-            "pulse_amp": _uniform(
-                "pulse_amp", cfg.channel_pulse_amp_range[0], cfg.channel_pulse_amp_range[1], K
-            )
-            * c_level,
+            "hf_sigma": _uniform(*specs["hf_sigma"]) * c_level,
+            "pulse_amp": _uniform(*specs["pulse_amp"]) * c_level,
             "pulse_prob": pulse_prob,
             "use_hf": structural["use_hf"],
             "use_pulse": structural["use_pulse"],
@@ -321,6 +406,150 @@ def build_world_model(
             pm.Deterministic(f"param_{key}", tensor)
 
     return model, out_names, param_names
+
+
+def build_oracle_model(
+    g_active: dict,
+    cfg: SCMPrior,
+    structural: dict,
+    data: dict[str, np.ndarray],
+    prior_cond: dict[str, tuple[float, float]] | None = None,
+) -> pm.Model:
+    """The observed-data variant of :func:`build_world_model` — the NUTS oracle.
+
+    Builds a ``pm.Model`` for the SAME world structure with the world's
+    dataset attached, so ``pm.sample`` yields the posterior over the
+    structural parameters and the latent demand — the identification floor an
+    amortized model (e.g. a PFN) is judged against. The priors and the media
+    response transforms are the same definitions generation uses
+    (:func:`_uniform_prior_specs`, :func:`_walk_priors`, and the
+    adstock/saturation code from :mod:`prior_generator.symbolic_graph`), so
+    draw and oracle cannot drift.
+
+    Parameters
+    ----------
+    g_active : dict
+        Active-size DAG blocks — the TRUE structure (see the caveat below).
+    cfg : SCMPrior
+        Supplies every prior range (one prior definition for draw + oracle).
+    structural : dict
+        Output of :func:`sample_structure` for the drawn world (concrete
+        mechanism families and walk smoothness). ``sample_scm`` records it in
+        ``SCM.extras["structural"]``.
+    data : dict
+        The world's observables — ``"channels"`` (T, K), ``"controls"``
+        (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``.
+    prior_cond : dict, optional
+        The world's prior-conditioning intervals (``SCM.extras["prior_cond"]``)
+        so the oracle runs under the SAME narrowed prior the world was drawn
+        from.
+
+    Returns
+    -------
+    pm.Model
+        Free RVs: the outcome-side priors (``beta``, mechanism shapes,
+        ``delta_db``, ``rho_zb``, walk params) and the latent demand / baseline
+        walk innovations. Deterministics ``contributions`` (T, K),
+        ``baseline`` (T,), ``sales_mu`` (T,) and ``demand`` (T, J) expose the
+        posterior series; compare ``contributions`` against the world's
+        ``contributions_observed`` truth.
+
+    Notes
+    -----
+    **What is exact, and what is not.** Conditioning this generative process
+    exactly is not possible: every random walk is normalized in-place
+    (``walk * std / walk.std()``), so the sales-noise walk has no closed-form
+    density to invert. The oracle keeps everything *upstream* of the
+    observation exact and makes three explicit, documented concessions:
+
+    1. **Structure-known**: the true DAG, mechanism families and walk
+       smoothness are given. This is the structure-known oracle — an upper
+       bound for any method that must also infer structure; a
+       structure-unknown oracle would marginalize over graphs and is out of
+       scope.
+    2. **Plug-in conditioning on the observed inputs**: ``channels`` and
+       ``controls`` enter as data (constants). The information they carry
+       about latent demand through ``p(C | D)`` / ``p(Z | D)`` is not modeled
+       — demand is inferred from the sales residual via ``D -> B`` only.
+    3. **iid sales-noise representation**: the generative sales noise
+       ``RW_Y`` (a smoothed, normalized walk with marginal sd exactly
+       ``rw_y_std``) is represented as iid ``Normal(0, rw_y_std)`` with the
+       SAME HalfNormal prior on the scale. The latent demand and baseline
+       walks stay exact (same ``T_full`` simulation, same transform, sliced
+       to the reported window).
+
+    Additionally the adstock convolution sees only the reported window
+    (zero-padded start) while generation used ``adstock_burn_in`` weeks of
+    real history — drop the first ``l_max`` weeks from comparisons.
+    """
+    K = len(g_active["g_cy"])
+    M = len(g_active["g_zb"])
+    J = len(g_active["g_db"])
+    channels = np.asarray(data["channels"], dtype="float64")
+    controls = np.asarray(data["controls"], dtype="float64")
+    sales = np.asarray(data["sales"], dtype="float64")
+    T = int(sales.shape[0])
+    if channels.shape != (T, K) or controls.shape != (T, M):
+        raise ValueError(
+            f"data shapes must be channels (T, K)={T, K}, controls (T, M)={T, M}, "
+            f"sales (T,)={(T,)}; got channels {channels.shape}, controls {controls.shape}"
+        )
+    burn_in = cfg.adstock_burn_in
+    T_full = T + burn_in
+    W = slice(burn_in, None)
+    g_cy = np.asarray(g_active["g_cy"], dtype="float64")
+    g_db = np.asarray(g_active["g_db"], dtype="float64")
+    g_zb = np.asarray(g_active["g_zb"], dtype="float64")
+    specs = _uniform_prior_specs(cfg, K, M, J, prior_cond)
+
+    with pm.Model() as model:
+        # Shared prior definitions — identical names, ranges and shapes to the
+        # generative model (the drift-guard tests compare them one by one).
+        rw = _walk_priors(cfg, structural, K, M, J, include=("d", "b", "y"))
+        beta = _uniform(*specs["beta"])
+        delta_db = _uniform(*specs["delta_db"])
+        rho_zb = _uniform(*specs["rho_zb"])
+        mech: dict[str, Any] = {name: _uniform(*specs[name]) for name in _MECHANISM_PARAM_NAMES}
+        mech_params: dict[str, Any] = {
+            "l_max": cfg.l_max,
+            "adstock_family": structural["adstock_family"],
+            "sat_family": structural["sat_family"],
+            **mech,
+        }
+
+        # Observed inputs enter as constants (static shapes — the adstock
+        # convolution indexes by the static time length).
+        channels_t = pt.as_tensor_variable(channels)
+
+        # Latent demand + baseline walks: the SAME transform generation uses,
+        # simulated over T_full and sliced to the reported window.
+        eps_d = pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, J))
+        eps_b = pm.Normal("eps_b", 0.0, 1.0, shape=(T_full,))
+        d_cols = [_walk_column(eps_d[:, j], rw["rw_d"], j, T_full) for j in range(J)]
+        D_full = pt.stack(d_cols, axis=1)  # (T_full, J)
+        walk_b = _walk_column(eps_b, rw["rw_b"], 0, T_full)
+        pm.Deterministic("demand", D_full[W])
+
+        term_bd = pt.dot(D_full[W], g_db * delta_db)  # (T,)
+        term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (T,)
+        baseline = pm.Deterministic("baseline", term_bd + term_bz + walk_b[W])
+
+        # Media response on the OBSERVED spend: same adstock / κ-relative
+        # saturation code as generation (window-only history — see Notes).
+        contrib_cols = []
+        for k in range(K):
+            ad_obs = _adstock_col(channels_t[:, k], mech_params, k)
+            scale_k = pt.maximum(ad_obs.mean(), 1e-8)
+            f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
+            contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
+        contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
+
+        sales_mu = pm.Deterministic("sales_mu", baseline + contributions.sum(axis=1))
+        # iid representation of the RW_Y sales noise (same HalfNormal scale
+        # prior; see Notes on why the normalized walk cannot be inverted).
+        pm.Normal("sales", mu=sales_mu, sigma=rw["rw_y"]["std"][0], observed=sales)
+
+    return model
 
 
 def draw_worlds(
