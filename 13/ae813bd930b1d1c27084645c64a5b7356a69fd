@@ -1,0 +1,33 @@
+prior_generator/world_model.py
+  s_018865bb869693::t_d2cf0dc697c78b 411-511,513-554
+  s_018865bb869693::t_057bc8d5c5de1d 119-281
+  s_018865bb869693::t_fb187e549b871d 37
+  s_018865bb869693::t_10e925a8eab3ac 325,328-329,332,337-344,346-347,349-350,354,357-358
+  s_018865bb869693::t_f8c4162d71e6bf 512
+  s_018865bb869693::t_340e6e9b7db047 18-24
+prior_generator/worlds.py
+  s_018865bb869693::t_31f2896aadcbba 121-149
+  s_018865bb869693::t_cf3944cb7a13e2 357-361
+prior_generator/__init__.py
+  s_018865bb869693::t_0c6636ad3c002d 34-40
+  s_018865bb869693::t_75dd2c9ee37381 64-65,67,71,73
+tests/test_oracle.py
+  s_018865bb869693::t_f8c4162d71e6bf 47
+  s_018865bb869693::t_6df2f684bbcd89 1-46,48-173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "13ae813bd930b1d1c27084645c64a5b7356a69fd",
+  "prompts": {},
+  "sessions": {
+    "s_018865bb869693": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9dc0a5e-e1eb-42e0-b1a7-544c9ab853bc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
