@@ -1,0 +1,70 @@
+prior_generator/__init__.py
+  s_97b7c7a3ea1334::t_8531237cf3b5dc 45-46,65-66
+tests/test_signal_diagnostics.py
+  s_97b7c7a3ea1334::t_23297d8bda6d3c 31,131
+  s_97b7c7a3ea1334::t_a777e6547118fe 1-8,10-16,18-30,32-64,69-74,84-130,132-158,160-162,202-235,242-246
+  s_6cdb3f9eca54e6::t_55fae956c8bf31 183
+  s_97b7c7a3ea1334::t_4b55b0a51bca40 9,75-78,82-83
+  s_6cdb3f9eca54e6::t_2a569e6c6eb06a 65-68,163-170,172-181,184-201,236-241
+  s_97b7c7a3ea1334::t_8a2863dd8c45e4 17,79-81
+  s_6cdb3f9eca54e6::t_9514c46be938bf 171,182
+  s_97b7c7a3ea1334::t_f5d174b5fb9dab 159
+prior_generator/signal_diagnostics.py
+  s_97b7c7a3ea1334::t_daaf39abeb1c34 123-125,211-213,221-235,253-255,259-261,272-274,290-292,335-337,339-347,415-418,462-474,478-483
+  s_a7e2615d9a8f10::t_f85639beba0abc 43-44,46,53,66-67,70-72,126-136,142-210,214-220,236-252,256-258,262-271,275,286-289,293-294
+  s_6cdb3f9eca54e6::t_2a569e6c6eb06a 20-21,25-27,281-285
+  s_6cdb3f9eca54e6::t_55fae956c8bf31 276
+  s_97b7c7a3ea1334::t_066a64e14ed60c 353-354
+  s_a7e2615d9a8f10::t_c634b00771ea62 305-312,331,333-334,338,348-352,355-357,434-441,475-476
+  s_97b7c7a3ea1334::t_1e967a728823ad 48,137-141,277-280,360-386,391-401,403-414,419-421,423,459-461,477,484
+  s_6cdb3f9eca54e6::t_3461a5b9ca578e 295-296,358-359
+tests/test_confounding_strength.py
+  s_6cdb3f9eca54e6::t_e9c9d820165554 58-61
+tests/test_identifiability.py
+  s_97b7c7a3ea1334::t_a777e6547118fe 62-63
+prior_generator/sampler.py
+  s_97b7c7a3ea1334::t_daaf39abeb1c34 1474-1483,1485-1486,1492-1499
+  s_97b7c7a3ea1334::t_8531237cf3b5dc 34,809-810,817-819
+  s_a7e2615d9a8f10::t_3fd43231a6712c 30-33,35,824,826-828,1412,1470-1473,1484,1487-1491,1500
+prior_generator/worlds.py
+  s_a7e2615d9a8f10::t_8f0f1ec1acd109 173-180
+  s_97b7c7a3ea1334::t_8531237cf3b5dc 24,183-184
+prior_generator/data_generator.py
+  s_a7e2615d9a8f10::t_84af0d55e03e53 250-251,331-332,351,411-414,442
+  s_6cdb3f9eca54e6::t_2a569e6c6eb06a 415-416,419-423
+  s_97b7c7a3ea1334::t_8531237cf3b5dc 298
+  s_a7e2615d9a8f10::t_a83963c8c3dfc7 34,299,417-418,452,456
+  s_97b7c7a3ea1334::t_daaf39abeb1c34 439-441,443-451,453-455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "019fedf47d846263ee888e19d768928c4a6ec81b",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    },
+    "s_97b7c7a3ea1334": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066378ca9ffeig3ASd28vdQp6q",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    },
+    "s_a7e2615d9a8f10": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0663dc2f1ffeYucjPfrXNnEKim",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
