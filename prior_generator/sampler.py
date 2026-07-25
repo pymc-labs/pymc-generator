@@ -301,6 +301,10 @@ class SCMPrior:
             raise ValueError(f"draws_per_cell must be >= 1, got {self.draws_per_cell}")
         if self.T < 4:
             raise ValueError(f"T must be >= 4, got {self.T}")
+        if isinstance(self.l_max, bool) or not isinstance(self.l_max, (int, np.integer)):
+            raise ValueError("l_max must be an int (not bool)")
+        if self.l_max < 1:
+            raise ValueError(f"l_max must be >= 1, got {self.l_max}")
         if not 0.0 <= self.p_long_horizon <= 1.0:
             raise ValueError(f"p_long_horizon must be in [0, 1], got {self.p_long_horizon}")
         n_val_cells = max(1, int(round(self.val_cell_frac * self.n_cells)))
@@ -331,6 +335,53 @@ class SCMPrior:
             raise ValueError(
                 f"saturation_family_probs must sum to 1.0, got {sum(self.saturation_family_probs)}"
             )
+
+        def _finite_range(
+            name: str,
+            *,
+            minimum: float | None = None,
+            maximum: float | None = None,
+            minimum_exclusive: bool = False,
+        ) -> None:
+            value = getattr(self, name)
+            try:
+                lo, hi = value
+                lo, hi = float(lo), float(hi)
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be a finite (lo, hi) pair, got {value!r}")
+            valid_min = minimum is None or (lo > minimum if minimum_exclusive else lo >= minimum)
+            if not (
+                np.isfinite(lo)
+                and np.isfinite(hi)
+                and lo <= hi
+                and valid_min
+                and (maximum is None or hi <= maximum)
+            ):
+                raise ValueError(f"{name} has invalid bounds {value!r}")
+
+        _finite_range("adstock_alpha_range", minimum=0.0, maximum=1.0)
+        _finite_range("weibull_lam_range", minimum=0.0, minimum_exclusive=True)
+        _finite_range("weibull_k_range", minimum=0.0, minimum_exclusive=True)
+        for name in (
+            "dc_coeff_range",
+            "dz_coeff_range",
+            "zc_coeff_range",
+            "zz_coeff_range",
+            "db_coeff_range",
+            "zb_coeff_range",
+            "rw_mean_range",
+            "rw_baseline_mean_range",
+        ):
+            _finite_range(name)
+        _finite_range("cc_coeff_range", minimum=0.0)
+        _finite_range("beta_additive_range", minimum=0.0)
+        _finite_range("rw_positive_mean_range", minimum=0.0, minimum_exclusive=True)
+        if self.rw_channel_std_range is not None:
+            _finite_range("rw_channel_std_range", minimum=0.0)
+        _finite_range("channel_hf_sigma_range", minimum=0.0)
+        _finite_range("channel_pulse_prob_range", minimum=0.0, maximum=0.5)
+        _finite_range("channel_pulse_amp_range", minimum=0.0)
+
         # Prior-conditioning hyperprior (ACE)
         if self.prior_cond_width_ranges is not None:
             unknown = sorted(set(self.prior_cond_width_ranges) - set(PRIOR_COND_QUANTITIES))
@@ -409,8 +460,8 @@ class SCMPrior:
             )
         for name in ("rw_std_sigma", "rw_channel_std_sigma", "rw_sales_std_sigma"):
             sigma = getattr(self, name)
-            if sigma <= 0:
-                raise ValueError(f"{name} must be > 0, got {sigma}")
+            if not np.isfinite(sigma) or sigma <= 0:
+                raise ValueError(f"{name} must be finite and > 0, got {sigma}")
         if self.rw_baseline_std_sigma is not None and (
             not np.isfinite(self.rw_baseline_std_sigma) or self.rw_baseline_std_sigma <= 0
         ):
@@ -884,8 +935,10 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
         adstock_burn_in=cfg.adstock_burn_in,
     )
     if cfg.include_identifiability_labels:
-        corpus["signal_metrics"] = signal_metrics
-        corpus["signal_metric_valid"] = signal_metric_valid
+        corpus["identifiability"] = {
+            "signal_metrics": signal_metrics,
+            "signal_metric_valid": signal_metric_valid,
+        }
     diagnostics["signal"] = _signal_block(
         cfg,
         layout,

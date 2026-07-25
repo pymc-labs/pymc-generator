@@ -125,7 +125,8 @@ A corpus can satisfy every schema contract and still be *unlearnable* if the tru
 contributions barely move. Every corpus embeds a signal summary; `check_signal_gate`
 turns it into PASS/FAIL rows.
 
-The optional dense truth metadata are `signal_metrics: float32 (N, K, 9)` and
+The optional `identifiability` metadata block contains
+`signal_metrics: float32 (N, K, 9)` and
 `signal_metric_valid: uint8 (N, K, 9)`. Their exact versioned layout and
 validity rules are in the [signal diagnostics reference](../reference/signal.md).
 They are calculated from the final retained float32 arrays (after truncation),

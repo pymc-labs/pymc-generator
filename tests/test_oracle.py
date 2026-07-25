@@ -151,6 +151,24 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
     with pytest.raises(ValueError, match="data shapes"):
         build_oracle_model(g_act, cfg, structural, bad)
 
+    bad_sales = {
+        "channels": world["channels"],
+        "controls": world["controls"],
+        "sales": world["sales"][:, None],
+    }
+    with pytest.raises(ValueError, match="sales must have shape"):
+        build_oracle_model(g_act, cfg, structural, bad_sales)
+
+    for key, fill in (("channels", np.nan), ("controls", np.inf), ("sales", np.nan)):
+        nonfinite = {
+            "channels": world["channels"].copy(),
+            "controls": world["controls"].copy(),
+            "sales": world["sales"].copy(),
+        }
+        nonfinite[key].flat[0] = fill
+        with pytest.raises(ValueError, match="finite"):
+            build_oracle_model(g_act, cfg, structural, nonfinite)
+
 
 def test_generation_untouched_by_oracle():
     """Building an oracle consumes no RNG and leaves corpora byte-identical."""

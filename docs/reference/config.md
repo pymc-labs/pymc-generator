@@ -92,9 +92,9 @@ design with reset state, **not** a conventional spend-only lift test.
 
 ## Identifiability labels
 
-`include_identifiability_labels: bool = True` controls the two dense,
-truth-derived metadata arrays `signal_metrics` and `signal_metric_valid`.
-Setting it to `False` omits those arrays while retaining the aggregate
+`include_identifiability_labels: bool = True` controls the nested
+`identifiability` block containing the dense, truth-derived `signal_metrics`
+and `signal_metric_valid` arrays. Setting it to `False` omits that block while retaining the aggregate
 `diagnostics["signal"]` quality report. It changes no model input, random draw,
 or generated observable array; use the disabled form for feature-only shards.
 

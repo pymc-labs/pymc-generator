@@ -423,7 +423,8 @@ def summarize_signal_metrics(
             else (float(predicate(vals).mean()) if vals.size else None)
         )
     out["sales_level_ratio_quantiles"] = {
-        f"q{int(q * 100)}": float(np.quantile(level_ratio, q)) for q in _QS
+        f"q{int(q * 100)}": (float(np.quantile(level_ratio, q)) if level_ratio.size else None)
+        for q in _QS
     }
     return out
 

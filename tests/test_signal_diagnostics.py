@@ -207,6 +207,19 @@ def test_summary_uses_valid_denominators_and_gate_contracts():
     assert not ok and any("frac_spearman_lt_03 missing" in line for line in lines)
 
 
+def test_empty_signal_summary_has_none_quantiles():
+    metrics = np.zeros((0, 2, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    valid = np.zeros_like(metrics, dtype=np.uint8)
+    summary = summarize_signal_metrics(
+        metrics,
+        valid,
+        np.zeros((0, 4)),
+        np.zeros((0, 2), dtype=bool),
+    )
+    assert summary["n_direct_channels"] == 0
+    assert all(value is None for value in summary["sales_level_ratio_quantiles"].values())
+
+
 def test_final_float32_metrics_recompute_after_save_load(tmp_path):
     x = np.array([0.1, 0.7, 2.1, 0.4, 1.3, 0.8], dtype=np.float64)[None, :, None].astype(np.float32)
     y = (1.7 * x).astype(np.float32)
@@ -270,8 +283,8 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
         l_max=signal_config["l_max"],
         adstock_burn_in=signal_config["adstock_burn_in"],
     )
-    assert np.array_equal(loaded["signal_metrics"], metrics)
-    assert np.array_equal(loaded["signal_metric_valid"], valid)
+    assert np.array_equal(loaded["identifiability"]["signal_metrics"], metrics)
+    assert np.array_equal(loaded["identifiability"]["signal_metric_valid"], valid)
 
 
 def test_validator_checks_signal_layout_dtype_and_eligibility():
@@ -306,8 +319,10 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "adstock_alpha": np.zeros((1, 1), dtype=np.float32),
         "weibull_lam": np.zeros((1, 1), dtype=np.float32),
         "weibull_k": np.zeros((1, 1), dtype=np.float32),
-        "signal_metrics": np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32),
-        "signal_metric_valid": np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.uint8),
+        "identifiability": {
+            "signal_metrics": np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32),
+            "signal_metric_valid": np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.uint8),
+        },
         "diagnostics": {
             "signal": {
                 "metric_version": SIGNAL_METRIC_VERSION,
@@ -319,7 +334,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
             }
         },
     }
-    corpus["signal_metrics"][0, 0, 0] = 1
+    corpus["identifiability"]["signal_metrics"][0, 0, 0] = 1
     errors = DataGenerator.validate_corpus(corpus)
     assert any("ineligible" in error for error in errors)
     assert SIGNAL_METRIC_VERSION == 2

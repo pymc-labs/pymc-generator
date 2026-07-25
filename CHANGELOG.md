@@ -18,10 +18,12 @@ While the project is on 0.x, minor versions may contain breaking changes.
   variance, and persists the resulting scalar. Corpus worlds can also include
   stratified, non-overlapping random channel-shock schedules with reset-aware
   adstock responses and typed audit metadata.
-- **Persisted signal features v1**: corpora now store dense per-direct-channel
-  signal metrics and validity masks, together with a versioned layout in
-  `diagnostics["signal"]`. Metrics are recomputed from the final float32,
-  post-truncation corpus arrays so persisted data and diagnostics agree.
+- **Persisted signal features v2**: corpora now store dense per-direct-channel
+  signal metrics and validity masks under the `identifiability` metadata block,
+  together with a versioned layout in `diagnostics["signal"]`. Metrics are
+  recomputed from the final float32, post-truncation corpus arrays so persisted
+  data and diagnostics agree. V2 adds estimability-aware R² validity and
+  self-contained adstock recomputation settings.
 
 - **ACE prior-conditioning hyperprior** (`prior_conditioning=True`): each cell
   draws a narrowed prior interval per conditioned quantity (`adstock_alpha`,

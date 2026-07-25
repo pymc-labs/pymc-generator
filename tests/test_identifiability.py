@@ -150,6 +150,9 @@ def test_additive_corpus_matches_legacy_hashes():
         for key, value in corpus.items()
         if isinstance(value, np.ndarray)
     }
+    hashes.update(
+        {key: _hash_array(key, value) for key, value in corpus["identifiability"].items()}
+    )
 
     assert hashes == EXPECTED_CORPUS_HASHES
 
@@ -182,10 +185,8 @@ def test_identifiability_labels_are_optional_metadata_not_features():
     )
     labelled = pg.sample_prior_predictive(cfg)
     feature_only = pg.sample_prior_predictive(replace(cfg, include_identifiability_labels=False))
-    label_keys = {"signal_metrics", "signal_metric_valid"}
-
-    assert label_keys <= labelled.keys()
-    assert label_keys.isdisjoint(feature_only)
+    assert set(labelled["identifiability"]) == {"signal_metrics", "signal_metric_valid"}
+    assert "identifiability" not in feature_only
     for key, value in feature_only.items():
         if isinstance(value, np.ndarray):
             assert np.array_equal(value, labelled[key]), key

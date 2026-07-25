@@ -762,6 +762,8 @@ def build_oracle_model(
     channels = np.asarray(data["channels"], dtype="float64")
     controls = np.asarray(data["controls"], dtype="float64")
     sales = np.asarray(data["sales"], dtype="float64")
+    if sales.ndim != 1:
+        raise ValueError(f"data sales must have shape (T,), got {sales.shape}")
     T = int(sales.shape[0])
     if channels.shape != (T, n_treatments) or controls.shape != (T, n_covariates):
         raise ValueError(
@@ -769,6 +771,8 @@ def build_oracle_model(
             f"controls (T, n_covariates)={T, n_covariates}, sales (T,)={(T,)}; "
             f"got channels {channels.shape}, controls {controls.shape}"
         )
+    if not all(np.isfinite(value).all() for value in (channels, controls, sales)):
+        raise ValueError("data channels, controls, and sales must contain only finite values")
     saturation_scale = data.get("saturation_scale")
     if saturation_scale is not None:
         saturation_scale = np.asarray(saturation_scale, dtype="float64")

@@ -181,8 +181,14 @@ def test_save_load_roundtrip(tmp_path, corpus):
     for key, val in corpus.items():
         if key == "diagnostics":
             assert loaded[key]["edge_types"] == list(EDGE_TYPES_EXTENDED)
+        elif key == "identifiability":
+            assert set(loaded[key]) == {"signal_metrics", "signal_metric_valid"}
+            for label, value in val.items():
+                assert np.array_equal(loaded[key][label], value)
         else:
             assert np.array_equal(loaded[key], val), f"{key} changed across roundtrip"
+    assert all(not key.startswith("identifiability__") for key in loaded)
+    assert isinstance(loaded["identifiability"], dict)
 
 
 def test_load_corpus_refuses_pickle_payload_without_execution(tmp_path):
@@ -211,11 +217,64 @@ def test_numpy_scalar_diagnostics_validate_and_roundtrip(tmp_path, corpus):
     modified["diagnostics"] = diagnostics
     assert DataGenerator.validate_corpus(modified) == []
 
-    signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
     path = tmp_path / "numpy-diagnostics.npz"
     pg.save_corpus(modified, path)
     loaded = pg.load_corpus(path)
     assert DataGenerator.validate_corpus(loaded) == []
+
+
+def test_validate_corpus_recomputes_labels_and_signal_summary(corpus):
+    labels = corpus["identifiability"]
+    metric_index = SIGNAL_METRIC_LAYOUT.index("contrib_r2_explained_by_rest")
+    eligible = np.argwhere(labels["signal_metric_valid"][..., metric_index] == 1)
+    assert eligible.size
+    n, k = eligible[0]
+
+    bad_label = dict(corpus)
+    bad_label["identifiability"] = dict(labels)
+    bad_label["identifiability"]["signal_metrics"] = labels["signal_metrics"].copy()
+    old = labels["signal_metrics"][n, k, metric_index]
+    bad_label["identifiability"]["signal_metrics"][n, k, metric_index] = 0.0 if old > 0.5 else 1.0
+    assert DataGenerator.validate_corpus(bad_label) == [
+        "identifiability signal_metrics do not match recomputation"
+    ]
+
+    bad_summary = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"]["frac_spearman_lt_03"] = 0.123
+    bad_summary["diagnostics"] = diagnostics
+    assert DataGenerator.validate_corpus(bad_summary) == [
+        "diagnostics signal summary does not match recomputation"
+    ]
+
+
+@pytest.mark.parametrize("diagnostics", ([], {"signal": []}))
+def test_validate_corpus_rejects_malformed_diagnostics(corpus, diagnostics):
+    broken = dict(corpus)
+    broken["diagnostics"] = diagnostics
+    errors = DataGenerator.validate_corpus(broken)
+    assert errors == [
+        "diagnostics must be a mapping"
+        if isinstance(diagnostics, list)
+        else "diagnostics signal must be a mapping"
+    ]
+
+
+def test_save_corpus_requires_npz_suffix(tmp_path):
+    with pytest.raises(ValueError, match="must use the .npz suffix"):
+        pg.save_corpus({"x": np.ones(1)}, tmp_path / "corpus.data")
+
+
+@pytest.mark.parametrize(
+    "diagnostics",
+    (np.array(["{}"]), np.array("{not json"), np.array("[]")),
+)
+def test_load_corpus_rejects_malformed_diagnostics(tmp_path, diagnostics):
+    path = tmp_path / "malformed.npz"
+    np.savez(path, diagnostics=diagnostics)
+    with pytest.raises(ValueError, match="diagnostics"):
+        pg.load_corpus(path)
 
 
 @pytest.mark.parametrize(
@@ -228,12 +287,14 @@ def test_numpy_scalar_diagnostics_validate_and_roundtrip(tmp_path, corpus):
 )
 def test_validate_corpus_rejects_out_of_domain_signal_metrics(corpus, metric, value):
     index = SIGNAL_METRIC_LAYOUT.index(metric)
-    eligible = np.argwhere(corpus["signal_metric_valid"][..., index] == 1)
+    labels = corpus["identifiability"]
+    eligible = np.argwhere(labels["signal_metric_valid"][..., index] == 1)
     assert eligible.size
     n, k = eligible[0]
     broken = dict(corpus)
-    broken["signal_metrics"] = corpus["signal_metrics"].copy()
-    broken["signal_metrics"][n, k, index] = value
+    broken["identifiability"] = dict(labels)
+    broken["identifiability"]["signal_metrics"] = labels["signal_metrics"].copy()
+    broken["identifiability"]["signal_metrics"][n, k, index] = value
     errors = DataGenerator.validate_corpus(broken)
     assert any(metric in error for error in errors)
 
@@ -269,6 +330,8 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         for value in corpus.values():
             if isinstance(value, np.ndarray) and value.ndim > 0:
                 assert value.shape[0] == n_tasks
+        for value in corpus["identifiability"].values():
+            assert value.shape[0] == n_tasks
         assert not any(key.startswith("_temp_") for key in corpus)
         assert corpus["is_val"].sum() >= 1
         assert corpus["diagnostics"]["n_tasks"] == n_tasks
@@ -292,8 +355,8 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
             l_max=cfg.l_max,
             adstock_burn_in=cfg.adstock_burn_in,
         )
-        assert np.array_equal(corpus["signal_metrics"], expected_metrics)
-        assert np.array_equal(corpus["signal_metric_valid"], expected_valid)
+        assert np.array_equal(corpus["identifiability"]["signal_metrics"], expected_metrics)
+        assert np.array_equal(corpus["identifiability"]["signal_metric_valid"], expected_valid)
         expected_signal = summarize_signal_metrics(
             expected_metrics,
             expected_valid,
@@ -315,6 +378,9 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         if isinstance(value, np.ndarray) and value.ndim > 0 and key != "is_val":
             assert np.array_equal(truncated[key], value[:n_tasks]), key
             assert np.array_equal(generated[key], value[:n_tasks]), key
+    for label, value in full["identifiability"].items():
+        assert np.array_equal(truncated["identifiability"][label], value[:n_tasks])
+        assert np.array_equal(generated["identifiability"][label], value[:n_tasks])
 
     path = tmp_path / "truncated.npz"
     pg.save_corpus(generated, path)
@@ -339,8 +405,7 @@ def test_datagenerator_generate_and_save_without_identifiability_labels(tmp_path
     path = tmp_path / "feature-only.npz"
     pg.DataGenerator(cfg).generate_and_save(path)
     loaded = pg.load_corpus(path)
-    assert "signal_metrics" not in loaded
-    assert "signal_metric_valid" not in loaded
+    assert "identifiability" not in loaded
     assert DataGenerator.validate_corpus(loaded) == []
 
 

@@ -31,7 +31,12 @@ from pathlib import Path
 import numpy as np
 
 from .sampler import SCMPrior, sample_prior_predictive
-from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION
+from .signal_diagnostics import (
+    SIGNAL_METRIC_LAYOUT,
+    SIGNAL_METRIC_VERSION,
+    dense_signal_metrics,
+    summarize_signal_metrics,
+)
 from .slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 # ---------------------------------------------------------------------------
@@ -241,9 +246,20 @@ class DataGenerator:
                 errors.append(f"Missing required key: {key}")
 
         signal_label_keys = ("signal_metrics", "signal_metric_valid")
-        has_signal_labels = all(key in corpus for key in signal_label_keys)
-        if any(key in corpus for key in signal_label_keys) and not has_signal_labels:
-            errors.append("signal_metrics and signal_metric_valid must be present together")
+        if any(key in corpus for key in signal_label_keys):
+            errors.append("signal labels must live under the identifiability metadata block")
+        identifiability = corpus.get("identifiability")
+        if identifiability is not None and not isinstance(identifiability, dict):
+            errors.append("identifiability must be a mapping")
+        has_signal_labels = isinstance(identifiability, dict) and all(
+            key in identifiability for key in signal_label_keys
+        )
+        if isinstance(identifiability, dict) and (
+            any(key in identifiability for key in signal_label_keys) and not has_signal_labels
+        ):
+            errors.append(
+                "identifiability signal_metrics and signal_metric_valid must be present together"
+            )
 
         if errors:
             return errors
@@ -304,8 +320,6 @@ class DataGenerator:
             "adstock_alpha": (N, K),
             "weibull_lam": (N, K),
             "weibull_k": (N, K),
-            "signal_metrics": (N, K, len(SIGNAL_METRIC_LAYOUT)),
-            "signal_metric_valid": (N, K, len(SIGNAL_METRIC_LAYOUT)),
         }
 
         for key, expected in expected_shapes.items():
@@ -326,6 +340,18 @@ class DataGenerator:
         if errors:
             return errors
 
+        if has_signal_labels:
+            expected_label_shape = (N, K, len(SIGNAL_METRIC_LAYOUT))
+            for key in signal_label_keys:
+                value = identifiability[key]
+                if not isinstance(value, np.ndarray) or value.shape != expected_label_shape:
+                    errors.append(
+                        f"Shape mismatch for identifiability {key}: "
+                        f"expected {expected_label_shape}, got {getattr(value, 'shape', None)}"
+                    )
+            if errors:
+                return errors
+
         expected_dtypes = {
             "channel_shock_mask": np.uint8,
             "active_c_mask": np.uint8,
@@ -341,12 +367,20 @@ class DataGenerator:
             "adstock_alpha": np.float32,
             "weibull_lam": np.float32,
             "weibull_k": np.float32,
-            "signal_metrics": np.float32,
-            "signal_metric_valid": np.uint8,
         }
         for key, dtype in expected_dtypes.items():
             if key in corpus and corpus[key].dtype != dtype:
                 errors.append(f"{key} has dtype {corpus[key].dtype}, expected {np.dtype(dtype)}")
+        if has_signal_labels:
+            for key, dtype in (
+                ("signal_metrics", np.float32),
+                ("signal_metric_valid", np.uint8),
+            ):
+                if identifiability[key].dtype != dtype:
+                    errors.append(
+                        f"identifiability {key} has dtype {identifiability[key].dtype}, "
+                        f"expected {np.dtype(dtype)}"
+                    )
 
         # Check finite values
         for key in ["spend_raw", "controls", "sales_raw", "contributions_raw", "baseline_raw"]:
@@ -363,7 +397,6 @@ class DataGenerator:
             "adstock_alpha",
             "weibull_lam",
             "weibull_k",
-            "signal_metrics",
         ):
             if key in corpus and not np.isfinite(corpus[key]).all():
                 errors.append(f"{key} contains NaN or Inf")
@@ -428,14 +461,14 @@ class DataGenerator:
         if not np.isin(corpus["adstock_family"], (0, 1, 2)).all():
             errors.append("adstock_family contains invalid family ids")
         if has_signal_labels:
-            if not np.isin(corpus["signal_metric_valid"], (0, 1)).all():
+            signal_metrics = identifiability["signal_metrics"]
+            signal_metric_valid = identifiability["signal_metric_valid"]
+            if not np.isin(signal_metric_valid, (0, 1)).all():
                 errors.append("signal_metric_valid is not binary")
-            if not np.isfinite(corpus["signal_metrics"]).all():
+            if not np.isfinite(signal_metrics).all():
                 errors.append("signal_metrics contains NaN or Inf")
-            if (corpus["signal_metrics"][corpus["signal_metric_valid"] == 0] != 0).any():
+            if (signal_metrics[signal_metric_valid == 0] != 0).any():
                 errors.append("signal_metrics has nonzero invalid values")
-            if corpus["signal_metrics"].shape[-1] != len(SIGNAL_METRIC_LAYOUT):
-                errors.append("signal_metrics has an unknown metric layout")
             metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
             for name, low, high in (
                 ("spearman", 0.0, 1.0),
@@ -443,12 +476,17 @@ class DataGenerator:
                 ("contrib_corr_baseline", -1.0, 1.0),
             ):
                 index = metric_index[name]
-                values = corpus["signal_metrics"][..., index][
-                    corpus["signal_metric_valid"][..., index].astype(bool)
-                ]
+                values = signal_metrics[..., index][signal_metric_valid[..., index].astype(bool)]
                 if ((values < low - 1e-6) | (values > high + 1e-6)).any():
                     errors.append(f"signal metric {name} is outside [{low}, {high}]")
-        signal_diagnostics = corpus.get("diagnostics", {}).get("signal", {})
+        diagnostics = corpus.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            errors.append("diagnostics must be a mapping")
+            return errors
+        signal_diagnostics = diagnostics.get("signal")
+        if not isinstance(signal_diagnostics, dict):
+            errors.append("diagnostics signal must be a mapping")
+            return errors
         metric_version = signal_diagnostics.get("metric_version")
 
         def _is_integer(value):
@@ -478,6 +516,7 @@ class DataGenerator:
             ):
                 errors.append("diagnostics signal adstock kernel semantics are not supported")
 
+        direct = corpus["g"][:, layout.slices["cy"]] == 1
         active_c = corpus.get("active_c_mask")
         if active_c is not None and active_c.shape == (N, K):
             inactive = active_c == 0
@@ -496,23 +535,12 @@ class DataGenerator:
             if (corpus["saturation_scale"][active_c == 1] <= 0.0).any():
                 errors.append("saturation_scale must be positive for active channels")
             if has_signal_labels and (
-                (corpus["signal_metrics"][inactive] != 0).any()
-                or corpus["signal_metric_valid"][inactive].any()
+                (signal_metrics[inactive] != 0).any() or signal_metric_valid[inactive].any()
             ):
                 errors.append("signal metrics have nonzero inactive-channel padding")
-            direct = (
-                corpus["g"][
-                    :,
-                    SlotLayout(
-                        K=K, M=M, J=corpus["demand"].shape[2], edge_types=EDGE_TYPES_EXTENDED
-                    ).slices["cy"],
-                ]
-                == 1
-            )
             ineligible = ~(direct & (active_c == 1))
             if has_signal_labels and (
-                (corpus["signal_metrics"][ineligible] != 0).any()
-                or corpus["signal_metric_valid"][ineligible].any()
+                (signal_metrics[ineligible] != 0).any() or signal_metric_valid[ineligible].any()
             ):
                 errors.append("signal metrics have nonzero ineligible-channel values")
 
@@ -532,7 +560,6 @@ class DataGenerator:
             == (N, n_channel_shocks)
         )
         if audit_shapes_ok:
-            direct = corpus["g"][:, layout.slices["cy"]] == 1
             for n in range(N):
                 rebuilt = np.zeros((T, K), dtype=np.uint8)
                 occupied = np.zeros(T, dtype=bool)
@@ -567,6 +594,55 @@ class DataGenerator:
                 if not np.array_equal(rebuilt, shock_mask[n]):
                     errors.append("channel_shock_mask does not match the schedule")
 
+        if not errors and metric_version == SIGNAL_METRIC_VERSION:
+            eligible = direct & (corpus["active_c_mask"] == 1)
+            expected_metrics, expected_valid = dense_signal_metrics(
+                corpus["spend_raw"],
+                corpus["contributions_raw"],
+                corpus["sales_raw"],
+                corpus["baseline_raw"],
+                eligible,
+                sales_scale=corpus["sales_scale"],
+                adstock_family=corpus["adstock_family"],
+                adstock_alpha=corpus["adstock_alpha"],
+                weibull_lam=corpus["weibull_lam"],
+                weibull_k=corpus["weibull_k"],
+                channel_shock_channel=channels,
+                channel_shock_start=starts,
+                l_max=int(signal_diagnostics["l_max"]),
+                adstock_burn_in=int(signal_diagnostics["adstock_burn_in"]),
+            )
+            if has_signal_labels:
+                if not np.array_equal(signal_metrics, expected_metrics):
+                    errors.append("identifiability signal_metrics do not match recomputation")
+                if not np.array_equal(signal_metric_valid, expected_valid):
+                    errors.append(
+                        "identifiability signal_metric_valid does not match recomputation"
+                    )
+            expected_signal = summarize_signal_metrics(
+                expected_metrics,
+                expected_valid,
+                corpus["sales_raw"],
+                eligible,
+                sales_scale=corpus["sales_scale"],
+                l_max=int(signal_diagnostics["l_max"]),
+                adstock_burn_in=int(signal_diagnostics["adstock_burn_in"]),
+            )
+            expected_signal.update(
+                {
+                    "metric_version": SIGNAL_METRIC_VERSION,
+                    "metric_layout": list(SIGNAL_METRIC_LAYOUT),
+                    "l_max": int(signal_diagnostics["l_max"]),
+                    "adstock_burn_in": int(signal_diagnostics["adstock_burn_in"]),
+                    "adstock_kernel_semantics": "normalized-causal-reset-aware-weibull-pdf",
+                    "adstock_kernel_version": 1,
+                }
+            )
+            actual_signal = dict(signal_diagnostics)
+            actual_signal["metric_layout"] = normalized_layout
+            if actual_signal != expected_signal:
+                errors.append("diagnostics signal summary does not match recomputation")
+
         # Check null channels have zero contribution
         if "g" in corpus and "contributions_raw" in corpus:
             g = corpus["g"]
@@ -597,6 +673,8 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
         Path to save the corpus (.npz file).
     """
     path = Path(path)
+    if path.suffix != ".npz":
+        raise ValueError(f"corpus path must use the .npz suffix, got {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert diagnostics dict to JSON string if present
@@ -608,9 +686,14 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
             def _json_default(value):
                 if isinstance(value, np.generic):
                     return value.item()
+                if isinstance(value, np.ndarray):
+                    return value.tolist()
                 raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
             save_dict[k] = np.array(json.dumps(v, default=_json_default))
+        elif k == "identifiability" and isinstance(v, dict):
+            for label, value in v.items():
+                save_dict[f"identifiability__{label}"] = value
         else:
             save_dict[k] = v
 
@@ -637,12 +720,27 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as data:
         corpus = {k: data[k] for k in data.files}
 
+    identifiability = {
+        key.removeprefix("identifiability__"): corpus.pop(key)
+        for key in tuple(corpus)
+        if key.startswith("identifiability__")
+    }
+    if identifiability:
+        corpus["identifiability"] = identifiability
+
     # Parse diagnostics JSON string if present
     if "diagnostics" in corpus:
         import json
 
         diag_str = corpus["diagnostics"]
-        if isinstance(diag_str, np.ndarray) and diag_str.ndim == 0:
-            corpus["diagnostics"] = json.loads(str(diag_str))
+        if not isinstance(diag_str, np.ndarray) or diag_str.ndim != 0:
+            raise ValueError(f"corpus {path} has a non-scalar diagnostics field")
+        try:
+            diagnostics = json.loads(str(diag_str.item()))
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"corpus {path} has invalid diagnostics JSON") from exc
+        if not isinstance(diagnostics, dict):
+            raise ValueError(f"corpus {path} diagnostics JSON must contain an object")
+        corpus["diagnostics"] = diagnostics
 
     return corpus

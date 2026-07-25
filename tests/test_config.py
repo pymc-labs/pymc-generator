@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 
+import numpy as np
 import pytest
 
 import prior_generator as pg
@@ -60,6 +61,38 @@ def test_edge_budget_unknown_key_rejected():
 def test_edge_budget_bad_spec_rejected(spec):
     with pytest.raises(ValueError):
         pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, edge_budget={"cc": spec})
+
+
+@pytest.mark.parametrize("l_max", (0, -1, True, 1.5))
+def test_lmax_must_be_a_positive_integer(l_max):
+    with pytest.raises(ValueError, match="l_max"):
+        SCMPrior(l_max=l_max).validate()
+
+
+@pytest.mark.parametrize("name", ("rw_std_sigma", "rw_channel_std_sigma", "rw_sales_std_sigma"))
+@pytest.mark.parametrize("value", (np.nan, np.inf, 0.0, -1.0))
+def test_random_walk_sigmas_must_be_finite_and_positive(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("adstock_alpha_range", (-0.1, 0.5)),
+        ("adstock_alpha_range", (0.5, 1.1)),
+        ("weibull_lam_range", (0.0, 1.0)),
+        ("weibull_k_range", (2.0, 1.0)),
+        ("beta_additive_range", (-0.1, 1.0)),
+        ("cc_coeff_range", (-0.1, 0.2)),
+        ("rw_positive_mean_range", (0.0, 1.0)),
+        ("rw_mean_range", (np.nan, 1.0)),
+        ("rw_baseline_mean_range", (2.0, 1.0)),
+    ),
+)
+def test_prior_ranges_fail_fast_on_invalid_bounds(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
 
 
 # --- deprecation / steering policy -----------------------------------------
