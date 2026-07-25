@@ -126,6 +126,12 @@ def test_validate_corpus_rejects_wrong_graph_slot_width(corpus):
     assert any("Shape mismatch for g" in error for error in errors)
 
 
+def test_validate_corpus_rejects_non_array_required_fields(corpus):
+    broken = dict(corpus)
+    broken["sales_raw"] = corpus["sales_raw"].tolist()
+    assert DataGenerator.validate_corpus(broken) == ["sales_raw must be an ndarray"]
+
+
 @pytest.mark.parametrize(
     "value",
     (
@@ -266,6 +272,16 @@ def test_save_corpus_requires_npz_suffix(tmp_path):
         pg.save_corpus({"x": np.ones(1)}, tmp_path / "corpus.data")
 
 
+def test_save_corpus_rejects_reserved_prefix_and_empty_identifiability(tmp_path):
+    with pytest.raises(ValueError, match="reserved identifiability__ prefix"):
+        pg.save_corpus(
+            {"identifiability__signal_metrics": np.ones(1)},
+            tmp_path / "collision.npz",
+        )
+    with pytest.raises(ValueError, match="omitted rather than empty"):
+        pg.save_corpus({"identifiability": {}}, tmp_path / "empty.npz")
+
+
 @pytest.mark.parametrize(
     "diagnostics",
     (np.array(["{}"]), np.array("{not json"), np.array("[]")),
@@ -297,6 +313,74 @@ def test_validate_corpus_rejects_out_of_domain_signal_metrics(corpus, metric, va
     broken["identifiability"]["signal_metrics"][n, k, index] = value
     errors = DataGenerator.validate_corpus(broken)
     assert any(metric in error for error in errors)
+
+
+@pytest.mark.parametrize("key", ("spend_norm", "spend_share", "sales_norm"))
+def test_validate_corpus_rejects_nonfinite_normalized_inputs(corpus, key):
+    broken = dict(corpus)
+    broken[key] = corpus[key].copy()
+    broken[key].flat[0] = np.nan
+    errors = DataGenerator.validate_corpus(broken)
+    assert any(f"{key} contains NaN or Inf" in error for error in errors)
+
+
+@pytest.mark.parametrize("key", ("spend_norm", "spend_share"))
+def test_validate_corpus_rejects_incorrect_normalized_inputs(corpus, key):
+    broken = dict(corpus)
+    broken[key] = corpus[key].copy()
+    broken[key].flat[0] += 0.25
+    errors = DataGenerator.validate_corpus(broken)
+    assert any(key in error for error in errors)
+
+
+def test_validate_corpus_rejects_nonpositive_sales_scale(corpus):
+    broken = dict(corpus)
+    broken["sales_scale"] = corpus["sales_scale"].copy()
+    broken["sales_scale"][0] = 0.0
+    errors = DataGenerator.validate_corpus(broken)
+    assert "sales_scale must be positive" in errors
+
+
+def test_validate_corpus_rejects_unverifiable_metric_version(corpus):
+    broken = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"]["metric_version"] = 1
+    broken["diagnostics"] = diagnostics
+    errors = DataGenerator.validate_corpus(broken)
+    assert "diagnostics signal metric_version is not supported" in errors
+
+
+def test_validate_corpus_rejects_empty_identifiability_block(corpus):
+    broken = dict(corpus)
+    broken["identifiability"] = {}
+    assert DataGenerator.validate_corpus(broken) == [
+        "identifiability signal_metrics and signal_metric_valid must be present together"
+    ]
+
+
+def test_validate_corpus_rejects_corrupt_layout_metrics_and_family(corpus):
+    bad_layout = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"]["metric_layout"] = [*SIGNAL_METRIC_LAYOUT, "unknown"]
+    bad_layout["diagnostics"] = diagnostics
+    assert any("metric_layout" in error for error in DataGenerator.validate_corpus(bad_layout))
+
+    bad_metric = dict(corpus)
+    bad_metric["identifiability"] = dict(corpus["identifiability"])
+    bad_metric["identifiability"]["signal_metrics"] = corpus["identifiability"][
+        "signal_metrics"
+    ].copy()
+    bad_metric["identifiability"]["signal_metrics"].flat[0] = np.nan
+    assert any(
+        "signal_metrics contains" in error for error in DataGenerator.validate_corpus(bad_metric)
+    )
+
+    bad_family = dict(corpus)
+    bad_family["adstock_family"] = corpus["adstock_family"].copy()
+    bad_family["adstock_family"][0, 0] = 3
+    assert any("adstock_family" in error for error in DataGenerator.validate_corpus(bad_family))
 
 
 def test_datagenerator_generate_n_tasks():

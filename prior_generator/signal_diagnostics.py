@@ -140,7 +140,10 @@ def _adstock_numpy(
         # sampled density before its normalized causal convolution.  The max
         # scale cancels after normalization, but retaining it also preserves
         # the degenerate-kernel behavior.
-        weights = (weights - weights.min()) / (weights.max() - weights.min())
+        span = weights.max() - weights.min()
+        if not np.isfinite(span) or span == 0.0:
+            return np.zeros_like(x, dtype=np.float64)
+        weights = (weights - weights.min()) / span
     total = weights.sum()
     if not np.isfinite(total) or total <= 1e-12:
         return np.zeros_like(x, dtype=np.float64)

@@ -63,6 +63,20 @@ def test_single_lag_weibull_is_identity_in_numpy_and_symbolic_paths():
     assert np.array_equal(symbolic_result, x)
 
 
+def test_degenerate_weibull_kernel_is_finite_and_consistent():
+    x = np.array([0.2, 1.0, 0.5], dtype=np.float64)
+    lam = 2.0804050381276453
+    shape = 2.0
+    with np.errstate(all="raise"):
+        numpy_result = _adstock_numpy(x, 2, 0.0, lam, shape, 2)
+        symbolic_result = pytensor.function(
+            [],
+            mechanisms.apply_weibull_pdf_adstock(pt.as_tensor_variable(x[:, None]), lam, shape, 2),
+        )()[:, 0]
+    assert np.array_equal(numpy_result, np.zeros_like(x))
+    assert np.array_equal(symbolic_result, numpy_result)
+
+
 def test_reset_adstock_is_chronological():
     x = np.arange(1, 9, dtype=np.float64)
     result = _reset_adstock_numpy(x, 1, 0.5, 1.0, 1.0, 3, np.array([5, 2]))

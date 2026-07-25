@@ -180,6 +180,11 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
     """
     if int(l_max) == 1:
         return x
+    lag = pt.arange(int(l_max), dtype=x.dtype) + 1
+    lam_t = pt.as_tensor_variable(lam)
+    k_t = pt.as_tensor_variable(k)
+    raw_weights = (k_t / lam_t) * pt.pow(lag / lam_t, k_t - 1) * pt.exp(-pt.pow(lag / lam_t, k_t))
+    weight_span = raw_weights.max() - raw_weights.min()
     out = _pmm.weibull_adstock(
         _as_time(x[:, 0]),
         lam=lam,
@@ -189,4 +194,5 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
         type="PDF",
         normalize=True,
     )
-    return out.values[:, None]
+    values = out.values[:, None]
+    return pt.switch(pt.eq(weight_span, 0), pt.zeros_like(values), values)

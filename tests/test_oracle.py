@@ -159,6 +159,14 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
     with pytest.raises(ValueError, match="sales must have shape"):
         build_oracle_model(g_act, cfg, structural, bad_sales)
 
+    empty = {
+        "channels": np.empty((0, 2)),
+        "controls": np.empty((0, 1)),
+        "sales": np.empty(0),
+    }
+    with pytest.raises(ValueError, match="at least one observation"):
+        build_oracle_model(g_act, cfg, structural, empty)
+
     for key, fill in (("channels", np.nan), ("controls", np.inf), ("sales", np.nan)):
         nonfinite = {
             "channels": world["channels"].copy(),

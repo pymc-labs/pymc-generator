@@ -95,6 +95,18 @@ def test_prior_ranges_fail_fast_on_invalid_bounds(name, value):
         SCMPrior(**{name: value}).validate()
 
 
+@pytest.mark.parametrize("value", (np.nan, np.inf, 8.0, 8.5, True))
+def test_adstock_burn_in_must_be_an_integer(value):
+    with pytest.raises(ValueError, match="adstock_burn_in"):
+        SCMPrior(adstock_burn_in=value).validate()
+
+
+@pytest.mark.parametrize("value", (True, "bad", [1.0], np.nan, np.inf, 0.0))
+def test_baseline_walk_sigma_must_be_a_finite_positive_scalar(value):
+    with pytest.raises(ValueError, match="rw_baseline_std_sigma"):
+        SCMPrior(rw_baseline_std_sigma=value).validate()
+
+
 # --- deprecation / steering policy -----------------------------------------
 
 

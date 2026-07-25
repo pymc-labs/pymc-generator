@@ -254,13 +254,17 @@ class DataGenerator:
         has_signal_labels = isinstance(identifiability, dict) and all(
             key in identifiability for key in signal_label_keys
         )
-        if isinstance(identifiability, dict) and (
-            any(key in identifiability for key in signal_label_keys) and not has_signal_labels
-        ):
+        if isinstance(identifiability, dict) and not has_signal_labels:
             errors.append(
                 "identifiability signal_metrics and signal_metric_valid must be present together"
             )
 
+        if errors:
+            return errors
+
+        for key in required_keys:
+            if not isinstance(corpus[key], np.ndarray):
+                errors.append(f"{key} must be an ndarray")
         if errors:
             return errors
 
@@ -382,33 +386,43 @@ class DataGenerator:
                         f"expected {np.dtype(dtype)}"
                     )
 
-        # Check finite values
-        for key in ["spend_raw", "controls", "sales_raw", "contributions_raw", "baseline_raw"]:
-            if key in corpus:
-                if not np.isfinite(corpus[key]).all():
+        # Every serialized numeric array must be finite, including normalized
+        # model inputs rather than only their raw source arrays.
+        for key, value in corpus.items():
+            if isinstance(value, np.ndarray) and not np.isfinite(value).all():
+                errors.append(f"{key} contains NaN or Inf")
+        if has_signal_labels:
+            for key in signal_label_keys:
+                if not np.isfinite(identifiability[key]).all():
                     errors.append(f"{key} contains NaN or Inf")
 
-        for key in (
-            "channel_shock_level_multiplier",
-            "channel_shock_level",
-            "channel_level",
-            "confounding_strength",
-            "saturation_scale",
-            "adstock_alpha",
-            "weibull_lam",
-            "weibull_k",
-        ):
-            if key in corpus and not np.isfinite(corpus[key]).all():
-                errors.append(f"{key} contains NaN or Inf")
+        positive_sales_scale = (corpus["sales_scale"] > 0.0).all()
+        if not positive_sales_scale:
+            errors.append("sales_scale must be positive")
+        expected_spend_means = corpus["spend_raw"].astype(np.float64).mean(axis=1)
+        if not np.allclose(corpus["spend_means"], expected_spend_means, rtol=1e-6, atol=1e-7):
+            errors.append("spend_means != mean(spend_raw, axis=1)")
+        expected_spend_norm = corpus["spend_raw"].astype(np.float64) / (
+            corpus["spend_means"].astype(np.float64)[:, None, :] + 1e-8
+        )
+        if not np.allclose(corpus["spend_norm"], expected_spend_norm, rtol=1e-5, atol=1e-7):
+            errors.append("spend_norm does not match spend_raw / spend_means")
+        active_spend_sum = (
+            corpus["spend_raw"].astype(np.float64)
+            * corpus["active_c_mask"].astype(np.float64)[:, None, :]
+        ).sum(axis=-1, keepdims=True)
+        expected_spend_share = (
+            corpus["spend_raw"].astype(np.float64) / (active_spend_sum + 1e-8)
+        ) * corpus["active_c_mask"].astype(np.float64)[:, None, :]
+        if not np.allclose(corpus["spend_share"], expected_spend_share, rtol=1e-5, atol=1e-7):
+            errors.append("spend_share does not match active-channel spend shares")
 
-        # Check sales_norm = sales_raw / sales_scale
-        if "sales_raw" in corpus and "sales_scale" in corpus and "sales_norm" in corpus:
-            sales_raw = corpus["sales_raw"].astype(np.float64)
-            sales_scale = corpus["sales_scale"].astype(np.float64)
-            sales_norm = corpus["sales_norm"].astype(np.float64)
-
-            expected_norm = sales_raw / sales_scale[:, None]
-            if not np.allclose(sales_norm, expected_norm, rtol=1e-5):
+        if positive_sales_scale:
+            expected_norm = (
+                corpus["sales_raw"].astype(np.float64)
+                / corpus["sales_scale"].astype(np.float64)[:, None]
+            )
+            if not np.allclose(corpus["sales_norm"], expected_norm, rtol=1e-5):
                 errors.append("sales_norm != sales_raw / sales_scale")
 
         # Check support_mask is binary
@@ -492,7 +506,7 @@ class DataGenerator:
         def _is_integer(value):
             return isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_))
 
-        if not _is_integer(metric_version) or metric_version not in (1, SIGNAL_METRIC_VERSION):
+        if not _is_integer(metric_version) or metric_version != SIGNAL_METRIC_VERSION:
             errors.append("diagnostics signal metric_version is not supported")
         metric_layout = signal_diagnostics.get("metric_layout")
         try:
@@ -675,6 +689,10 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
     path = Path(path)
     if path.suffix != ".npz":
         raise ValueError(f"corpus path must use the .npz suffix, got {path}")
+    if any(key.startswith("identifiability__") for key in corpus):
+        raise ValueError("top-level corpus keys may not use the reserved identifiability__ prefix")
+    if corpus.get("identifiability") == {}:
+        raise ValueError("identifiability metadata must be omitted rather than empty")
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert diagnostics dict to JSON string if present

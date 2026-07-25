@@ -765,6 +765,8 @@ def build_oracle_model(
     if sales.ndim != 1:
         raise ValueError(f"data sales must have shape (T,), got {sales.shape}")
     T = int(sales.shape[0])
+    if T < 1:
+        raise ValueError("data sales must contain at least one observation")
     if channels.shape != (T, n_treatments) or controls.shape != (T, n_covariates):
         raise ValueError(
             f"data shapes must be channels (T, n_treatments)={T, n_treatments}, "

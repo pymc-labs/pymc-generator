@@ -451,7 +451,7 @@ class SCMPrior:
         # Phase 4: additive-SCM priors
         for name in ("dz_base_rate", "zc_base_rate", "cc_base_rate", "zz_base_rate"):
             rate = getattr(self, name)
-            if not 0.0 <= rate <= 1.0:
+            if not np.isfinite(rate) or not 0.0 <= rate <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1], got {rate}")
         if self.cc_coeff_range[0] < 0:
             raise ValueError(
@@ -460,14 +460,22 @@ class SCMPrior:
             )
         for name in ("rw_std_sigma", "rw_channel_std_sigma", "rw_sales_std_sigma"):
             sigma = getattr(self, name)
-            if not np.isfinite(sigma) or sigma <= 0:
+            if (
+                isinstance(sigma, (bool, np.bool_))
+                or not isinstance(sigma, (int, float, np.integer, np.floating))
+                or not np.isfinite(sigma)
+                or sigma <= 0
+            ):
                 raise ValueError(f"{name} must be finite and > 0, got {sigma}")
-        if self.rw_baseline_std_sigma is not None and (
-            not np.isfinite(self.rw_baseline_std_sigma) or self.rw_baseline_std_sigma <= 0
-        ):
-            raise ValueError(
-                f"rw_baseline_std_sigma must be finite and > 0, got {self.rw_baseline_std_sigma}"
-            )
+        if self.rw_baseline_std_sigma is not None:
+            sigma = self.rw_baseline_std_sigma
+            if (
+                isinstance(sigma, (bool, np.bool_))
+                or not isinstance(sigma, (int, float, np.integer, np.floating))
+                or not np.isfinite(sigma)
+                or sigma <= 0
+            ):
+                raise ValueError(f"rw_baseline_std_sigma must be finite and > 0, got {sigma}")
         if self.confounding_strength_range is not None:
             try:
                 lo, hi = self.confounding_strength_range
@@ -488,6 +496,10 @@ class SCMPrior:
                 f"after softplus), got {self.rw_positive_mean_range}"
             )
         # Channel texture
+        if isinstance(self.adstock_burn_in, bool) or not isinstance(
+            self.adstock_burn_in, (int, np.integer)
+        ):
+            raise ValueError("adstock_burn_in must be an int (not bool)")
         if self.adstock_burn_in < 0:
             raise ValueError(f"adstock_burn_in must be >= 0, got {self.adstock_burn_in}")
         if 0 < self.adstock_burn_in < self.l_max:
