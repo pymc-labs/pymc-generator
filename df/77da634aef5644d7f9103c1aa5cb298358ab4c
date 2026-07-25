@@ -1,0 +1,27 @@
+prior_generator/sampler.py
+  s_d5ca59f66d4414::t_37a5be9707fd8c 831-905,907-921,1007-1009
+  s_d5ca59f66d4414::t_f0daa7f2194255 1296-1302,1304-1318,1348-1351,1398-1401,1468,1549
+  s_d5ca59f66d4414::t_bade1359a153ef 906,1303
+tests/test_schema_io.py
+  s_d5ca59f66d4414::t_bf5dfd63f73030 10-12,14-15,124-149,151-188
+  s_d5ca59f66d4414::t_4031e19edcdf2d 13,150
+  s_d5ca59f66d4414::t_f25f5fcbc5f2a5 189-190
+prior_generator/data_generator.py
+  s_d5ca59f66d4414::t_690d204127d003 79-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "df77da634aef5644d7f9103c1aa5cb298358ab4c",
+  "prompts": {},
+  "sessions": {
+    "s_d5ca59f66d4414": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_06622f5c3ffeyV8xR01cw2IGb9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
