@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import numpy as np
 import pymc as pm
-import pytensor.tensor as pt
 import pytest
 
 import prior_generator as pg
 from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.symbolic_graph import _adstock_col_with_resets, _saturate_col
+from prior_generator.signal_diagnostics import _reset_adstock_numpy
 from prior_generator.world_model import build_oracle_model, build_world_model, sample_structure
 
 #: Free RVs the two models must define identically (same name, same prior).
@@ -207,6 +206,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
     }
     structural = sample_structure(g, cfg, np.random.default_rng(4))
     structural["adstock_family"][:] = 1
+    structural["sat_family"][:] = 0
     model, names, _ = build_world_model(g, cfg, structural, cfg.T)
     drawn = {name: value[0] for name, value in pg.draw_worlds(model, names, seed=13).items()}
     data = {
@@ -220,6 +220,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
             "channel_shock_start",
             "channel_shock_length",
             "channel_shock_level_multiplier",
+            "channel_shock_level",
         )
     }
     return cfg, g, structural, drawn, data
@@ -237,53 +238,40 @@ def test_shocked_oracle_uses_known_schedule_without_schedule_rvs_and_zero_respon
     assert np.array_equal(contribution[mask, 0], np.zeros(mask.sum()))
 
 
-def test_shocked_oracle_repeated_reset_boundaries_match_shared_helper():
+def test_shocked_oracle_repeated_reset_boundaries_match_independent_numpy_reference():
     cfg, g, structural, _drawn, data = _shocked_oracle_world(n_shocks=2, level=(0.5, 0.5))
     # Make the reset behavior independent of a random schedule realization.
     data.update(
         {
             "channels": np.array(
-                [[4.0], [3.0], [0.5], [0.5], [7.0], [8.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0]]
+                [[4.0], [3.0], [0.5], [0.5], [7.0], [8.0], [0.5], [0.5], [1.0], [1.0], [1.0], [1.0]]
             ),
             "channel_shock_channel": np.array([0, 0], dtype="int64"),
             "channel_shock_start": np.array([2, 6], dtype="int64"),
             "channel_shock_length": np.array([2, 2], dtype="int64"),
             "channel_shock_level_multiplier": np.array([0.5, 0.5]),
+            "channel_shock_level": np.array([0.5, 0.5]),
             "saturation_scale": np.array([3.0]),
         }
     )
     oracle = build_oracle_model(g, cfg, structural, data)
-    params = {
-        "l_max": cfg.l_max,
-        "adstock_family": structural["adstock_family"],
-        "sat_family": structural["sat_family"],
-        "beta": oracle["beta"],
-        "adstock_alpha": oracle["adstock_alpha"],
-        "weibull_lam": oracle["weibull_lam"],
-        "weibull_k": oracle["weibull_k"],
-        "hill_slope": oracle["hill_slope"],
-        "hill_kappa_mult": oracle["hill_kappa_mult"],
-        "logistic_lam": oracle["logistic_lam"],
-        "mm_alpha": oracle["mm_alpha"],
-        "mm_kappa_mult": oracle["mm_kappa_mult"],
-        "tanh_b": oracle["tanh_b"],
-        "tanh_c": oracle["tanh_c"],
-        "root_alpha": oracle["root_alpha"],
-        "channel_shock": {
-            "n_shocks": 2,
-            "channel": pt.as_tensor_variable(data["channel_shock_channel"]),
-            "start_full": pt.as_tensor_variable(data["channel_shock_start"]),
-        },
-    }
-    adstock = _adstock_col_with_resets(pt.as_tensor_variable(data["channels"][:, 0]), params, 0)
-    expected = params["beta"][0] * _saturate_col(
-        adstock, pt.as_tensor_variable(data["saturation_scale"][0]), params, 0
-    )
     with oracle:
-        got, expected_value = pm.draw(
-            [oracle["contributions"][:, 0], expected], draws=1, random_seed=29
+        got, alpha, beta = pm.draw(
+            [oracle["contributions"][:, 0], oracle["adstock_alpha"], oracle["beta"]],
+            draws=1,
+            random_seed=29,
         )
-    np.testing.assert_allclose(got, expected_value, rtol=0.0, atol=1e-14)
+    adstock = _reset_adstock_numpy(
+        data["channels"][:, 0],
+        family=1,
+        alpha=alpha[0],
+        lam=1.0,
+        shape=1.0,
+        l_max=cfg.l_max,
+        starts=data["channel_shock_start"],
+    )
+    expected = beta[0] * adstock / data["saturation_scale"][0]
+    np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-14)
 
 
 def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
@@ -300,6 +288,12 @@ def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
     malformed_scale["saturation_scale"] = np.array([np.nan])
     with pytest.raises(ValueError, match="saturation_scale"):
         build_oracle_model(g, cfg, structural, malformed_scale)
+    contradictory = dict(data)
+    contradictory["channels"] = contradictory["channels"].copy()
+    start = int(contradictory["channel_shock_start"][0])
+    contradictory["channels"][start : start + 2, 0] = 1.0
+    with pytest.raises(ValueError, match="held level does not match observed spend"):
+        build_oracle_model(g, cfg, structural, contradictory)
 
 
 @pytest.mark.slow

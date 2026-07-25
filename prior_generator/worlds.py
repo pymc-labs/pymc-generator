@@ -159,6 +159,7 @@ class SCM:
                     "channel_shock_start": self.data["channel_shock_start"],
                     "channel_shock_length": self.data["channel_shock_length"],
                     "channel_shock_level_multiplier": self.data["channel_shock_level_multiplier"],
+                    "channel_shock_level": self.data["channel_shock_level"],
                 }
             )
         return build_oracle_model(

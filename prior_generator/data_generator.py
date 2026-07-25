@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from .sampler import SCMPrior, sample_prior_predictive
-from .signal_diagnostics import SIGNAL_METRIC_LAYOUT
+from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION
 from .slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 # ---------------------------------------------------------------------------
@@ -419,10 +419,28 @@ class DataGenerator:
             if corpus["signal_metrics"].shape[-1] != len(SIGNAL_METRIC_LAYOUT):
                 errors.append("signal_metrics has an unknown metric layout")
         signal_diagnostics = corpus.get("diagnostics", {}).get("signal", {})
-        if signal_diagnostics.get("metric_version") != 1:
+        metric_version = signal_diagnostics.get("metric_version")
+        if metric_version not in (1, SIGNAL_METRIC_VERSION):
             errors.append("diagnostics signal metric_version is not supported")
         if signal_diagnostics.get("metric_layout") != list(SIGNAL_METRIC_LAYOUT):
             errors.append("diagnostics signal metric_layout does not match signal_metrics")
+        if metric_version == SIGNAL_METRIC_VERSION:
+            if (
+                not isinstance(signal_diagnostics.get("l_max"), int)
+                or signal_diagnostics["l_max"] < 1
+            ):
+                errors.append("diagnostics signal l_max must be a positive integer")
+            if (
+                not isinstance(signal_diagnostics.get("adstock_burn_in"), int)
+                or signal_diagnostics["adstock_burn_in"] < 0
+            ):
+                errors.append("diagnostics signal adstock_burn_in must be a nonnegative integer")
+            if (
+                signal_diagnostics.get("adstock_kernel_semantics")
+                != "normalized-causal-reset-aware-weibull-pdf"
+                or signal_diagnostics.get("adstock_kernel_version") != 1
+            ):
+                errors.append("diagnostics signal adstock kernel semantics are not supported")
 
         active_c = corpus.get("active_c_mask")
         if active_c is not None and active_c.shape == (N, K):

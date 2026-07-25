@@ -128,6 +128,35 @@ def test_r2_is_invariant_to_large_target_offsets():
     assert shifted[0, 0, index] == base[0, 0, index]
 
 
+def test_r2_is_scale_invariant_for_representably_nonconstant_targets():
+    x = np.arange(100, dtype=np.float32)
+    index = _metric("contrib_r2_explained_by_rest")
+    for amplitude in (1.0, 1e-4, 1e-7):
+        y = (amplitude * np.sin(np.arange(100))).astype(np.float32)
+        metrics, valid = _dense(x, y)
+        assert valid[0, 0, index] == 1
+        assert np.isclose(metrics[0, 0, index], 0.0, atol=1e-6)
+
+
+def test_r2_requires_residual_degrees_of_freedom_not_raw_column_count():
+    index = _metric("contrib_r2_explained_by_rest")
+    _, saturated_valid = _dense(np.arange(2), np.arange(2), baseline=np.arange(2))
+    assert saturated_valid[0, 0, index] == 0
+
+    spend = np.ones((1, 3, 2), dtype=np.float32)
+    baseline = np.arange(3, dtype=np.float32)
+    contributions = np.stack([baseline, 2 * baseline], axis=1)[None]
+    metrics, valid = dense_signal_metrics(
+        spend,
+        contributions,
+        np.ones((1, 3), dtype=np.float32),
+        baseline[None],
+        np.ones((1, 2)),
+    )
+    assert valid[0, 0, index] == 1
+    assert metrics[0, 0, index] == 1.0
+
+
 def test_short_constant_and_warmup_validity_contracts():
     short, short_valid = _dense(np.arange(2), np.arange(2), l_max=3)
     assert short_valid[0, 0, _metric("spend_hf")] == 1
@@ -193,6 +222,8 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
         n_covariates=2,
         n_latent=1,
         T=16,
+        l_max=3,
+        adstock_burn_in=3,
         n_cells=2,
         draws_per_cell=1,
         seed=37,
@@ -203,6 +234,10 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
     loaded = load_corpus(path)
     layout = SlotLayout(K=2, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
     direct = (loaded["g"][:, layout.slices["cy"]] == 1) & (loaded["active_c_mask"] == 1)
+    signal_config = loaded["diagnostics"]["signal"]
+    assert signal_config["adstock_kernel_semantics"] == (
+        "normalized-causal-reset-aware-weibull-pdf"
+    )
     metrics, valid = dense_signal_metrics(
         loaded["spend_raw"],
         loaded["contributions_raw"],
@@ -216,8 +251,8 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
         weibull_k=loaded["weibull_k"],
         channel_shock_channel=loaded["channel_shock_channel"],
         channel_shock_start=loaded["channel_shock_start"],
-        l_max=cfg.l_max,
-        adstock_burn_in=cfg.adstock_burn_in,
+        l_max=signal_config["l_max"],
+        adstock_burn_in=signal_config["adstock_burn_in"],
     )
     assert np.array_equal(loaded["signal_metrics"], metrics)
     assert np.array_equal(loaded["signal_metric_valid"], valid)
@@ -261,10 +296,14 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
             "signal": {
                 "metric_version": SIGNAL_METRIC_VERSION,
                 "metric_layout": list(SIGNAL_METRIC_LAYOUT),
+                "l_max": 8,
+                "adstock_burn_in": 0,
+                "adstock_kernel_semantics": "normalized-causal-reset-aware-weibull-pdf",
+                "adstock_kernel_version": 1,
             }
         },
     }
     corpus["signal_metrics"][0, 0, 0] = 1
     errors = DataGenerator.validate_corpus(corpus)
     assert any("ineligible" in error for error in errors)
-    assert SIGNAL_METRIC_VERSION == 1
+    assert SIGNAL_METRIC_VERSION == 2

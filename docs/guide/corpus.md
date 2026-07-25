@@ -134,6 +134,10 @@ model inputs. Set `include_identifiability_labels=False` to omit both arrays;
 all observable arrays remain byte-identical and the aggregate signal diagnostics
 remain available.
 
+The `diagnostics["signal"]` block includes the metric and adstock-kernel
+versions plus `l_max` and `adstock_burn_in`; use those stored values rather than
+assuming configuration defaults when recomputing a loaded shard.
+
 ```python exec="1" source="material-block" result="text"
 from scm_docs import corpus
 from prior_generator.signal_diagnostics import check_signal_gate

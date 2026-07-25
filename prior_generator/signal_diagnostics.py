@@ -50,7 +50,7 @@ __all__ = [
 ]
 
 _QS = (0.1, 0.5, 0.9)
-SIGNAL_METRIC_VERSION = 1
+SIGNAL_METRIC_VERSION = 2
 
 #: Per-pair metrics emitted by :func:`per_channel_signal` and summarized (as
 #: ``<key>_quantiles``) by :func:`signal_summary`. Single source of truth —
@@ -268,24 +268,23 @@ def dense_signal_metrics(
             # Explained by the full reported window: intercept, baseline, and
             # all *other* active direct contributions.
             others = [j for j in np.flatnonzero(mask[n]) if j != k]
-            design = [np.ones(T), baseline[n]] + [contributions[n, :, j] for j in others]
-            fitted = (
-                np.column_stack(design) @ np.linalg.lstsq(np.column_stack(design), y, rcond=None)[0]
-            )
-            sst = np.sum((y - y.mean()) ** 2)
-            tolerance = 32.0 * np.finfo(np.float32).eps * max(float(sst), 1.0)
-            ss_res = np.sum((y - fitted) ** 2)
-            # R² is undefined for a constant target.  Treat it as explained
-            # only when the full-window intercept/baseline/rest fit reproduces
-            # it to a scale-aware numerical residual tolerance.
-            r2 = (
-                float(ss_res <= tolerance)
-                if sst <= tolerance
-                else float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
-            )
-            metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
-            valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
             centered_y, centered_b = y - y.mean(), baseline[n] - baseline[n].mean()
+            centered_predictors = [centered_b] + [
+                contributions[n, :, j] - contributions[n, :, j].mean() for j in others
+            ]
+            design = np.column_stack(centered_predictors)
+            design_rank = 1 + np.linalg.matrix_rank(design)
+            if T > design_rank:
+                sst = float(centered_y @ centered_y)
+                if sst == 0.0:
+                    # Persisted constants are exactly reproducible by the intercept.
+                    r2 = 1.0
+                else:
+                    fitted = design @ np.linalg.lstsq(design, centered_y, rcond=None)[0]
+                    ss_res = float(np.sum((centered_y - fitted) ** 2))
+                    r2 = float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
+                metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
+                valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
             denom = np.sqrt(np.sum(centered_y**2) * np.sum(centered_b**2))
             metrics[n, k, metric_index["contrib_corr_baseline"]] = (
                 centered_y @ centered_b / denom if denom > 1e-12 else 0.0

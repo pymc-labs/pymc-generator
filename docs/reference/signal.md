@@ -6,13 +6,13 @@ This module quantifies, per direct (C→Y) channel, how much signal the generato
 actually produced — embedded in every corpus's `diagnostics["signal"]` block and
 checkable at generation time.
 
-## Persisted layout (version 1)
+## Persisted layout (version 2)
 
 With `include_identifiability_labels=True` (the default), `signal_metrics` is a
 dense `float32` array of shape `(N, K, 9)` and `signal_metric_valid` is a
 same-shaped binary `uint8` array. These arrays are truth-derived metadata, not
 model features; setting the option to `False` omits both without changing any
-observable array. The locked, append-only v1 layout in
+observable array. The locked, append-only v2 layout in
 `diagnostics["signal"]["metric_layout"]` is:
 
 1. `spend_cv`
@@ -25,7 +25,7 @@ observable array. The locked, append-only v1 layout in
 8. `contrib_r2_explained_by_rest`
 9. `contrib_corr_baseline`
 
-`metric_version` is `1`. Entries for inactive or non-direct channels are zero
+`metric_version` is `2`. Entries for inactive or non-direct channels are zero
 and invalid. Validity is per metric, rather than a promise that every metric
 can be computed for every eligible pair; invalid metric values are exactly zero
 and summaries exclude them from both quantiles and fractions. For example,
@@ -42,9 +42,10 @@ artifact fraction is reported as `0.0` with sufficient burn-in); it is also
 invalid when the window is too short.
 
 `contrib_r2_explained_by_rest` is full-window R² against an intercept,
-baseline, and the other active direct contributions. For a constant target it
-is `1` only if that full-window fit reproduces the target within the
-scale-aware numerical tolerance; otherwise ordinary R² is clipped to `[0, 1]`.
+baseline, and the other active direct contributions. It is invalid when the
+design rank leaves no residual degrees of freedom. An exactly constant stored
+target is `1`; every representably nonconstant target uses ordinary centered
+R² clipped to `[0, 1]`, without an amplitude-dependent tolerance floor.
 `contrib_corr_baseline` is the signed Pearson correlation and is encoded as
 zero when either series has no variance. Constant-rank Spearman inputs are also
 encoded as zero, not NaN.
@@ -52,6 +53,9 @@ encoded as zero, not NaN.
 Metrics are calculated from the final stored float32 arrays, after any task
 truncation, so they are exactly recomputable after save/load. The signal summary
 is likewise derived from those retained arrays and carries the layout/version.
+It also records `l_max`, `adstock_burn_in`, `adstock_kernel_semantics`, and
+`adstock_kernel_version`, so nondefault shards can be recomputed without their
+original Python config object.
 
 ```python
 from prior_generator.signal_diagnostics import SIGNAL_METRIC_LAYOUT

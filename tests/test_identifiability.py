@@ -175,6 +175,10 @@ def test_identifiability_labels_are_optional_metadata_not_features():
         n_cells=2,
         draws_per_cell=1,
         seed=47,
+        confounding_strength_range=(0.6, 0.6),
+        n_channel_shocks=1,
+        channel_shock_length_range=(2, 2),
+        channel_shock_level_range=(0.0, 0.5),
     )
     labelled = pg.sample_prior_predictive(cfg)
     feature_only = pg.sample_prior_predictive(replace(cfg, include_identifiability_labels=False))

@@ -227,6 +227,10 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         )
         expected_signal["metric_version"] = SIGNAL_METRIC_VERSION
         expected_signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
+        expected_signal["l_max"] = cfg.l_max
+        expected_signal["adstock_burn_in"] = cfg.adstock_burn_in
+        expected_signal["adstock_kernel_semantics"] = "normalized-causal-reset-aware-weibull-pdf"
+        expected_signal["adstock_kernel_version"] = 1
         assert corpus["diagnostics"]["signal"] == expected_signal
 
     for key, value in full.items():

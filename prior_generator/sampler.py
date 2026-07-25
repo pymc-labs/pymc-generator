@@ -836,6 +836,10 @@ def _signal_block(
     )
     out["metric_version"] = SIGNAL_METRIC_VERSION
     out["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
+    out["l_max"] = int(cfg.l_max)
+    out["adstock_burn_in"] = int(cfg.adstock_burn_in)
+    out["adstock_kernel_semantics"] = "normalized-causal-reset-aware-weibull-pdf"
+    out["adstock_kernel_version"] = 1
     return out
 
 

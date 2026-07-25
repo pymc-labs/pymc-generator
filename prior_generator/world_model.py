@@ -211,10 +211,8 @@ def _oracle_channel_shock_schedule(
     """Validate and freeze a world's reported-window reset schedule for the oracle.
 
     Channel shocks are known intervention-design state, not latent variables in
-    the observed-data model. The generator reports every event's selected
-    channel, start, length, and held-level multiplier; the oracle uses the
-    first two as reset indices and validates the complete configured schedule
-    without recreating any schedule RVs.
+    the observed-data model. The oracle validates the complete reported schedule
+    and its held levels against observed spend without recreating schedule RVs.
     """
     S = int(cfg.n_channel_shocks)
     if S == 0:
@@ -243,6 +241,14 @@ def _oracle_channel_shock_schedule(
             "data['channel_shock_level_multiplier'] must be a finite array "
             f"with shape {(S,)}, got {multiplier.shape}"
         )
+    if "channel_shock_level" not in data:
+        raise ValueError("enabled channel shocks require data['channel_shock_level'] metadata")
+    level = np.asarray(data["channel_shock_level"], dtype="float64")
+    if level.shape != (S,) or not np.isfinite(level).all():
+        raise ValueError(
+            f"data['channel_shock_level'] must be a finite array with shape {(S,)}, "
+            f"got {level.shape}"
+        )
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1)
     if not np.isin(channel, direct).all():
@@ -260,6 +266,9 @@ def _oracle_channel_shock_schedule(
             raise ValueError(
                 f"channel shock metadata start {start[s]} is infeasible for slot {s} and length {length[s]}"
             )
+        observed = np.asarray(data["channels"])[start[s] : start[s] + length[s], channel[s]]
+        if not np.allclose(observed, level[s], rtol=1e-6, atol=1e-7):
+            raise ValueError("channel shock held level does not match observed spend")
 
     return {
         "n_shocks": S,
@@ -680,8 +689,9 @@ def build_oracle_model(
         reported-window adstock mean. When
         channel shocks are enabled, it must also carry the world's known
         design metadata: ``channel_shock_channel``, ``channel_shock_start``,
-        ``channel_shock_length``, and ``channel_shock_level_multiplier``, each
-        with one entry per configured shock.
+        ``channel_shock_length``, ``channel_shock_level_multiplier``, and
+        ``channel_shock_level``, each with one entry per configured shock. The
+        absolute level must match observed spend throughout its event window.
     prior_cond : dict, optional
         The world's prior-conditioning intervals (``SCM.extras["prior_cond"]``)
         so the oracle runs under the SAME narrowed prior the world was drawn
