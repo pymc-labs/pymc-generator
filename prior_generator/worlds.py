@@ -17,6 +17,7 @@ structure draws and the per-round pm.draw seeds.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -166,7 +167,7 @@ class SCM:
             prior_cond=self.extras.get("prior_cond"),
         )
 
-    def signal(self) -> dict[str, np.ndarray]:
+    def signal(self) -> dict[str, Any]:
         """Per-direct-channel signal metrics (see ``signal_diagnostics``).
 
         Adds a ``"channel"`` key with the 0-based indices of the direct
@@ -189,10 +190,11 @@ class SCM:
             channel_shock_start=np.asarray(d["channel_shock_start"])[None],
             adstock_burn_in=self.cfg.adstock_burn_in,
         )
-        per["channel"] = np.nonzero(cy_mask[0])[0].astype(float)
-        per["metric_version"] = SIGNAL_METRIC_VERSION
-        per["metric_layout"] = SIGNAL_METRIC_LAYOUT
-        return per
+        out: dict[str, Any] = dict(per)
+        out["channel"] = np.nonzero(cy_mask[0])[0].astype(float)
+        out["metric_version"] = SIGNAL_METRIC_VERSION
+        out["metric_layout"] = SIGNAL_METRIC_LAYOUT
+        return out
 
 
 def path_to_y(g: dict) -> dict[str, bool]:

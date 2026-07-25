@@ -171,7 +171,7 @@ def _adstock_col_with_resets(c_col: TensorVariable, params: dict, k: int) -> Ten
         suffix = c_col * pt.cast(time >= start, c_col.dtype)
         reset_out = _adstock_col(suffix, params, k)
         out = pt.switch(applies & (time >= start), reset_out, out)
-    return cast(TensorVariable, out)
+    return out
 
 
 def _clamp_channel(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
