@@ -18,12 +18,13 @@ def _built(
     T=12,
     K=3,
     S=0,
-    length=(1, 1),
+    length=None,
     level=(0.0, 0.0),
     burn_in=0,
     direct=None,
     adstock_family=None,
 ):
+    shock_kwargs = {} if length is None else {"channel_shock_length_range": length}
     cfg = make_scm_prior(
         n_treatments=K,
         n_covariates=1,
@@ -31,9 +32,9 @@ def _built(
         T=T,
         adstock_burn_in=burn_in,
         n_channel_shocks=S,
-        channel_shock_length_range=length,
         channel_shock_level_range=level,
         edge_budget={"cy": (K, K)},
+        **shock_kwargs,
     )
     if direct is None:
         direct = np.ones(K, dtype=int)
@@ -65,6 +66,7 @@ def _built(
         {"channel_shock_level_range": (1.0, 0.0)},
         {"channel_shock_level_range": (0.0, np.inf)},
         {"n_channel_shocks": 13},
+        {"n_channel_shocks": 1, "channel_shock_length_range": (1, 1)},
         {"n_channel_shocks": 4, "channel_shock_length_range": (4, 4)},
     ],
 )
@@ -85,7 +87,7 @@ def test_disabled_schedule_has_empty_tensors_and_no_shock_rvs():
 
 def test_schedule_slots_containment_levels_and_burn_in_offset():
     model, names, param_names, cfg, g = _built(
-        T=10, S=3, length=(1, 3), level=(0.5, 1.5), burn_in=8
+        T=10, S=3, length=(2, 3), level=(0.5, 1.5), burn_in=8
     )
     d = draw_worlds(model, names + param_names, seed=3, draws=8)
     selected_level = np.take_along_axis(
@@ -123,11 +125,29 @@ def test_exact_fill_uneven_slots_and_same_seed_reproducibility():
 
 
 def test_single_direct_channel_can_be_selected_repeatedly_and_batched_values_vary():
-    model, names, _, _, _ = _built(T=12, S=4, length=(1, 2), level=(0.1, 0.9), direct=[0, 1, 0])
+    model, names, _, _, _ = _built(T=12, S=4, length=(2, 3), level=(0.1, 0.9), direct=[0, 1, 0])
     d = draw_worlds(model, names, seed=12, draws=12)
     assert (d["channel_shock_channel"] == 1).all()
     assert np.unique(d["channel_shock_length"]).size > 1
     assert np.unique(d["channel_shock_level_multiplier"]).size > 1
+
+
+def test_default_enabled_shock_is_visible_as_a_spend_plateau():
+    cfg = make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=12,
+        n_channel_shocks=1,
+        channel_shock_level_range=(0.5, 0.5),
+        edge_budget={"cy": (1, 1)},
+    )
+    assert cfg.channel_shock_length_range == (2, 2)
+    model, names, _, _, _ = _built(T=12, K=1, S=1, level=(0.5, 0.5))
+    drawn = draw_worlds(model, names, seed=15)
+    spend = drawn["channels"][0, :, 0]
+    plateau_starts = np.flatnonzero(spend[:-1] == spend[1:])
+    assert int(drawn["channel_shock_start"][0, 0]) in plateau_starts
 
 
 @pytest.mark.parametrize("adstock_family", (1, 2), ids=("geometric", "weibull"))

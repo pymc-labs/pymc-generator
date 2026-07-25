@@ -222,6 +222,7 @@ class DataGenerator:
             "is_val",
             "cell_id",
             "active_c_mask",
+            "confounding_strength",
             "channel_shock_mask",
             "channel_shock_channel",
             "channel_shock_start",
@@ -229,16 +230,20 @@ class DataGenerator:
             "channel_shock_level_multiplier",
             "channel_shock_level",
             "channel_level",
+            "saturation_scale",
             "adstock_family",
             "adstock_alpha",
             "weibull_lam",
             "weibull_k",
-            "signal_metrics",
-            "signal_metric_valid",
         ]
         for key in required_keys:
             if key not in corpus:
                 errors.append(f"Missing required key: {key}")
+
+        signal_label_keys = ("signal_metrics", "signal_metric_valid")
+        has_signal_labels = all(key in corpus for key in signal_label_keys)
+        if any(key in corpus for key in signal_label_keys) and not has_signal_labels:
+            errors.append("signal_metrics and signal_metric_valid must be present together")
 
         if errors:
             return errors
@@ -270,6 +275,7 @@ class DataGenerator:
             "is_val": (N,),
             "cell_id": (N,),
             "active_c_mask": (N, K),
+            "confounding_strength": (N,),
             "channel_shock_mask": (N, T, K),
             "channel_shock_channel": (N, n_channel_shocks),
             "channel_shock_start": (N, n_channel_shocks),
@@ -277,6 +283,7 @@ class DataGenerator:
             "channel_shock_level_multiplier": (N, n_channel_shocks),
             "channel_shock_level": (N, n_channel_shocks),
             "channel_level": (N, K),
+            "saturation_scale": (N, K),
             "adstock_family": (N, K),
             "adstock_alpha": (N, K),
             "weibull_lam": (N, K),
@@ -310,6 +317,8 @@ class DataGenerator:
             "channel_shock_level_multiplier": np.float32,
             "channel_shock_level": np.float32,
             "channel_level": np.float32,
+            "confounding_strength": np.float32,
+            "saturation_scale": np.float32,
             "adstock_family": np.uint8,
             "adstock_alpha": np.float32,
             "weibull_lam": np.float32,
@@ -331,6 +340,8 @@ class DataGenerator:
             "channel_shock_level_multiplier",
             "channel_shock_level",
             "channel_level",
+            "confounding_strength",
+            "saturation_scale",
             "adstock_alpha",
             "weibull_lam",
             "weibull_k",
@@ -392,16 +403,21 @@ class DataGenerator:
             errors.append("channel_shock_level_multiplier contains negative values")
         if (corpus["channel_shock_level"] < 0).any():
             errors.append("channel_shock_level contains negative values")
+        if not (
+            (corpus["confounding_strength"] >= 0.0) & (corpus["confounding_strength"] <= 0.95)
+        ).all():
+            errors.append("confounding_strength must be in [0, 0.95]")
         if not np.isin(corpus["adstock_family"], (0, 1, 2)).all():
             errors.append("adstock_family contains invalid family ids")
-        if not np.isin(corpus["signal_metric_valid"], (0, 1)).all():
-            errors.append("signal_metric_valid is not binary")
-        if not np.isfinite(corpus["signal_metrics"]).all():
-            errors.append("signal_metrics contains NaN or Inf")
-        if (corpus["signal_metrics"][corpus["signal_metric_valid"] == 0] != 0).any():
-            errors.append("signal_metrics has nonzero invalid values")
-        if corpus["signal_metrics"].shape[-1] != len(SIGNAL_METRIC_LAYOUT):
-            errors.append("signal_metrics has an unknown metric layout")
+        if has_signal_labels:
+            if not np.isin(corpus["signal_metric_valid"], (0, 1)).all():
+                errors.append("signal_metric_valid is not binary")
+            if not np.isfinite(corpus["signal_metrics"]).all():
+                errors.append("signal_metrics contains NaN or Inf")
+            if (corpus["signal_metrics"][corpus["signal_metric_valid"] == 0] != 0).any():
+                errors.append("signal_metrics has nonzero invalid values")
+            if corpus["signal_metrics"].shape[-1] != len(SIGNAL_METRIC_LAYOUT):
+                errors.append("signal_metrics has an unknown metric layout")
         signal_diagnostics = corpus.get("diagnostics", {}).get("signal", {})
         if signal_diagnostics.get("metric_version") != 1:
             errors.append("diagnostics signal metric_version is not supported")
@@ -413,6 +429,7 @@ class DataGenerator:
             inactive = active_c == 0
             for key in (
                 "channel_level",
+                "saturation_scale",
                 "adstock_family",
                 "adstock_alpha",
                 "weibull_lam",
@@ -422,9 +439,12 @@ class DataGenerator:
                     corpus[key][inactive], np.zeros(inactive.sum(), dtype=corpus[key].dtype)
                 ):
                     errors.append(f"{key} has nonzero inactive-channel padding")
-            if (corpus["signal_metrics"][inactive] != 0).any() or corpus["signal_metric_valid"][
-                inactive
-            ].any():
+            if (corpus["saturation_scale"][active_c == 1] <= 0.0).any():
+                errors.append("saturation_scale must be positive for active channels")
+            if has_signal_labels and (
+                (corpus["signal_metrics"][inactive] != 0).any()
+                or corpus["signal_metric_valid"][inactive].any()
+            ):
                 errors.append("signal metrics have nonzero inactive-channel padding")
             direct = (
                 corpus["g"][
@@ -436,9 +456,10 @@ class DataGenerator:
                 == 1
             )
             ineligible = ~(direct & (active_c == 1))
-            if (corpus["signal_metrics"][ineligible] != 0).any() or corpus["signal_metric_valid"][
-                ineligible
-            ].any():
+            if has_signal_labels and (
+                (corpus["signal_metrics"][ineligible] != 0).any()
+                or corpus["signal_metric_valid"][ineligible].any()
+            ):
                 errors.append("signal metrics have nonzero ineligible-channel values")
 
         layout = SlotLayout(K=K, M=M, J=corpus["demand"].shape[2], edge_types=EDGE_TYPES_EXTENDED)

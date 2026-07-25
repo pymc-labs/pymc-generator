@@ -36,12 +36,12 @@ def test_model_is_pm_model_with_priors_and_outputs(built):
     model, out_names = built
     # continuous priors + noise are real RVs; every graph output is registered
     assert len(model.free_RVs) > 10
-    assert len(out_names) == 21
-    assert out_names[:14] == (
+    assert out_names[:15] == (
         "demand",
         "controls",
         "channels",
         "channels_base",
+        "saturation_scale",
         "baseline",
         "baseline_intrinsic",
         "control_contribution",

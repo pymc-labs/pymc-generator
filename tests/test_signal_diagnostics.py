@@ -51,6 +51,18 @@ def test_numpy_adstock_matches_pytensor_mechanisms():
     assert np.allclose(_adstock_numpy(x, 2, 0.0, 3.0, 2.0, 4), weibull)
 
 
+def test_single_lag_weibull_is_identity_in_numpy_and_symbolic_paths():
+    x = np.array([0.2, 1.0, 0.5], dtype=np.float64)
+    with np.errstate(all="raise"):
+        numpy_result = _adstock_numpy(x, 2, 0.0, 3.0, 2.0, 1)
+        symbolic_result = pytensor.function(
+            [],
+            mechanisms.apply_weibull_pdf_adstock(pt.as_tensor_variable(x[:, None]), 3.0, 2.0, 1),
+        )()[:, 0]
+    assert np.array_equal(numpy_result, x)
+    assert np.array_equal(symbolic_result, x)
+
+
 def test_reset_adstock_is_chronological():
     x = np.arange(1, 9, dtype=np.float64)
     result = _reset_adstock_numpy(x, 1, 0.5, 1.0, 1.0, 3, np.array([5, 2]))
@@ -104,6 +116,16 @@ def test_r2_and_signed_baseline_correlation_contracts():
 
     negative, _ = _dense(x, -baseline, baseline=baseline)
     assert np.isclose(negative[0, 0, _metric("contrib_corr_baseline")], -1.0)
+
+
+def test_r2_is_invariant_to_large_target_offsets():
+    x = np.arange(8, dtype=np.float32)
+    y = np.tile(np.array([-1.0, 1.0], dtype=np.float32), 4)
+    base, _ = _dense(x, y)
+    shifted, _ = _dense(x, y + np.float32(1_000_000.0))
+    index = _metric("contrib_r2_explained_by_rest")
+    assert base[0, 0, index] == 0.0
+    assert shifted[0, 0, index] == base[0, 0, index]
 
 
 def test_short_constant_and_warmup_validity_contracts():
@@ -220,6 +242,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "is_val": np.zeros(1, dtype=np.uint8),
         "cell_id": np.zeros(1, dtype=np.int32),
         "active_c_mask": np.ones((1, 1), dtype=np.uint8),
+        "confounding_strength": np.zeros(1, dtype=np.float32),
         "channel_shock_mask": np.zeros((1, 4, 1), dtype=np.uint8),
         "channel_shock_channel": np.empty((1, 0), dtype=np.int32),
         "channel_shock_start": np.empty((1, 0), dtype=np.int32),
@@ -227,6 +250,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "channel_shock_level_multiplier": np.empty((1, 0), dtype=np.float32),
         "channel_shock_level": np.empty((1, 0), dtype=np.float32),
         "channel_level": np.ones((1, 1), dtype=np.float32),
+        "saturation_scale": np.ones((1, 1), dtype=np.float32),
         "adstock_family": np.zeros((1, 1), dtype=np.uint8),
         "adstock_alpha": np.zeros((1, 1), dtype=np.float32),
         "weibull_lam": np.zeros((1, 1), dtype=np.float32),

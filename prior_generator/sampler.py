@@ -160,8 +160,12 @@ class SCMPrior:
 
     # Symbolic, per-draw carryover-reset held-level channel shocks.
     n_channel_shocks: int = 0
-    channel_shock_length_range: tuple[int, int] = (1, 1)
+    channel_shock_length_range: tuple[int, int] = (2, 2)
     channel_shock_level_range: tuple[float, float] = (0.0, 0.0)
+
+    # Dense truth-derived attribution labels are metadata, never model inputs.
+    # Disable them for feature-only shards without changing generated worlds.
+    include_identifiability_labels: bool = True
 
     # -- Prior-conditioning hyperprior (ACE, plan doc to-do/01) -------------
     # When enabled, each CELL draws a narrowed prior interval per conditioned
@@ -474,6 +478,8 @@ class SCMPrior:
             raise ValueError("n_channel_shocks must be an int (not bool)")
         if self.n_channel_shocks < 0:
             raise ValueError(f"n_channel_shocks must be >= 0, got {self.n_channel_shocks}")
+        if not isinstance(self.include_identifiability_labels, bool):
+            raise ValueError("include_identifiability_labels must be a bool")
         try:
             shock_len_lo, shock_len_hi = self.channel_shock_length_range
         except (TypeError, ValueError):
@@ -506,6 +512,11 @@ class SCMPrior:
         if self.n_channel_shocks > self.T:
             raise ValueError(
                 f"n_channel_shocks must be <= T ({self.T}), got {self.n_channel_shocks}"
+            )
+        if self.n_channel_shocks and shock_len_lo < 2:
+            raise ValueError(
+                "enabled channel shocks must last at least 2 weeks so the held level "
+                "is observable in spend"
             )
         if self.n_channel_shocks and self.n_channel_shocks * shock_len_hi > self.T:
             raise ValueError(
@@ -868,8 +879,9 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
         l_max=cfg.l_max,
         adstock_burn_in=cfg.adstock_burn_in,
     )
-    corpus["signal_metrics"] = signal_metrics
-    corpus["signal_metric_valid"] = signal_metric_valid
+    if cfg.include_identifiability_labels:
+        corpus["signal_metrics"] = signal_metrics
+        corpus["signal_metric_valid"] = signal_metric_valid
     diagnostics["signal"] = _signal_block(
         cfg,
         layout,
@@ -892,14 +904,17 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
     contrib_tot = contributions.sum(axis=(1, 2))
     media_share = contrib_tot / (contrib_tot + baseline.sum(axis=1) + 1e-12)
 
+    edge_marginals = {}
+    for edge_type in layout.edge_types:
+        block = g_tasks[:, layout.slices[edge_type]]
+        edge_marginals[edge_type] = float(block.mean()) if block.size else 0.0
+
     diagnostics.update(
         {
             "n_tasks": int(n_tasks),
             "n_cells": int(np.unique(corpus["cell_id"]).size),
             "tasks_per_sec": float(n_tasks / elapsed),
-            "edge_marginals": {
-                et: float(g_tasks[:, layout.slices[et]].mean()) for et in layout.edge_types
-            },
+            "edge_marginals": edge_marginals,
             "media_share_quantiles": {
                 f"q{int(q * 100)}": float(np.quantile(media_share, q)) for q in qs
             },
@@ -1040,6 +1055,7 @@ _CORPUS_SHOCK_NAMES = (
     "channel_shock_level",
 )
 _CORPUS_PARAM_NAMES = (
+    "saturation_scale",
     "param_channel_level",
     "param_adstock_alpha",
     "param_weibull_lam",
@@ -1130,6 +1146,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
       (C->Y or outgoing C->C).
     * ``confounding_strength`` (N,) float32 — the effective per-world shared
       baseline/channel innovation strength (all zeros when disabled).
+    * ``saturation_scale`` (N, K) float32 — the generation-time nonlinear
+      response anchor, zero-padded for inactive channels.
     * ``prior_cond`` (N, P) float32 — present IFF ``cfg.prior_conditioning``:
       the per-cell narrowed prior intervals as packed ``(low, width)`` pairs
       in ``PRIOR_COND_LAYOUT`` order, broadcast to worlds;
@@ -1280,6 +1298,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 shock_mask_pad[:, :K_active] = drawn["channel_shock_mask"]
                 channel_level_pad = np.zeros(K_max)
                 channel_level_pad[:K_active] = drawn["param_channel_level"]
+                saturation_scale_pad = np.zeros(K_max)
+                saturation_scale_pad[:K_active] = drawn["saturation_scale"]
                 adstock_family_pad = np.zeros(K_max, dtype=np.uint8)
                 adstock_family_pad[:K_active] = structural["adstock_family"]
                 adstock_alpha_pad = np.zeros(K_max)
@@ -1341,6 +1361,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "channel_shock_level_multiplier": drawn["channel_shock_level_multiplier"],
                         "channel_shock_level": drawn["channel_shock_level"],
                         "channel_level": channel_level_pad,
+                        "saturation_scale": saturation_scale_pad,
                         "adstock_family": adstock_family_pad,
                         "adstock_alpha": adstock_alpha_pad,
                         "weibull_lam": weibull_lam_pad,
@@ -1391,6 +1412,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     )
     channel_shock_level = np.stack([tk["channel_shock_level"] for tk in tasks])
     channel_level = np.stack([tk["channel_level"] for tk in tasks])
+    saturation_scale = np.stack([tk["saturation_scale"] for tk in tasks])
     adstock_family = np.stack([tk["adstock_family"] for tk in tasks])
     adstock_alpha = np.stack([tk["adstock_alpha"] for tk in tasks])
     weibull_lam = np.stack([tk["weibull_lam"] for tk in tasks])
@@ -1542,6 +1564,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "channel_shock_level_multiplier": channel_shock_level_multiplier.astype(np.float32),
         "channel_shock_level": channel_shock_level.astype(np.float32),
         "channel_level": channel_level.astype(np.float32),
+        "saturation_scale": saturation_scale.astype(np.float32),
         "adstock_family": adstock_family.astype(np.uint8),
         "adstock_alpha": adstock_alpha.astype(np.float32),
         "weibull_lam": weibull_lam.astype(np.float32),

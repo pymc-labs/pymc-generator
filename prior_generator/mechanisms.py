@@ -178,6 +178,8 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
     Delegates to ``pymc_marketing.mmm.transformers.weibull_adstock`` with
     ``type="PDF"``, ``normalize=True``. ``lam``/``k`` may be floats or symbolic.
     """
+    if int(l_max) == 1:
+        return x
     out = _pmm.weibull_adstock(
         _as_time(x[:, 0]),
         lam=lam,

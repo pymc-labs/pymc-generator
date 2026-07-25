@@ -674,7 +674,10 @@ def build_oracle_model(
         ``SCM.extras["structural"]``.
     data : dict
         The world's observables — ``"channels"`` (T, K), ``"controls"``
-        (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``. When
+        (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``. The
+        optional ``"saturation_scale"`` (K,) pins the exact generation-time
+        nonlinear response anchor; legacy callers that omit it use the
+        reported-window adstock mean. When
         channel shocks are enabled, it must also carry the world's known
         design metadata: ``channel_shock_channel``, ``channel_shock_start``,
         ``channel_shock_length``, and ``channel_shock_level_multiplier``, each
@@ -742,6 +745,16 @@ def build_oracle_model(
             f"controls (T, n_covariates)={T, n_covariates}, sales (T,)={(T,)}; "
             f"got channels {channels.shape}, controls {controls.shape}"
         )
+    saturation_scale = data.get("saturation_scale")
+    if saturation_scale is not None:
+        saturation_scale = np.asarray(saturation_scale, dtype="float64")
+        if saturation_scale.shape != (n_treatments,) or not (
+            np.isfinite(saturation_scale).all() and (saturation_scale > 0.0).all()
+        ):
+            raise ValueError(
+                "saturation_scale must be finite and positive with shape "
+                f"{(n_treatments,)}, got {saturation_scale!r}"
+            )
     burn_in = cfg.adstock_burn_in
     T_full = T + burn_in
     W = slice(burn_in, None)
@@ -794,7 +807,11 @@ def build_oracle_model(
         contrib_cols = []
         for k in range(n_treatments):
             ad_obs = _adstock_col_with_resets(channels_t[:, k], mech_params, k)
-            scale_k = pt.maximum(ad_obs.mean(), 1e-8)
+            scale_k = (
+                pt.maximum(ad_obs.mean(), 1e-8)
+                if saturation_scale is None
+                else pt.as_tensor_variable(saturation_scale[k])
+            )
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
             contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))

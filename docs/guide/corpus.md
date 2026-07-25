@@ -53,6 +53,7 @@ schedule arrays when shocks are disabled. `S` is the configured
 | --- | --- | --- | --- |
 | `confounding_strength` | `(N,)` | `float32` | drawn per-world rho (`0` when disabled) |
 | `channel_level` | `(N, K)` | `float32` | `softplus(rw_c_mean)` reference level |
+| `saturation_scale` | `(N, K)` | `float32` | generation-time response anchor (zero-padded for inactive channels) |
 | `adstock_family` | `(N, K)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
 | `adstock_alpha` | `(N, K)` | `float32` | geometric decay parameter |
 | `weibull_lam` | `(N, K)` | `float32` | Weibull scale parameter |
@@ -124,11 +125,14 @@ A corpus can satisfy every schema contract and still be *unlearnable* if the tru
 contributions barely move. Every corpus embeds a signal summary; `check_signal_gate`
 turns it into PASS/FAIL rows.
 
-The dense labels are `signal_metrics: float32 (N, K, 9)` and
+The optional dense truth metadata are `signal_metrics: float32 (N, K, 9)` and
 `signal_metric_valid: uint8 (N, K, 9)`. Their exact versioned layout and
 validity rules are in the [signal diagnostics reference](../reference/signal.md).
 They are calculated from the final retained float32 arrays (after truncation),
-so a consumer can recompute them after loading the `.npz`.
+so a consumer can recompute them after loading the `.npz`. They are labels, not
+model inputs. Set `include_identifiability_labels=False` to omit both arrays;
+all observable arrays remain byte-identical and the aggregate signal diagnostics
+remain available.
 
 ```python exec="1" source="material-block" result="text"
 from scm_docs import corpus

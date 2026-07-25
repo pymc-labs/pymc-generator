@@ -3,7 +3,7 @@
 Where :func:`prior_generator.sample_prior_predictive` produces a padded N-task corpus
 for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
-DAG blocks, the drawn SCM parameters, and up to 23 named output series,
+DAG blocks, the drawn SCM parameters, and named output series and metadata,
 including the interventional decomposition truth and shock-schedule audit
 outputs when enabled.
 
@@ -37,6 +37,7 @@ SCM_OUT_NAMES = (
     "controls",
     "channels",
     "channels_base",
+    "saturation_scale",
     "baseline",
     "baseline_intrinsic",
     "control_contribution",
@@ -68,8 +69,8 @@ class SCM:
     data : dict
         The :data:`SCM_OUT_NAMES` series at active sizes — e.g.
         ``channels (T, K)``, ``sales (T,)``, ``contributions (T, K)``,
-        ``indirect_effects_by_source (T, 3)`` in the locked (cc, zc, dc)
-        order.
+        ``saturation_scale (K,)``, and ``indirect_effects_by_source (T, 3)``
+        in the locked (cc, zc, dc) order.
     g : dict
         Active-size DAG blocks (``g_cy``, ``g_dc``, ``g_dz``, ``g_db``,
         ``g_zb``, ``g_zc``, ``g_cc``, ``g_zz``).
@@ -149,6 +150,7 @@ class SCM:
             "channels": self.data["channels"],
             "controls": self.data["controls"],
             "sales": self.data["sales"],
+            "saturation_scale": self.data["saturation_scale"],
         }
         if self.cfg.n_channel_shocks:
             data.update(

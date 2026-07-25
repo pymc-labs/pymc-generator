@@ -8,9 +8,12 @@ checkable at generation time.
 
 ## Persisted layout (version 1)
 
-`signal_metrics` is a dense `float32` array of shape `(N, K, 9)` and
-`signal_metric_valid` is a same-shaped binary `uint8` array. The locked,
-append-only v1 layout in `diagnostics["signal"]["metric_layout"]` is:
+With `include_identifiability_labels=True` (the default), `signal_metrics` is a
+dense `float32` array of shape `(N, K, 9)` and `signal_metric_valid` is a
+same-shaped binary `uint8` array. These arrays are truth-derived metadata, not
+model features; setting the option to `False` omits both without changing any
+observable array. The locked, append-only v1 layout in
+`diagnostics["signal"]["metric_layout"]` is:
 
 1. `spend_cv`
 2. `spend_hf`

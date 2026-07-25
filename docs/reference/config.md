@@ -66,8 +66,10 @@ cfg = make_scm_prior(
 - `n_channel_shocks: int = 0` is the exact number `S` of shocks in **each**
   world. It must be an integer in `[0, T]` and must fit at maximum length:
   `S * channel_shock_length_range[1] <= T`.
-- `channel_shock_length_range: tuple[int, int] = (1, 1)` has integral bounds
-  `1 <= lo <= hi <= T`.
+- `channel_shock_length_range: tuple[int, int] = (2, 2)` has integral bounds
+  `1 <= lo <= hi <= T`. When `S > 0`, `lo` must be at least 2 so every
+  intervention creates a spend-visible held-level plateau. One-week ranges
+  remain valid only while shocks are disabled.
 - `channel_shock_level_range: tuple[float, float] = (0.0, 0.0)` has finite
   bounds `0 <= lo <= hi`.
 
@@ -87,6 +89,14 @@ multiple shocks on a channel, the latest reset supersedes earlier carryover;
 outside an event the natural spend process resumes. Downstream channel
 recursion still observes the clamped parent. This is a known intervention
 design with reset state, **not** a conventional spend-only lift test.
+
+## Identifiability labels
+
+`include_identifiability_labels: bool = True` controls the two dense,
+truth-derived metadata arrays `signal_metrics` and `signal_metric_valid`.
+Setting it to `False` omits those arrays while retaining the aggregate
+`diagnostics["signal"]` quality report. It changes no model input, random draw,
+or generated observable array; use the disabled form for feature-only shards.
 
 ::: prior_generator.presets.make_scm_prior
 

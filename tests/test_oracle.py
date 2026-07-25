@@ -171,6 +171,8 @@ def test_scm_oracle_model_roundtrip():
     """SCM.oracle_model() rebuilds the oracle from the recorded extras."""
     cfg = _small_cfg(prior_conditioning=True)
     world = pg.sample_scm(cfg, seed=3)
+    assert world.data["saturation_scale"].shape == (world.K,)
+    assert (world.data["saturation_scale"] > 0.0).all()
     oracle = world.oracle_model()
     # the conditioned prior narrows adstock_alpha to the recorded interval
     lo, width = world.extras["prior_cond"]["adstock_alpha"]
@@ -213,6 +215,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
             "channels",
             "controls",
             "sales",
+            "saturation_scale",
             "channel_shock_channel",
             "channel_shock_start",
             "channel_shock_length",
@@ -246,6 +249,7 @@ def test_shocked_oracle_repeated_reset_boundaries_match_shared_helper():
             "channel_shock_start": np.array([2, 6], dtype="int64"),
             "channel_shock_length": np.array([2, 2], dtype="int64"),
             "channel_shock_level_multiplier": np.array([0.5, 0.5]),
+            "saturation_scale": np.array([3.0]),
         }
     )
     oracle = build_oracle_model(g, cfg, structural, data)
@@ -273,7 +277,7 @@ def test_shocked_oracle_repeated_reset_boundaries_match_shared_helper():
     }
     adstock = _adstock_col_with_resets(pt.as_tensor_variable(data["channels"][:, 0]), params, 0)
     expected = params["beta"][0] * _saturate_col(
-        adstock, pt.maximum(adstock.mean(), 1e-8), params, 0
+        adstock, pt.as_tensor_variable(data["saturation_scale"][0]), params, 0
     )
     with oracle:
         got, expected_value = pm.draw(
@@ -292,6 +296,10 @@ def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
     malformed["channel_shock_length"] = np.array([1, 2], dtype="int64")
     with pytest.raises(ValueError, match="channel_shock_length"):
         build_oracle_model(g, cfg, structural, malformed)
+    malformed_scale = dict(data)
+    malformed_scale["saturation_scale"] = np.array([np.nan])
+    with pytest.raises(ValueError, match="saturation_scale"):
+        build_oracle_model(g, cfg, structural, malformed_scale)
 
 
 @pytest.mark.slow

@@ -84,7 +84,10 @@ three explicit concessions (all documented in the API reference):
 
 Additionally, the adstock convolution sees only the reported window
 (zero-padded start) while generation used `adstock_burn_in` weeks of real
-history — **drop the first `l_max` weeks** from band comparisons.
+history, so **drop the first `l_max` weeks** from band comparisons. The
+generation-time per-channel `saturation_scale` is persisted and supplied by
+`SCM.oracle_model()`, preventing that initial-history difference from shifting
+the nonlinear response anchor after carryover itself has converged.
 
 ### Held-level carryover-reset shocks
 

@@ -45,6 +45,8 @@ def test_required_keys_and_shapes(corpus):
         "baseline_intrinsic": (N, T),
         "channel_active": (N, K),
         "active_c_mask": (N, K),
+        "confounding_strength": (N,),
+        "saturation_scale": (N, K),
     }
     for key, shape in expected.items():
         assert corpus[key].shape == shape, f"{key}: {corpus[key].shape} != {shape}"
@@ -60,6 +62,7 @@ def test_shock_and_mechanism_metadata_schema(corpus):
         "channel_shock_level_multiplier": ((N, 0), np.float32),
         "channel_shock_level": ((N, 0), np.float32),
         "channel_level": ((N, K), np.float32),
+        "saturation_scale": ((N, K), np.float32),
         "adstock_family": ((N, K), np.uint8),
         "adstock_alpha": ((N, K), np.float32),
         "weibull_lam": ((N, K), np.float32),
@@ -96,6 +99,54 @@ def test_validate_corpus_flags_nan(corpus):
     broken["spend_raw"] = bad
     errors = DataGenerator.validate_corpus(broken)
     assert any("NaN" in e or "Inf" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        np.array([np.nan] * 6, dtype=np.float32),
+        np.array([-0.1] * 6, dtype=np.float32),
+        np.array([0.96] * 6, dtype=np.float32),
+        np.zeros(6, dtype=np.float64),
+    ),
+)
+def test_validate_corpus_rejects_invalid_confounding_strength(corpus, value):
+    broken = dict(corpus)
+    broken["confounding_strength"] = value
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("confounding_strength" in error for error in errors)
+
+
+def test_validate_corpus_requires_confounding_strength(corpus):
+    broken = {key: value for key, value in corpus.items() if key != "confounding_strength"}
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("confounding_strength" in error for error in errors)
+
+
+def test_validate_corpus_rejects_nonpositive_active_saturation_scale(corpus):
+    broken = dict(corpus)
+    bad = corpus["saturation_scale"].copy()
+    bad[0, np.flatnonzero(corpus["active_c_mask"][0])[0]] = 0.0
+    broken["saturation_scale"] = bad
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("saturation_scale" in error for error in errors)
+
+
+def test_single_node_edge_marginals_are_defined_without_empty_mean_warning(recwarn):
+    generated = pg.sample_prior_predictive(
+        pg.make_scm_prior(
+            n_treatments=1,
+            n_covariates=1,
+            n_latent=1,
+            T=8,
+            n_cells=2,
+            draws_per_cell=1,
+            seed=91,
+        )
+    )
+    assert generated["diagnostics"]["edge_marginals"]["cc"] == 0.0
+    assert generated["diagnostics"]["edge_marginals"]["zz"] == 0.0
+    assert not any("Mean of empty slice" in str(item.message) for item in recwarn)
 
 
 def test_save_load_roundtrip(tmp_path, corpus):
@@ -207,7 +258,7 @@ def test_shock_metadata_is_reconstructable_and_zero_padded():
         draws_per_cell=1,
         n_treatments_active_range=(2, 3),
         n_channel_shocks=2,
-        channel_shock_length_range=(1, 2),
+        channel_shock_length_range=(2, 2),
         channel_shock_level_range=(0.0, 1.0),
         seed=14,
     )

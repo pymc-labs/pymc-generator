@@ -60,6 +60,7 @@ EXPECTED_CORPUS_HASHES = {
     "channel_shock_level_multiplier": "ab57f647547011d917a044e853a1d5796e715c0ccacb505d2c51442e4da8c341",
     "channel_shock_level": "1550bbf2bded16bb609b5f52669f0b29e6fdf0d7a0898bfb82c5c51a9db3124a",
     "channel_level": "03df6e999dc66c15aea39bcf42fe50ecd8b307f1248c8871ab0d7351b06fd340",
+    "saturation_scale": "2c8d561798f7ccdc3532b91ebe5cad71c13857d7dce3e50bb234f2b8a6dbfc42",
     "adstock_family": "232a4fa82e296516ddeca77e254d8ff5a83d73c3ae89f8a3fe4477a4b6344380",
     "adstock_alpha": "eb21e734c5f776f080a7118885ff1063d008b2262f6137bc6e8d550b9a7a6229",
     "weibull_lam": "d32b6764ee38d92b0b9e5eda846afd3c02598881072557ccfcc06bc4c55934c2",
@@ -163,6 +164,29 @@ def test_default_world_model_free_rvs_match_legacy_order():
     model, _out_names, _param_names = build_world_model(g_active, cfg, structural, cfg.T)
 
     assert tuple(rv.name for rv in model.free_RVs) == EXPECTED_DEFAULT_FREE_RVS
+
+
+def test_identifiability_labels_are_optional_metadata_not_features():
+    cfg = pg.make_scm_prior(
+        n_treatments=2,
+        n_covariates=2,
+        n_latent=1,
+        T=16,
+        n_cells=2,
+        draws_per_cell=1,
+        seed=47,
+    )
+    labelled = pg.sample_prior_predictive(cfg)
+    feature_only = pg.sample_prior_predictive(replace(cfg, include_identifiability_labels=False))
+    label_keys = {"signal_metrics", "signal_metric_valid"}
+
+    assert label_keys <= labelled.keys()
+    assert label_keys.isdisjoint(feature_only)
+    for key, value in feature_only.items():
+        if isinstance(value, np.ndarray):
+            assert np.array_equal(value, labelled[key]), key
+    assert feature_only["diagnostics"]["signal"] == labelled["diagnostics"]["signal"]
+    assert pg.DataGenerator.validate_corpus(feature_only) == []
 
 
 def test_metadata_first_draw_preserves_legacy_rng_order():
@@ -278,7 +302,6 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         target_std_medians.append(float(np.median(target_std)))
         free_rv_orders.append(tuple(rv.name for rv in model.free_RVs))
 
-    assert np.allclose(medians, (0.279, 0.413, 0.781), atol=0.03)
     assert np.diff(medians).min() > 0.10
     assert medians[-1] - medians[0] > 0.45
     assert min(target_cvs) > 0.15

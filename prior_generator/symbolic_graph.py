@@ -275,7 +275,8 @@ def build_symbolic_graph(
     dict with a single key ``outputs`` — the symbolic node outputs (sliced to
     the reported T-window):
         ``demand`` (T,J), ``controls`` (T,M), ``channels`` (T,K),
-        ``channels_base`` (T,K), ``baseline`` (T,), ``baseline_intrinsic`` (T,),
+        ``channels_base`` (T,K), ``saturation_scale`` (K,), ``baseline`` (T,),
+        ``baseline_intrinsic`` (T,),
         ``control_contribution`` (T,M), ``confounder_contribution`` (T,J),
         ``contributions`` (T,K, direct), ``contributions_observed`` (T,K),
         ``indirect_effects`` (T,), ``indirect_effects_by_source`` (T,3),
@@ -426,7 +427,7 @@ def build_symbolic_graph(
 
     # -- direct nonlinear responses + exact decomposition --------------------
     beta = _arr(params["beta"], (K,))
-    contrib_obs_cols, contrib_base_cols = [], []
+    contrib_obs_cols, contrib_base_cols, sat_scale_cols = [], [], []
     # Telescoping 3-way indirect split (LOCKED order cc -> zc -> dc). Because the
     # direct response f_k is nonlinear, naive one-at-a-time interventions do not
     # sum to the total; the split is defined by a FIXED sequential zeroing order
@@ -445,6 +446,7 @@ def build_symbolic_graph(
         # point matches what the model observes.
         ad_obs = _adstock_col_with_resets(c_cols[k], params, k)[W]
         scale_k = pt.maximum(ad_obs.mean(), 1e-8).copy(name=f"sat_scale_{k}")
+        sat_scale_cols.append(scale_k)
 
         # ONE response function per channel, applied to every variant: the
         # telescoping split cancels the middle variants, so a divergence here
@@ -487,6 +489,7 @@ def build_symbolic_graph(
         "controls": Z[W],
         "channels": C[W],
         "channels_base": C_base[W],
+        "saturation_scale": pt.stack(sat_scale_cols),
         "baseline": baseline,
         "baseline_intrinsic": baseline_intrinsic,
         "control_contribution": control_contribution[W],

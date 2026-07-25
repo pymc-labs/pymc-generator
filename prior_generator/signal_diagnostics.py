@@ -124,7 +124,9 @@ def _adstock_numpy(
     x: np.ndarray, family: int, alpha: float, lam: float, shape: float, l_max: int
 ) -> np.ndarray:
     """The generator's normalized, causal adstock for one reported series."""
-    if family == 0:
+    if family not in (0, 1, 2):
+        raise ValueError(f"unknown adstock family {family}")
+    if family == 0 or int(l_max) == 1:
         return x.copy()
     lag = np.arange(int(l_max), dtype=np.float64)
     if family == 1:
@@ -139,8 +141,6 @@ def _adstock_numpy(
         # scale cancels after normalization, but retaining it also preserves
         # the degenerate-kernel behavior.
         weights = (weights - weights.min()) / (weights.max() - weights.min())
-    else:
-        raise ValueError(f"unknown adstock family {family}")
     total = weights.sum()
     if not np.isfinite(total) or total <= 1e-12:
         return np.zeros_like(x, dtype=np.float64)
@@ -273,7 +273,7 @@ def dense_signal_metrics(
                 np.column_stack(design) @ np.linalg.lstsq(np.column_stack(design), y, rcond=None)[0]
             )
             sst = np.sum((y - y.mean()) ** 2)
-            tolerance = 32.0 * np.finfo(np.float32).eps * max(float(np.dot(y, y)), 1.0)
+            tolerance = 32.0 * np.finfo(np.float32).eps * max(float(sst), 1.0)
             ss_res = np.sum((y - fitted) ** 2)
             # R² is undefined for a constant target.  Treat it as explained
             # only when the full-window intercept/baseline/rest fit reproduces
