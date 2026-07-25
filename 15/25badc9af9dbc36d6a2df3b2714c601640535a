@@ -1,0 +1,25 @@
+prior_generator/sampler.py
+  s_13b951586b4422::t_d0e36ba637dcc7 128,216-222,396-401
+prior_generator/world_model.py
+  s_13b951586b4422::t_d0e36ba637dcc7 190
+tests/test_identifiability.py
+  s_13b951586b4422::t_7909af4e0b8bfd 6,9,139-153
+tests/test_oracle.py
+  s_13b951586b4422::t_193db98bc893db 79-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "1525badc9af9dbc36d6a2df3b2714c601640535a",
+  "prompts": {},
+  "sessions": {
+    "s_13b951586b4422": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0669696f4ffey6t3anI2Hir27E",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
