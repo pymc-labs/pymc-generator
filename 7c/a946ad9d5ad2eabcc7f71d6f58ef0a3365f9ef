@@ -1,0 +1,45 @@
+prior_generator/signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_3d5824515d40fe 143-146
+prior_generator/sampler.py
+  s_6cdb3f9eca54e6::t_90eb4981083fdc 454,463-468,470-478
+  s_6cdb3f9eca54e6::t_b7998bf7ad605e 499-502
+tests/test_signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_2905118369eb28 66-73,75-79
+  s_6cdb3f9eca54e6::t_4f4b751146c755 74
+tests/test_schema_io.py
+  s_6cdb3f9eca54e6::t_2905118369eb28 129-134,275-284,318-375,379-383
+  s_6cdb3f9eca54e6::t_4f4b751146c755 376-378
+  s_6cdb3f9eca54e6::t_62d50a7565dd29 384-385
+tests/test_config.py
+  s_6cdb3f9eca54e6::t_2905118369eb28 98-109
+prior_generator/data_generator.py
+  s_6cdb3f9eca54e6::t_0b674b14add24c 257,265-267
+  s_6cdb3f9eca54e6::t_5cc06c1174782f 389-392,394-397,399-420,425
+  s_6cdb3f9eca54e6::t_c27adde0e6a7cb 509
+  s_6cdb3f9eca54e6::t_4f4b751146c755 421-424
+  s_6cdb3f9eca54e6::t_b7998bf7ad605e 692-695
+  s_6cdb3f9eca54e6::t_d91b263c913b66 268-270
+prior_generator/world_model.py
+  s_6cdb3f9eca54e6::t_b7998bf7ad605e 768-769
+prior_generator/mechanisms.py
+  s_6cdb3f9eca54e6::t_3d5824515d40fe 183-185,187,197-198
+  s_6cdb3f9eca54e6::t_4f4b751146c755 186
+tests/test_oracle.py
+  s_6cdb3f9eca54e6::t_2905118369eb28 162-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "7ca946ad9d5ad2eabcc7f71d6f58ef0a3365f9ef",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
