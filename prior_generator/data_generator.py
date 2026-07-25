@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from .sampler import SCMPrior, sample_prior_predictive
+from .slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 # ---------------------------------------------------------------------------
 # Data generator
@@ -233,6 +234,18 @@ class DataGenerator:
             "sales_scale",
             "is_val",
             "cell_id",
+            "active_c_mask",
+            "channel_shock_mask",
+            "channel_shock_channel",
+            "channel_shock_start",
+            "channel_shock_length",
+            "channel_shock_level_multiplier",
+            "channel_shock_level",
+            "channel_level",
+            "adstock_family",
+            "adstock_alpha",
+            "weibull_lam",
+            "weibull_k",
         ]
         for key in required_keys:
             if key not in corpus:
@@ -247,6 +260,7 @@ class DataGenerator:
         K = corpus["spend_raw"].shape[2]
         M = corpus["controls"].shape[2]
         S = corpus["g"].shape[1]
+        n_channel_shocks = corpus["channel_shock_channel"].shape[1]
 
         # Check shapes
         expected_shapes = {
@@ -266,6 +280,18 @@ class DataGenerator:
             "sales_scale": (N,),
             "is_val": (N,),
             "cell_id": (N,),
+            "active_c_mask": (N, K),
+            "channel_shock_mask": (N, T, K),
+            "channel_shock_channel": (N, n_channel_shocks),
+            "channel_shock_start": (N, n_channel_shocks),
+            "channel_shock_length": (N, n_channel_shocks),
+            "channel_shock_level_multiplier": (N, n_channel_shocks),
+            "channel_shock_level": (N, n_channel_shocks),
+            "channel_level": (N, K),
+            "adstock_family": (N, K),
+            "adstock_alpha": (N, K),
+            "weibull_lam": (N, K),
+            "weibull_k": (N, K),
         }
 
         for key, expected in expected_shapes.items():
@@ -284,11 +310,40 @@ class DataGenerator:
                     errors.append(f"Shape mismatch for {key}: expected dim {i} = {e}, got {a}")
                     break
 
+        expected_dtypes = {
+            "channel_shock_mask": np.uint8,
+            "active_c_mask": np.uint8,
+            "channel_shock_channel": np.int32,
+            "channel_shock_start": np.int32,
+            "channel_shock_length": np.int32,
+            "channel_shock_level_multiplier": np.float32,
+            "channel_shock_level": np.float32,
+            "channel_level": np.float32,
+            "adstock_family": np.uint8,
+            "adstock_alpha": np.float32,
+            "weibull_lam": np.float32,
+            "weibull_k": np.float32,
+        }
+        for key, dtype in expected_dtypes.items():
+            if key in corpus and corpus[key].dtype != dtype:
+                errors.append(f"{key} has dtype {corpus[key].dtype}, expected {np.dtype(dtype)}")
+
         # Check finite values
         for key in ["spend_raw", "controls", "sales_raw", "contributions_raw", "baseline_raw"]:
             if key in corpus:
                 if not np.isfinite(corpus[key]).all():
                     errors.append(f"{key} contains NaN or Inf")
+
+        for key in (
+            "channel_shock_level_multiplier",
+            "channel_shock_level",
+            "channel_level",
+            "adstock_alpha",
+            "weibull_lam",
+            "weibull_k",
+        ):
+            if key in corpus and not np.isfinite(corpus[key]).all():
+                errors.append(f"{key} contains NaN or Inf")
 
         # Check sales_norm = sales_raw / sales_scale
         if "sales_raw" in corpus and "sales_scale" in corpus and "sales_norm" in corpus:
@@ -330,6 +385,88 @@ class DataGenerator:
             g = corpus["g"]
             if not np.all((np.abs(g.astype(float)) < 1e-9) | (np.abs(g.astype(float) - 1) < 1e-9)):
                 errors.append("g is not binary")
+        if not np.isin(corpus["active_c_mask"], (0, 1)).all():
+            errors.append("active_c_mask is not binary")
+
+        # Top-level shock audit metadata is intentionally sufficient to
+        # reconstruct every held-spend intervention without persisting the
+        # full burn-in mask or natural (unshocked) paths.
+        shock_mask = corpus["channel_shock_mask"]
+        if not np.isin(shock_mask, (0, 1)).all():
+            errors.append("channel_shock_mask is not binary")
+        if (corpus["channel_shock_level_multiplier"] < 0).any():
+            errors.append("channel_shock_level_multiplier contains negative values")
+        if (corpus["channel_shock_level"] < 0).any():
+            errors.append("channel_shock_level contains negative values")
+        if not np.isin(corpus["adstock_family"], (0, 1, 2)).all():
+            errors.append("adstock_family contains invalid family ids")
+
+        active_c = corpus.get("active_c_mask")
+        if active_c is not None and active_c.shape == (N, K):
+            inactive = active_c == 0
+            for key in (
+                "channel_level",
+                "adstock_family",
+                "adstock_alpha",
+                "weibull_lam",
+                "weibull_k",
+            ):
+                if not np.array_equal(
+                    corpus[key][inactive], np.zeros(inactive.sum(), dtype=corpus[key].dtype)
+                ):
+                    errors.append(f"{key} has nonzero inactive-channel padding")
+
+        layout = SlotLayout(K=K, M=M, J=corpus["demand"].shape[2], edge_types=EDGE_TYPES_EXTENDED)
+        channels = corpus["channel_shock_channel"]
+        starts = corpus["channel_shock_start"]
+        lengths = corpus["channel_shock_length"]
+        levels = corpus["channel_shock_level"]
+        multipliers = corpus["channel_shock_level_multiplier"]
+        channel_level = corpus["channel_level"]
+        audit_shapes_ok = (
+            shock_mask.shape == (N, T, K)
+            and corpus["g"].shape == (N, layout.n_slots)
+            and channels.shape
+            == starts.shape
+            == lengths.shape
+            == levels.shape
+            == (N, n_channel_shocks)
+        )
+        if audit_shapes_ok:
+            direct = corpus["g"][:, layout.slices["cy"]] == 1
+            for n in range(N):
+                rebuilt = np.zeros((T, K), dtype=np.uint8)
+                occupied = np.zeros(T, dtype=bool)
+                for s_idx in range(n_channel_shocks):
+                    channel, start, length = (
+                        int(channels[n, s_idx]),
+                        int(starts[n, s_idx]),
+                        int(lengths[n, s_idx]),
+                    )
+                    slot_lo = s_idx * T // max(n_channel_shocks, 1)
+                    slot_hi = (s_idx + 1) * T // max(n_channel_shocks, 1)
+                    if not (0 <= channel < K and direct[n, channel]):
+                        errors.append("channel_shock_channel is not an active direct channel")
+                        continue
+                    if not (length > 0 and slot_lo <= start and start + length <= slot_hi):
+                        errors.append("channel shock start/length is outside its schedule slot")
+                        continue
+                    if occupied[start : start + length].any():
+                        errors.append("channel shocks overlap globally")
+                    occupied[start : start + length] = True
+                    rebuilt[start : start + length, channel] = 1
+                    expected_level = multipliers[n, s_idx] * channel_level[n, channel]
+                    if not np.isclose(levels[n, s_idx], expected_level, rtol=1e-6, atol=1e-7):
+                        errors.append(
+                            "channel_shock_level does not match multiplier * channel_level"
+                        )
+                    if not np.array_equal(
+                        corpus["spend_raw"][n, start : start + length, channel],
+                        np.full(length, levels[n, s_idx], dtype=np.float32),
+                    ):
+                        errors.append("held spend does not equal channel_shock_level")
+                if not np.array_equal(rebuilt, shock_mask[n]):
+                    errors.append("channel_shock_mask does not match the schedule")
 
         # Check null channels have zero contribution
         if "g" in corpus and "contributions_raw" in corpus:

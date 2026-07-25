@@ -928,6 +928,24 @@ _ADDITIVE_OUT_NAMES = (
     "confounding_strength",
 )
 
+# Corpus audit metadata.  These are already deterministics in each cell model;
+# requesting just these values preserves the one-model-per-cell sampling path
+# while avoiding persistence of natural-path realism outputs or burn-in masks.
+_CORPUS_SHOCK_NAMES = (
+    "channel_shock_mask",
+    "channel_shock_channel",
+    "channel_shock_start",
+    "channel_shock_length",
+    "channel_shock_level_multiplier",
+    "channel_shock_level",
+)
+_CORPUS_PARAM_NAMES = (
+    "param_channel_level",
+    "param_adstock_alpha",
+    "param_weibull_lam",
+    "param_weibull_k",
+)
+
 
 def _pack_prior_cond(prior_cond: dict[str, tuple[float, float]]) -> np.ndarray:
     """Pack one cell's ``{quantity: (low, width)}`` draw into a ``(P,)`` row.
@@ -1100,9 +1118,19 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             n_req = n_missing + max(2, int(np.ceil(0.5 * n_missing)))
             draw_seed = int(rng.integers(2**31 - 1))
             try:
-                draw_names = _ADDITIVE_OUT_NAMES + (
-                    ("channels_unshocked", "sales_unshocked") if cfg.n_channel_shocks else ()
-                )
+                # Output order controls PyTensor's RNG traversal. Metadata
+                # deterministics must precede the legacy outputs: appending
+                # them changes legacy draws, while a separate same-seed call
+                # produces parameters from a different joint world.
+                if cfg.n_channel_shocks:
+                    draw_names = (
+                        _CORPUS_PARAM_NAMES
+                        + _CORPUS_SHOCK_NAMES
+                        + _ADDITIVE_OUT_NAMES
+                        + ("channels_unshocked", "sales_unshocked")
+                    )
+                else:
+                    draw_names = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
                 drawn_b = draw_worlds(model, draw_names, draw_seed, draws=n_req)
             except Exception as exc:
                 # A sporadic pytensor py-linker evaluation crash on large graphs
@@ -1148,6 +1176,18 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 demand_pad[:, :J_active] = drawn["demand"]
                 contrib_pad = np.zeros((T, K_max))
                 contrib_pad[:, :K_active] = drawn["contributions"]
+                shock_mask_pad = np.zeros((T, K_max), dtype=np.uint8)
+                shock_mask_pad[:, :K_active] = drawn["channel_shock_mask"]
+                channel_level_pad = np.zeros(K_max)
+                channel_level_pad[:K_active] = drawn["param_channel_level"]
+                adstock_family_pad = np.zeros(K_max, dtype=np.uint8)
+                adstock_family_pad[:K_active] = structural["adstock_family"]
+                adstock_alpha_pad = np.zeros(K_max)
+                adstock_alpha_pad[:K_active] = drawn["param_adstock_alpha"]
+                weibull_lam_pad = np.zeros(K_max)
+                weibull_lam_pad[:K_active] = drawn["param_weibull_lam"]
+                weibull_k_pad = np.zeros(K_max)
+                weibull_k_pad[:K_active] = drawn["param_weibull_k"]
                 # Phase 5 decomposition targets (zero-padded to max sizes)
                 control_contrib_pad = np.zeros((T, M_max))
                 control_contrib_pad[:, :M_active] = drawn["control_contribution"]
@@ -1171,6 +1211,17 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "split_type": split_type,
                         "sales_scale": sales_scale,
                         "confounding_strength": drawn["confounding_strength"],
+                        "channel_shock_mask": shock_mask_pad,
+                        "channel_shock_channel": drawn["channel_shock_channel"],
+                        "channel_shock_start": drawn["channel_shock_start"],
+                        "channel_shock_length": drawn["channel_shock_length"],
+                        "channel_shock_level_multiplier": drawn["channel_shock_level_multiplier"],
+                        "channel_shock_level": drawn["channel_shock_level"],
+                        "channel_level": channel_level_pad,
+                        "adstock_family": adstock_family_pad,
+                        "adstock_alpha": adstock_alpha_pad,
+                        "weibull_lam": weibull_lam_pad,
+                        "weibull_k": weibull_k_pad,
                         "cell": cell,
                     }
                 )
@@ -1204,6 +1255,19 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     confounding_strength = np.asarray(
         [tk["confounding_strength"] for tk in tasks], dtype=np.float64
     )
+    channel_shock_mask = np.stack([tk["channel_shock_mask"] for tk in tasks])
+    channel_shock_channel = np.stack([tk["channel_shock_channel"] for tk in tasks])
+    channel_shock_start = np.stack([tk["channel_shock_start"] for tk in tasks])
+    channel_shock_length = np.stack([tk["channel_shock_length"] for tk in tasks])
+    channel_shock_level_multiplier = np.stack(
+        [tk["channel_shock_level_multiplier"] for tk in tasks]
+    )
+    channel_shock_level = np.stack([tk["channel_shock_level"] for tk in tasks])
+    channel_level = np.stack([tk["channel_level"] for tk in tasks])
+    adstock_family = np.stack([tk["adstock_family"] for tk in tasks])
+    adstock_alpha = np.stack([tk["adstock_alpha"] for tk in tasks])
+    weibull_lam = np.stack([tk["weibull_lam"] for tk in tasks])
+    weibull_k = np.stack([tk["weibull_k"] for tk in tasks])
 
     active_c_mask = np.stack([cell_gs[c]["active_c"] for c in cell_id])
     active_m_mask = np.stack([cell_gs[c]["active_m"] for c in cell_id])
@@ -1390,6 +1454,17 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "baseline_intrinsic": baseline_intrinsic.astype(np.float32),
         "indirect_effects_by_source": indirect_effects_by_source.astype(np.float32),
         "confounding_strength": confounding_strength.astype(np.float32),
+        "channel_shock_mask": channel_shock_mask.astype(np.uint8),
+        "channel_shock_channel": channel_shock_channel.astype(np.int32),
+        "channel_shock_start": channel_shock_start.astype(np.int32),
+        "channel_shock_length": channel_shock_length.astype(np.int32),
+        "channel_shock_level_multiplier": channel_shock_level_multiplier.astype(np.float32),
+        "channel_shock_level": channel_shock_level.astype(np.float32),
+        "channel_level": channel_level.astype(np.float32),
+        "adstock_family": adstock_family.astype(np.uint8),
+        "adstock_alpha": adstock_alpha.astype(np.float32),
+        "weibull_lam": weibull_lam.astype(np.float32),
+        "weibull_k": weibull_k.astype(np.float32),
         "diagnostics": diagnostics,
     }
     if prior_cond_arr is not None:

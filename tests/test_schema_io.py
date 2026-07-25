@@ -44,6 +44,27 @@ def test_required_keys_and_shapes(corpus):
         assert corpus[key].shape == shape, f"{key}: {corpus[key].shape} != {shape}"
 
 
+def test_shock_and_mechanism_metadata_schema(corpus):
+    N, T, K = corpus["spend_raw"].shape
+    expected = {
+        "channel_shock_mask": ((N, T, K), np.uint8),
+        "channel_shock_channel": ((N, 0), np.int32),
+        "channel_shock_start": ((N, 0), np.int32),
+        "channel_shock_length": ((N, 0), np.int32),
+        "channel_shock_level_multiplier": ((N, 0), np.float32),
+        "channel_shock_level": ((N, 0), np.float32),
+        "channel_level": ((N, K), np.float32),
+        "adstock_family": ((N, K), np.uint8),
+        "adstock_alpha": ((N, K), np.float32),
+        "weibull_lam": ((N, K), np.float32),
+        "weibull_k": ((N, K), np.float32),
+    }
+    for key, (shape, dtype) in expected.items():
+        assert corpus[key].shape == shape
+        assert corpus[key].dtype == dtype
+    assert not corpus["channel_shock_mask"].any()
+
+
 def test_g_layout_is_extended_8_block(corpus):
     N, T, K = corpus["spend_raw"].shape
     M, J = corpus["controls"].shape[2], corpus["demand"].shape[2]
@@ -90,6 +111,52 @@ def test_datagenerator_generate_n_tasks():
     corpus = gen.generate(n_tasks=7, seed=1)
     assert corpus["spend_raw"].shape[0] == 7
     assert corpus["is_val"].sum() >= 1
+    assert corpus["channel_shock_mask"].shape[0] == 7
+    assert corpus["channel_level"].shape[0] == 7
+
+
+def test_validate_corpus_flags_corrupt_shock_metadata(corpus):
+    broken = dict(corpus)
+    bad = corpus["channel_shock_mask"].copy()
+    bad[0, 0, 0] = 2
+    broken["channel_shock_mask"] = bad
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("channel_shock_mask is not binary" in error for error in errors)
+
+
+def test_shock_metadata_is_reconstructable_and_zero_padded():
+    cfg = pg.make_scm_prior(
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        T=24,
+        n_cells=2,
+        draws_per_cell=1,
+        n_treatments_active_range=(2, 3),
+        n_channel_shocks=2,
+        channel_shock_length_range=(1, 2),
+        channel_shock_level_range=(0.0, 1.0),
+        seed=14,
+    )
+    generated = pg.sample_prior_predictive(cfg)
+    assert DataGenerator.validate_corpus(generated) == []
+    inactive = generated["active_c_mask"] == 0
+    for key in ("channel_level", "adstock_family", "adstock_alpha", "weibull_lam", "weibull_k"):
+        assert not generated[key][inactive].any(), key
+
+    broken = dict(generated)
+    bad_start = generated["channel_shock_start"].copy()
+    bad_start[0, 0] = cfg.T
+    broken["channel_shock_start"] = bad_start
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("start/length" in error or "mask does not match" in error for error in errors)
+
+    broken = dict(generated)
+    bad_level = generated["channel_shock_level"].copy()
+    bad_level[0, 0] += 1.0
+    broken["channel_shock_level"] = bad_level
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("multiplier * channel_level" in error for error in errors)
 
 
 def test_sales_norm_matches_scale(corpus):

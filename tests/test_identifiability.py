@@ -9,8 +9,14 @@ import numpy as np
 import pytest
 
 import prior_generator as pg
-from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.world_model import build_world_model, sample_structure
+from prior_generator.sampler import (
+    _ADDITIVE_OUT_NAMES,
+    _CORPUS_PARAM_NAMES,
+    _CORPUS_SHOCK_NAMES,
+    _slice_g_active,
+    sample_g_additive,
+)
+from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 EXPECTED_CORPUS_HASHES = {
     "spend_raw": "d70d6d526c7105b7376d354f46735722c1fc998a18e1d0064c5a1c6389f661ee",
@@ -42,6 +48,17 @@ EXPECTED_CORPUS_HASHES = {
     "baseline_intrinsic": "15c1859dceb34a5c392aba4dcccd7042f5003bfb3600bc92f0288359e7f82f99",
     "indirect_effects_by_source": "7f5420e30590585e1102d670bf6e8c4fffec7c5991658807edf0f184c4c8b157",
     "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
+    "channel_shock_mask": "a2c17b7c3b20dff7ef9b8ef7316a3ef323f705522c3fef1744df2a33a3af832b",
+    "channel_shock_channel": "7f956e232d961d634c20094542cf11ae23525f62749f31010e76d0cbcacc7e82",
+    "channel_shock_start": "52d81fd29e1721a2b63114638580692d9faf97a1ef36eb6d5129adf758cd1f35",
+    "channel_shock_length": "fc492e4b1613b6e1cf17271739cd12251266644e410cb1c14180e21c6b07c59e",
+    "channel_shock_level_multiplier": "ab57f647547011d917a044e853a1d5796e715c0ccacb505d2c51442e4da8c341",
+    "channel_shock_level": "1550bbf2bded16bb609b5f52669f0b29e6fdf0d7a0898bfb82c5c51a9db3124a",
+    "channel_level": "03df6e999dc66c15aea39bcf42fe50ecd8b307f1248c8871ab0d7351b06fd340",
+    "adstock_family": "232a4fa82e296516ddeca77e254d8ff5a83d73c3ae89f8a3fe4477a4b6344380",
+    "adstock_alpha": "eb21e734c5f776f080a7118885ff1063d008b2262f6137bc6e8d550b9a7a6229",
+    "weibull_lam": "d32b6764ee38d92b0b9e5eda846afd3c02598881072557ccfcc06bc4c55934c2",
+    "weibull_k": "d85308882b4f1815c2ec329d351b27ebf4286c1acfdca977bab9434a1a062270",
 }
 
 EXPECTED_DEFAULT_FREE_RVS = (
@@ -139,6 +156,27 @@ def test_default_world_model_free_rvs_match_legacy_order():
     model, _out_names, _param_names = build_world_model(g_active, cfg, structural, cfg.T)
 
     assert tuple(rv.name for rv in model.free_RVs) == EXPECTED_DEFAULT_FREE_RVS
+
+
+def test_metadata_first_draw_preserves_legacy_rng_order():
+    cfg = pg.make_scm_prior(n_treatments=2, n_covariates=2, n_latent=1, T=24)
+    rng = np.random.default_rng(23)
+    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=2, J_active=1)
+    g_active = _slice_g_active(g, 2, 2, 1)
+    model, _out_names, _param_names = build_world_model(
+        g_active, cfg, sample_structure(g_active, cfg, rng), cfg.T
+    )
+
+    legacy = draw_worlds(model, _ADDITIVE_OUT_NAMES, seed=29, draws=3)
+    combined = draw_worlds(
+        model,
+        _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES,
+        seed=29,
+        draws=3,
+    )
+
+    for name in _ADDITIVE_OUT_NAMES:
+        assert np.array_equal(combined[name], legacy[name]), name
 
 
 def test_baseline_walk_sigma_default_tracks_shared_sigma_after_replace():
