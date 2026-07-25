@@ -68,9 +68,12 @@ three explicit concessions (all documented in the API reference):
    method that must also infer structure. A structure-unknown oracle would
    marginalize over graphs and is out of scope.
 2. **Plug-in conditioning on the observed inputs.** Spend and controls enter as
-   data. The information they carry about latent demand through `p(C | D)` /
-   `p(Z | D)` is not modeled — demand is inferred from the sales residual via
-   `D → B` only.
+    data. The information they carry about latent demand through `p(C | D)` /
+    `p(Z | D)` is not modeled. This also deliberately does **not** model
+    `p(C | eps_b)` or exploit baseline information encoded through the
+    channel–baseline correlation (rho, configured here as confounding strength);
+    demand is inferred from the sales residual via `D → B` only. This is a
+    plug-in-channel concession, not a claim of exact conditioning.
 3. **iid sales-noise representation.** Every random walk in the generator is
    normalized in-place (`walk * std / walk.std()`), so the sales-noise walk has
    no closed-form density to invert — exact `pm.observe`-style conditioning on
@@ -82,6 +85,23 @@ three explicit concessions (all documented in the API reference):
 Additionally, the adstock convolution sees only the reported window
 (zero-padded start) while generation used `adstock_burn_in` weeks of real
 history — **drop the first `l_max` weeks** from band comparisons.
+
+### Held-level carryover-reset shocks
+
+When channel shocks are enabled, `SCM.oracle_model()` also passes the world's
+reported shock channel, start, length, and held-level multiplier to the
+oracle. This metadata is **additional observed design state**, not an inferred
+schedule and not a free random variable in the oracle. The oracle validates the
+configured schedule and uses each reported start to reset that channel's
+adstock history with the same response helper used by generation. Consequently,
+a zero-level held window has exactly zero direct response, including immediately
+after positive pre-window spend; repeated shocks on one channel use the latest
+reset.
+
+These are not conventional spend-only lift tests: a shock holds a channel to an
+absolute level and surgically resets its carryover response state. Outside such
+known reset boundaries, the reported-window zero-padding caveat above still
+applies.
 
 ## Guarantees that cannot drift
 

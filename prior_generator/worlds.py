@@ -144,15 +144,25 @@ class SCM:
                 "this SCM does not carry its structural draw (extras['structural']); "
                 "oracle_model() needs a world produced by sample_scm"
             )
+        data = {
+            "channels": self.data["channels"],
+            "controls": self.data["controls"],
+            "sales": self.data["sales"],
+        }
+        if self.cfg.n_channel_shocks:
+            data.update(
+                {
+                    "channel_shock_channel": self.data["channel_shock_channel"],
+                    "channel_shock_start": self.data["channel_shock_start"],
+                    "channel_shock_length": self.data["channel_shock_length"],
+                    "channel_shock_level_multiplier": self.data["channel_shock_level_multiplier"],
+                }
+            )
         return build_oracle_model(
             self.g,
             self.cfg,
             self.extras["structural"],
-            data={
-                "channels": self.data["channels"],
-                "controls": self.data["controls"],
-                "sales": self.data["sales"],
-            },
+            data=data,
             prior_cond=self.extras.get("prior_cond"),
         )
 

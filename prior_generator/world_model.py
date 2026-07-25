@@ -34,7 +34,12 @@ import pytensor.tensor as pt
 
 from . import mechanisms
 from .sampler import SCMPrior
-from .symbolic_graph import _adstock_col, _saturate_col, _walk_column, build_symbolic_graph
+from .symbolic_graph import (
+    _adstock_col_with_resets,
+    _saturate_col,
+    _walk_column,
+    build_symbolic_graph,
+)
 
 
 def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) -> dict:
@@ -197,6 +202,71 @@ def _channel_shock_schedule(
         "channel_shock_length": lengths,
         "channel_shock_level_multiplier": multipliers,
         "channel_shock_level": levels,
+    }
+
+
+def _oracle_channel_shock_schedule(
+    cfg: SCMPrior, g_cy: np.ndarray, data: dict[str, np.ndarray], T: int
+) -> dict[str, Any] | None:
+    """Validate and freeze a world's reported-window reset schedule for the oracle.
+
+    Channel shocks are known intervention-design state, not latent variables in
+    the observed-data model. The generator reports every event's selected
+    channel, start, length, and held-level multiplier; the oracle uses the
+    first two as reset indices and validates the complete configured schedule
+    without recreating any schedule RVs.
+    """
+    S = int(cfg.n_channel_shocks)
+    if S == 0:
+        return None
+
+    def _event_int(name: str) -> np.ndarray:
+        if name not in data:
+            raise ValueError(f"enabled channel shocks require data[{name!r}] metadata")
+        value = np.asarray(data[name])
+        if value.shape != (S,) or not np.issubdtype(value.dtype, np.integer):
+            raise ValueError(
+                f"data[{name!r}] must be an integer array with shape {(S,)}, got {value.shape}"
+            )
+        return value.astype("int64", copy=False)
+
+    channel = _event_int("channel_shock_channel")
+    start = _event_int("channel_shock_start")
+    length = _event_int("channel_shock_length")
+    if "channel_shock_level_multiplier" not in data:
+        raise ValueError(
+            "enabled channel shocks require data['channel_shock_level_multiplier'] metadata"
+        )
+    multiplier = np.asarray(data["channel_shock_level_multiplier"], dtype="float64")
+    if multiplier.shape != (S,) or not np.isfinite(multiplier).all():
+        raise ValueError(
+            "data['channel_shock_level_multiplier'] must be a finite array "
+            f"with shape {(S,)}, got {multiplier.shape}"
+        )
+
+    direct = np.flatnonzero(np.asarray(g_cy) == 1)
+    if not np.isin(channel, direct).all():
+        raise ValueError("channel shock metadata must select only direct g_cy channels")
+    len_lo, len_hi = cfg.channel_shock_length_range
+    if ((length < len_lo) | (length > len_hi)).any():
+        raise ValueError("channel shock metadata length is outside the configured range")
+    level_lo, level_hi = cfg.channel_shock_level_range
+    if ((multiplier < level_lo) | (multiplier > level_hi)).any():
+        raise ValueError("channel shock metadata level multiplier is outside the configured range")
+    for s in range(S):
+        slot_lo = s * T // S
+        slot_hi = (s + 1) * T // S
+        if not slot_lo <= start[s] <= slot_hi - length[s]:
+            raise ValueError(
+                f"channel shock metadata start {start[s]} is infeasible for slot {s} and length {length[s]}"
+            )
+
+    return {
+        "n_shocks": S,
+        "channel": pt.as_tensor_variable(channel),
+        # The oracle's channel matrix starts at reported week zero, unlike the
+        # generator's full-horizon channel matrix.
+        "start_full": pt.as_tensor_variable(start),
     }
 
 
@@ -604,7 +674,11 @@ def build_oracle_model(
         ``SCM.extras["structural"]``.
     data : dict
         The world's observables — ``"channels"`` (T, K), ``"controls"``
-        (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``.
+        (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``. When
+        channel shocks are enabled, it must also carry the world's known
+        design metadata: ``channel_shock_channel``, ``channel_shock_start``,
+        ``channel_shock_length``, and ``channel_shock_level_multiplier``, each
+        with one entry per configured shock.
     prior_cond : dict, optional
         The world's prior-conditioning intervals (``SCM.extras["prior_cond"]``)
         so the oracle runs under the SAME narrowed prior the world was drawn
@@ -634,9 +708,12 @@ def build_oracle_model(
        structure-unknown oracle would marginalize over graphs and is out of
        scope.
     2. **Plug-in conditioning on the observed inputs**: ``channels`` and
-       ``controls`` enter as data (constants). The information they carry
-       about latent demand through ``p(C | D)`` / ``p(Z | D)`` is not modeled
-       — demand is inferred from the sales residual via ``D -> B`` only.
+        ``controls`` enter as data (constants). The information they carry
+        about latent demand through ``p(C | D)`` / ``p(Z | D)`` is not modeled
+        — including baseline information encoded through the channel–baseline
+        correlation (rho, configured here as confounding strength) — demand is
+        inferred from the sales residual via ``D -> B`` only. This does not
+        posit ``p(C | eps_b)`` or claim exact conditioning.
     3. **iid sales-noise representation**: the generative sales noise
        ``RW_Y`` (a smoothed, normalized walk with marginal sd exactly
        ``rw_y_std``) is represented as iid ``Normal(0, rw_y_std)`` with the
@@ -646,7 +723,11 @@ def build_oracle_model(
 
     Additionally the adstock convolution sees only the reported window
     (zero-padded start) while generation used ``adstock_burn_in`` weeks of
-    real history — drop the first ``l_max`` weeks from comparisons.
+    real history — drop the first ``l_max`` weeks from comparisons. Known
+    carryover-reset shocks are an exception to the ordinary initial-history
+    issue: their reported starts are observed design state and reset the
+    oracle response history exactly as in generation. They are held-level
+    interventions, not conventional spend-only lift tests.
     """
     n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
     n_covariates = len(g_active["g_zb"])  # observed controls
@@ -668,6 +749,7 @@ def build_oracle_model(
     g_db = np.asarray(g_active["g_db"], dtype="float64")
     g_zb = np.asarray(g_active["g_zb"], dtype="float64")
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
+    oracle_schedule = _oracle_channel_shock_schedule(cfg, g_cy, data, T)
 
     with pm.Model() as model:
         # Shared prior definitions — identical names, ranges and shapes to the
@@ -685,6 +767,8 @@ def build_oracle_model(
             "sat_family": structural["sat_family"],
             **mech,
         }
+        if oracle_schedule is not None:
+            mech_params["channel_shock"] = oracle_schedule
 
         # Observed inputs enter as constants (static shapes — the adstock
         # convolution indexes by the static time length).
@@ -703,11 +787,13 @@ def build_oracle_model(
         term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (T,)
         baseline = pm.Deterministic("baseline", term_bd + term_bz + walk_b[W])
 
-        # Media response on the OBSERVED spend: same adstock / κ-relative
-        # saturation code as generation (window-only history — see Notes).
+        # Media response on the OBSERVED spend: same reset-aware adstock /
+        # κ-relative saturation code as generation. The observed reset-aware
+        # response also pins the saturation scale; schedule metadata is known
+        # design state and creates no oracle RVs.
         contrib_cols = []
         for k in range(n_treatments):
-            ad_obs = _adstock_col(channels_t[:, k], mech_params, k)
+            ad_obs = _adstock_col_with_resets(channels_t[:, k], mech_params, k)
             scale_k = pt.maximum(ad_obs.mean(), 1e-8)
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
             contrib_cols.append((g_cy[k] * beta[k]) * f_obs)

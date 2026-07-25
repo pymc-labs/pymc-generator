@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import numpy as np
 import pymc as pm
+import pytensor.tensor as pt
 import pytest
 
 import prior_generator as pg
 from prior_generator.sampler import _slice_g_active, sample_g_additive
+from prior_generator.symbolic_graph import _adstock_col_with_resets, _saturate_col
 from prior_generator.world_model import build_oracle_model, build_world_model, sample_structure
 
 #: Free RVs the two models must define identically (same name, same prior).
@@ -74,6 +76,14 @@ def test_shared_priors_same_measure(world_and_oracle):
         lp_gen = pm.logp(gen_model[name], val).eval()
         lp_oracle = pm.logp(oracle[name], val).eval()
         assert np.allclose(lp_gen, lp_oracle), f"prior for {name!r} drifted between models"
+
+
+def test_default_unshocked_oracle_keeps_legacy_free_rvs(world_and_oracle):
+    """Disabled schedules leave the existing oracle prior/RV surface untouched."""
+    _gen_model, oracle, _world = world_and_oracle
+    free_names = {rv.name for rv in oracle.free_RVs}
+    assert set(SHARED_RV_NAMES) <= free_names
+    assert not any(name.startswith("channel_shock") for name in free_names)
 
 
 def test_baseline_walk_override_is_shared_by_generation_and_oracle():
@@ -168,6 +178,120 @@ def test_scm_oracle_model_roundtrip():
     inside = np.full(world.K, lo + width / 2)
     assert not np.isfinite(pm.logp(oracle["adstock_alpha"], outside).eval()).all()
     assert np.isfinite(pm.logp(oracle["adstock_alpha"], inside).eval()).all()
+
+
+def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
+    """A deterministic small direct-only shocked world and its oracle inputs."""
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=12,
+        adstock_burn_in=0,
+        n_channel_shocks=n_shocks,
+        channel_shock_length_range=(2, 2),
+        channel_shock_level_range=level,
+        edge_budget={"cy": (1, 1)},
+    )
+    g = {
+        "g_cy": np.array([1]),
+        "g_dc": np.zeros((1, 1), dtype=int),
+        "g_dz": np.zeros((1, 1), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((1, 1), dtype=int),
+        "g_cc": np.zeros((1, 1), dtype=int),
+        "g_zz": np.zeros((1, 1), dtype=int),
+    }
+    structural = sample_structure(g, cfg, np.random.default_rng(4))
+    structural["adstock_family"][:] = 1
+    model, names, _ = build_world_model(g, cfg, structural, cfg.T)
+    drawn = {name: value[0] for name, value in pg.draw_worlds(model, names, seed=13).items()}
+    data = {
+        key: drawn[key]
+        for key in (
+            "channels",
+            "controls",
+            "sales",
+            "channel_shock_channel",
+            "channel_shock_start",
+            "channel_shock_length",
+            "channel_shock_level_multiplier",
+        )
+    }
+    return cfg, g, structural, drawn, data
+
+
+def test_shocked_oracle_uses_known_schedule_without_schedule_rvs_and_zero_response():
+    cfg, g, structural, drawn, data = _shocked_oracle_world()
+    oracle = build_oracle_model(g, cfg, structural, data)
+
+    assert not any(rv.name.startswith("channel_shock") for rv in oracle.free_RVs)
+    # Held zero spend begins a new response history, so pre-window carryover
+    # cannot leak into the direct response in the intervention window.
+    mask = drawn["channel_shock_mask"][:, 0].astype(bool)
+    contribution = pm.draw(oracle["contributions"], draws=1, random_seed=17)
+    assert np.array_equal(contribution[mask, 0], np.zeros(mask.sum()))
+
+
+def test_shocked_oracle_repeated_reset_boundaries_match_shared_helper():
+    cfg, g, structural, _drawn, data = _shocked_oracle_world(n_shocks=2, level=(0.5, 0.5))
+    # Make the reset behavior independent of a random schedule realization.
+    data.update(
+        {
+            "channels": np.array(
+                [[4.0], [3.0], [0.5], [0.5], [7.0], [8.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0]]
+            ),
+            "channel_shock_channel": np.array([0, 0], dtype="int64"),
+            "channel_shock_start": np.array([2, 6], dtype="int64"),
+            "channel_shock_length": np.array([2, 2], dtype="int64"),
+            "channel_shock_level_multiplier": np.array([0.5, 0.5]),
+        }
+    )
+    oracle = build_oracle_model(g, cfg, structural, data)
+    params = {
+        "l_max": cfg.l_max,
+        "adstock_family": structural["adstock_family"],
+        "sat_family": structural["sat_family"],
+        "beta": oracle["beta"],
+        "adstock_alpha": oracle["adstock_alpha"],
+        "weibull_lam": oracle["weibull_lam"],
+        "weibull_k": oracle["weibull_k"],
+        "hill_slope": oracle["hill_slope"],
+        "hill_kappa_mult": oracle["hill_kappa_mult"],
+        "logistic_lam": oracle["logistic_lam"],
+        "mm_alpha": oracle["mm_alpha"],
+        "mm_kappa_mult": oracle["mm_kappa_mult"],
+        "tanh_b": oracle["tanh_b"],
+        "tanh_c": oracle["tanh_c"],
+        "root_alpha": oracle["root_alpha"],
+        "channel_shock": {
+            "n_shocks": 2,
+            "channel": pt.as_tensor_variable(data["channel_shock_channel"]),
+            "start_full": pt.as_tensor_variable(data["channel_shock_start"]),
+        },
+    }
+    adstock = _adstock_col_with_resets(pt.as_tensor_variable(data["channels"][:, 0]), params, 0)
+    expected = params["beta"][0] * _saturate_col(
+        adstock, pt.maximum(adstock.mean(), 1e-8), params, 0
+    )
+    with oracle:
+        got, expected_value = pm.draw(
+            [oracle["contributions"][:, 0], expected], draws=1, random_seed=29
+        )
+    np.testing.assert_allclose(got, expected_value, rtol=0.0, atol=1e-14)
+
+
+def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
+    cfg, g, structural, _drawn, data = _shocked_oracle_world()
+    missing = dict(data)
+    del missing["channel_shock_start"]
+    with pytest.raises(ValueError, match="channel_shock_start"):
+        build_oracle_model(g, cfg, structural, missing)
+    malformed = dict(data)
+    malformed["channel_shock_length"] = np.array([1, 2], dtype="int64")
+    with pytest.raises(ValueError, match="channel_shock_length"):
+        build_oracle_model(g, cfg, structural, malformed)
 
 
 @pytest.mark.slow
