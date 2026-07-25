@@ -43,6 +43,34 @@ storage is float32/uint8/int32):
 | `active_c_mask` / `active_m_mask` / `active_j_mask` | (N, K/M/J) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block |
 
+### Channel, adstock, and intervention audit metadata
+
+The following arrays are persisted for every corpus, including empty `(N, 0)`
+schedule arrays when shocks are disabled. `S` is the configured
+`n_channel_shocks`, so every world has exactly `S` event records.
+
+| Key | Shape | dtype | Meaning |
+| --- | --- | --- | --- |
+| `confounding_strength` | `(N,)` | `float32` | drawn per-world rho (`0` when disabled) |
+| `channel_level` | `(N, K)` | `float32` | `softplus(rw_c_mean)` reference level |
+| `adstock_family` | `(N, K)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
+| `adstock_alpha` | `(N, K)` | `float32` | geometric decay parameter |
+| `weibull_lam` | `(N, K)` | `float32` | Weibull scale parameter |
+| `weibull_k` | `(N, K)` | `float32` | Weibull shape parameter |
+| `channel_shock_mask` | `(N, T, K)` | `uint8` | binary reported-window held-spend mask |
+| `channel_shock_channel` | `(N, S)` | `int32` | selected direct-channel index per event |
+| `channel_shock_start` | `(N, S)` | `int32` | reported-window event start |
+| `channel_shock_length` | `(N, S)` | `int32` | held duration in weeks |
+| `channel_shock_level_multiplier` | `(N, S)` | `float32` | sampled relative held-level multiplier |
+| `channel_shock_level` | `(N, S)` | `float32` | realized held level |
+
+Together these schedule fields are observable intervention/reset metadata: they
+reconstruct each reported held-spend window without storing a natural path or a
+full burn-in mask. The realized level equals the multiplier times the selected
+`channel_level`. For an enabled schedule, events occupy globally
+non-overlapping deterministic time slots; channel selection may repeat because
+direct channels are sampled uniformly with replacement.
+
 Inspect the real arrays:
 
 ```python exec="1" source="material-block" result="text"
@@ -95,6 +123,12 @@ print("reported decomposition_max_abs_error:",
 A corpus can satisfy every schema contract and still be *unlearnable* if the true
 contributions barely move. Every corpus embeds a signal summary; `check_signal_gate`
 turns it into PASS/FAIL rows.
+
+The dense labels are `signal_metrics: float32 (N, K, 9)` and
+`signal_metric_valid: uint8 (N, K, 9)`. Their exact versioned layout and
+validity rules are in the [signal diagnostics reference](../reference/signal.md).
+They are calculated from the final retained float32 arrays (after truncation),
+so a consumer can recompute them after loading the `.npz`.
 
 ```python exec="1" source="material-block" result="text"
 from scm_docs import corpus

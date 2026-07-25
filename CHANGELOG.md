@@ -10,6 +10,19 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **Baseline, confounding, and intervention metadata**: `rw_baseline_std_sigma`
+  now defaults to `None`, dynamically following `rw_std_sigma` for the `RW_B`
+  baseline walk only; it can be set explicitly without changing other walks.
+  `confounding_strength_range` optionally draws a per-world `rho` in `[0, 0.95]`
+  that mixes baseline innovations into channel innovations with preserved marginal
+  variance, and persists the resulting scalar. Corpus worlds can also include
+  stratified, non-overlapping random channel-shock schedules with reset-aware
+  adstock responses and typed audit metadata.
+- **Persisted signal features v1**: corpora now store dense per-direct-channel
+  signal metrics and validity masks, together with a versioned layout in
+  `diagnostics["signal"]`. Metrics are recomputed from the final float32,
+  post-truncation corpus arrays so persisted data and diagnostics agree.
+
 - **ACE prior-conditioning hyperprior** (`prior_conditioning=True`): each cell
   draws a narrowed prior interval per conditioned quantity (`adstock_alpha`,
   `hill_shape`) — `w ~ U(w_lo, w_hi)`, `lo ~ U(S_lo, S_hi − w)` — and its

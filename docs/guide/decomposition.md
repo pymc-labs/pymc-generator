@@ -23,6 +23,23 @@ The identity is exact because `Y` and the decomposition are built from the *same
 symbolic quantities — $f_k$ is one fixed function evaluated on two inputs, and the
 κ-relative saturation scale is computed once and reused.
 
+## Held-spend shocks do not break the identity
+
+When channel shocks are enabled, a scheduled reported-window interval clamps a
+direct channel to its recorded held level and resets that channel's adstock
+history at the interval start. In particular, a zero held level has an exactly
+zero direct contribution throughout the interval: carryover from pre-shock
+spend cannot leak into it. Repeated shocks reset again, with the most recent
+reset defining later carryover.
+
+These interventions change the observed channel path (and can propagate to
+downstream channels), but all decomposition terms are evaluated on the same
+intervened graph. The additive identity, telescoping indirect split, baseline
+split, and full reconstruction therefore hold inside and outside shock masks,
+with only dtype-scaled rounding after float32 corpus persistence. Schedule/reset
+metadata is observable in the corpus; see
+[Generating a corpus](corpus.md#channel-adstock-and-intervention-audit-metadata).
+
 ## Verify it yourself
 
 ```python exec="1" source="material-block" result="text"
