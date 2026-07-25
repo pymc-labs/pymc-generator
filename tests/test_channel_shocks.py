@@ -7,7 +7,7 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
-from prior_generator import make_scm_prior
+from prior_generator import load_corpus, make_scm_prior, sample_prior_predictive, save_corpus
 from prior_generator.sampler import _additive_task_ok
 from prior_generator.symbolic_graph import _adstock_col, _adstock_col_with_resets
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
@@ -191,6 +191,66 @@ def test_shocked_world_preserves_every_decomposition_identity():
         assert error.max() < 1e-9
         assert error[inside].max() < 1e-9
         assert error[~inside].max() < 1e-9
+
+
+def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_outside_masks(
+    tmp_path,
+):
+    """Public persisted arrays retain exact held-zero responses and decomposition labels."""
+    corpus = sample_prior_predictive(
+        make_scm_prior(
+            n_treatments=2,
+            n_covariates=2,
+            n_latent=1,
+            T=20,
+            n_cells=2,
+            draws_per_cell=2,
+            seed=71,
+            nonlinearity="linear",
+            edge_budget={"cy": (2, 2)},
+            n_channel_shocks=1,
+            channel_shock_length_range=(3, 3),
+            channel_shock_level_range=(0.0, 0.0),
+        )
+    )
+    path = tmp_path / "shocked.npz"
+    save_corpus(corpus, path)
+    persisted = load_corpus(path)
+    inside = persisted["channel_shock_mask"].any(axis=2).astype(bool)
+    assert inside.any() and (~inside).any()
+    assert np.array_equal(persisted["channel_shock_level"], np.zeros((4, 1), dtype=np.float32))
+
+    f = lambda key: persisted[key].astype(np.float64)  # noqa: E731
+    errors = (
+        np.abs(
+            f("baseline_raw")
+            + f("contributions_raw").sum(2)
+            + f("indirect_effects")
+            - f("sales_raw")
+        ),
+        np.abs(
+            f("baseline_intrinsic")
+            + f("confounder_contribution").sum(2)
+            + f("control_contribution").sum(2)
+            + f("contributions_raw").sum(2)
+            + f("indirect_effects_by_source").sum(2)
+            - f("sales_raw")
+        ),
+        np.abs(f("indirect_effects_by_source").sum(2) - f("indirect_effects")),
+    )
+    tolerance = (
+        32
+        * np.finfo(persisted["sales_raw"].dtype).eps
+        * max(float(np.abs(persisted["sales_raw"]).max()), 1.0)
+    )
+    for error in errors:
+        assert error.max() <= tolerance
+        assert error[inside].max() <= tolerance
+        assert error[~inside].max() <= tolerance
+    assert np.array_equal(
+        persisted["contributions_raw"][persisted["channel_shock_mask"].astype(bool)],
+        np.zeros(persisted["channel_shock_mask"].sum(), dtype=np.float32),
+    )
 
 
 def test_realism_cv_and_spike_guards_use_the_unshocked_reference():

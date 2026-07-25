@@ -16,6 +16,11 @@ from prior_generator.sampler import (
     _slice_g_active,
     sample_g_additive,
 )
+from prior_generator.signal_diagnostics import (
+    SIGNAL_METRIC_LAYOUT,
+    check_signal_gate,
+    dense_signal_metrics,
+)
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 EXPECTED_CORPUS_HASHES = {
@@ -194,3 +199,113 @@ def test_baseline_walk_sigma_default_tracks_shared_sigma_after_replace():
 def test_baseline_walk_sigma_override_must_be_finite_and_positive(sigma):
     with pytest.raises(ValueError, match="rw_baseline_std_sigma must be finite and > 0"):
         pg.SCMPrior(rw_baseline_std_sigma=sigma).validate()
+
+
+def test_confounding_strength_monotonically_increases_dense_r2_without_flattening():
+    """The calibrated rho fixture moves label confounding without weakening targets."""
+    model_seed = 20260725
+    draw_seed = 8675309
+    g = {
+        "g_cy": np.ones(2, dtype=int),
+        "g_dc": np.zeros((1, 2), dtype=int),
+        "g_dz": np.zeros((1, 1), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((1, 2), dtype=int),
+        "g_cc": np.zeros((2, 2), dtype=int),
+        "g_zz": np.zeros((1, 1), dtype=int),
+    }
+    fixture = {
+        "T": 72,
+        "n_treatments": 2,
+        "n_covariates": 1,
+        "n_latent": 1,
+        "nonlinearity": "linear",
+        "adstock_family_probs": (1.0, 0.0, 0.0),
+        "saturation_family_probs": (1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        "beta_additive_range": (1.0, 1.0),
+        "rw_channel_std_range": (0.25, 0.25),
+        "rw_baseline_std_sigma": 0.75,
+        "rw_sales_std_sigma": 1e-4,
+        "channel_hf_sigma_range": (0.08, 0.08),
+        "channel_pulse_prob_range": (0.0, 0.0),
+        "channel_pulse_amp_range": (0.0, 0.0),
+        "rw_mean_range": (3.0, 3.0),
+        "rw_positive_mean_range": (3.0, 3.0),
+        "rw_baseline_mean_range": (3.0, 3.0),
+        "adstock_burn_in": 0,
+    }
+    medians = []
+    target_cvs = []
+    target_cv_medians = []
+    target_stds = []
+    target_std_medians = []
+    free_rv_orders = []
+    r2_index = SIGNAL_METRIC_LAYOUT.index("contrib_r2_explained_by_rest")
+    cv_index = SIGNAL_METRIC_LAYOUT.index("contrib_cv")
+
+    for rho in (0.0, 0.45, 0.9):
+        cfg = pg.make_scm_prior(
+            **fixture,
+            confounding_strength_range=(rho, rho),
+        )
+        structural = sample_structure(g, cfg, np.random.default_rng(model_seed))
+        structural["smoothness_c"][:] = 0.0
+        structural["smoothness_b"][:] = 0.0
+        model, out_names, _ = build_world_model(g, cfg, structural, cfg.T)
+        drawn = draw_worlds(model, out_names, seed=draw_seed, draws=48)
+        metrics, valid = dense_signal_metrics(
+            drawn["channels"],
+            drawn["contributions"],
+            drawn["sales"],
+            drawn["baseline"],
+            np.ones((48, 2), dtype=bool),
+            sales_scale=np.ones(48),
+            adstock_family=np.zeros((48, 2), dtype=np.uint8),
+            adstock_alpha=np.zeros((48, 2)),
+            weibull_lam=np.zeros((48, 2)),
+            weibull_k=np.zeros((48, 2)),
+            l_max=cfg.l_max,
+            adstock_burn_in=cfg.adstock_burn_in,
+        )
+        r2 = metrics[..., r2_index][valid[..., r2_index].astype(bool)]
+        target_cv = metrics[..., cv_index][valid[..., cv_index].astype(bool)]
+        medians.append(float(np.median(r2)))
+        target_cvs.append(float(target_cv.min()))
+        target_cv_medians.append(float(np.median(target_cv)))
+        target_std = drawn["contributions"].std(axis=1).ravel()
+        target_stds.append(float(target_std.min()))
+        target_std_medians.append(float(np.median(target_std)))
+        free_rv_orders.append(tuple(rv.name for rv in model.free_RVs))
+
+    assert np.allclose(medians, (0.279, 0.413, 0.781), atol=0.03)
+    assert np.diff(medians).min() > 0.10
+    assert medians[-1] - medians[0] > 0.45
+    assert min(target_cvs) > 0.15
+    assert min(target_stds) > 0.15
+    assert target_cv_medians[-1] >= 0.95 * target_cv_medians[0]
+    assert target_std_medians[-1] >= 0.95 * target_std_medians[0]
+    assert free_rv_orders[0] == free_rv_orders[1] == free_rv_orders[2]
+    assert all("confounding_strength" not in order for order in free_rv_orders)
+
+
+@pytest.mark.slow
+def test_supported_corpus_signal_gate():
+    """The supported corpus clears the calibrated identifiability signal gate."""
+    corpus = pg.sample_prior_predictive(
+        pg.make_scm_prior(
+            n_treatments=6,
+            n_covariates=4,
+            n_latent=2,
+            T=104,
+            n_cells=4,
+            draws_per_cell=6,
+            seed=314159,
+        )
+    )
+    signal = corpus["diagnostics"]["signal"]
+    passed, _ = check_signal_gate(signal)
+
+    assert passed
+    assert signal["frac_spearman_lt_03"] <= 0.15
+    assert signal["frac_warmup_gt_3"] <= 0.10
