@@ -248,12 +248,28 @@ class DataGenerator:
         if errors:
             return errors
 
+        core_ndims = {
+            "spend_raw": 3,
+            "controls": 3,
+            "demand": 3,
+            "g": 2,
+            "channel_shock_channel": 2,
+        }
+        for key, ndim in core_ndims.items():
+            value = corpus[key]
+            if not isinstance(value, np.ndarray) or value.ndim != ndim:
+                actual = getattr(value, "ndim", type(value).__name__)
+                errors.append(f"{key} must have ndim={ndim}, got {actual}")
+        if errors:
+            return errors
+
         # Get dimensions
         N = corpus["spend_raw"].shape[0]
         T = corpus["spend_raw"].shape[1]
         K = corpus["spend_raw"].shape[2]
         M = corpus["controls"].shape[2]
-        S = corpus["g"].shape[1]
+        J = corpus["demand"].shape[2]
+        layout = SlotLayout(K=K, M=M, J=J, edge_types=EDGE_TYPES_EXTENDED)
         n_channel_shocks = corpus["channel_shock_channel"].shape[1]
 
         # Check shapes
@@ -266,7 +282,7 @@ class DataGenerator:
             "sales_norm": (N, T),
             "support_mask": (N, T),
             "is_future": (N,),
-            "g": (N, S),
+            "g": (N, layout.n_slots),
             "contributions_raw": (N, T, K),
             "baseline_raw": (N, T),
             "demand": (N, T, -1),  # J can vary
@@ -307,6 +323,8 @@ class DataGenerator:
                 if e != a:
                     errors.append(f"Shape mismatch for {key}: expected dim {i} = {e}, got {a}")
                     break
+        if errors:
+            return errors
 
         expected_dtypes = {
             "channel_shock_mask": np.uint8,
@@ -418,20 +436,38 @@ class DataGenerator:
                 errors.append("signal_metrics has nonzero invalid values")
             if corpus["signal_metrics"].shape[-1] != len(SIGNAL_METRIC_LAYOUT):
                 errors.append("signal_metrics has an unknown metric layout")
+            metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
+            for name, low, high in (
+                ("spearman", 0.0, 1.0),
+                ("contrib_r2_explained_by_rest", 0.0, 1.0),
+                ("contrib_corr_baseline", -1.0, 1.0),
+            ):
+                index = metric_index[name]
+                values = corpus["signal_metrics"][..., index][
+                    corpus["signal_metric_valid"][..., index].astype(bool)
+                ]
+                if ((values < low - 1e-6) | (values > high + 1e-6)).any():
+                    errors.append(f"signal metric {name} is outside [{low}, {high}]")
         signal_diagnostics = corpus.get("diagnostics", {}).get("signal", {})
         metric_version = signal_diagnostics.get("metric_version")
-        if metric_version not in (1, SIGNAL_METRIC_VERSION):
+
+        def _is_integer(value):
+            return isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_))
+
+        if not _is_integer(metric_version) or metric_version not in (1, SIGNAL_METRIC_VERSION):
             errors.append("diagnostics signal metric_version is not supported")
-        if signal_diagnostics.get("metric_layout") != list(SIGNAL_METRIC_LAYOUT):
+        metric_layout = signal_diagnostics.get("metric_layout")
+        try:
+            normalized_layout = list(metric_layout)
+        except TypeError:
+            normalized_layout = None
+        if normalized_layout != list(SIGNAL_METRIC_LAYOUT):
             errors.append("diagnostics signal metric_layout does not match signal_metrics")
         if metric_version == SIGNAL_METRIC_VERSION:
-            if (
-                not isinstance(signal_diagnostics.get("l_max"), int)
-                or signal_diagnostics["l_max"] < 1
-            ):
+            if not _is_integer(signal_diagnostics.get("l_max")) or signal_diagnostics["l_max"] < 1:
                 errors.append("diagnostics signal l_max must be a positive integer")
             if (
-                not isinstance(signal_diagnostics.get("adstock_burn_in"), int)
+                not _is_integer(signal_diagnostics.get("adstock_burn_in"))
                 or signal_diagnostics["adstock_burn_in"] < 0
             ):
                 errors.append("diagnostics signal adstock_burn_in must be a nonnegative integer")
@@ -480,7 +516,6 @@ class DataGenerator:
             ):
                 errors.append("signal metrics have nonzero ineligible-channel values")
 
-        layout = SlotLayout(K=K, M=M, J=corpus["demand"].shape[2], edge_types=EDGE_TYPES_EXTENDED)
         channels = corpus["channel_shock_channel"]
         starts = corpus["channel_shock_start"]
         lengths = corpus["channel_shock_length"]
@@ -570,7 +605,12 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
         if k == "diagnostics" and isinstance(v, dict):
             import json
 
-            save_dict[k] = np.array(json.dumps(v))
+            def _json_default(value):
+                if isinstance(value, np.generic):
+                    return value.item()
+                raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+            save_dict[k] = np.array(json.dumps(v, default=_json_default))
         else:
             save_dict[k] = v
 
@@ -594,7 +634,7 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
     if not path.exists():
         raise FileNotFoundError(f"Corpus file not found: {path}")
 
-    with np.load(path, allow_pickle=True) as data:
+    with np.load(path, allow_pickle=False) as data:
         corpus = {k: data[k] for k in data.files}
 
     # Parse diagnostics JSON string if present

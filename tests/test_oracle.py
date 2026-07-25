@@ -207,8 +207,11 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
     structural = sample_structure(g, cfg, np.random.default_rng(4))
     structural["adstock_family"][:] = 1
     structural["sat_family"][:] = 0
-    model, names, _ = build_world_model(g, cfg, structural, cfg.T)
-    drawn = {name: value[0] for name, value in pg.draw_worlds(model, names, seed=13).items()}
+    model, names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    drawn = {
+        name: value[0]
+        for name, value in pg.draw_worlds(model, names + param_names, seed=13).items()
+    }
     data = {
         key: drawn[key]
         for key in (
@@ -223,6 +226,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
             "channel_shock_level",
         )
     }
+    data["channel_level"] = drawn["param_channel_level"]
     return cfg, g, structural, drawn, data
 
 
@@ -251,6 +255,7 @@ def test_shocked_oracle_repeated_reset_boundaries_match_independent_numpy_refere
             "channel_shock_length": np.array([2, 2], dtype="int64"),
             "channel_shock_level_multiplier": np.array([0.5, 0.5]),
             "channel_shock_level": np.array([0.5, 0.5]),
+            "channel_level": np.array([1.0]),
             "saturation_scale": np.array([3.0]),
         }
     )
@@ -275,7 +280,7 @@ def test_shocked_oracle_repeated_reset_boundaries_match_independent_numpy_refere
 
 
 def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
-    cfg, g, structural, _drawn, data = _shocked_oracle_world()
+    cfg, g, structural, _drawn, data = _shocked_oracle_world(level=(0.0, 1.0))
     missing = dict(data)
     del missing["channel_shock_start"]
     with pytest.raises(ValueError, match="channel_shock_start"):
@@ -294,6 +299,27 @@ def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
     contradictory["channels"][start : start + 2, 0] = 1.0
     with pytest.raises(ValueError, match="held level does not match observed spend"):
         build_oracle_model(g, cfg, structural, contradictory)
+    contradictory_multiplier = dict(data)
+    original_multiplier = float(data["channel_shock_level_multiplier"][0])
+    contradictory_multiplier["channel_shock_level_multiplier"] = np.array(
+        [0.0 if original_multiplier > 0.5 else 1.0]
+    )
+    with pytest.raises(ValueError, match=r"multiplier \* channel_level"):
+        build_oracle_model(g, cfg, structural, contradictory_multiplier)
+
+
+def test_scm_oracle_model_roundtrip_with_shocks():
+    cfg = _small_cfg(
+        n_channel_shocks=1,
+        channel_shock_length_range=(2, 2),
+        channel_shock_level_range=(0.0, 0.0),
+    )
+    world = pg.sample_scm(cfg, seed=15, max_eps_draws=4)
+    oracle = world.oracle_model()
+    assert {"baseline", "contributions", "sales_mu", "demand"} <= {
+        deterministic.name for deterministic in oracle.deterministics
+    }
+    assert not any(rv.name.startswith("channel_shock") for rv in oracle.free_RVs)
 
 
 @pytest.mark.slow

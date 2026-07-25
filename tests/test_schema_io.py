@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -14,6 +16,14 @@ from prior_generator.signal_diagnostics import (
     summarize_signal_metrics,
 )
 from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
+
+
+class _PicklePayload:
+    def __init__(self, marker):
+        self.marker = marker
+
+    def __reduce__(self):
+        return (os.system, (f"touch {self.marker}",))
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +111,21 @@ def test_validate_corpus_flags_nan(corpus):
     assert any("NaN" in e or "Inf" in e for e in errors)
 
 
+@pytest.mark.parametrize("key", ("spend_raw", "controls", "demand", "g"))
+def test_validate_corpus_returns_errors_for_malformed_core_dimensions(corpus, key):
+    broken = dict(corpus)
+    broken[key] = corpus[key][0]
+    errors = DataGenerator.validate_corpus(broken)
+    assert any(key in error and "ndim" in error for error in errors)
+
+
+def test_validate_corpus_rejects_wrong_graph_slot_width(corpus):
+    broken = dict(corpus)
+    broken["g"] = np.pad(corpus["g"], ((0, 0), (0, 1)))
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("Shape mismatch for g" in error for error in errors)
+
+
 @pytest.mark.parametrize(
     "value",
     (
@@ -158,6 +183,59 @@ def test_save_load_roundtrip(tmp_path, corpus):
             assert loaded[key]["edge_types"] == list(EDGE_TYPES_EXTENDED)
         else:
             assert np.array_equal(loaded[key], val), f"{key} changed across roundtrip"
+
+
+def test_load_corpus_refuses_pickle_payload_without_execution(tmp_path):
+    path = tmp_path / "malicious.npz"
+    marker = tmp_path / "executed"
+    np.savez(path, payload=np.array([_PicklePayload(marker)], dtype=object))
+    with pytest.raises(ValueError, match="Object arrays cannot be loaded"):
+        pg.load_corpus(path)
+    assert not marker.exists()
+
+
+def test_numpy_scalar_diagnostics_validate_and_roundtrip(tmp_path, corpus):
+    modified = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    signal = dict(diagnostics["signal"])
+    signal.update(
+        {
+            "metric_version": np.int64(SIGNAL_METRIC_VERSION),
+            "metric_layout": np.asarray(SIGNAL_METRIC_LAYOUT),
+            "l_max": np.int32(signal["l_max"]),
+            "adstock_burn_in": np.int64(signal["adstock_burn_in"]),
+            "adstock_kernel_version": np.int64(1),
+        }
+    )
+    diagnostics["signal"] = signal
+    modified["diagnostics"] = diagnostics
+    assert DataGenerator.validate_corpus(modified) == []
+
+    signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
+    path = tmp_path / "numpy-diagnostics.npz"
+    pg.save_corpus(modified, path)
+    loaded = pg.load_corpus(path)
+    assert DataGenerator.validate_corpus(loaded) == []
+
+
+@pytest.mark.parametrize(
+    ("metric", "value"),
+    (
+        ("spearman", -0.1),
+        ("contrib_r2_explained_by_rest", 1.1),
+        ("contrib_corr_baseline", 1.1),
+    ),
+)
+def test_validate_corpus_rejects_out_of_domain_signal_metrics(corpus, metric, value):
+    index = SIGNAL_METRIC_LAYOUT.index(metric)
+    eligible = np.argwhere(corpus["signal_metric_valid"][..., index] == 1)
+    assert eligible.size
+    n, k = eligible[0]
+    broken = dict(corpus)
+    broken["signal_metrics"] = corpus["signal_metrics"].copy()
+    broken["signal_metrics"][n, k, index] = value
+    errors = DataGenerator.validate_corpus(broken)
+    assert any(metric in error for error in errors)
 
 
 def test_datagenerator_generate_n_tasks():
@@ -236,10 +314,33 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
     for key, value in full.items():
         if isinstance(value, np.ndarray) and value.ndim > 0 and key != "is_val":
             assert np.array_equal(truncated[key], value[:n_tasks]), key
+            assert np.array_equal(generated[key], value[:n_tasks]), key
 
     path = tmp_path / "truncated.npz"
     pg.save_corpus(generated, path)
     loaded = pg.load_corpus(path)
+    assert DataGenerator.validate_corpus(loaded) == []
+
+
+def test_datagenerator_generate_and_save_without_identifiability_labels(tmp_path):
+    cfg = pg.make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        T=16,
+        n_cells=2,
+        draws_per_cell=1,
+        seed=57,
+        include_identifiability_labels=False,
+        confounding_strength_range=(0.3, 0.3),
+        n_channel_shocks=1,
+        channel_shock_length_range=(2, 2),
+    )
+    path = tmp_path / "feature-only.npz"
+    pg.DataGenerator(cfg).generate_and_save(path)
+    loaded = pg.load_corpus(path)
+    assert "signal_metrics" not in loaded
+    assert "signal_metric_valid" not in loaded
     assert DataGenerator.validate_corpus(loaded) == []
 
 

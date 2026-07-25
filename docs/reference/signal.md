@@ -50,6 +50,11 @@ R² clipped to `[0, 1]`, without an amplitude-dependent tolerance floor.
 zero when either series has no variance. Constant-rank Spearman inputs are also
 encoded as zero, not NaN.
 
+The legacy flattened helpers keep `baseline` optional. When it is omitted,
+both baseline-dependent metrics are zero and invalid rather than being inferred
+from a fabricated zero baseline. Persisted corpus generation always supplies
+the true baseline.
+
 Metrics are calculated from the final stored float32 arrays, after any task
 truncation, so they are exactly recomputable after save/load. The signal summary
 is likewise derived from those retained arrays and carries the layout/version.

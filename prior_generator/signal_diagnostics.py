@@ -273,18 +273,19 @@ def dense_signal_metrics(
                 contributions[n, :, j] - contributions[n, :, j].mean() for j in others
             ]
             design = np.column_stack(centered_predictors)
-            design_rank = 1 + np.linalg.matrix_rank(design)
-            if T > design_rank:
-                sst = float(centered_y @ centered_y)
-                if sst == 0.0:
-                    # Persisted constants are exactly reproducible by the intercept.
-                    r2 = 1.0
-                else:
+            sst = float(centered_y @ centered_y)
+            if sst == 0.0:
+                # Persisted constants are exactly reproducible by the intercept.
+                metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1.0
+                valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
+            else:
+                design_rank = 1 + np.linalg.matrix_rank(design)
+                if T > design_rank:
                     fitted = design @ np.linalg.lstsq(design, centered_y, rcond=None)[0]
                     ss_res = float(np.sum((centered_y - fitted) ** 2))
                     r2 = float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
-                metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
-                valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
+                    metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
+                    valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
             denom = np.sqrt(np.sum(centered_y**2) * np.sum(centered_b**2))
             metrics[n, k, metric_index["contrib_corr_baseline"]] = (
                 centered_y @ centered_b / denom if denom > 1e-12 else 0.0
@@ -346,6 +347,11 @@ def per_channel_signal(
         channel_shock_start=channel_shock_start,
         adstock_burn_in=adstock_burn_in,
     )
+    if baseline is None:
+        for name in ("contrib_r2_explained_by_rest", "contrib_corr_baseline"):
+            index = SIGNAL_METRIC_LAYOUT.index(name)
+            dense[..., index] = 0.0
+            valid[..., index] = 0
     task_idx = np.broadcast_to(np.arange(N)[:, None], (N, K))
     out = {"task_idx": task_idx[mask].astype(np.float64)}
     for i, key in enumerate(SIGNAL_METRIC_LAYOUT):
@@ -473,6 +479,11 @@ def signal_summary(
         channel_shock_start=channel_shock_start,
         adstock_burn_in=adstock_burn_in,
     )
+    if baseline is None:
+        for name in ("contrib_r2_explained_by_rest", "contrib_corr_baseline"):
+            index = SIGNAL_METRIC_LAYOUT.index(name)
+            metrics[..., index] = 0.0
+            valid[..., index] = 0
     return summarize_signal_metrics(
         metrics,
         valid,

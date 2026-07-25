@@ -249,6 +249,16 @@ def _oracle_channel_shock_schedule(
             f"data['channel_shock_level'] must be a finite array with shape {(S,)}, "
             f"got {level.shape}"
         )
+    if "channel_level" not in data:
+        raise ValueError("enabled channel shocks require data['channel_level'] metadata")
+    channel_level = np.asarray(data["channel_level"], dtype="float64")
+    if channel_level.shape != g_cy.shape or not (
+        np.isfinite(channel_level).all() and (channel_level > 0.0).all()
+    ):
+        raise ValueError(
+            "data['channel_level'] must be finite and positive with shape "
+            f"{g_cy.shape}, got {channel_level.shape}"
+        )
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1)
     if not np.isin(channel, direct).all():
@@ -259,6 +269,8 @@ def _oracle_channel_shock_schedule(
     level_lo, level_hi = cfg.channel_shock_level_range
     if ((multiplier < level_lo) | (multiplier > level_hi)).any():
         raise ValueError("channel shock metadata level multiplier is outside the configured range")
+    if not np.allclose(level, multiplier * channel_level[channel], rtol=1e-6, atol=1e-7):
+        raise ValueError("channel shock level does not match multiplier * channel_level")
     for s in range(S):
         slot_lo = s * T // S
         slot_hi = (s + 1) * T // S
@@ -690,8 +702,10 @@ def build_oracle_model(
         channel shocks are enabled, it must also carry the world's known
         design metadata: ``channel_shock_channel``, ``channel_shock_start``,
         ``channel_shock_length``, ``channel_shock_level_multiplier``, and
-        ``channel_shock_level``, each with one entry per configured shock. The
-        absolute level must match observed spend throughout its event window.
+        ``channel_shock_level``, each with one entry per configured shock, plus
+        per-channel ``channel_level``. The absolute level must match both
+        observed spend throughout its event window and the multiplier-relative
+        channel level.
     prior_cond : dict, optional
         The world's prior-conditioning intervals (``SCM.extras["prior_cond"]``)
         so the oracle runs under the SAME narrowed prior the world was drawn

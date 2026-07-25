@@ -91,6 +91,18 @@ def test_flattened_signal_api_remains_compatible():
     flattened = per_channel_signal(x, x, x[..., 0] + 1, np.ones((1, 1)), l_max=3)
     assert flattened["task_idx"].shape == (1,)
     assert flattened["spearman_valid"].shape == (1,)
+    assert flattened["contrib_r2_explained_by_rest_valid"][0] == 0
+    assert flattened["contrib_corr_baseline_valid"][0] == 0
+    with_baseline = per_channel_signal(
+        x,
+        x,
+        x[..., 0] + 1,
+        np.ones((1, 1)),
+        l_max=3,
+        baseline=x[..., 0],
+    )
+    assert with_baseline["contrib_r2_explained_by_rest_valid"][0] == 1
+    assert with_baseline["contrib_corr_baseline_valid"][0] == 1
     summary = signal_summary(x, x, x[..., 0] + 1, np.ones((1, 1)), l_max=3)
     assert summary["n_direct_channels"] == 1
 
@@ -142,6 +154,10 @@ def test_r2_requires_residual_degrees_of_freedom_not_raw_column_count():
     index = _metric("contrib_r2_explained_by_rest")
     _, saturated_valid = _dense(np.arange(2), np.arange(2), baseline=np.arange(2))
     assert saturated_valid[0, 0, index] == 0
+
+    constant, constant_valid = _dense(np.arange(2), np.ones(2), baseline=np.arange(2))
+    assert constant_valid[0, 0, index] == 1
+    assert constant[0, 0, index] == 1.0
 
     spend = np.ones((1, 3, 2), dtype=np.float32)
     baseline = np.arange(3, dtype=np.float32)
@@ -268,7 +284,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "sales_norm": np.ones((1, 4), dtype=np.float32),
         "support_mask": np.ones((1, 4), dtype=np.uint8),
         "is_future": np.zeros(1, dtype=np.uint8),
-        "g": np.zeros((1, 8), dtype=np.uint8),
+        "g": np.zeros((1, 6), dtype=np.uint8),
         "contributions_raw": np.zeros((1, 4, 1), dtype=np.float32),
         "baseline_raw": np.ones((1, 4), dtype=np.float32),
         "demand": np.ones((1, 4, 1), dtype=np.float32),

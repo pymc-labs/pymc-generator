@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytensor.tensor as pt
 import pytest
 
 import prior_generator as pg
+from prior_generator.random_walk import symbolic_random_walk
 from prior_generator.sampler import _slice_g_active, sample_g_additive
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
@@ -60,6 +62,50 @@ def test_enabled_confounding_preserves_decomposition_and_nonflat_channels():
         < 1e-9
     )
     assert d["channels"].std(axis=0).max() > 0.0
+
+
+def test_shared_innovation_formula_drives_channel_walk_exactly():
+    rho = 0.6
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=24,
+        confounding_strength_range=(rho, rho),
+        channel_hf_sigma_range=(0.0, 0.0),
+        channel_pulse_prob_range=(0.0, 0.0),
+        channel_pulse_amp_range=(0.0, 0.0),
+    )
+    g = {
+        "g_cy": np.ones(1, dtype=int),
+        "g_dc": np.zeros((1, 1), dtype=int),
+        "g_dz": np.zeros((1, 1), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((1, 1), dtype=int),
+        "g_cc": np.zeros((1, 1), dtype=int),
+        "g_zz": np.zeros((1, 1), dtype=int),
+    }
+    structural = sample_structure(g, cfg, np.random.default_rng(18))
+    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    drawn = {
+        name: values[0]
+        for name, values in draw_worlds(
+            model, out_names + param_names + ("eps_c", "eps_b"), seed=19
+        ).items()
+    }
+    effective_eps = np.sqrt(1.0 - rho**2) * drawn["eps_c"][:, 0] + rho * drawn["eps_b"]
+    T_full = cfg.T + cfg.adstock_burn_in
+    walk = symbolic_random_walk(
+        T_full,
+        mean=drawn["param_rw_c_mean"][0],
+        std=drawn["param_rw_c_std"][0],
+        smoothness=float(structural["smoothness_c"][0]),
+        positive_only=True,
+        eps=pt.as_tensor_variable(effective_eps),
+    ).eval()
+    expected_channel = np.logaddexp(0.0, walk)[cfg.adstock_burn_in :]
+    np.testing.assert_allclose(drawn["channels"][:, 0], expected_channel, rtol=0.0, atol=1e-12)
 
 
 def test_confounding_strength_is_persisted_in_corpus():

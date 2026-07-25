@@ -213,10 +213,11 @@ def test_shocked_world_preserves_every_decomposition_identity():
         assert error[~inside].max() < 1e-9
 
 
+@pytest.mark.parametrize("level_multiplier", (0.0, 0.5))
 def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_outside_masks(
-    tmp_path,
+    tmp_path, level_multiplier
 ):
-    """Public persisted arrays retain exact held-zero responses and decomposition labels."""
+    """Persisted zero/nonzero shocks retain responses and decomposition labels."""
     corpus = sample_prior_predictive(
         make_scm_prior(
             n_treatments=2,
@@ -230,7 +231,7 @@ def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_out
             edge_budget={"cy": (2, 2)},
             n_channel_shocks=1,
             channel_shock_length_range=(3, 3),
-            channel_shock_level_range=(0.0, 0.0),
+            channel_shock_level_range=(level_multiplier, level_multiplier),
         )
     )
     path = tmp_path / "shocked.npz"
@@ -238,7 +239,10 @@ def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_out
     persisted = load_corpus(path)
     inside = persisted["channel_shock_mask"].any(axis=2).astype(bool)
     assert inside.any() and (~inside).any()
-    assert np.array_equal(persisted["channel_shock_level"], np.zeros((4, 1), dtype=np.float32))
+    if level_multiplier == 0.0:
+        assert np.array_equal(persisted["channel_shock_level"], np.zeros((4, 1), dtype=np.float32))
+    else:
+        assert (persisted["channel_shock_level"] > 0.0).all()
 
     f = lambda key: persisted[key].astype(np.float64)  # noqa: E731
     errors = (
@@ -267,10 +271,16 @@ def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_out
         assert error.max() <= tolerance
         assert error[inside].max() <= tolerance
         assert error[~inside].max() <= tolerance
-    assert np.array_equal(
-        persisted["contributions_raw"][persisted["channel_shock_mask"].astype(bool)],
-        np.zeros(persisted["channel_shock_mask"].sum(), dtype=np.float32),
-    )
+    shocked_contributions = persisted["contributions_raw"][
+        persisted["channel_shock_mask"].astype(bool)
+    ]
+    if level_multiplier == 0.0:
+        assert np.array_equal(
+            shocked_contributions,
+            np.zeros(persisted["channel_shock_mask"].sum(), dtype=np.float32),
+        )
+    else:
+        assert (shocked_contributions > 0.0).all()
 
 
 def test_realism_cv_and_spike_guards_use_the_unshocked_reference():
@@ -288,6 +298,35 @@ def test_realism_cv_and_spike_guards_use_the_unshocked_reference():
         spend_spike_ratio=50.0,
         realism_spend=natural_spend,
         realism_sales=natural_sales,
+    )
+    assert not _additive_task_ok(
+        actual_spend,
+        actual_sales,
+        {"actual": actual_spend},
+        np.array([1]),
+        cv_floor=0.1,
+        realism_spend=np.ones_like(natural_spend),
+        realism_sales=natural_sales,
+    )
+    assert not _additive_task_ok(
+        actual_spend,
+        actual_sales,
+        {"actual": actual_spend},
+        np.array([1]),
+        cv_floor=0.1,
+        spend_spike_ratio=3.0,
+        realism_spend=np.array([[1.0], [4.0], [1.0]]),
+        realism_sales=natural_sales,
+    )
+    assert not _additive_task_ok(
+        actual_spend,
+        actual_sales,
+        {"actual": actual_spend},
+        np.array([1]),
+        cv_floor=0.1,
+        sales_spike_ratio=3.0,
+        realism_spend=natural_spend,
+        realism_sales=np.array([1.0, 4.0, 1.0]),
     )
 
 

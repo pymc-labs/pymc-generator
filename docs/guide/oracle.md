@@ -94,7 +94,8 @@ the nonlinear response anchor after carryover itself has converged.
 When channel shocks are enabled, `SCM.oracle_model()` also passes the world's
 reported shock channel, start, length, and held-level multiplier to the
 oracle, together with the realized absolute held level. The oracle rejects a
-schedule whose claimed held level does not match the recorded spend window.
+schedule whose claimed held level does not match the recorded spend window or
+`multiplier * channel_level`.
 This metadata is **additional observed design state**, not an inferred
 schedule and not a free random variable in the oracle. The oracle validates the
 configured schedule and uses each reported start to reset that channel's
