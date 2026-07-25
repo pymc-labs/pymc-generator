@@ -1,0 +1,67 @@
+prior_generator/world_model.py
+  s_6cdb3f9eca54e6::t_128a9722cedc05 748-757,810-814
+  s_6cdb3f9eca54e6::t_81fbe13e7e72c2 677-680
+docs/reference/signal.md
+  s_6cdb3f9eca54e6::t_81fbe13e7e72c2 11-16
+tests/test_identifiability.py
+  s_6cdb3f9eca54e6::t_18ac825a295193 63,169-191
+docs/reference/config.md
+  s_6cdb3f9eca54e6::t_81fbe13e7e72c2 69-72,93-99
+  s_6cdb3f9eca54e6::t_b9d14ec3d9eb7f 100
+docs/guide/corpus.md
+  s_6cdb3f9eca54e6::t_81fbe13e7e72c2 56,128,132-135
+docs/guide/oracle.md
+  s_6cdb3f9eca54e6::t_81fbe13e7e72c2 87-90
+prior_generator/mechanisms.py
+  s_6cdb3f9eca54e6::t_4d3be86d51a54a 181-182
+prior_generator/worlds.py
+  s_6cdb3f9eca54e6::t_d89a342b84b70f 6
+  s_6cdb3f9eca54e6::t_4d3be86d51a54a 40,153
+  s_6cdb3f9eca54e6::t_cd746274ce3f9d 72-73
+tests/test_schema_io.py
+  s_6cdb3f9eca54e6::t_bbec4e7ec1a47f 126-151
+  s_6cdb3f9eca54e6::t_18ac825a295193 48-49,65,104-125,261
+prior_generator/symbolic_graph.py
+  s_6cdb3f9eca54e6::t_4d3be86d51a54a 430,449,492
+  s_6cdb3f9eca54e6::t_cd746274ce3f9d 278-279
+prior_generator/data_generator.py
+  s_6cdb3f9eca54e6::t_95a587921856ce 243-246,412-420,444-447,459-462
+  s_6cdb3f9eca54e6::t_9acbdcf95e6143 407
+  s_6cdb3f9eca54e6::t_f186d10f6b6ec9 225,233,278,286,320-321,343-344,406,408-409,432,442-443
+  s_6cdb3f9eca54e6::t_860f150b2cad66 247
+tests/test_oracle.py
+  s_6cdb3f9eca54e6::t_bbec4e7ec1a47f 174-175,218,252,280,299-302
+tests/test_channel_shocks.py
+  s_6cdb3f9eca54e6::t_18ac825a295193 69,90,128,135-145,147-150
+  s_6cdb3f9eca54e6::t_257146e096f668 27
+  s_6cdb3f9eca54e6::t_cd746274ce3f9d 21,37,146
+  s_6cdb3f9eca54e6::t_ae70d6333846a2 151-152
+tests/test_signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_18ac825a295193 54-65,121-130,245,253
+prior_generator/signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_4d3be86d51a54a 127-129,276
+prior_generator/sampler.py
+  s_6cdb3f9eca54e6::t_16f2231ddeba7b 1301-1302,1364,1415,1567
+  s_6cdb3f9eca54e6::t_321c3d14c049eb 1058
+  s_6cdb3f9eca54e6::t_cd746274ce3f9d 1149-1150
+  s_6cdb3f9eca54e6::t_95a587921856ce 163,166-169,481-482,516-520,882-884
+  s_6cdb3f9eca54e6::t_84b0809767f1fb 907-911,917
+tests/test_world_model.py
+  s_6cdb3f9eca54e6::t_dc148bcb76af89 39,44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "34c034e61b4b799a4206aefbac4b7e816b2e293e",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
