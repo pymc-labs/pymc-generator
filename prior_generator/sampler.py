@@ -153,6 +153,12 @@ class SCMPrior:
     channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
     adstock_burn_in: int = 0
 
+    # Symbolic, per-draw channel-shock schedule. Shocks are reported for audit
+    # only at present; they are not yet applied to channel trajectories.
+    n_channel_shocks: int = 0
+    channel_shock_length_range: tuple[int, int] = (1, 1)
+    channel_shock_level_range: tuple[float, float] = (0.0, 0.0)
+
     # -- Prior-conditioning hyperprior (ACE, plan doc to-do/01) -------------
     # When enabled, each CELL draws a narrowed prior interval per conditioned
     # quantity (stage-1 concrete numpy, like the rest of the structure):
@@ -454,6 +460,53 @@ class SCMPrior:
             raise ValueError(
                 "channel_pulse_prob_range enables pulses but channel_pulse_amp_range "
                 "has zero amplitude — disable pulses via the prob range instead"
+            )
+        # Symbolic channel-shock schedule. Keep this validation explicit rather
+        # than relying on PyMC's distribution errors, so invalid schedules fail
+        # before a model is built.
+        if isinstance(self.n_channel_shocks, bool) or not isinstance(
+            self.n_channel_shocks, (int, np.integer)
+        ):
+            raise ValueError("n_channel_shocks must be an int (not bool)")
+        if self.n_channel_shocks < 0:
+            raise ValueError(f"n_channel_shocks must be >= 0, got {self.n_channel_shocks}")
+        try:
+            shock_len_lo, shock_len_hi = self.channel_shock_length_range
+        except (TypeError, ValueError):
+            raise ValueError("channel_shock_length_range must be an (lo, hi) integer pair")
+        if (
+            isinstance(shock_len_lo, bool)
+            or isinstance(shock_len_hi, bool)
+            or not isinstance(shock_len_lo, (int, np.integer))
+            or not isinstance(shock_len_hi, (int, np.integer))
+            or not 1 <= shock_len_lo <= shock_len_hi <= self.T
+        ):
+            raise ValueError(
+                "channel_shock_length_range must have integer bounds satisfying "
+                f"1 <= lo <= hi <= T, got {self.channel_shock_length_range!r}"
+            )
+        try:
+            shock_level_lo, shock_level_hi = self.channel_shock_level_range
+            shock_level_lo, shock_level_hi = float(shock_level_lo), float(shock_level_hi)
+        except (TypeError, ValueError):
+            raise ValueError("channel_shock_level_range must be a finite (lo, hi) pair")
+        if not (
+            np.isfinite(shock_level_lo)
+            and np.isfinite(shock_level_hi)
+            and 0.0 <= shock_level_lo <= shock_level_hi
+        ):
+            raise ValueError(
+                "channel_shock_level_range must satisfy finite 0 <= lo <= hi, "
+                f"got {self.channel_shock_level_range!r}"
+            )
+        if self.n_channel_shocks > self.T:
+            raise ValueError(
+                f"n_channel_shocks must be <= T ({self.T}), got {self.n_channel_shocks}"
+            )
+        if self.n_channel_shocks and self.n_channel_shocks * shock_len_hi > self.T:
+            raise ValueError(
+                "n_channel_shocks * max channel_shock_length must be <= T, got "
+                f"{self.n_channel_shocks} * {shock_len_hi} > {self.T}"
             )
         # Validate variable-size DAG ranges
         k_act_max = min(self.n_treatments_active_range[1], self.n_treatments)

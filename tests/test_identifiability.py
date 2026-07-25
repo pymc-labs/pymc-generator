@@ -121,7 +121,9 @@ def test_additive_corpus_matches_legacy_hashes():
     # Diagnostics include elapsed timing, so only the serialized top-level arrays
     # participate in this deterministic legacy contract.
     hashes = {
-        key: _hash_array(key, value) for key, value in corpus.items() if isinstance(value, np.ndarray)
+        key: _hash_array(key, value)
+        for key, value in corpus.items()
+        if isinstance(value, np.ndarray)
     }
 
     assert hashes == EXPECTED_CORPUS_HASHES

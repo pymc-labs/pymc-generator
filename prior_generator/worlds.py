@@ -3,8 +3,9 @@
 Where :func:`prior_generator.sample_prior_predictive` produces a padded N-task corpus
 for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
-DAG blocks, the drawn SCM parameters, and the 14 named output series
-including the interventional decomposition truth.
+DAG blocks, the drawn SCM parameters, and the 21 named output series
+including the interventional decomposition truth and shock-schedule audit
+outputs.
 
 The sampling path mirrors ``sampler._generate_corpus_additive``: draw the DAG
 + structure, build the world's PyMC model (``world_model.build_world_model``),
@@ -47,6 +48,13 @@ SCM_OUT_NAMES = (
     "indirect_effects_by_source",
     "sales",
     "confounding_strength",
+    "channel_shock_mask",
+    "channel_shock_mask_full",
+    "channel_shock_channel",
+    "channel_shock_start",
+    "channel_shock_length",
+    "channel_shock_level_multiplier",
+    "channel_shock_level",
 )
 
 
@@ -409,6 +417,7 @@ def _assemble_params(drawn: dict, b: int, structural: dict) -> dict:
         "pulse_amp",
         "pulse_prob",
         "confounding_strength",
+        "channel_level",
     )
     params = {k: drawn[f"param_{k}"][b] for k in keys}
     params["adstock_family"] = structural["adstock_family"]

@@ -116,6 +116,80 @@ def _uniform(name: str, lo: float, hi: float, shape):
     return pm.Uniform(name, lo, hi, shape=shape)
 
 
+def _channel_shock_schedule(
+    cfg: SCMPrior, g_cy: np.ndarray, T: int, burn_in: int, c_level
+) -> dict[str, Any]:
+    """Build the symbolic audit schedule for configured channel shocks.
+
+    The disjoint chronological slots make overlap impossible even when the
+    same direct channel is selected repeatedly. This deliberately does not
+    feed the schedule into the channel equations yet.
+    """
+    S = int(cfg.n_channel_shocks)
+    K = len(g_cy)
+    if S == 0:
+        return {
+            "channel_shock_mask": pt.zeros((T, K), dtype="int8"),
+            "channel_shock_mask_full": pt.zeros((T + burn_in, K), dtype="int8"),
+            "channel_shock_channel": pt.zeros((0,), dtype="int64"),
+            "channel_shock_start": pt.zeros((0,), dtype="int64"),
+            "channel_shock_length": pt.zeros((0,), dtype="int64"),
+            "channel_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
+            "channel_shock_level": pt.zeros((0,), dtype="float64"),
+        }
+
+    direct = np.flatnonzero(np.asarray(g_cy) == 1).astype("int64")
+    if not len(direct):
+        raise ValueError("enabled channel shocks require at least one direct g_cy channel")
+    len_lo, len_hi = cfg.channel_shock_length_range
+    level_lo, level_hi = cfg.channel_shock_level_range
+    if len_lo == len_hi:
+        lengths = pt.as_tensor_variable(np.full(S, len_lo, dtype="int64"))
+    else:
+        lengths = pm.DiscreteUniform("channel_shock_length", len_lo, len_hi, shape=S)
+    if len(direct) == 1:
+        ranks = pt.zeros((S,), dtype="int64")
+    else:
+        ranks = pm.DiscreteUniform("channel_shock_channel_rank", 0, len(direct) - 1, shape=S)
+    channels = pt.cast(pt.as_tensor_variable(direct)[ranks], "int64")
+    if level_lo == level_hi:
+        multipliers = pt.as_tensor_variable(np.full(S, level_lo, dtype="float64"))
+    else:
+        multipliers = pm.Uniform("channel_shock_level_multiplier", level_lo, level_hi, shape=S)
+
+    starts = []
+    for s in range(S):
+        slot_lo = s * T // S
+        slot_hi = (s + 1) * T // S
+        # A fixed length that fills the slot has exactly one feasible start.
+        if len_lo == len_hi and slot_hi - slot_lo == len_lo:
+            starts.append(pt.as_tensor_variable(np.asarray(slot_lo, dtype="int64")))
+        else:
+            starts.append(
+                pm.DiscreteUniform(f"channel_shock_start_{s}", slot_lo, slot_hi - lengths[s])
+            )
+    starts_t = pt.stack(starts)
+    levels = multipliers * c_level[channels]
+
+    def _mask(n_time: int, offset: int):
+        time = pt.arange(n_time)[:, None]
+        active = (time >= (starts_t + offset)[None, :]) & (
+            time < (starts_t + lengths + offset)[None, :]
+        )
+        selected = pt.eq(pt.arange(K)[:, None], channels[None, :]).T
+        return pt.cast(pt.any(active[:, :, None] & selected[None, :, :], axis=1), "int8")
+
+    return {
+        "channel_shock_mask": _mask(T, 0),
+        "channel_shock_mask_full": _mask(T + burn_in, burn_in),
+        "channel_shock_channel": channels,
+        "channel_shock_start": starts_t,
+        "channel_shock_length": lengths,
+        "channel_shock_level_multiplier": multipliers,
+        "channel_shock_level": levels,
+    }
+
+
 def _rw_prior_group(
     name, n, positive, mean_range, std_sigma, smoothness, std_range=None, relative=False
 ):
@@ -355,6 +429,7 @@ def build_world_model(
         rw_c = rw["rw_c"]
 
         c_level = pt.softplus(rw_c["mean"])  # per-channel level anchor for texture
+        shock_outputs = _channel_shock_schedule(cfg, g_active["g_cy"], T, burn_in, c_level)
         pulse_prob = _uniform(*specs["pulse_prob"])
 
         params: dict[str, Any] = {
@@ -419,6 +494,7 @@ def build_world_model(
 
         graph = build_symbolic_graph(g_active, params, T, K, M, J, burn_in=burn_in, eps=eps)
         graph["outputs"]["confounding_strength"] = confounding_strength
+        graph["outputs"].update(shock_outputs)
         out_names = tuple(graph["outputs"].keys())
         for name in out_names:
             # A nondegenerate confounding strength is itself the named Uniform
@@ -448,6 +524,7 @@ def build_world_model(
             "pulse_amp": params["pulse_amp"],
             "pulse_prob": params["pulse_prob"],
             "rw_c_mean": rw_c["mean"],
+            "channel_level": c_level,
             "rw_c_std": rw_c["std"],
             "confounding_strength": confounding_strength,
         }
