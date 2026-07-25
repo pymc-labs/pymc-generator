@@ -1,0 +1,37 @@
+tests/test_oracle.py
+  s_47859316b2f55b::t_1aa5fbc8724777 14,183-241,245-254,257-259,268-273,285-294
+  s_47859316b2f55b::t_daf7a30cf1c8fc 255-256,260-267,274,278-281,283-284
+  s_47859316b2f55b::t_a32b716de04279 242-244,275-277,282
+  s_47859316b2f55b::t_91f0328ee73eb6 81-88
+  s_47859316b2f55b::t_b9688fe9cc99f3 19
+  s_47859316b2f55b::t_6598a3252d1fa3 295-296
+prior_generator/worlds.py
+  s_47859316b2f55b::t_c71e79d55fab6e 158
+  s_47859316b2f55b::t_1aa5fbc8724777 147-157,159-160,165
+prior_generator/world_model.py
+  s_47859316b2f55b::t_0ae05c6ca43930 713-716
+  s_47859316b2f55b::t_c71e79d55fab6e 237-239
+  s_47859316b2f55b::t_316efb7f930221 677-681,711-712,726-730,752,770-771,790-793,796
+  s_47859316b2f55b::t_2f03aec46906a5 37-42,208-236,240-269
+  s_47859316b2f55b::t_5ee457eaab723a 270-272
+docs/guide/oracle.md
+  s_47859316b2f55b::t_316efb7f930221 71-72,89-104
+  s_47859316b2f55b::t_0ae05c6ca43930 73-76
+  s_47859316b2f55b::t_4d7d7a8d6bbdb9 105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "28a2f66c37d72eac3ddc557f12421c98f4f1a359",
+  "prompts": {},
+  "sessions": {
+    "s_47859316b2f55b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066178a61ffez0AkLJIxpQTFQn",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
