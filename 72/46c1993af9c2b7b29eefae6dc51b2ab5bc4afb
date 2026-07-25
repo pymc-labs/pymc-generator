@@ -1,0 +1,34 @@
+tests/test_world_model.py
+  s_4ff9a3ab4fbd69::t_2bb15eb56a27e9 39
+prior_generator/worlds.py
+  s_4ff9a3ab4fbd69::t_d2036a4c24bde4 6,31
+  s_4ff9a3ab4fbd69::t_ca736920d8fa0e 49,411
+tests/test_identifiability.py
+  s_4ff9a3ab4fbd69::t_2bb15eb56a27e9 44
+prior_generator/world_model.py
+  s_4ff9a3ab4fbd69::t_49470e472a264f 424-428
+  s_4ff9a3ab4fbd69::t_ca736920d8fa0e 402-419,421,452
+tests/test_confounding_strength.py
+  s_4ff9a3ab4fbd69::t_2bb15eb56a27e9 1-76
+  s_4ff9a3ab4fbd69::t_8387e93a00ff9e 77-90
+prior_generator/sampler.py
+  s_4ff9a3ab4fbd69::t_d2036a4c24bde4 956-957
+  s_4ff9a3ab4fbd69::t_ca736920d8fa0e 133-136,406-408,410-419,876,1111,1142-1144,1330
+  s_4ff9a3ab4fbd69::t_dd59cd39bc68ab 409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "7246c1993af9c2b7b29eefae6dc51b2ab5bc4afb",
+  "prompts": {},
+  "sessions": {
+    "s_4ff9a3ab4fbd69": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066924fe3ffeASzb4qF70Mo4GE",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
