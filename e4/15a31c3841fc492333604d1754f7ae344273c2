@@ -1,0 +1,20 @@
+tests/test_identifiability.py
+  s_b908204c6f8bcd::t_49d91708e17795 118-119
+  s_b908204c6f8bcd::t_acbe1b680de106 1-117,120-136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "e415a31c3841fc492333604d1754f7ae344273c2",
+  "prompts": {},
+  "sessions": {
+    "s_b908204c6f8bcd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0669c1ec6ffeXm5IeDWO6CjMri",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
