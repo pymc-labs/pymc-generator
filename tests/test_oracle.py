@@ -76,6 +76,31 @@ def test_shared_priors_same_measure(world_and_oracle):
         assert np.allclose(lp_gen, lp_oracle), f"prior for {name!r} drifted between models"
 
 
+def test_baseline_walk_override_is_shared_by_generation_and_oracle():
+    """An explicit baseline scale reaches both models without running NUTS."""
+    cfg = _small_cfg(rw_std_sigma=1.2, rw_baseline_std_sigma=0.35)
+    rng = np.random.default_rng(2)
+    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g_act = _slice_g_active(g, 2, 1, 1)
+    structural = sample_structure(g_act, cfg, rng)
+    gen_model, _out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.T)
+    oracle = build_oracle_model(
+        g_act,
+        cfg,
+        structural,
+        {
+            "channels": np.zeros((cfg.T, 2)),
+            "controls": np.zeros((cfg.T, 1)),
+            "sales": np.zeros(cfg.T),
+        },
+    )
+    value = np.array([0.4])
+    expected = pm.logp(pm.HalfNormal.dist(sigma=0.35), value).eval()
+
+    assert np.allclose(pm.logp(gen_model["rw_b_std"], value).eval(), expected)
+    assert np.allclose(pm.logp(oracle["rw_b_std"], value).eval(), expected)
+
+
 def test_oracle_logp_finite_at_truth(world_and_oracle):
     """Total oracle logp (priors + likelihood) is finite at the drawn world."""
     _gen_model, oracle, world = world_and_oracle

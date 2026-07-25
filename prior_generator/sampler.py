@@ -125,6 +125,7 @@ class SCMPrior:
     rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # channels
     rw_baseline_mean_range: tuple[float, float] = (3.0, 8.0)  # baseline level
     rw_std_sigma: float = 1.0  # HalfNormal prior for walk std
+    rw_baseline_std_sigma: float | None = None  # None follows rw_std_sigma
     rw_channel_std_sigma: float = 0.6  # HalfNormal for channel walk std
     rw_sales_std_sigma: float = 0.25  # HalfNormal for sales-noise walk std
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
@@ -211,6 +212,13 @@ class SCMPrior:
         lo = min(self.n_latent_active_range[0], self.n_latent)
         hi = min(self.n_latent_active_range[1], self.n_latent)
         return (lo, hi)
+
+    @property
+    def rw_baseline_std_sigma_effective(self) -> float:
+        """Baseline walk scale, following the shared walk scale unless overridden."""
+        if self.rw_baseline_std_sigma is None:
+            return self.rw_std_sigma
+        return self.rw_baseline_std_sigma
 
     @property
     def n_query(self) -> int:
@@ -385,6 +393,12 @@ class SCMPrior:
             sigma = getattr(self, name)
             if sigma <= 0:
                 raise ValueError(f"{name} must be > 0, got {sigma}")
+        if self.rw_baseline_std_sigma is not None and (
+            not np.isfinite(self.rw_baseline_std_sigma) or self.rw_baseline_std_sigma <= 0
+        ):
+            raise ValueError(
+                f"rw_baseline_std_sigma must be finite and > 0, got {self.rw_baseline_std_sigma}"
+            )
         if self.rw_positive_mean_range[0] <= 0:
             raise ValueError(
                 f"rw_positive_mean_range must be positive (channel walks stay positive "

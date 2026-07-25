@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 
 import numpy as np
+import pytest
 
 import prior_generator as pg
 from prior_generator.sampler import _slice_g_active, sample_g_additive
@@ -134,3 +136,18 @@ def test_default_world_model_free_rvs_match_legacy_order():
     model, _out_names, _param_names = build_world_model(g_active, cfg, structural, cfg.T)
 
     assert tuple(rv.name for rv in model.free_RVs) == EXPECTED_DEFAULT_FREE_RVS
+
+
+def test_baseline_walk_sigma_default_tracks_shared_sigma_after_replace():
+    """The default baseline scale remains dynamic rather than being copied at construction."""
+    cfg = pg.SCMPrior(rw_std_sigma=0.8)
+    assert cfg.rw_baseline_std_sigma is None
+    assert cfg.rw_baseline_std_sigma_effective == 0.8
+    assert replace(cfg, rw_std_sigma=0.35).rw_baseline_std_sigma_effective == 0.35
+    assert replace(cfg, rw_baseline_std_sigma=0.6).rw_baseline_std_sigma_effective == 0.6
+
+
+@pytest.mark.parametrize("sigma", (0.0, -0.1, np.nan, np.inf, -np.inf))
+def test_baseline_walk_sigma_override_must_be_finite_and_positive(sigma):
+    with pytest.raises(ValueError, match="rw_baseline_std_sigma must be finite and > 0"):
+        pg.SCMPrior(rw_baseline_std_sigma=sigma).validate()

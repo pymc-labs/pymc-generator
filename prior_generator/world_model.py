@@ -187,7 +187,7 @@ def _walk_priors(
             1,
             False,
             cfg.rw_baseline_mean_range,
-            cfg.rw_std_sigma,
+            cfg.rw_baseline_std_sigma_effective,
             structural["smoothness_b"],
         )
     if "y" in include:
