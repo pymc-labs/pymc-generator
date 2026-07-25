@@ -1,0 +1,22 @@
+prior_generator/symbolic_graph.py
+  s_6cdb3f9eca54e6::t_261d156fa1edd1 174
+prior_generator/worlds.py
+  s_6cdb3f9eca54e6::t_5044c38dd8642b 20,170,193
+  s_6cdb3f9eca54e6::t_261d156fa1edd1 194-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "2a0f1180ef68b2a4e923cf57f1f8da37a70405ee",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
