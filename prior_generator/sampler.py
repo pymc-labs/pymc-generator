@@ -153,8 +153,7 @@ class SCMPrior:
     channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
     adstock_burn_in: int = 0
 
-    # Symbolic, per-draw channel-shock schedule. Shocks are reported for audit
-    # only at present; they are not yet applied to channel trajectories.
+    # Symbolic, per-draw carryover-reset held-level channel shocks.
     n_channel_shocks: int = 0
     channel_shock_length_range: tuple[int, int] = (1, 1)
     channel_shock_level_range: tuple[float, float] = (0.0, 0.0)
@@ -968,30 +967,35 @@ def _additive_task_ok(
     cv_floor: float,
     sales_spike_ratio: float = 8.0,
     spend_spike_ratio: float = 50.0,
+    realism_spend: np.ndarray | None = None,
+    realism_sales: np.ndarray | None = None,
 ) -> bool:
     """Single-task realism filter for the additive SCM.
 
     Realism checks on the additive scale: finite
-    arrays, non-negative sales, spend-CV floor on direct (C->Y) channels,
-    and spike-ratio guards.
+    arrays and non-negative actual sales are always required.  CV and spike
+    checks can use natural (unshocked) audit paths so a deliberate intervention
+    is not rejected for looking unlike organic spend.
     """
     for a in arrays.values():
         if not np.isfinite(a).all():
             return False
     if (sales < 0).any():
         return False
+    realism_spend = spend if realism_spend is None else realism_spend
+    realism_sales = sales if realism_sales is None else realism_sales
     active = np.asarray(g_cy_active) == 1
     if active.any():
-        cv = spend.std(axis=0) / (spend.mean(axis=0) + 1e-12)  # (K,)
+        cv = realism_spend.std(axis=0) / (realism_spend.mean(axis=0) + 1e-12)  # (K,)
         if cv[active].min() < cv_floor:
             return False
-    sales_med = np.median(sales)
+    sales_med = np.median(realism_sales)
     safe_med = sales_med if sales_med > 0 else 1.0
-    if sales.max() / safe_med >= sales_spike_ratio:
+    if realism_sales.max() / safe_med >= sales_spike_ratio:
         return False
-    spend_med = np.median(spend, axis=0)  # (K,)
+    spend_med = np.median(realism_spend, axis=0)  # (K,)
     safe_spend_med = np.where(spend_med > 0, spend_med, 1.0)
-    if (spend.max(axis=0) / safe_spend_med).max() >= spend_spike_ratio:
+    if (realism_spend.max(axis=0) / safe_spend_med).max() >= spend_spike_ratio:
         return False
     return True
 
@@ -1096,7 +1100,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             n_req = n_missing + max(2, int(np.ceil(0.5 * n_missing)))
             draw_seed = int(rng.integers(2**31 - 1))
             try:
-                drawn_b = draw_worlds(model, _ADDITIVE_OUT_NAMES, draw_seed, draws=n_req)
+                draw_names = _ADDITIVE_OUT_NAMES + (
+                    ("channels_unshocked", "sales_unshocked") if cfg.n_channel_shocks else ()
+                )
+                drawn_b = draw_worlds(model, draw_names, draw_seed, draws=n_req)
             except Exception as exc:
                 # A sporadic pytensor py-linker evaluation crash on large graphs
                 # (or any draw failure) — count the whole batch as rejected and
@@ -1111,7 +1118,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             for b in range(n_req):
                 if len(accepted) == cfg.draws_per_cell:
                     break
-                drawn = {name: drawn_b[name][b] for name in _ADDITIVE_OUT_NAMES}
+                drawn = {name: drawn_b[name][b] for name in draw_names}
                 n_evaluated += 1
 
                 if not _additive_task_ok(
@@ -1120,6 +1127,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     arrays=drawn,
                     g_cy_active=g_act["g_cy"],
                     cv_floor=cfg.spend_cv_floor,
+                    realism_spend=drawn.get("channels_unshocked"),
+                    realism_sales=drawn.get("sales_unshocked"),
                 ):
                     n_rejected += 1
                     continue

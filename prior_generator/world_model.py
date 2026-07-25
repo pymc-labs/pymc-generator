@@ -119,23 +119,17 @@ def _uniform(name: str, lo: float, hi: float, shape):
 def _channel_shock_schedule(
     cfg: SCMPrior, g_cy: np.ndarray, T: int, burn_in: int, c_level
 ) -> dict[str, Any]:
-    """Build the symbolic audit schedule for configured channel shocks.
+    """Build the symbolic intervention schedule for configured channel shocks.
 
     The disjoint chronological slots make overlap impossible even when the
-    same direct channel is selected repeatedly. This deliberately does not
-    feed the schedule into the channel equations yet.
+    same direct channel is selected repeatedly. The full-horizon mask and
+    level matrix are internal inputs to the channel equations.
     """
     S = int(cfg.n_channel_shocks)
     K = len(g_cy)
     if S == 0:
         return {
-            "channel_shock_mask": pt.zeros((T, K), dtype="int8"),
-            "channel_shock_mask_full": pt.zeros((T + burn_in, K), dtype="int8"),
-            "channel_shock_channel": pt.zeros((0,), dtype="int64"),
-            "channel_shock_start": pt.zeros((0,), dtype="int64"),
-            "channel_shock_length": pt.zeros((0,), dtype="int64"),
-            "channel_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
-            "channel_shock_level": pt.zeros((0,), dtype="float64"),
+            "n_shocks": 0,
         }
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1).astype("int64")
@@ -179,9 +173,25 @@ def _channel_shock_schedule(
         selected = pt.eq(pt.arange(K)[:, None], channels[None, :]).T
         return pt.cast(pt.any(active[:, :, None] & selected[None, :, :], axis=1), "int8")
 
+    mask = _mask(T, 0)
+    mask_full = _mask(T + burn_in, burn_in)
+    time_full = pt.arange(T + burn_in)[:, None]
+    active_full = (time_full >= (starts_t + burn_in)[None, :]) & (
+        time_full < (starts_t + lengths + burn_in)[None, :]
+    )
+    selected = pt.eq(pt.arange(K)[:, None], channels[None, :]).T
+    level_full = pt.sum(
+        pt.cast(active_full[:, :, None] & selected[None, :, :], "float64") * levels[None, :, None],
+        axis=1,
+    )
     return {
-        "channel_shock_mask": _mask(T, 0),
-        "channel_shock_mask_full": _mask(T + burn_in, burn_in),
+        "n_shocks": S,
+        "mask_full": mask_full,
+        "level_full": level_full,
+        "channel": channels,
+        "start_full": starts_t + burn_in,
+        "channel_shock_mask": mask,
+        "channel_shock_mask_full": mask_full,
         "channel_shock_channel": channels,
         "channel_shock_start": starts_t,
         "channel_shock_length": lengths,
@@ -461,6 +471,8 @@ def build_world_model(
             "use_hf": structural["use_hf"],
             "use_pulse": structural["use_pulse"],
         }
+        if cfg.n_channel_shocks:
+            params["channel_shock"] = shock_outputs
 
         eps = {
             "eps_d": pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, J)),
@@ -494,7 +506,34 @@ def build_world_model(
 
         graph = build_symbolic_graph(g_active, params, T, K, M, J, burn_in=burn_in, eps=eps)
         graph["outputs"]["confounding_strength"] = confounding_strength
-        graph["outputs"].update(shock_outputs)
+        if cfg.n_channel_shocks:
+            graph["outputs"].update(
+                {
+                    key: shock_outputs[key]
+                    for key in (
+                        "channel_shock_mask",
+                        "channel_shock_mask_full",
+                        "channel_shock_channel",
+                        "channel_shock_start",
+                        "channel_shock_length",
+                        "channel_shock_level_multiplier",
+                        "channel_shock_level",
+                    )
+                }
+            )
+        else:
+            # Keep disabled schedules out of the structural graph and RV stream.
+            graph["outputs"].update(
+                {
+                    "channel_shock_mask": pt.zeros((T, K), dtype="int8"),
+                    "channel_shock_mask_full": pt.zeros((T_full, K), dtype="int8"),
+                    "channel_shock_channel": pt.zeros((0,), dtype="int64"),
+                    "channel_shock_start": pt.zeros((0,), dtype="int64"),
+                    "channel_shock_length": pt.zeros((0,), dtype="int64"),
+                    "channel_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
+                    "channel_shock_level": pt.zeros((0,), dtype="float64"),
+                }
+            )
         out_names = tuple(graph["outputs"].keys())
         for name in out_names:
             # A nondegenerate confounding strength is itself the named Uniform

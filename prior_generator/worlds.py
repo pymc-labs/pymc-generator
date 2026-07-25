@@ -3,9 +3,9 @@
 Where :func:`prior_generator.sample_prior_predictive` produces a padded N-task corpus
 for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
-DAG blocks, the drawn SCM parameters, and the 21 named output series
+DAG blocks, the drawn SCM parameters, and up to 23 named output series,
 including the interventional decomposition truth and shock-schedule audit
-outputs.
+outputs when enabled.
 
 The sampling path mirrors ``sampler._generate_corpus_additive``: draw the DAG
 + structure, build the world's PyMC model (``world_model.build_world_model``),
@@ -29,10 +29,8 @@ ADSTOCK_NAMES = ("none", "geometric", "weibull")
 #: Saturation family names, indexed by ``params["sat_family"]``.
 SATURATION_NAMES = ("linear", "hill", "logistic", "michaelis_menten", "tanh", "root")
 
-#: Graph outputs kept for every world — the 12 corpus outputs plus the two
-#: audit-only series (``channels_base``: channels with all upstream inputs
-#: surgically removed; ``contributions_observed``: observed-path
-#: contributions). Order must match ``build_symbolic_graph``'s outputs.
+#: Graph outputs kept for every world, including decomposition and optional
+#: shock audit paths. Order must match ``build_symbolic_graph``'s outputs.
 SCM_OUT_NAMES = (
     "demand",
     "controls",
@@ -47,6 +45,8 @@ SCM_OUT_NAMES = (
     "indirect_effects",
     "indirect_effects_by_source",
     "sales",
+    "channels_unshocked",
+    "sales_unshocked",
     "confounding_strength",
     "channel_shock_mask",
     "channel_shock_mask_full",
@@ -383,6 +383,8 @@ def sample_scm(
                 arrays=check,
                 g_cy_active=g_act["g_cy"],
                 cv_floor=cfg.spend_cv_floor,
+                realism_spend=d.get("channels_unshocked"),
+                realism_sales=d.get("sales_unshocked"),
             ):
                 return SCM(
                     data=d,

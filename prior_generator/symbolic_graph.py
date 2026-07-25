@@ -150,6 +150,45 @@ def _adstock_col(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
     return cast(TensorVariable, out[:, 0])
 
 
+def _adstock_col_with_resets(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
+    """Adstock a channel, resetting its response history at its shock starts.
+
+    A reset is response-state surgery rather than a change to the natural
+    channel path: after a shock starts, its response is the ordinary adstock
+    of the input suffix beginning at that start.  Schedule slots are ordered,
+    so applying the corresponding switches in schedule order makes a later
+    shock on the same channel override an earlier reset.
+    """
+    schedule = params.get("channel_shock")
+    if schedule is None:
+        return _adstock_col(c_col, params, k)
+
+    out = _adstock_col(c_col, params, k)
+    time = pt.arange(c_col.shape[0])
+    for s in range(int(schedule["n_shocks"])):
+        start = schedule["start_full"][s]
+        applies = pt.eq(schedule["channel"][s], k)
+        suffix = c_col * pt.cast(time >= start, c_col.dtype)
+        reset_out = _adstock_col(suffix, params, k)
+        out = pt.switch(applies & (time >= start), reset_out, out)
+    return cast(TensorVariable, out)
+
+
+def _clamp_channel(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
+    """Apply this channel's absolute held-level shock windows, when enabled."""
+    schedule = params.get("channel_shock")
+    if schedule is None:
+        return c_col
+    return cast(
+        TensorVariable,
+        pt.switch(
+            pt.neq(schedule["mask_full"][:, k], 0),
+            schedule["level_full"][:, k],
+            c_col,
+        ),
+    )
+
+
 def _saturate_col(
     ad_col: TensorVariable, mean_ad: TensorVariable, params: dict, k: int
 ) -> TensorVariable:
@@ -326,6 +365,7 @@ def build_symbolic_graph(
     v_zc = _arr(params["v_zc"], (M, K))
     alpha_cc = _arr(params["alpha_cc"], (K, K))
     c_cols: list[TensorVariable] = []
+    c_unshocked_cols: list[TensorVariable] = []
     c_base_cols: list[TensorVariable] = []
     # Telescoping intervention variants (see indirect_effects_by_source, below):
     #   c_no_cc      = channel with the C->C term dropped
@@ -349,13 +389,18 @@ def build_symbolic_graph(
             own = own + pulse_amp[k] * eps_c_pulse[:, k]
         term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], T_full)
         term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], T_full)
+        # The natural recursion is retained solely for the realism reference.
+        # The observed recursion instead sees already-clamped upstream parents,
+        # which is the SCM meaning of a channel intervention.
+        term_c_unshocked = _dot_terms(c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], T_full)
         term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], T_full)
         # softplus guard: spend-like channels must stay non-negative even
         # when signed upstream contributions push the pre-activation down
-        c_cols.append(pt.softplus(term_d + term_z + term_c + own))
-        c_base_cols.append(pt.softplus(own))
-        c_no_cc_cols.append(pt.softplus(term_d + term_z + own))
-        c_no_cc_zc_cols.append(pt.softplus(term_d + own))
+        c_unshocked_cols.append(pt.softplus(term_d + term_z + term_c_unshocked + own))
+        c_cols.append(_clamp_channel(pt.softplus(term_d + term_z + term_c + own), params, k))
+        c_base_cols.append(_clamp_channel(pt.softplus(own), params, k))
+        c_no_cc_cols.append(_clamp_channel(pt.softplus(term_d + term_z + own), params, k))
+        c_no_cc_zc_cols.append(_clamp_channel(pt.softplus(term_d + own), params, k))
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
 
@@ -398,7 +443,7 @@ def build_symbolic_graph(
         # pre-window history instead of the zero padding (warmup artifact).
         # The κ scale is a mean over the REPORTED window so f_k's operating
         # point matches what the model observes.
-        ad_obs = _adstock_col(c_cols[k], params, k)[W]
+        ad_obs = _adstock_col_with_resets(c_cols[k], params, k)[W]
         scale_k = pt.maximum(ad_obs.mean(), 1e-8).copy(name=f"sat_scale_{k}")
 
         # ONE response function per channel, applied to every variant: the
@@ -408,9 +453,9 @@ def build_symbolic_graph(
             return _saturate_col(ad_col, _scale, params, _k)
 
         f_obs = _f(ad_obs)
-        f_base = _f(_adstock_col(c_base_cols[k], params, k)[W])
-        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k)[W])
-        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k)[W])
+        f_base = _f(_adstock_col_with_resets(c_base_cols[k], params, k)[W])
+        f_no_cc = _f(_adstock_col_with_resets(c_no_cc_cols[k], params, k)[W])
+        f_no_cc_zc = _f(_adstock_col_with_resets(c_no_cc_zc_cols[k], params, k)[W])
         gate = g_cy[k] * beta[k]  # g concrete, beta possibly symbolic
         contrib_obs_cols.append(gate * f_obs)
         contrib_base_cols.append(gate * f_base)
@@ -437,20 +482,31 @@ def build_symbolic_graph(
     #        == baseline_intrinsic + Σ confounder_contribution + Σ control_contribution
     #           + contributions.sum(1) + indirect_effects_by_source.sum(1)
 
-    return {
-        "outputs": {
-            "demand": D[W],
-            "controls": Z[W],
-            "channels": C[W],
-            "channels_base": C_base[W],
-            "baseline": baseline,
-            "baseline_intrinsic": baseline_intrinsic,
-            "control_contribution": control_contribution[W],
-            "confounder_contribution": confounder_contribution[W],
-            "contributions": contributions,
-            "contributions_observed": contributions_observed,
-            "indirect_effects": indirect_effects,
-            "indirect_effects_by_source": indirect_effects_by_source,
-            "sales": sales,
-        },
+    outputs = {
+        "demand": D[W],
+        "controls": Z[W],
+        "channels": C[W],
+        "channels_base": C_base[W],
+        "baseline": baseline,
+        "baseline_intrinsic": baseline_intrinsic,
+        "control_contribution": control_contribution[W],
+        "confounder_contribution": confounder_contribution[W],
+        "contributions": contributions,
+        "contributions_observed": contributions_observed,
+        "indirect_effects": indirect_effects,
+        "indirect_effects_by_source": indirect_effects_by_source,
+        "sales": sales,
     }
+    # These are intentionally audit-only paths.  They are drawn to decide
+    # whether the *natural* world is realistic, never persisted in corpora.
+    if params.get("channel_shock") is not None:
+        unshocked_contribs = []
+        for k in range(K):
+            ad_unshocked = _adstock_col(c_unshocked_cols[k], params, k)[W]
+            scale_k = pt.maximum(ad_unshocked.mean(), 1e-8)
+            unshocked_contribs.append(
+                g_cy[k] * beta[k] * _saturate_col(ad_unshocked, scale_k, params, k)
+            )
+        outputs["channels_unshocked"] = pt.stack(c_unshocked_cols, axis=1)[W]
+        outputs["sales_unshocked"] = baseline + pt.stack(unshocked_contribs, axis=1).sum(axis=1)
+    return {"outputs": outputs}

@@ -43,7 +43,10 @@ for name, arr in scm.data.items():
 | **Direct truth** | `contributions` (per channel), `baseline`, `baseline_intrinsic` |
 | **Baseline split** | `control_contribution` (Z→B), `confounder_contribution` (D→B) |
 | **Indirect truth** | `indirect_effects`, `indirect_effects_by_source` (cc, zc, dc) |
-| **Latent / audit** | `demand`, `channels_base`, `contributions_observed` |
+| **Latent / audit** | `demand`, `channels_base`, `contributions_observed`; with channel shocks enabled: `channels_unshocked`, `sales_unshocked`, and the `channel_shock_*` schedule |
+
+`channels_unshocked` and `sales_unshocked` are single-world audit paths used by
+the realism filter. They are not public top-level arrays in generated corpora.
 
 ## What's inside: `.g` (the DAG)
 
