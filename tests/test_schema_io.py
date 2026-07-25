@@ -7,6 +7,12 @@ import pytest
 
 import prior_generator as pg
 from prior_generator import DataGenerator
+from prior_generator.signal_diagnostics import (
+    SIGNAL_METRIC_LAYOUT,
+    SIGNAL_METRIC_VERSION,
+    dense_signal_metrics,
+    summarize_signal_metrics,
+)
 from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 
@@ -113,6 +119,73 @@ def test_datagenerator_generate_n_tasks():
     assert corpus["is_val"].sum() >= 1
     assert corpus["channel_shock_mask"].shape[0] == 7
     assert corpus["channel_level"].shape[0] == 7
+
+
+def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
+    cfg = pg.make_scm_prior(
+        n_treatments=2,
+        n_covariates=2,
+        n_latent=1,
+        T=16,
+        n_cells=2,
+        draws_per_cell=2,
+        seed=73,
+    )
+    n_tasks = 3
+    full = pg.sample_prior_predictive(cfg)
+    truncated = pg.sample_prior_predictive(cfg, n=n_tasks)
+    generated = DataGenerator(cfg).generate(n_tasks=n_tasks, validate=True)
+
+    for corpus in (truncated, generated):
+        for value in corpus.values():
+            if isinstance(value, np.ndarray) and value.ndim > 0:
+                assert value.shape[0] == n_tasks
+        assert not any(key.startswith("_temp_") for key in corpus)
+        assert corpus["is_val"].sum() >= 1
+        assert corpus["diagnostics"]["n_tasks"] == n_tasks
+        assert corpus["diagnostics"]["n_cells"] == len(np.unique(corpus["cell_id"]))
+
+        layout = SlotLayout(K=2, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+        direct = (corpus["g"][:, layout.slices["cy"]] == 1) & (corpus["active_c_mask"] == 1)
+        expected_metrics, expected_valid = dense_signal_metrics(
+            corpus["spend_raw"],
+            corpus["contributions_raw"],
+            corpus["sales_raw"],
+            corpus["baseline_raw"],
+            direct,
+            sales_scale=corpus["sales_scale"],
+            adstock_family=corpus["adstock_family"],
+            adstock_alpha=corpus["adstock_alpha"],
+            weibull_lam=corpus["weibull_lam"],
+            weibull_k=corpus["weibull_k"],
+            channel_shock_channel=corpus["channel_shock_channel"],
+            channel_shock_start=corpus["channel_shock_start"],
+            l_max=cfg.l_max,
+            adstock_burn_in=cfg.adstock_burn_in,
+        )
+        assert np.array_equal(corpus["signal_metrics"], expected_metrics)
+        assert np.array_equal(corpus["signal_metric_valid"], expected_valid)
+        expected_signal = summarize_signal_metrics(
+            expected_metrics,
+            expected_valid,
+            corpus["sales_raw"],
+            direct,
+            sales_scale=corpus["sales_scale"],
+            l_max=cfg.l_max,
+            adstock_burn_in=cfg.adstock_burn_in,
+        )
+        expected_signal["metric_version"] = SIGNAL_METRIC_VERSION
+        expected_signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
+        assert corpus["diagnostics"]["signal"] == expected_signal
+
+    for key, value in full.items():
+        if isinstance(value, np.ndarray) and value.ndim > 0 and key != "is_val":
+            assert np.array_equal(truncated[key], value[:n_tasks]), key
+
+    path = tmp_path / "truncated.npz"
+    pg.save_corpus(generated, path)
+    loaded = pg.load_corpus(path)
+    assert DataGenerator.validate_corpus(loaded) == []
 
 
 def test_validate_corpus_flags_corrupt_shock_metadata(corpus):

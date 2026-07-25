@@ -828,6 +828,97 @@ def _signal_block(
     return out
 
 
+_TEMP_DECOMPOSITION_ERROR_KEYS = (
+    "_temp_decomposition_max_abs_error",
+    "_temp_telescoping_split_max_abs_error",
+    "_temp_full_decomposition_max_abs_error",
+    "_temp_baseline_decomposition_max_abs_error",
+)
+
+
+def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
+    """Derive retained-corpus diagnostics and signal features exactly once.
+
+    Generation deliberately leaves task-leading arrays unsummarized so callers
+    can truncate them first.  In particular, signal features must be based on
+    the exact float32 arrays persisted by the corpus rather than a superseded
+    pre-truncation population.
+    """
+    layout = cfg.layout
+    n_tasks = corpus["spend_raw"].shape[0]
+    diagnostics = corpus["diagnostics"]
+    elapsed = diagnostics["elapsed_s"]
+
+    g_tasks = corpus["g"]
+    active_c_mask = corpus["active_c_mask"]
+    cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (active_c_mask == 1)
+    signal_metrics, signal_metric_valid = dense_signal_metrics(
+        corpus["spend_raw"],
+        corpus["contributions_raw"],
+        corpus["sales_raw"],
+        corpus["baseline_raw"],
+        cy_mask,
+        sales_scale=corpus["sales_scale"],
+        adstock_family=corpus["adstock_family"],
+        adstock_alpha=corpus["adstock_alpha"],
+        weibull_lam=corpus["weibull_lam"],
+        weibull_k=corpus["weibull_k"],
+        channel_shock_channel=corpus["channel_shock_channel"],
+        channel_shock_start=corpus["channel_shock_start"],
+        l_max=cfg.l_max,
+        adstock_burn_in=cfg.adstock_burn_in,
+    )
+    corpus["signal_metrics"] = signal_metrics
+    corpus["signal_metric_valid"] = signal_metric_valid
+    diagnostics["signal"] = _signal_block(
+        cfg,
+        layout,
+        corpus["sales_raw"],
+        g_tasks,
+        active_c_mask,
+        corpus["sales_scale"],
+        signal_metrics,
+        signal_metric_valid,
+    )
+
+    # These are intentionally calculated from the retained, persisted arrays.
+    # Do not regenerate per-task normalizers here: slicing their already-cast
+    # values preserves the serialized-array compatibility contract.
+    spend = corpus["spend_raw"].astype(np.float64)
+    contributions = corpus["contributions_raw"].astype(np.float64)
+    baseline = corpus["baseline_raw"].astype(np.float64)
+    qs = (0.1, 0.5, 0.9)
+    cv_all = (spend.std(axis=1) / (spend.mean(axis=1) + 1e-12)).ravel()
+    contrib_tot = contributions.sum(axis=(1, 2))
+    media_share = contrib_tot / (contrib_tot + baseline.sum(axis=1) + 1e-12)
+
+    diagnostics.update(
+        {
+            "n_tasks": int(n_tasks),
+            "n_cells": int(np.unique(corpus["cell_id"]).size),
+            "tasks_per_sec": float(n_tasks / elapsed),
+            "edge_marginals": {
+                et: float(g_tasks[:, layout.slices[et]].mean()) for et in layout.edge_types
+            },
+            "media_share_quantiles": {
+                f"q{int(q * 100)}": float(np.quantile(media_share, q)) for q in qs
+            },
+            "spend_cv_quantiles": {f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs},
+        }
+    )
+    for key, diagnostic_key in zip(
+        _TEMP_DECOMPOSITION_ERROR_KEYS,
+        (
+            "decomposition_max_abs_error",
+            "telescoping_split_max_abs_error",
+            "full_decomposition_max_abs_error",
+            "baseline_decomposition_max_abs_error",
+        ),
+    ):
+        diagnostics[diagnostic_key] = float(np.max(corpus.pop(key)))
+    return corpus
+
+
 def _make_support_mask(
     rng: np.random.Generator, T: int, n_query: int, p_long_horizon: float
 ) -> tuple[np.ndarray, int]:
@@ -913,9 +1004,9 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
         for key, val in list(corpus.items()):
             if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == actual:
                 corpus[key] = val[:n]
-        if "is_val" in corpus and corpus["is_val"].sum() == 0:
-            corpus["is_val"][0] = 1  # keep at least one val world after truncation
-    return corpus
+    if corpus["is_val"].sum() == 0:
+        corpus["is_val"][0] = 1  # keep at least one val world after truncation
+    return _finalize_corpus(corpus, prior)
 
 
 # --------------------------------------------------------------------------
@@ -1202,6 +1293,29 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 control_contrib_pad[:, :M_active] = drawn["control_contribution"]
                 confounder_contrib_pad = np.zeros((T, J_max))
                 confounder_contrib_pad[:, :J_active] = drawn["confounder_contribution"]
+                decomposition_error = np.abs(
+                    drawn["baseline"]
+                    + contrib_pad.sum(axis=-1)
+                    + drawn["indirect_effects"]
+                    - drawn["sales"]
+                ).max()
+                telescoping_error = np.abs(
+                    drawn["indirect_effects_by_source"].sum(axis=-1) - drawn["indirect_effects"]
+                ).max()
+                full_decomposition_error = np.abs(
+                    drawn["baseline_intrinsic"]
+                    + confounder_contrib_pad.sum(axis=-1)
+                    + control_contrib_pad.sum(axis=-1)
+                    + contrib_pad.sum(axis=-1)
+                    + drawn["indirect_effects_by_source"].sum(axis=-1)
+                    - drawn["sales"]
+                ).max()
+                baseline_decomposition_error = np.abs(
+                    drawn["baseline_intrinsic"]
+                    + confounder_contrib_pad.sum(axis=-1)
+                    + control_contrib_pad.sum(axis=-1)
+                    - drawn["baseline"]
+                ).max()
 
                 accepted.append(
                     {
@@ -1231,6 +1345,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "adstock_alpha": adstock_alpha_pad,
                         "weibull_lam": weibull_lam_pad,
                         "weibull_k": weibull_k_pad,
+                        "_temp_decomposition_max_abs_error": decomposition_error,
+                        "_temp_telescoping_split_max_abs_error": telescoping_error,
+                        "_temp_full_decomposition_max_abs_error": full_decomposition_error,
+                        "_temp_baseline_decomposition_max_abs_error": baseline_decomposition_error,
                         "cell": cell,
                     }
                 )
@@ -1277,6 +1395,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     adstock_alpha = np.stack([tk["adstock_alpha"] for tk in tasks])
     weibull_lam = np.stack([tk["weibull_lam"] for tk in tasks])
     weibull_k = np.stack([tk["weibull_k"] for tk in tasks])
+    temp_decomposition_errors = {
+        key: np.asarray([tk[key] for tk in tasks], dtype=np.float64)
+        for key in _TEMP_DECOMPOSITION_ERROR_KEYS
+    }
 
     active_c_mask = np.stack([cell_gs[c]["active_c"] for c in cell_id])
     active_m_mask = np.stack([cell_gs[c]["active_m"] for c in cell_id])
@@ -1343,46 +1465,14 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         sales_scale[bad_scale] = np.where(np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0)
     sales_norm = sales_raw / sales_scale[:, None]
 
-    # -- diagnostics ---------------------------------------------------------
+    # -- static diagnostics --------------------------------------------------
     elapsed = time.perf_counter() - t_start
-    qs = (0.1, 0.5, 0.9)
-    cv_all = (spend_raw.std(axis=1) / (spend_raw.mean(axis=1) + 1e-12)).ravel()
-    contrib_tot = contributions_raw.sum(axis=(1, 2))
-    media_share = contrib_tot / (contrib_tot + baseline_raw.sum(axis=1) + 1e-12)
-    decomp_err = np.abs(
-        baseline_raw + contributions_raw.sum(axis=-1) + indirect_effects - sales_raw
-    ).max()
-    # Phase 5 invariants (float64 pre-storage error):
-    #  (1) telescoping split sums to the total indirect series
-    telescoping_err = np.abs(indirect_effects_by_source.sum(axis=-1) - indirect_effects).max()
-    #  (2) full per-node additivity to sales
-    full_decomp_err = np.abs(
-        baseline_intrinsic
-        + confounder_contribution.sum(axis=-1)
-        + control_contribution.sum(axis=-1)
-        + contributions_raw.sum(axis=-1)
-        + indirect_effects_by_source.sum(axis=-1)
-        - sales_raw
-    ).max()
-    #  (3) per-node baseline terms reconstruct the aggregate baseline
-    baseline_decomp_err = np.abs(
-        baseline_intrinsic
-        + confounder_contribution.sum(axis=-1)
-        + control_contribution.sum(axis=-1)
-        - baseline_raw
-    ).max()
     diagnostics = {
         "edge_types": list(layout.edge_types),
-        "n_tasks": int(n_tasks),
-        "n_cells": int(cfg.n_cells),
         "draws_per_cell": int(cfg.draws_per_cell),
         "elapsed_s": float(elapsed),
-        "tasks_per_sec": float(n_tasks / elapsed),
         "n_draws_evaluated": int(n_evaluated),
         "rejection_rate": float(n_rejected / max(n_evaluated, 1)),
-        "edge_marginals": {
-            et: float(g_cells[:, layout.slices[et]].mean()) for et in layout.edge_types
-        },
         "edge_base_rates": {
             "cy": float(EDGE_BASE_RATES["cy"]),
             "dc": float(EDGE_BASE_RATES["dc"]),
@@ -1401,15 +1491,6 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             if cfg.edge_budget
             else None
         ),
-        "decomposition_max_abs_error": float(decomp_err),
-        "telescoping_split_max_abs_error": float(telescoping_err),
-        "full_decomposition_max_abs_error": float(full_decomp_err),
-        "baseline_decomposition_max_abs_error": float(baseline_decomp_err),
-        "media_share_quantiles": {
-            f"q{int(q * 100)}": float(np.quantile(media_share, q)) for q in qs
-        },
-        "spend_cv_quantiles": {f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs},
-        "signal": {},
     }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
@@ -1465,39 +1546,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "adstock_alpha": adstock_alpha.astype(np.float32),
         "weibull_lam": weibull_lam.astype(np.float32),
         "weibull_k": weibull_k.astype(np.float32),
+        **temp_decomposition_errors,
         "diagnostics": diagnostics,
     }
-    # Signal features are computed only from the exact float32 values persisted
-    # above, so save/load recomputation is bit-for-bit reproducible.
-    cy_mask = (corpus["g"][:, layout.slices["cy"]] == 1) & (corpus["active_c_mask"] == 1)
-    signal_metrics, signal_metric_valid = dense_signal_metrics(
-        corpus["spend_raw"],
-        corpus["contributions_raw"],
-        corpus["sales_raw"],
-        corpus["baseline_raw"],
-        cy_mask,
-        sales_scale=corpus["sales_scale"],
-        adstock_family=corpus["adstock_family"],
-        adstock_alpha=corpus["adstock_alpha"],
-        weibull_lam=corpus["weibull_lam"],
-        weibull_k=corpus["weibull_k"],
-        channel_shock_channel=corpus["channel_shock_channel"],
-        channel_shock_start=corpus["channel_shock_start"],
-        l_max=cfg.l_max,
-        adstock_burn_in=cfg.adstock_burn_in,
-    )
-    corpus["signal_metrics"] = signal_metrics
-    corpus["signal_metric_valid"] = signal_metric_valid
-    diagnostics["signal"] = _signal_block(
-        cfg,
-        layout,
-        corpus["sales_raw"],
-        corpus["g"],
-        corpus["active_c_mask"],
-        corpus["sales_scale"],
-        signal_metrics,
-        signal_metric_valid,
-    )
     if prior_cond_arr is not None:
         # Present IFF prior_conditioning=True — an unconditioned corpus stays
         # byte-identical to the pre-feature format (consumers treat absence

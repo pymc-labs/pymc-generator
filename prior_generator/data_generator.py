@@ -76,21 +76,12 @@ class DataGenerator:
         if n_tasks is not None and n_tasks <= 0:
             raise ValueError(f"n_tasks must be positive, got {n_tasks}")
 
-        cfg = self._make_config(n_tasks, seed)
+        cfg = self._make_config(seed=seed)
 
-        # Generate corpus
-        corpus = sample_prior_predictive(cfg)
-
-        # Truncate to requested n_tasks
-        if n_tasks is not None:
-            actual_n = corpus["spend_raw"].shape[0]
-            if actual_n > n_tasks:
-                for key in corpus:
-                    if isinstance(corpus[key], np.ndarray) and corpus[key].shape[0] == actual_n:
-                        corpus[key] = corpus[key][:n_tasks]
-                # Ensure at least one val task after truncation
-                if "is_val" in corpus and corpus["is_val"].sum() == 0:
-                    corpus["is_val"][0] = 1
+        # sample_prior_predictive truncates before deriving retained-corpus
+        # diagnostics and signal labels. Do not independently slice a finalized
+        # corpus here, or those task-level summaries would become stale.
+        corpus = sample_prior_predictive(cfg, n=n_tasks)
 
         # Validate if requested
         if validate:
@@ -185,16 +176,11 @@ class DataGenerator:
 
     def _make_config(
         self,
-        n_tasks: int | None = None,
         seed: int | None = None,
     ) -> SCMPrior:
         """Create a SCMPrior with overrides."""
         cfg = self.config
         overrides = {}
-
-        if n_tasks is not None:
-            dpc = cfg.draws_per_cell
-            overrides["n_cells"] = max(2, (n_tasks + dpc - 1) // dpc)
 
         if seed is not None:
             overrides["seed"] = seed
