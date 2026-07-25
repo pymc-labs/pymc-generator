@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .sampler import SCMPrior, _additive_task_ok, _slice_g_active, sample_g_additive
-from .signal_diagnostics import per_channel_signal
+from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION, per_channel_signal
 
 #: Adstock family names, indexed by ``params["adstock_family"]``.
 ADSTOCK_NAMES = ("none", "geometric", "weibull")
@@ -170,8 +170,18 @@ class SCM:
             d["sales"][None],
             cy_mask,
             l_max=self.cfg.l_max,
+            baseline=d["baseline"][None],
+            adstock_family=np.asarray(self.params["adstock_family"])[None],
+            adstock_alpha=np.asarray(self.params["adstock_alpha"])[None],
+            weibull_lam=np.asarray(self.params["weibull_lam"])[None],
+            weibull_k=np.asarray(self.params["weibull_k"])[None],
+            channel_shock_channel=np.asarray(d["channel_shock_channel"])[None],
+            channel_shock_start=np.asarray(d["channel_shock_start"])[None],
+            adstock_burn_in=self.cfg.adstock_burn_in,
         )
         per["channel"] = np.nonzero(cy_mask[0])[0].astype(float)
+        per["metric_version"] = SIGNAL_METRIC_VERSION
+        per["metric_layout"] = SIGNAL_METRIC_LAYOUT
         return per
 
 

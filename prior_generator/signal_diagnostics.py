@@ -17,11 +17,14 @@ Metrics per (task, direct channel) pair
 * ``contrib_hf``    — high-frequency ratio of the target.
 * ``contrib_rel_std`` — target std / per-task sales scale (amplitude of the
   target in training-loss units).
-* ``spearman``      — |rank correlation| between observed spend and the true
-  contribution (how much of the target is visible from the input).
+* ``spearman``      — |rank correlation| between true-family-adstocked spend
+  and the contribution (how much of the target is visible from the input).
 * ``warmup_ratio``  — (max-min over the first ``l_max`` weeks) / (std of the
   rest): >> 1 flags the adstock zero-padding warmup artifact dominating the
   target (fixed by ``adstock_burn_in``).
+* ``contrib_r2_explained_by_rest`` — contribution R² against an intercept,
+  baseline, and the other direct-channel contributions.
+* ``contrib_corr_baseline`` — signed contribution/baseline correlation.
 
 ``signal_summary`` reduces these to quantiles plus degenerate-target
 fractions, and adds the per-task normalized sales level
@@ -37,12 +40,17 @@ __all__ = [
     "DEFAULT_GATE",
     "FRAC_KEYS",
     "METRIC_KEYS",
+    "SIGNAL_METRIC_LAYOUT",
+    "SIGNAL_METRIC_VERSION",
     "check_signal_gate",
+    "dense_signal_metrics",
     "per_channel_signal",
+    "summarize_signal_metrics",
     "signal_summary",
 ]
 
 _QS = (0.1, 0.5, 0.9)
+SIGNAL_METRIC_VERSION = 1
 
 #: Per-pair metrics emitted by :func:`per_channel_signal` and summarized (as
 #: ``<key>_quantiles``) by :func:`signal_summary`. Single source of truth —
@@ -55,7 +63,12 @@ METRIC_KEYS: tuple[str, ...] = (
     "contrib_rel_std",
     "spearman",
     "warmup_ratio",
+    "contrib_r2_explained_by_rest",
+    "contrib_corr_baseline",
 )
+
+# This is a persisted feature layout: append only.
+SIGNAL_METRIC_LAYOUT: tuple[str, ...] = METRIC_KEYS
 
 #: Degenerate-target fractions emitted by :func:`signal_summary`.
 FRAC_KEYS: tuple[str, ...] = (
@@ -107,6 +120,180 @@ def _spearman_abs(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.asarray(np.where(denom > 1e-12, np.abs(num) / np.maximum(denom, 1e-12), 0.0))
 
 
+def _adstock_numpy(
+    x: np.ndarray, family: int, alpha: float, lam: float, shape: float, l_max: int
+) -> np.ndarray:
+    """The generator's normalized, causal adstock for one reported series."""
+    if family == 0:
+        return x.copy()
+    lag = np.arange(int(l_max), dtype=np.float64)
+    if family == 1:
+        weights = np.power(float(alpha), lag)
+    elif family == 2:
+        t = lag + 1.0
+        lam = max(float(lam), 1e-12)
+        shape = max(float(shape), 1e-12)
+        weights = (shape / lam) * np.power(t / lam, shape - 1.0) * np.exp(-np.power(t / lam, shape))
+        # Match pymc-marketing's PDF mode exactly: it min/max scales the
+        # sampled density before its normalized causal convolution.  The max
+        # scale cancels after normalization, but retaining it also preserves
+        # the degenerate-kernel behavior.
+        weights = (weights - weights.min()) / (weights.max() - weights.min())
+    else:
+        raise ValueError(f"unknown adstock family {family}")
+    total = weights.sum()
+    if not np.isfinite(total) or total <= 1e-12:
+        return np.zeros_like(x, dtype=np.float64)
+    weights = weights / total
+    return np.convolve(x, weights, mode="full")[: x.size]
+
+
+def _reset_adstock_numpy(
+    x: np.ndarray,
+    family: int,
+    alpha: float,
+    lam: float,
+    shape: float,
+    l_max: int,
+    starts: np.ndarray,
+) -> np.ndarray:
+    """Match symbolic response-state resets, in chronological shock order."""
+    out = _adstock_numpy(x, family, alpha, lam, shape, l_max)
+    for start in np.sort(starts.astype(int)):
+        if 0 <= start < x.size:
+            suffix = _adstock_numpy(x[start:], family, alpha, lam, shape, l_max)
+            out[start:] = suffix
+    return out
+
+
+def dense_signal_metrics(
+    spend: np.ndarray,
+    contributions: np.ndarray,
+    sales: np.ndarray,
+    baseline: np.ndarray,
+    cy_mask: np.ndarray,
+    *,
+    sales_scale: np.ndarray | None = None,
+    adstock_family: np.ndarray | None = None,
+    adstock_alpha: np.ndarray | None = None,
+    weibull_lam: np.ndarray | None = None,
+    weibull_k: np.ndarray | None = None,
+    channel_shock_channel: np.ndarray | None = None,
+    channel_shock_start: np.ndarray | None = None,
+    l_max: int = 8,
+    adstock_burn_in: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return persisted dense ``(N, K, L)`` metrics and uint8 validity.
+
+    Inputs are deliberately the final persisted arrays; callers must not pass
+    pre-cast draw values.  Ineligible/padded cells are exactly zero and invalid.
+    """
+    spend = np.asarray(spend, dtype=np.float64)
+    contributions = np.asarray(contributions, dtype=np.float64)
+    sales = np.asarray(sales, dtype=np.float64)
+    baseline = np.asarray(baseline, dtype=np.float64)
+    mask = np.asarray(cy_mask, dtype=bool)
+    if spend.ndim != 3:
+        raise ValueError("spend must have shape (N, T, K)")
+    N, T, K = spend.shape
+    if contributions.shape != (N, T, K) or sales.shape != (N, T) or baseline.shape != (N, T):
+        raise ValueError("signal source arrays have incompatible shapes")
+    if mask.shape != (N, K):
+        raise ValueError(f"cy_mask shape {mask.shape} != {(N, K)}")
+    if not all(np.isfinite(a).all() for a in (spend, contributions, sales, baseline)):
+        raise ValueError("signal source arrays must be finite")
+    l_max = max(int(l_max), 1)
+    scale = sales.std(axis=1) if sales_scale is None else np.asarray(sales_scale, dtype=np.float64)
+    if scale.shape != (N,) or not np.isfinite(scale).all():
+        raise ValueError("sales_scale must be finite with shape (N,)")
+    scale = np.maximum(scale, 1e-12)
+    fam = np.zeros((N, K), dtype=np.uint8) if adstock_family is None else np.asarray(adstock_family)
+    alpha = (
+        np.zeros((N, K)) if adstock_alpha is None else np.asarray(adstock_alpha, dtype=np.float64)
+    )
+    wlam = np.ones((N, K)) if weibull_lam is None else np.asarray(weibull_lam, dtype=np.float64)
+    wk = np.ones((N, K)) if weibull_k is None else np.asarray(weibull_k, dtype=np.float64)
+    if any(a.shape != (N, K) for a in (fam, alpha, wlam, wk)):
+        raise ValueError("adstock metadata must have shape (N, K)")
+    metrics = np.zeros((N, K, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    valid = np.zeros_like(metrics, dtype=np.uint8)
+    metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
+    shock_channels = (
+        np.empty((N, 0), dtype=int)
+        if channel_shock_channel is None
+        else np.asarray(channel_shock_channel)
+    )
+    shock_starts = (
+        np.empty((N, 0), dtype=int)
+        if channel_shock_start is None
+        else np.asarray(channel_shock_start)
+    )
+    if (
+        shock_channels.shape != shock_starts.shape
+        or shock_channels.ndim != 2
+        or shock_channels.shape[0] != N
+    ):
+        raise ValueError("shock schedule arrays must share shape (N, S)")
+    for n, k in zip(*np.nonzero(mask)):
+        x, y = spend[n, :, k], contributions[n, :, k]
+        std_x, std_y = x.std(), y.std()
+        values = {
+            "spend_cv": std_x / (abs(x.mean()) + 1e-12),
+            "contrib_cv": std_y / (abs(y.mean()) + 1e-12),
+            "contrib_rel_std": std_y / scale[n],
+        }
+        for name, value in values.items():
+            metrics[n, k, metric_index[name]] = value
+            valid[n, k, metric_index[name]] = 1
+        if T >= 2:
+            metrics[n, k, metric_index["spend_hf"]] = _hf_ratio(x[None])[0]
+            metrics[n, k, metric_index["contrib_hf"]] = _hf_ratio(y[None])[0]
+            valid[n, k, [metric_index["spend_hf"], metric_index["contrib_hf"]]] = 1
+        starts = shock_starts[n, shock_channels[n] == k]
+        ad_x = _reset_adstock_numpy(
+            x, int(fam[n, k]), alpha[n, k], wlam[n, k], wk[n, k], l_max, starts
+        )
+        # Visibility intentionally compares once-adstocked observed spend; do
+        # not adstock a contribution that already contains the response.
+        if T - l_max >= 3:
+            metrics[n, k, metric_index["spearman"]] = _spearman_abs(
+                ad_x[l_max:][None], y[l_max:][None]
+            )[0]
+            valid[n, k, metric_index["spearman"]] = 1
+        if int(adstock_burn_in) < l_max and T >= l_max + 3:
+            warm_range = y[:l_max].max() - y[:l_max].min()
+            metrics[n, k, metric_index["warmup_ratio"]] = warm_range / max(y[l_max:].std(), 1e-12)
+            valid[n, k, metric_index["warmup_ratio"]] = 1
+        if T >= 2:
+            # Explained by the full reported window: intercept, baseline, and
+            # all *other* active direct contributions.
+            others = [j for j in np.flatnonzero(mask[n]) if j != k]
+            design = [np.ones(T), baseline[n]] + [contributions[n, :, j] for j in others]
+            fitted = (
+                np.column_stack(design) @ np.linalg.lstsq(np.column_stack(design), y, rcond=None)[0]
+            )
+            sst = np.sum((y - y.mean()) ** 2)
+            tolerance = 32.0 * np.finfo(np.float32).eps * max(float(np.dot(y, y)), 1.0)
+            ss_res = np.sum((y - fitted) ** 2)
+            # R² is undefined for a constant target.  Treat it as explained
+            # only when the full-window intercept/baseline/rest fit reproduces
+            # it to a scale-aware numerical residual tolerance.
+            r2 = (
+                float(ss_res <= tolerance)
+                if sst <= tolerance
+                else float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
+            )
+            metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
+            valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
+            centered_y, centered_b = y - y.mean(), baseline[n] - baseline[n].mean()
+            denom = np.sqrt(np.sum(centered_y**2) * np.sum(centered_b**2))
+            metrics[n, k, metric_index["contrib_corr_baseline"]] = (
+                centered_y @ centered_b / denom if denom > 1e-12 else 0.0
+            )
+            valid[n, k, metric_index["contrib_corr_baseline"]] = 1
+    return metrics, valid
+
+
 def per_channel_signal(
     spend: np.ndarray,
     contributions: np.ndarray,
@@ -115,6 +302,14 @@ def per_channel_signal(
     *,
     sales_scale: np.ndarray | None = None,
     l_max: int = 8,
+    baseline: np.ndarray | None = None,
+    adstock_family: np.ndarray | None = None,
+    adstock_alpha: np.ndarray | None = None,
+    weibull_lam: np.ndarray | None = None,
+    weibull_k: np.ndarray | None = None,
+    channel_shock_channel: np.ndarray | None = None,
+    channel_shock_start: np.ndarray | None = None,
+    adstock_burn_in: int = 0,
 ) -> dict[str, np.ndarray]:
     """Per-(task, direct channel) signal metrics.
 
@@ -133,52 +328,99 @@ def per_channel_signal(
     dict of 1-D float arrays, one entry per (task, direct channel) pair, plus
     ``task_idx`` locating each pair.
     """
-    spend = np.asarray(spend, dtype=np.float64)
-    contributions = np.asarray(contributions, dtype=np.float64)
-    sales = np.asarray(sales, dtype=np.float64)
-    mask = np.asarray(cy_mask).astype(bool)
+    spend = np.asarray(spend)
     N, T, K = spend.shape
-    if contributions.shape != (N, T, K):
-        raise ValueError(f"contributions shape {contributions.shape} != {(N, T, K)}")
-    if mask.shape != (N, K):
-        raise ValueError(f"cy_mask shape {mask.shape} != {(N, K)}")
+    mask = np.asarray(cy_mask, dtype=bool)
+    dense, valid = dense_signal_metrics(
+        spend,
+        contributions,
+        sales,
+        np.zeros((N, T), dtype=spend.dtype) if baseline is None else baseline,
+        mask,
+        sales_scale=sales_scale,
+        l_max=l_max,
+        adstock_family=adstock_family,
+        adstock_alpha=adstock_alpha,
+        weibull_lam=weibull_lam,
+        weibull_k=weibull_k,
+        channel_shock_channel=channel_shock_channel,
+        channel_shock_start=channel_shock_start,
+        adstock_burn_in=adstock_burn_in,
+    )
+    task_idx = np.broadcast_to(np.arange(N)[:, None], (N, K))
+    out = {"task_idx": task_idx[mask].astype(np.float64)}
+    for i, key in enumerate(SIGNAL_METRIC_LAYOUT):
+        # Select dense result rows for the legacy flattened API; this is not a
+        # second metric computation.
+        out[key] = dense[..., i][mask]
+        out[f"{key}_valid"] = valid[..., i][mask]
+    return out
+
+
+def summarize_signal_metrics(
+    metrics: np.ndarray,
+    valid: np.ndarray,
+    sales: np.ndarray,
+    cy_mask: np.ndarray,
+    *,
+    sales_scale: np.ndarray | None = None,
+    l_max: int = 8,
+    adstock_burn_in: int = 0,
+) -> dict:
+    """Summarize persisted dense metrics using their per-metric validity.
+
+    This is deliberately separate from metric calculation so corpus diagnostics
+    can be derived from exactly the float32 arrays written to disk.
+    """
+    metrics = np.asarray(metrics)
+    valid = np.asarray(valid)
+    sales = np.asarray(sales, dtype=np.float64)
+    mask = np.asarray(cy_mask, dtype=bool)
+    expected = mask.shape + (len(SIGNAL_METRIC_LAYOUT),)
+    if metrics.shape != expected or valid.shape != expected:
+        raise ValueError(f"metrics and validity must have shape {expected}")
+    if sales.ndim != 2 or sales.shape[0] != mask.shape[0]:
+        raise ValueError("sales must have shape (N, T)")
+    if not np.isfinite(metrics).all() or not np.isin(valid, (0, 1)).all():
+        raise ValueError("metrics must be finite and validity must be binary")
+
     if sales_scale is None:
         scale = sales.std(axis=1)
     else:
         scale = np.asarray(sales_scale, dtype=np.float64)
-    scale = np.maximum(scale, 1e-12)
+    if scale.shape != (sales.shape[0],) or not np.isfinite(scale).all():
+        raise ValueError("sales_scale must be finite with shape (N,)")
+    level_ratio = np.abs(sales.mean(axis=1)) / np.maximum(scale, 1e-12)
+    n_pairs = int(mask.sum())
+    out: dict = {"n_direct_channels": n_pairs}
+    metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
+    for key, i in metric_index.items():
+        vals = metrics[..., i][mask & valid[..., i].astype(bool)]
+        out[f"{key}_quantiles"] = {
+            f"q{int(q * 100)}": (float(np.quantile(vals, q)) if vals.size else None) for q in _QS
+        }
 
-    s = np.swapaxes(spend, 1, 2)  # (N, K, T)
-    c = np.swapaxes(contributions, 1, 2)  # (N, K, T)
-
-    spend_cv = s.std(axis=-1) / (np.abs(s.mean(axis=-1)) + 1e-12)  # (N, K)
-    spend_hf = _hf_ratio(s)
-    contrib_cv = c.std(axis=-1) / (np.abs(c.mean(axis=-1)) + 1e-12)
-    contrib_hf = _hf_ratio(c)
-    contrib_rel_std = c.std(axis=-1) / scale[:, None]
-    spearman = _spearman_abs(s, c)
-    # Warmup window needs >= 3 post-warmup samples for a stable "rest" std;
-    # for shorter series the ratio is unmeasurable — report 0 rather than a
-    # 1e12 explosion that would spuriously fail every warmup gate.
-    warm = min(max(int(l_max), 1), T - 3)
-    if warm >= 1:
-        warm_range = c[..., :warm].max(axis=-1) - c[..., :warm].min(axis=-1)
-        rest_std = np.maximum(c[..., warm:].std(axis=-1), 1e-12)
-        warmup_ratio = warm_range / rest_std
-    else:
-        warmup_ratio = np.zeros((N, K))
-
-    task_idx = np.broadcast_to(np.arange(N)[:, None], (N, K))
-    return {
-        "task_idx": task_idx[mask].astype(np.float64),
-        "spend_cv": spend_cv[mask],
-        "spend_hf": spend_hf[mask],
-        "contrib_cv": contrib_cv[mask],
-        "contrib_hf": contrib_hf[mask],
-        "contrib_rel_std": contrib_rel_std[mask],
-        "spearman": spearman[mask],
-        "warmup_ratio": warmup_ratio[mask],
+    fraction_specs = {
+        "frac_contrib_cv_lt_005": ("contrib_cv", lambda x: x < 0.05),
+        "frac_contrib_cv_lt_010": ("contrib_cv", lambda x: x < 0.10),
+        "frac_contrib_hf_lt_015": ("contrib_hf", lambda x: x < 0.15),
+        "frac_spearman_lt_03": ("spearman", lambda x: x < 0.3),
+        "frac_warmup_gt_3": ("warmup_ratio", lambda x: x > 3.0),
     }
+    for key, (metric, predicate) in fraction_specs.items():
+        i = metric_index[metric]
+        vals = metrics[..., i][mask & valid[..., i].astype(bool)]
+        # A full burn-in makes warmup explicitly N/A, rather than absent due
+        # to too few observations.  Its aggregate artifact fraction is 0.
+        out[key] = (
+            0.0
+            if metric == "warmup_ratio" and adstock_burn_in >= l_max
+            else (float(predicate(vals).mean()) if vals.size else None)
+        )
+    out["sales_level_ratio_quantiles"] = {
+        f"q{int(q * 100)}": float(np.quantile(level_ratio, q)) for q in _QS
+    }
+    return out
 
 
 def signal_summary(
@@ -189,6 +431,14 @@ def signal_summary(
     *,
     sales_scale: np.ndarray | None = None,
     l_max: int = 8,
+    baseline: np.ndarray | None = None,
+    adstock_family: np.ndarray | None = None,
+    adstock_alpha: np.ndarray | None = None,
+    weibull_lam: np.ndarray | None = None,
+    weibull_k: np.ndarray | None = None,
+    channel_shock_channel: np.ndarray | None = None,
+    channel_shock_start: np.ndarray | None = None,
+    adstock_burn_in: int = 0,
 ) -> dict:
     """Corpus-level signal report: metric quantiles + degenerate fractions.
 
@@ -206,39 +456,33 @@ def signal_summary(
     * ``frac_warmup_gt_3`` — share whose largest feature is the adstock
       zero-padding warmup (generator artifact, fixed by ``adstock_burn_in``).
     """
-    per = per_channel_signal(
-        spend, contributions, sales, cy_mask, sales_scale=sales_scale, l_max=l_max
+    spend = np.asarray(spend)
+    baseline_array = np.zeros(spend.shape[:2], dtype=spend.dtype) if baseline is None else baseline
+    metrics, valid = dense_signal_metrics(
+        spend,
+        contributions,
+        sales,
+        baseline_array,
+        cy_mask,
+        sales_scale=sales_scale,
+        l_max=l_max,
+        adstock_family=adstock_family,
+        adstock_alpha=adstock_alpha,
+        weibull_lam=weibull_lam,
+        weibull_k=weibull_k,
+        channel_shock_channel=channel_shock_channel,
+        channel_shock_start=channel_shock_start,
+        adstock_burn_in=adstock_burn_in,
     )
-    sales = np.asarray(sales, dtype=np.float64)
-    if sales_scale is None:
-        scale = sales.std(axis=1)
-    else:
-        scale = np.asarray(sales_scale, dtype=np.float64)
-    level_ratio = np.abs(sales.mean(axis=1)) / np.maximum(scale, 1e-12)
-
-    # Empty-mask corpora emit None (never NaN — json.dumps would produce a
-    # bare `NaN` literal that strict JSON parsers reject) and every frac key
-    # is always present so the manifest schema is data-independent.
-    n_pairs = int(per["spend_cv"].shape[0])
-    out: dict = {"n_direct_channels": n_pairs}
-    for key in METRIC_KEYS:
-        vals = per[key]
-        out[f"{key}_quantiles"] = {
-            f"q{int(q * 100)}": (float(np.quantile(vals, q)) if n_pairs else None) for q in _QS
-        }
-    _fracs = {
-        "frac_contrib_cv_lt_005": (per["contrib_cv"] < 0.05),
-        "frac_contrib_cv_lt_010": (per["contrib_cv"] < 0.10),
-        "frac_contrib_hf_lt_015": (per["contrib_hf"] < 0.15),
-        "frac_spearman_lt_03": (per["spearman"] < 0.3),
-        "frac_warmup_gt_3": (per["warmup_ratio"] > 3.0),
-    }
-    for key in FRAC_KEYS:
-        out[key] = float(_fracs[key].mean()) if n_pairs else None
-    out["sales_level_ratio_quantiles"] = {
-        f"q{int(q * 100)}": float(np.quantile(level_ratio, q)) for q in _QS
-    }
-    return out
+    return summarize_signal_metrics(
+        metrics,
+        valid,
+        sales,
+        cy_mask,
+        sales_scale=sales_scale,
+        l_max=l_max,
+        adstock_burn_in=adstock_burn_in,
+    )
 
 
 def check_signal_gate(signal: dict, gate: dict[str, float] | None = None) -> tuple[bool, list[str]]:

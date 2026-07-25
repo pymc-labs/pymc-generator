@@ -42,6 +42,8 @@ _LAZY_IMPORTS = {
     "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
     "SCENARIOS": (".scenarios", "SCENARIOS"),
+    "SIGNAL_METRIC_VERSION": (".signal_diagnostics", "SIGNAL_METRIC_VERSION"),
+    "SIGNAL_METRIC_LAYOUT": (".signal_diagnostics", "SIGNAL_METRIC_LAYOUT"),
 }
 
 
@@ -60,6 +62,8 @@ __all__ = [
     "SCMPrior",
     "DataGenerator",
     "SCM",
+    "SIGNAL_METRIC_LAYOUT",
+    "SIGNAL_METRIC_VERSION",
     "__version__",
     "build_oracle_model",
     "build_world_model",

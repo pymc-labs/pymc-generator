@@ -55,7 +55,10 @@ def test_nondegenerate_confounding_strength_varies_per_batched_world():
 def test_enabled_confounding_preserves_decomposition_and_nonflat_channels():
     model, out_names, _ = _built((0.7, 0.7))
     d = {name: value[0] for name, value in draw_worlds(model, out_names, seed=10).items()}
-    assert np.abs(d["sales"] - d["baseline"] - d["contributions"].sum(1) - d["indirect_effects"]).max() < 1e-9
+    assert (
+        np.abs(d["sales"] - d["baseline"] - d["contributions"].sum(1) - d["indirect_effects"]).max()
+        < 1e-9
+    )
     assert d["channels"].std(axis=0).max() > 0.0
 
 

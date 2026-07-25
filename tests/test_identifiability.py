@@ -59,6 +59,8 @@ EXPECTED_CORPUS_HASHES = {
     "adstock_alpha": "eb21e734c5f776f080a7118885ff1063d008b2262f6137bc6e8d550b9a7a6229",
     "weibull_lam": "d32b6764ee38d92b0b9e5eda846afd3c02598881072557ccfcc06bc4c55934c2",
     "weibull_k": "d85308882b4f1815c2ec329d351b27ebf4286c1acfdca977bab9434a1a062270",
+    "signal_metrics": "ebbf907c94fea3597ef2bcc5035e231b05042b7cfa2a6f03f6fee83fab57d854",
+    "signal_metric_valid": "f1ecbab717272a25f5802cb87be6fd3b1bdd88cede7e75a141f74ebacf212b16",
 }
 
 EXPECTED_DEFAULT_FREE_RVS = (

@@ -27,7 +27,12 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from .signal_diagnostics import signal_summary
+from .signal_diagnostics import (
+    SIGNAL_METRIC_LAYOUT,
+    SIGNAL_METRIC_VERSION,
+    dense_signal_metrics,
+    summarize_signal_metrics,
+)
 from .slots import (
     EDGE_BASE_RATES,
     EDGE_TYPES_EXTENDED,
@@ -797,26 +802,30 @@ def sample_g_additive(
 def _signal_block(
     cfg: SCMPrior,
     layout: SlotLayout,
-    spend_raw: np.ndarray,
-    contributions_raw: np.ndarray,
     sales_raw: np.ndarray,
     g_tasks: np.ndarray,
     active_c_mask: np.ndarray,
     sales_scale: np.ndarray,
+    signal_metrics: np.ndarray,
+    signal_metric_valid: np.ndarray,
 ) -> dict:
     """``diagnostics["signal"]`` for a corpus.
 
     "Direct active channel" = cy edge present AND channel not padding.
     """
     cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (active_c_mask == 1)
-    return signal_summary(
-        spend_raw,
-        contributions_raw,
+    out = summarize_signal_metrics(
+        signal_metrics,
+        signal_metric_valid,
         sales_raw,
         cy_mask,
         sales_scale=sales_scale,
         l_max=cfg.l_max,
+        adstock_burn_in=cfg.adstock_burn_in,
     )
+    out["metric_version"] = SIGNAL_METRIC_VERSION
+    out["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
+    return out
 
 
 def _make_support_mask(
@@ -1400,16 +1409,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             f"q{int(q * 100)}": float(np.quantile(media_share, q)) for q in qs
         },
         "spend_cv_quantiles": {f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs},
-        "signal": _signal_block(
-            cfg,
-            layout,
-            spend_raw,
-            contributions_raw,
-            sales_raw,
-            g_tasks,
-            active_c_mask,
-            sales_scale,
-        ),
+        "signal": {},
     }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
@@ -1467,6 +1467,37 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "weibull_k": weibull_k.astype(np.float32),
         "diagnostics": diagnostics,
     }
+    # Signal features are computed only from the exact float32 values persisted
+    # above, so save/load recomputation is bit-for-bit reproducible.
+    cy_mask = (corpus["g"][:, layout.slices["cy"]] == 1) & (corpus["active_c_mask"] == 1)
+    signal_metrics, signal_metric_valid = dense_signal_metrics(
+        corpus["spend_raw"],
+        corpus["contributions_raw"],
+        corpus["sales_raw"],
+        corpus["baseline_raw"],
+        cy_mask,
+        sales_scale=corpus["sales_scale"],
+        adstock_family=corpus["adstock_family"],
+        adstock_alpha=corpus["adstock_alpha"],
+        weibull_lam=corpus["weibull_lam"],
+        weibull_k=corpus["weibull_k"],
+        channel_shock_channel=corpus["channel_shock_channel"],
+        channel_shock_start=corpus["channel_shock_start"],
+        l_max=cfg.l_max,
+        adstock_burn_in=cfg.adstock_burn_in,
+    )
+    corpus["signal_metrics"] = signal_metrics
+    corpus["signal_metric_valid"] = signal_metric_valid
+    diagnostics["signal"] = _signal_block(
+        cfg,
+        layout,
+        corpus["sales_raw"],
+        corpus["g"],
+        corpus["active_c_mask"],
+        corpus["sales_scale"],
+        signal_metrics,
+        signal_metric_valid,
+    )
     if prior_cond_arr is not None:
         # Present IFF prior_conditioning=True — an unconditioned corpus stays
         # byte-identical to the pre-feature format (consumers treat absence

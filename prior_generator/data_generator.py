@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from .sampler import SCMPrior, sample_prior_predictive
+from .signal_diagnostics import SIGNAL_METRIC_LAYOUT
 from .slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 # ---------------------------------------------------------------------------
@@ -246,6 +247,8 @@ class DataGenerator:
             "adstock_alpha",
             "weibull_lam",
             "weibull_k",
+            "signal_metrics",
+            "signal_metric_valid",
         ]
         for key in required_keys:
             if key not in corpus:
@@ -292,6 +295,8 @@ class DataGenerator:
             "adstock_alpha": (N, K),
             "weibull_lam": (N, K),
             "weibull_k": (N, K),
+            "signal_metrics": (N, K, len(SIGNAL_METRIC_LAYOUT)),
+            "signal_metric_valid": (N, K, len(SIGNAL_METRIC_LAYOUT)),
         }
 
         for key, expected in expected_shapes.items():
@@ -323,6 +328,8 @@ class DataGenerator:
             "adstock_alpha": np.float32,
             "weibull_lam": np.float32,
             "weibull_k": np.float32,
+            "signal_metrics": np.float32,
+            "signal_metric_valid": np.uint8,
         }
         for key, dtype in expected_dtypes.items():
             if key in corpus and corpus[key].dtype != dtype:
@@ -341,6 +348,7 @@ class DataGenerator:
             "adstock_alpha",
             "weibull_lam",
             "weibull_k",
+            "signal_metrics",
         ):
             if key in corpus and not np.isfinite(corpus[key]).all():
                 errors.append(f"{key} contains NaN or Inf")
@@ -400,6 +408,19 @@ class DataGenerator:
             errors.append("channel_shock_level contains negative values")
         if not np.isin(corpus["adstock_family"], (0, 1, 2)).all():
             errors.append("adstock_family contains invalid family ids")
+        if not np.isin(corpus["signal_metric_valid"], (0, 1)).all():
+            errors.append("signal_metric_valid is not binary")
+        if not np.isfinite(corpus["signal_metrics"]).all():
+            errors.append("signal_metrics contains NaN or Inf")
+        if (corpus["signal_metrics"][corpus["signal_metric_valid"] == 0] != 0).any():
+            errors.append("signal_metrics has nonzero invalid values")
+        if corpus["signal_metrics"].shape[-1] != len(SIGNAL_METRIC_LAYOUT):
+            errors.append("signal_metrics has an unknown metric layout")
+        signal_diagnostics = corpus.get("diagnostics", {}).get("signal", {})
+        if signal_diagnostics.get("metric_version") != 1:
+            errors.append("diagnostics signal metric_version is not supported")
+        if signal_diagnostics.get("metric_layout") != list(SIGNAL_METRIC_LAYOUT):
+            errors.append("diagnostics signal metric_layout does not match signal_metrics")
 
         active_c = corpus.get("active_c_mask")
         if active_c is not None and active_c.shape == (N, K):
@@ -415,6 +436,24 @@ class DataGenerator:
                     corpus[key][inactive], np.zeros(inactive.sum(), dtype=corpus[key].dtype)
                 ):
                     errors.append(f"{key} has nonzero inactive-channel padding")
+            if (corpus["signal_metrics"][inactive] != 0).any() or corpus["signal_metric_valid"][
+                inactive
+            ].any():
+                errors.append("signal metrics have nonzero inactive-channel padding")
+            direct = (
+                corpus["g"][
+                    :,
+                    SlotLayout(
+                        K=K, M=M, J=corpus["demand"].shape[2], edge_types=EDGE_TYPES_EXTENDED
+                    ).slices["cy"],
+                ]
+                == 1
+            )
+            ineligible = ~(direct & (active_c == 1))
+            if (corpus["signal_metrics"][ineligible] != 0).any() or corpus["signal_metric_valid"][
+                ineligible
+            ].any():
+                errors.append("signal metrics have nonzero ineligible-channel values")
 
         layout = SlotLayout(K=K, M=M, J=corpus["demand"].shape[2], edge_types=EDGE_TYPES_EXTENDED)
         channels = corpus["channel_shock_channel"]
