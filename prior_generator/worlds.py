@@ -3,7 +3,7 @@
 Where :func:`prior_generator.sample_prior_predictive` produces a padded N-task corpus
 for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
-DAG blocks, the drawn SCM parameters, and the 13 named output series
+DAG blocks, the drawn SCM parameters, and the 14 named output series
 including the interventional decomposition truth.
 
 The sampling path mirrors ``sampler._generate_corpus_additive``: draw the DAG
@@ -28,7 +28,7 @@ ADSTOCK_NAMES = ("none", "geometric", "weibull")
 #: Saturation family names, indexed by ``params["sat_family"]``.
 SATURATION_NAMES = ("linear", "hill", "logistic", "michaelis_menten", "tanh", "root")
 
-#: Graph outputs kept for every world — the 11 corpus outputs plus the two
+#: Graph outputs kept for every world — the 12 corpus outputs plus the two
 #: audit-only series (``channels_base``: channels with all upstream inputs
 #: surgically removed; ``contributions_observed``: observed-path
 #: contributions). Order must match ``build_symbolic_graph``'s outputs.
@@ -46,6 +46,7 @@ SCM_OUT_NAMES = (
     "indirect_effects",
     "indirect_effects_by_source",
     "sales",
+    "confounding_strength",
 )
 
 
@@ -407,6 +408,7 @@ def _assemble_params(drawn: dict, b: int, structural: dict) -> dict:
         "hf_sigma",
         "pulse_amp",
         "pulse_prob",
+        "confounding_strength",
     )
     params = {k: drawn[f"param_{k}"][b] for k in keys}
     params["adstock_family"] = structural["adstock_family"]

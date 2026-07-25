@@ -399,10 +399,33 @@ def build_world_model(
             ).astype("float64"),
         }
 
+        # Preserve the legacy innovation dictionary and graph path exactly when
+        # the feature is disabled. When enabled, rho is a single per-world
+        # value and only the channel innovation supplied to the graph changes.
+        # The orthonormal mixture leaves every channel innovation's marginal
+        # variance at one while correlating it with the baseline innovation.
+        if cfg.confounding_strength_range is None:
+            confounding_strength = pt.as_tensor_variable(np.asarray(0.0, dtype="float64"))
+        else:
+            lo, hi = cfg.confounding_strength_range
+            if float(lo) == float(hi):
+                confounding_strength = pt.as_tensor_variable(np.asarray(lo, dtype="float64"))
+            else:
+                confounding_strength = pm.Uniform("confounding_strength", lo, hi)
+            eps["eps_c"] = (
+                pt.sqrt(1.0 - confounding_strength**2) * eps["eps_c"]
+                + confounding_strength * eps["eps_b"][:, None]
+            )
+
         graph = build_symbolic_graph(g_active, params, T, K, M, J, burn_in=burn_in, eps=eps)
+        graph["outputs"]["confounding_strength"] = confounding_strength
         out_names = tuple(graph["outputs"].keys())
         for name in out_names:
-            pm.Deterministic(name, graph["outputs"][name])
+            # A nondegenerate confounding strength is itself the named Uniform
+            # RV. It is already drawable by this output name; wrapping it in a
+            # Deterministic would register the same name twice.
+            if name not in model.named_vars:
+                pm.Deterministic(name, graph["outputs"][name])
 
         # Register the continuous params that world descriptions / bundles
         # report (edge coefficients + per-channel mechanism/texture params) as
@@ -426,6 +449,7 @@ def build_world_model(
             "pulse_prob": params["pulse_prob"],
             "rw_c_mean": rw_c["mean"],
             "rw_c_std": rw_c["std"],
+            "confounding_strength": confounding_strength,
         }
         param_names = tuple(f"param_{k}" for k in report_specs)
         for key, tensor in report_specs.items():

@@ -130,6 +130,10 @@ class SCMPrior:
     rw_sales_std_sigma: float = 0.25  # HalfNormal for sales-noise walk std
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
+    # Optional shared innovation between the baseline and every channel. When
+    # enabled, rho is resolved per world and mixes their already-standardized
+    # innovations without changing either marginal innovation variance.
+    confounding_strength_range: tuple[float, float] | None = None
 
     # -- Channel texture (plan doc 05 signal fix) --------------------------
     # High-frequency exogenous drive on the channel's own pre-softplus input:
@@ -399,6 +403,20 @@ class SCMPrior:
             raise ValueError(
                 f"rw_baseline_std_sigma must be finite and > 0, got {self.rw_baseline_std_sigma}"
             )
+        if self.confounding_strength_range is not None:
+            try:
+                lo, hi = self.confounding_strength_range
+                lo, hi = float(lo), float(hi)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "confounding_strength_range must be a (lo, hi) pair or None, got "
+                    f"{self.confounding_strength_range!r}"
+                )
+            if not (np.isfinite(lo) and np.isfinite(hi) and 0.0 <= lo <= hi <= 0.95):
+                raise ValueError(
+                    "confounding_strength_range must satisfy finite 0 <= lo <= hi <= 0.95, "
+                    f"got {self.confounding_strength_range}"
+                )
         if self.rw_positive_mean_range[0] <= 0:
             raise ValueError(
                 f"rw_positive_mean_range must be positive (channel walks stay positive "
@@ -855,6 +873,7 @@ _ADDITIVE_OUT_NAMES = (
     "indirect_effects",
     "indirect_effects_by_source",
     "sales",
+    "confounding_strength",
 )
 
 
@@ -934,6 +953,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
       from all upstream influences flowing through channels.
     * ``channel_active`` (N, K) uint8 — the D1b activation rule
       (C->Y or outgoing C->C).
+    * ``confounding_strength`` (N,) float32 — the effective per-world shared
+      baseline/channel innovation strength (all zeros when disabled).
     * ``prior_cond`` (N, P) float32 — present IFF ``cfg.prior_conditioning``:
       the per-cell narrowed prior intervals as packed ``(low, width)`` pairs
       in ``PRIOR_COND_LAYOUT`` order, broadcast to worlds;
@@ -1087,6 +1108,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "support": support,
                         "split_type": split_type,
                         "sales_scale": sales_scale,
+                        "confounding_strength": drawn["confounding_strength"],
                         "cell": cell,
                     }
                 )
@@ -1117,6 +1139,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     support_mask = np.stack([tk["support"] for tk in tasks]).astype(np.uint8)
     split_type = np.array([tk["split_type"] for tk in tasks], dtype=np.uint8)
     cell_id = np.array([tk["cell"] for tk in tasks], dtype=np.int32)
+    confounding_strength = np.asarray(
+        [tk["confounding_strength"] for tk in tasks], dtype=np.float64
+    )
 
     active_c_mask = np.stack([cell_gs[c]["active_c"] for c in cell_id])
     active_m_mask = np.stack([cell_gs[c]["active_m"] for c in cell_id])
@@ -1302,6 +1327,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "confounder_contribution": confounder_contribution.astype(np.float32),
         "baseline_intrinsic": baseline_intrinsic.astype(np.float32),
         "indirect_effects_by_source": indirect_effects_by_source.astype(np.float32),
+        "confounding_strength": confounding_strength.astype(np.float32),
         "diagnostics": diagnostics,
     }
     if prior_cond_arr is not None:

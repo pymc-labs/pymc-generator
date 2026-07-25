@@ -41,6 +41,7 @@ EXPECTED_CORPUS_HASHES = {
     "confounder_contribution": "7c8bbd686627bf048057afc0cd20c3fbdf8b95140281511a45aedfce4035d73f",
     "baseline_intrinsic": "15c1859dceb34a5c392aba4dcccd7042f5003bfb3600bc92f0288359e7f82f99",
     "indirect_effects_by_source": "7f5420e30590585e1102d670bf6e8c4fffec7c5991658807edf0f184c4c8b157",
+    "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
 }
 
 EXPECTED_DEFAULT_FREE_RVS = (
