@@ -1,0 +1,62 @@
+docs/guide/corpus.md
+  s_6cdb3f9eca54e6::t_7600feb88d2493 128-129
+prior_generator/sampler.py
+  s_6cdb3f9eca54e6::t_864e6c5edeccf5 304-307
+  s_6cdb3f9eca54e6::t_005ab5c5837573 463-464
+  s_6cdb3f9eca54e6::t_f03db52ad4c1ba 938-941
+  s_6cdb3f9eca54e6::t_859f7578f93211 338-351,353-384
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 352
+tests/test_identifiability.py
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 154
+  s_6cdb3f9eca54e6::t_c44bc4aef82c47 153,155,188-189
+docs/reference/config.md
+  s_6cdb3f9eca54e6::t_7600feb88d2493 95-97
+tests/test_signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_c44bc4aef82c47 286-287,322,325,337
+  s_6cdb3f9eca54e6::t_b9a21752d391db 210-222
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 323-324
+tests/test_oracle.py
+  s_6cdb3f9eca54e6::t_b7742227e24b7c 154-171
+tests/test_config.py
+  s_6cdb3f9eca54e6::t_b9a21752d391db 7,66-71,73-95
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 72
+  s_6cdb3f9eca54e6::t_ee7f9d758daa76 96-97
+docs/reference/signal.md
+  s_6cdb3f9eca54e6::t_7600feb88d2493 11-16,69-70
+prior_generator/data_generator.py
+  s_6cdb3f9eca54e6::t_da53ca1e6160f0 249-262,343-354,374-383
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 619-621
+  s_6cdb3f9eca54e6::t_671ad6bb743556 34-39
+  s_6cdb3f9eca54e6::t_d461b887628de8 464-466,468,470,479,482-489,519,538,543
+  s_6cdb3f9eca54e6::t_c8539b42eb54b8 597-618,622-645,676-677,689-690,694-696,723-730,736-744
+CHANGELOG.md
+  s_6cdb3f9eca54e6::t_9cb208cbc82f17 21-26
+prior_generator/world_model.py
+  s_6cdb3f9eca54e6::t_f09602b436d084 765-766,774-775
+prior_generator/signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_fea2f84e94728e 427
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 426
+tests/test_schema_io.py
+  s_6cdb3f9eca54e6::t_00ae65eaf2b512 333-334,381-383
+  s_6cdb3f9eca54e6::t_e6696bfa31bc0a 184-187,190,226-236,238-277
+  s_6cdb3f9eca54e6::t_b376ea7e7f8849 237,358-359
+  s_6cdb3f9eca54e6::t_f0a841df26256f 191
+  s_6cdb3f9eca54e6::t_ec2a40b0cc7e30 290-291,295-297,408
+  s_6cdb3f9eca54e6::t_1749a64aef133c 278-279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "7b894266830c61e538bfe09606d87a5e439248c9",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
