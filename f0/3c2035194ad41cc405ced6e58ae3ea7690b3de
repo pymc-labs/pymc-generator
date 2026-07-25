@@ -1,0 +1,42 @@
+tests/test_identifiability.py
+  s_eb24f7a310abb2::t_4c671086bec123 236
+  s_eb24f7a310abb2::t_71bcdf9a408a1c 240,275,286
+  s_6cdb3f9eca54e6::t_eb6186a0598678 206-207,224-226,232,241-242,252,256,276-278,285,287
+  s_eb24f7a310abb2::t_861a4fbdbc062e 19-22
+  s_eb24f7a310abb2::t_089a20231651af 202-205,208-223,227-231,233-235,237-239,243-251,253-255,257-274,279-284,288-311
+  s_eb24f7a310abb2::t_aebcaf03d1253b 23
+tests/test_channel_shocks.py
+  s_6cdb3f9eca54e6::t_eb6186a0598678 203
+  s_eb24f7a310abb2::t_089a20231651af 10,196,198-202,204-209,211-225,227,229-240,242-243,245-253
+  s_eb24f7a310abb2::t_4c671086bec123 210
+  s_eb24f7a310abb2::t_0777ce0c851d08 197
+  s_eb24f7a310abb2::t_15907682ce34c1 226
+  s_eb24f7a310abb2::t_12106552f859b9 228
+  s_eb24f7a310abb2::t_e945eaf6e999aa 241
+  s_eb24f7a310abb2::t_3264b26f2d1147 244
+  s_eb24f7a310abb2::t_89dfbf17d80725 254-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "f03c2035194ad41cc405ced6e58ae3ea7690b3de",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    },
+    "s_eb24f7a310abb2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_065f87013ffeYL1F4VMZLihZjB",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
