@@ -1,0 +1,65 @@
+tests/test_config.py
+  s_6cdb3f9eca54e6::t_7540b199f2a275 110-124,129-143,145-147,149,151-153,155-161
+  s_6cdb3f9eca54e6::t_ffbdbb776deaf3 144,150
+  s_6cdb3f9eca54e6::t_4a13336faf8b0a 125-128,148,154
+tests/test_signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_ffbdbb776deaf3 352-353
+  s_6cdb3f9eca54e6::t_a87d4abb4f6b57 361
+  s_6cdb3f9eca54e6::t_4506094c6b27eb 323-327,329-334
+prior_generator/data_generator.py
+  s_6cdb3f9eca54e6::t_dcecd77d3eea8c 625-627,629-651
+  s_6cdb3f9eca54e6::t_93114fd030c321 870-877,879,887,896,907-908,912-913
+  s_6cdb3f9eca54e6::t_33bf28d82fb269 327-331,333-338,352-353,391-406,409-419,433-434,448-449
+  s_6cdb3f9eca54e6::t_928ea96f1293c5 321,878,880-886,888-895,897-906,909-911,997-998
+  s_6cdb3f9eca54e6::t_7bd20481d901fe 1004-1006,1019-1021,1023-1026,1031-1034,1039
+  s_6cdb3f9eca54e6::t_6c14be9b7ee9f0 788-790,803-808
+  s_6cdb3f9eca54e6::t_df4f0d8d3899e2 40
+  s_6cdb3f9eca54e6::t_b1bb953ed80b38 263,354-358,454-456,460-462,652-670,674-675,677-698,705-711,715-719,797-802,1013-1014
+  s_6cdb3f9eca54e6::t_f3ec881e1070de 960,1027-1028,1035-1036
+  s_6cdb3f9eca54e6::t_170654946bae46 576-600
+  s_6cdb3f9eca54e6::t_a486de54a25219 671-673,699-704,712-714
+  s_6cdb3f9eca54e6::t_a87d4abb4f6b57 628
+  s_6cdb3f9eca54e6::t_2c39e04a8b6a73 721-738,740-787,791-796,809-818
+  s_6cdb3f9eca54e6::t_988b9214456fc3 276-279,457-459
+  s_6cdb3f9eca54e6::t_8b87d34347f60c 230-234,236-241
+  s_6cdb3f9eca54e6::t_0eda3ad82793d3 720
+tests/test_prior_conditioning.py
+  s_6cdb3f9eca54e6::t_9e7c2b165b5d88 109-110,112-119,138-144
+  s_6cdb3f9eca54e6::t_a87d4abb4f6b57 111
+  s_6cdb3f9eca54e6::t_a486de54a25219 84,105
+  s_6cdb3f9eca54e6::t_4eaa8041698408 78-83,85-104,106-108,120-137
+.dev/planning/to-do/04-descriptive-dimension-names.md
+  s_6cdb3f9eca54e6::t_d56ed348a2c5e6 1-69
+prior_generator/sampler.py
+  s_6cdb3f9eca54e6::t_928ea96f1293c5 326-327,338-342,345,359-363,367
+  s_6cdb3f9eca54e6::t_b1bb953ed80b38 355,377
+  s_6cdb3f9eca54e6::t_7a1ef327a39e90 281-291,298-304,347-354,369-376
+tests/test_schema_io.py
+  s_6cdb3f9eca54e6::t_a486de54a25219 391-393,796
+  s_6cdb3f9eca54e6::t_eb2c45d48edf6b 396-403
+  s_6cdb3f9eca54e6::t_4a13336faf8b0a 75-79,366-390,394-395,628-639,641,643,654-658,663-681,691-692,695-709,711,783-795,826
+  s_6cdb3f9eca54e6::t_7540b199f2a275 37-53,127-130,132,137,139-145,344-362,624-627,640,642,644-653,659-662,682-683,693-694,710,775-782,797-799,821-825,827-833
+  s_6cdb3f9eca54e6::t_399a3763765a8f 131,133-136,138,178-191
+  s_6cdb3f9eca54e6::t_9bf36e749a1f8f 365,800-820
+  s_6cdb3f9eca54e6::t_3757498ea0f5ea 684-690,712-774
+  s_6cdb3f9eca54e6::t_3ee8ef9fdbb4b3 146-147
+  s_6cdb3f9eca54e6::t_0858c085cc933f 192-193
+  s_6cdb3f9eca54e6::t_0e65b195a15cbb 363-364
+  s_6cdb3f9eca54e6::t_02a78ddb214cef 834-835
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "21235a911a30aac0373553d8db90bd31882f5f27",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
