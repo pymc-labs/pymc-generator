@@ -278,12 +278,30 @@ class SCMPrior:
         }
 
     def validate(self) -> None:
+        def _finite_real(name: str, value, *, positive: bool = False, nonnegative: bool = False):
+            if (
+                isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, float, np.integer, np.floating))
+                or not np.isfinite(value)
+                or (positive and value <= 0)
+                or (nonnegative and value < 0)
+            ):
+                domain = "positive" if positive else "nonnegative" if nonnegative else "finite"
+                raise ValueError(f"{name} must be a {domain} real scalar, got {value!r}")
+
         if self.n_treatments < 1:
             raise ValueError(f"n_treatments must be >= 1, got {self.n_treatments}")
         if self.n_covariates < 1:
             raise ValueError(f"n_covariates must be >= 1, got {self.n_covariates}")
         if self.n_latent < 1:
             raise ValueError(f"n_latent must be >= 1, got {self.n_latent}")
+        _finite_real("query_frac", self.query_frac, positive=True)
+        _finite_real("val_cell_frac", self.val_cell_frac, positive=True)
+        if self.val_cell_frac >= 1.0:
+            raise ValueError(f"val_cell_frac must be < 1, got {self.val_cell_frac}")
+        _finite_real("spend_cv_floor", self.spend_cv_floor, nonnegative=True)
+        _finite_real("rw_smoothness_alpha", self.rw_smoothness_alpha, positive=True)
+        _finite_real("rw_smoothness_beta", self.rw_smoothness_beta, positive=True)
         if not 0 < self.n_query < self.T:
             raise ValueError(
                 f"query_frac={self.query_frac} gives {self.n_query} query weeks "
@@ -305,7 +323,8 @@ class SCMPrior:
             raise ValueError("l_max must be an int (not bool)")
         if self.l_max < 1:
             raise ValueError(f"l_max must be >= 1, got {self.l_max}")
-        if not 0.0 <= self.p_long_horizon <= 1.0:
+        _finite_real("p_long_horizon", self.p_long_horizon, nonnegative=True)
+        if self.p_long_horizon > 1.0:
             raise ValueError(f"p_long_horizon must be in [0, 1], got {self.p_long_horizon}")
         n_val_cells = max(1, int(round(self.val_cell_frac * self.n_cells)))
         if n_val_cells >= self.n_cells:
@@ -316,22 +335,46 @@ class SCMPrior:
                 f"out of {self.n_cells}; need at least 1 train and 1 val cell"
             )
         # Validate mechanism diversity probabilities
-        if len(self.adstock_family_probs) != 3:
+        try:
+            n_adstock_probs = len(self.adstock_family_probs)
+        except TypeError:
+            n_adstock_probs = -1
+        if n_adstock_probs != 3:
             raise ValueError(
                 f"adstock_family_probs must have 3 entries (none/geometric/weibull), "
-                f"got {len(self.adstock_family_probs)}"
+                f"got {n_adstock_probs}"
             )
-        if not np.isclose(sum(self.adstock_family_probs), 1.0, atol=1e-6):
+        if any(
+            isinstance(prob, (bool, np.bool_))
+            or not isinstance(prob, (int, float, np.integer, np.floating))
+            or not np.isfinite(prob)
+            or not 0.0 <= prob <= 1.0
+            for prob in self.adstock_family_probs
+        ):
+            raise ValueError("adstock_family_probs entries must be finite probabilities")
+        if not np.isclose(sum(self.adstock_family_probs), 1.0, rtol=0.0, atol=1e-8):
             raise ValueError(
                 f"adstock_family_probs must sum to 1.0, got {sum(self.adstock_family_probs)}"
             )
-        if len(self.saturation_family_probs) != 6:
+        try:
+            n_saturation_probs = len(self.saturation_family_probs)
+        except TypeError:
+            n_saturation_probs = -1
+        if n_saturation_probs != 6:
             raise ValueError(
                 f"saturation_family_probs must have 6 entries "
                 f"(none/hill/logistic/michaelis_menten/tanh/root), "
-                f"got {len(self.saturation_family_probs)}"
+                f"got {n_saturation_probs}"
             )
-        if not np.isclose(sum(self.saturation_family_probs), 1.0, atol=1e-6):
+        if any(
+            isinstance(prob, (bool, np.bool_))
+            or not isinstance(prob, (int, float, np.integer, np.floating))
+            or not np.isfinite(prob)
+            or not 0.0 <= prob <= 1.0
+            for prob in self.saturation_family_probs
+        ):
+            raise ValueError("saturation_family_probs entries must be finite probabilities")
+        if not np.isclose(sum(self.saturation_family_probs), 1.0, rtol=0.0, atol=1e-8):
             raise ValueError(
                 f"saturation_family_probs must sum to 1.0, got {sum(self.saturation_family_probs)}"
             )

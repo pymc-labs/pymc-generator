@@ -34,6 +34,23 @@ def corpus():
     return pg.sample_prior_predictive(cfg)
 
 
+@pytest.fixture(scope="module")
+def padded_corpus():
+    cfg = pg.make_scm_prior(
+        n_treatments=4,
+        n_covariates=3,
+        n_latent=2,
+        n_treatments_active_range=(2, 2),
+        n_covariates_active_range=(1, 1),
+        n_latent_active_range=(1, 1),
+        T=16,
+        n_cells=2,
+        draws_per_cell=1,
+        seed=107,
+    )
+    return pg.sample_prior_predictive(cfg)
+
+
 def test_required_keys_and_shapes(corpus):
     N, T, K = corpus["spend_raw"].shape
     M = corpus["controls"].shape[2]
@@ -55,6 +72,11 @@ def test_required_keys_and_shapes(corpus):
         "baseline_intrinsic": (N, T),
         "channel_active": (N, K),
         "active_c_mask": (N, K),
+        "active_m_mask": (N, M),
+        "active_j_mask": (N, J),
+        "K_active": (N,),
+        "M_active": (N,),
+        "J_active": (N,),
         "confounding_strength": (N,),
         "saturation_scale": (N, K),
     }
@@ -102,6 +124,27 @@ def test_validate_corpus_flags_missing_key(corpus):
     assert any("sales_scale" in e for e in errors)
 
 
+@pytest.mark.parametrize(
+    "key",
+    (
+        "active_m_mask",
+        "active_j_mask",
+        "K_active",
+        "M_active",
+        "J_active",
+        "indirect_effects",
+        "channel_active",
+        "control_contribution",
+        "confounder_contribution",
+        "baseline_intrinsic",
+        "indirect_effects_by_source",
+    ),
+)
+def test_validate_corpus_requires_complete_generated_schema(corpus, key):
+    broken = {name: value for name, value in corpus.items() if name != key}
+    assert any(key in error for error in DataGenerator.validate_corpus(broken))
+
+
 def test_validate_corpus_flags_nan(corpus):
     broken = dict(corpus)
     bad = corpus["spend_raw"].copy()
@@ -130,6 +173,22 @@ def test_validate_corpus_rejects_non_array_required_fields(corpus):
     broken = dict(corpus)
     broken["sales_raw"] = corpus["sales_raw"].tolist()
     assert DataGenerator.validate_corpus(broken) == ["sales_raw must be an ndarray"]
+
+
+def test_validate_corpus_rejects_non_array_extra_fields(corpus):
+    broken = dict(corpus)
+    broken["extra"] = "not an array"
+    assert DataGenerator.validate_corpus(broken) == ["extra must be an ndarray"]
+
+
+@pytest.mark.parametrize(
+    ("key", "dtype"),
+    (("spend_raw", np.float64), ("g", np.int32), ("K_active", np.int64)),
+)
+def test_validate_corpus_rejects_wrong_required_dtypes(corpus, key, dtype):
+    broken = dict(corpus)
+    broken[key] = corpus[key].astype(dtype)
+    assert any(f"{key} has dtype" in error for error in DataGenerator.validate_corpus(broken))
 
 
 @pytest.mark.parametrize(
@@ -280,6 +339,66 @@ def test_save_corpus_rejects_reserved_prefix_and_empty_identifiability(tmp_path)
         )
     with pytest.raises(ValueError, match="omitted rather than empty"):
         pg.save_corpus({"identifiability": {}}, tmp_path / "empty.npz")
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    (
+        ({"x": [1.0]}, "x must be an ndarray"),
+        ({"x": np.array([object()], dtype=object)}, "x may not have object dtype"),
+        (
+            {"identifiability": {"label": [1.0]}},
+            "identifiability.label must be an ndarray",
+        ),
+        (
+            {"identifiability": {"label": np.array([object()], dtype=object)}},
+            "identifiability.label may not have object dtype",
+        ),
+    ),
+)
+def test_save_corpus_rejects_unreadable_payloads(tmp_path, payload, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        pg.save_corpus(payload, tmp_path / "bad.npz")
+    assert not (tmp_path / "bad.npz").exists()
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    (
+        ({"diagnostics": [1, 2]}, "diagnostics must be a mapping"),
+        ({"identifiability": [np.ones(1)]}, "identifiability metadata must be a mapping"),
+        (
+            {"diagnostics": {"bad": np.array([object()], dtype=object)}},
+            "diagnostics arrays may not have object dtype",
+        ),
+    ),
+)
+def test_save_corpus_rejects_malformed_nested_payloads(tmp_path, payload, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        pg.save_corpus(payload, tmp_path / "bad.npz")
+    assert not (tmp_path / "bad.npz").exists()
+
+
+def test_validate_corpus_rejects_explicit_none_identifiability(corpus):
+    broken = dict(corpus)
+    broken["identifiability"] = None
+    assert DataGenerator.validate_corpus(broken) == ["identifiability must be a mapping"]
+
+
+def test_validate_corpus_returns_error_for_unsupported_extra_array(corpus):
+    broken = dict(corpus)
+    broken["extra"] = np.array([object()], dtype=object)
+    assert any(
+        "extra has unsupported dtype" in error for error in DataGenerator.validate_corpus(broken)
+    )
+
+
+def test_validate_and_save_reject_complex_arrays(tmp_path, corpus):
+    broken = dict(corpus)
+    broken["extra"] = np.array([1 + 2j], dtype=np.complex64)
+    assert DataGenerator.validate_corpus(broken) == ["extra has unsupported dtype complex64"]
+    with pytest.raises(ValueError, match="extra may not have complex dtype"):
+        pg.save_corpus(broken, tmp_path / "complex.npz")
 
 
 @pytest.mark.parametrize(
@@ -500,6 +619,218 @@ def test_validate_corpus_flags_corrupt_shock_metadata(corpus):
     broken["channel_shock_mask"] = bad
     errors = DataGenerator.validate_corpus(broken)
     assert any("channel_shock_mask is not binary" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("key", "axis", "expected"),
+    (
+        ("spend_raw", "channel", "inactive-channel padding"),
+        ("spend_norm", "channel", "inactive-channel padding"),
+        ("spend_share", "channel", "inactive-channel padding"),
+        ("contributions_raw", "channel", "inactive-channel padding"),
+        ("channel_shock_mask", "channel", "inactive-channel padding"),
+        ("spend_means", "channel", "inactive-channel padding"),
+        ("channel_active", "channel", "inactive-channel padding"),
+        ("channel_level", "channel", "inactive-channel padding"),
+        ("saturation_scale", "channel", "inactive-channel padding"),
+        ("adstock_family", "channel", "inactive-channel padding"),
+        ("adstock_alpha", "channel", "inactive-channel padding"),
+        ("weibull_lam", "channel", "inactive-channel padding"),
+        ("weibull_k", "channel", "inactive-channel padding"),
+        ("controls", "control", "inactive-control padding"),
+        ("control_contribution", "control", "inactive-control padding"),
+        ("demand", "demand", "inactive-demand padding"),
+        ("confounder_contribution", "demand", "inactive-demand padding"),
+    ),
+)
+def test_validate_corpus_rejects_nonzero_node_padding(padded_corpus, key, axis, expected):
+    broken = dict(padded_corpus)
+    bad = padded_corpus[key].copy()
+    active_key = {
+        "channel": "K_active",
+        "control": "M_active",
+        "demand": "J_active",
+    }[axis]
+    index = int(padded_corpus[active_key][0])
+    if bad.ndim == 3:
+        bad[0, 0, index] = 1
+    else:
+        bad[0, index] = 1
+    broken[key] = bad
+    assert any(expected in error for error in DataGenerator.validate_corpus(broken))
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    (
+        ("K_active", "K_active"),
+        ("M_active", "M_active"),
+        ("J_active", "J_active"),
+        ("active_c_mask", "K_active"),
+        ("active_m_mask", "M_active"),
+        ("active_j_mask", "J_active"),
+    ),
+)
+def test_validate_corpus_rejects_corrupt_active_counts_and_masks(padded_corpus, key, expected):
+    broken = dict(padded_corpus)
+    broken[key] = padded_corpus[key].copy()
+    if key.endswith("_active"):
+        broken[key][0] += 1
+    else:
+        broken[key][0, int(broken[key][0].sum())] = 1
+    assert any(expected in error for error in DataGenerator.validate_corpus(broken))
+
+
+def test_validate_corpus_rejects_zero_active_count(padded_corpus):
+    broken = dict(padded_corpus)
+    broken["K_active"] = padded_corpus["K_active"].copy()
+    broken["K_active"][0] = 0
+    assert "K_active does not match its active prefix mask" in DataGenerator.validate_corpus(broken)
+
+
+@pytest.mark.parametrize("edge_type", EDGE_TYPES_EXTENDED)
+def test_validate_corpus_rejects_graph_edges_incident_to_padding(padded_corpus, edge_type):
+    broken = dict(padded_corpus)
+    layout = SlotLayout(K=4, M=3, J=2, edge_types=EDGE_TYPES_EXTENDED)
+    parts = layout.unpack(padded_corpus["g"][:1])
+    inactive = {"c": 2, "m": 1, "j": 1}
+    indices = {
+        "cy": (inactive["c"],),
+        "dc": (0, inactive["c"]),
+        "dz": (0, inactive["m"]),
+        "db": (inactive["j"],),
+        "zb": (inactive["m"],),
+        "zc": (inactive["m"], 0),
+        "cc": (0, inactive["c"]),
+        "zz": (0, inactive["m"]),
+    }
+    parts[edge_type][(0, *indices[edge_type])] = 1
+    bad = padded_corpus["g"].copy()
+    bad[0] = layout.pack(**{f"g_{name}": value for name, value in parts.items()})[0]
+    broken["g"] = bad
+    assert any(f"g_{edge_type}" in error for error in DataGenerator.validate_corpus(broken))
+
+
+@pytest.mark.parametrize(("edge_type", "index"), (("cc", (1, 0)), ("zz", (1, 0))))
+def test_validate_corpus_rejects_non_dag_square_graph_blocks(corpus, edge_type, index):
+    broken = dict(corpus)
+    layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+    parts = layout.unpack(corpus["g"])
+    parts[edge_type][(0, *index)] = 1
+    broken["g"] = layout.pack(**{f"g_{name}": value for name, value in parts.items()})
+    assert f"g_{edge_type} must be strictly upper triangular" in DataGenerator.validate_corpus(
+        broken
+    )
+
+
+def test_validate_corpus_rejects_offsetting_impossible_indirect_sources():
+    generated = pg.sample_prior_predictive(
+        pg.make_scm_prior(
+            n_treatments=3,
+            n_covariates=2,
+            n_latent=1,
+            T=10,
+            n_cells=2,
+            draws_per_cell=1,
+            l_max=2,
+            adstock_burn_in=2,
+            cc_base_rate=0.0,
+            zc_base_rate=0.0,
+            edge_rate_overrides={"dc": 0.0},
+            seed=823,
+        )
+    )
+    broken = dict(generated)
+    broken["indirect_effects_by_source"] = generated["indirect_effects_by_source"].copy()
+    broken["indirect_effects_by_source"][0, 0, 0] = 1.0
+    broken["indirect_effects_by_source"][0, 0, 1] = -1.0
+    errors = DataGenerator.validate_corpus(broken)
+    assert "indirect_effects_by_source cc column is nonzero without an edge" in errors
+    assert "indirect_effects_by_source zc column is nonzero without an edge" in errors
+
+
+def test_validate_corpus_rejects_corrupt_cell_metadata(corpus):
+    forged_id = dict(corpus)
+    forged_id["cell_id"] = corpus["cell_id"].copy()
+    forged_id["cell_id"][1] = 99
+    errors = DataGenerator.validate_corpus(forged_id)
+    assert "cell_id must contain contiguous nonnegative ids" in errors
+    assert "diagnostics n_cells does not match cell_id" in errors
+
+    inconsistent_graph = dict(corpus)
+    inconsistent_graph["g"] = corpus["g"].copy()
+    inconsistent_graph["g"][1, 0] ^= 1
+    assert "g differs within a cell" in DataGenerator.validate_corpus(inconsistent_graph)
+
+
+def test_validate_corpus_handles_array_valued_signal_diagnostic(corpus):
+    broken = dict(corpus)
+    broken["diagnostics"] = dict(corpus["diagnostics"])
+    broken["diagnostics"]["signal"] = dict(corpus["diagnostics"]["signal"])
+    value = broken["diagnostics"]["signal"]["n_direct_channels"]
+    broken["diagnostics"]["signal"]["n_direct_channels"] = np.array([value, value])
+    assert "diagnostics signal summary does not match recomputation" in (
+        DataGenerator.validate_corpus(broken)
+    )
+
+
+def test_validate_corpus_rejects_incorrect_channel_active(corpus):
+    broken = dict(corpus)
+    broken["channel_active"] = corpus["channel_active"].copy()
+    broken["channel_active"][0, 0] ^= 1
+    assert any(
+        "channel_active does not match" in error for error in DataGenerator.validate_corpus(broken)
+    )
+
+
+def test_validate_corpus_rejects_balanced_null_channel_contribution(corpus):
+    layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+    direct = corpus["g"][:, layout.slices["cy"]]
+    n, k = np.argwhere(direct == 0)[0]
+    broken = dict(corpus)
+    for key in ("contributions_raw", "indirect_effects", "indirect_effects_by_source"):
+        broken[key] = corpus[key].copy()
+    broken["contributions_raw"][n, 0, k] += 0.25
+    broken["indirect_effects"][n, 0] -= 0.25
+    broken["indirect_effects_by_source"][n, 0, 0] -= 0.25
+    assert any("channels without C->Y" in error for error in DataGenerator.validate_corpus(broken))
+
+
+@pytest.mark.parametrize(
+    ("edge_type", "contribution_key", "message"),
+    (
+        ("zb", "control_contribution", "without a Z->B edge"),
+        ("db", "confounder_contribution", "without a D->B edge"),
+    ),
+)
+def test_validate_corpus_rejects_balanced_parentless_baseline_contribution(
+    corpus, edge_type, contribution_key, message
+):
+    layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+    edges = layout.unpack(corpus["g"])[edge_type]
+    n, node = np.argwhere(edges == 0)[0]
+    broken = dict(corpus)
+    broken[contribution_key] = corpus[contribution_key].copy()
+    broken["baseline_intrinsic"] = corpus["baseline_intrinsic"].copy()
+    broken[contribution_key][n, 0, node] += 0.25
+    broken["baseline_intrinsic"][n, 0] -= 0.25
+    assert any(message in error for error in DataGenerator.validate_corpus(broken))
+
+
+@pytest.mark.parametrize(
+    ("key", "index", "expected"),
+    (
+        ("indirect_effects", (0, 0), "additive decomposition"),
+        ("indirect_effects_by_source", (0, 0, 0), "telescoping decomposition"),
+        ("baseline_intrinsic", (0, 0), "baseline decomposition"),
+        ("control_contribution", (0, 0, 0), "full decomposition"),
+    ),
+)
+def test_validate_corpus_rejects_corrupt_decompositions(corpus, key, index, expected):
+    broken = dict(corpus)
+    broken[key] = corpus[key].copy()
+    broken[key][index] += 1.0
+    assert any(expected in error for error in DataGenerator.validate_corpus(broken))
 
 
 def test_shock_metadata_is_reconstructable_and_zero_padded():

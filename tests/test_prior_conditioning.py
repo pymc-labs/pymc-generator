@@ -75,6 +75,73 @@ def test_diagnostics_echo(conditioned_corpus):
     assert set(echo["width_ranges"]) == set(PRIOR_COND_QUANTITIES)
     assert echo["supports"]["adstock_alpha"] == [0.2, 0.8]
     assert echo["width_ranges"]["hill_shape"] == [0.2, 1.6]
+    assert pg.DataGenerator.validate_corpus(conditioned_corpus) == []
+
+
+def test_validator_rejects_malformed_prior_conditioning_metadata(conditioned_corpus):
+    malformed_array = dict(conditioned_corpus)
+    malformed_array["prior_cond"] = conditioned_corpus["prior_cond"].tolist()
+    assert pg.DataGenerator.validate_corpus(malformed_array) == ["prior_cond must be an ndarray"]
+
+    missing_echo = dict(conditioned_corpus)
+    missing_echo["diagnostics"] = dict(conditioned_corpus["diagnostics"])
+    del missing_echo["diagnostics"]["prior_cond"]
+    assert any(
+        "must be present together" in error
+        for error in pg.DataGenerator.validate_corpus(missing_echo)
+    )
+
+    missing_array = dict(conditioned_corpus)
+    del missing_array["prior_cond"]
+    assert any(
+        "must be present together" in error
+        for error in pg.DataGenerator.validate_corpus(missing_array)
+    )
+
+
+def test_validator_rejects_invalid_or_non_cellwise_prior_intervals(conditioned_corpus):
+    bad_layout = dict(conditioned_corpus)
+    bad_layout["diagnostics"] = dict(conditioned_corpus["diagnostics"])
+    bad_layout["diagnostics"]["prior_cond"] = dict(conditioned_corpus["diagnostics"]["prior_cond"])
+    bad_layout["diagnostics"]["prior_cond"]["layout"] = ["unknown"]
+    assert any("layout" in error for error in pg.DataGenerator.validate_corpus(bad_layout))
+
+    bad_bounds = dict(conditioned_corpus)
+    bad_bounds["diagnostics"] = dict(conditioned_corpus["diagnostics"])
+    bad_bounds["diagnostics"]["prior_cond"] = dict(conditioned_corpus["diagnostics"]["prior_cond"])
+    bad_bounds["diagnostics"]["prior_cond"]["supports"] = dict(
+        conditioned_corpus["diagnostics"]["prior_cond"]["supports"]
+    )
+    bad_bounds["diagnostics"]["prior_cond"]["supports"]["adstock_alpha"] = [0.8, 0.2]
+    assert "diagnostics prior_cond adstock_alpha bounds are invalid" in (
+        pg.DataGenerator.validate_corpus(bad_bounds)
+    )
+
+    bad_width = dict(conditioned_corpus)
+    bad_width["prior_cond"] = conditioned_corpus["prior_cond"].copy()
+    bad_width["prior_cond"][0, 1] = 0.0
+    assert any(
+        "intervals are outside" in error for error in pg.DataGenerator.validate_corpus(bad_width)
+    )
+
+    inconsistent = dict(conditioned_corpus)
+    inconsistent["prior_cond"] = conditioned_corpus["prior_cond"].copy()
+    same_cell_rows = np.flatnonzero(
+        conditioned_corpus["cell_id"] == conditioned_corpus["cell_id"][0]
+    )
+    assert len(same_cell_rows) > 1
+    inconsistent["prior_cond"][same_cell_rows[1], 0] += 1e-3
+    assert any(
+        "rows differ within a cell" in error
+        for error in pg.DataGenerator.validate_corpus(inconsistent)
+    )
+
+    forged_cell = dict(inconsistent)
+    forged_cell["cell_id"] = conditioned_corpus["cell_id"].copy()
+    forged_cell["cell_id"][same_cell_rows[1]] = 99
+    errors = pg.DataGenerator.validate_corpus(forged_cell)
+    assert "cell_id must contain contiguous nonnegative ids" in errors
+    assert "diagnostics n_cells does not match cell_id" in errors
 
 
 # -- invariant 2: nesting ----------------------------------------------------

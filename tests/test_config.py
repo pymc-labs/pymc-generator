@@ -107,6 +107,58 @@ def test_baseline_walk_sigma_must_be_a_finite_positive_scalar(value):
         SCMPrior(rw_baseline_std_sigma=value).validate()
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("spend_cv_floor", np.nan),
+        ("spend_cv_floor", np.inf),
+        ("spend_cv_floor", -0.1),
+        ("spend_cv_floor", True),
+        ("rw_smoothness_alpha", np.nan),
+        ("rw_smoothness_alpha", 0.0),
+        ("rw_smoothness_beta", np.inf),
+        ("rw_smoothness_beta", -1.0),
+        ("val_cell_frac", np.nan),
+        ("val_cell_frac", 0.0),
+        ("val_cell_frac", 1.0),
+        ("val_cell_frac", True),
+        ("query_frac", np.nan),
+        ("query_frac", np.inf),
+        ("query_frac", 0.0),
+        ("query_frac", True),
+        ("p_long_horizon", np.nan),
+        ("p_long_horizon", np.inf),
+        ("p_long_horizon", -0.1),
+        ("p_long_horizon", 1.1),
+    ),
+)
+def test_scalar_domain_parameters_fail_fast(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("adstock_family_probs", None),
+        ("adstock_family_probs", 1),
+        ("adstock_family_probs", (np.nan, 0.5, 0.5)),
+        ("adstock_family_probs", (True, 0.0, 0.0)),
+        ("adstock_family_probs", (-0.1, 0.5, 0.6)),
+        ("adstock_family_probs", (0.3, 0.3, 0.40001)),
+        ("saturation_family_probs", None),
+        ("saturation_family_probs", 1),
+        ("saturation_family_probs", (np.inf, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        ("saturation_family_probs", (False, 0.2, 0.2, 0.2, 0.2, 0.2)),
+        ("saturation_family_probs", (1.1, 0.0, 0.0, 0.0, 0.0, -0.1)),
+        ("saturation_family_probs", (0.15, 0.17, 0.17, 0.17, 0.17, 0.0)),
+    ),
+)
+def test_family_probabilities_fail_fast(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
 # --- deprecation / steering policy -----------------------------------------
 
 

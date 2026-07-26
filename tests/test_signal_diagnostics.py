@@ -320,7 +320,18 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "is_val": np.zeros(1, dtype=np.uint8),
         "cell_id": np.zeros(1, dtype=np.int32),
         "active_c_mask": np.ones((1, 1), dtype=np.uint8),
+        "active_m_mask": np.ones((1, 1), dtype=np.uint8),
+        "active_j_mask": np.ones((1, 1), dtype=np.uint8),
+        "K_active": np.ones(1, dtype=np.int32),
+        "M_active": np.ones(1, dtype=np.int32),
+        "J_active": np.ones(1, dtype=np.int32),
         "confounding_strength": np.zeros(1, dtype=np.float32),
+        "indirect_effects": np.zeros((1, 4), dtype=np.float32),
+        "channel_active": np.zeros((1, 1), dtype=np.uint8),
+        "control_contribution": np.zeros((1, 4, 1), dtype=np.float32),
+        "confounder_contribution": np.zeros((1, 4, 1), dtype=np.float32),
+        "baseline_intrinsic": np.ones((1, 4), dtype=np.float32),
+        "indirect_effects_by_source": np.zeros((1, 4, 3), dtype=np.float32),
         "channel_shock_mask": np.zeros((1, 4, 1), dtype=np.uint8),
         "channel_shock_channel": np.empty((1, 0), dtype=np.int32),
         "channel_shock_start": np.empty((1, 0), dtype=np.int32),
@@ -338,6 +349,8 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
             "signal_metric_valid": np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.uint8),
         },
         "diagnostics": {
+            "n_tasks": 1,
+            "n_cells": 1,
             "signal": {
                 "metric_version": SIGNAL_METRIC_VERSION,
                 "metric_layout": list(SIGNAL_METRIC_LAYOUT),
@@ -345,7 +358,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
                 "adstock_burn_in": 0,
                 "adstock_kernel_semantics": "normalized-causal-reset-aware-weibull-pdf",
                 "adstock_kernel_version": 1,
-            }
+            },
         },
     }
     corpus["identifiability"]["signal_metrics"][0, 0, 0] = 1
