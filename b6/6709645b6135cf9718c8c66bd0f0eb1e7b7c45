@@ -1,0 +1,43 @@
+docs/guide/corpus.md
+  s_6cdb3f9eca54e6::t_890a90a03d4fbd 44-50
+prior_generator/sampler.py
+  s_6cdb3f9eca54e6::t_bfc31b6dc44d63 638-663,1608
+  s_6cdb3f9eca54e6::t_ae83fa9b00bd6a 281-288,300-309
+tests/test_schema_io.py
+  s_6cdb3f9eca54e6::t_2170fbfc0e5293 405-424,806-824
+  s_6cdb3f9eca54e6::t_890a90a03d4fbd 484-505,516-524
+  s_6cdb3f9eca54e6::t_712f0cf73f1264 404
+  s_6cdb3f9eca54e6::t_510ed520bc884f 525-526
+  s_6cdb3f9eca54e6::t_36104d590462ad 825-826
+tests/test_signal_diagnostics.py
+  s_6cdb3f9eca54e6::t_890a90a03d4fbd 312,354
+prior_generator/symbolic_graph.py
+  s_6cdb3f9eca54e6::t_ae83fa9b00bd6a 473-478
+tests/test_config.py
+  s_6cdb3f9eca54e6::t_2170fbfc0e5293 159,162-188
+  s_6cdb3f9eca54e6::t_890a90a03d4fbd 189-200
+  s_6cdb3f9eca54e6::t_97a32628add91f 160-161
+.github/workflows/ci.yml
+  s_6cdb3f9eca54e6::t_287960ae9bebc2 54-56
+prior_generator/data_generator.py
+  s_6cdb3f9eca54e6::t_3cde2547fa6739 533-535,550
+  s_6cdb3f9eca54e6::t_ae83fa9b00bd6a 1042-1048,1077-1078,1087-1088
+  s_6cdb3f9eca54e6::t_52e3938faf40c1 517
+  s_6cdb3f9eca54e6::t_bfc31b6dc44d63 515-516,518-532,536-549,551-552,639-642,651,955
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "b66709645b6135cf9718c8c66bd0f0eb1e7b7c45",
+  "prompts": {},
+  "sessions": {
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
