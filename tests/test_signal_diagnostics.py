@@ -309,7 +309,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "controls": np.ones((1, 4, 1), dtype=np.float32),
         "sales_raw": np.ones((1, 4), dtype=np.float32),
         "sales_norm": np.ones((1, 4), dtype=np.float32),
-        "support_mask": np.ones((1, 4), dtype=np.uint8),
+        "support_mask": np.array([[1, 1, 1, 0]], dtype=np.uint8),
         "is_future": np.zeros(1, dtype=np.uint8),
         "g": np.zeros((1, 6), dtype=np.uint8),
         "contributions_raw": np.zeros((1, 4, 1), dtype=np.float32),
@@ -351,6 +351,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "diagnostics": {
             "n_tasks": 1,
             "n_cells": 1,
+            "short_horizon_n_query": 1,
             "signal": {
                 "metric_version": SIGNAL_METRIC_VERSION,
                 "metric_layout": list(SIGNAL_METRIC_LAYOUT),

@@ -51,9 +51,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # The pinned modeling stack (pytensor==3.0.7, pymc==6.0.1, pymc-marketing
-      # @ v1.0.0 branch) comes from [project.dependencies], so an editable
-      # install pulls it — including the git-URL pymc-marketing.
+      # The pinned modeling stack (pytensor==3.0.7, pymc==6.0.1, and
+      # pymc-marketing at an exact commit) comes from [project.dependencies],
+      # so an editable install also resolves the git-URL dependency.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

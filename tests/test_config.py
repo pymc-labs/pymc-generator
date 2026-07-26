@@ -159,6 +159,48 @@ def test_family_probabilities_fail_fast(name, value):
         SCMPrior(**{name: value}).validate()
 
 
+@pytest.mark.parametrize(
+    "name",
+    ("n_treatments", "n_covariates", "n_latent", "n_cells", "draws_per_cell", "T", "seed"),
+)
+@pytest.mark.parametrize("value", (True, np.nan, np.inf, 1.5))
+def test_integer_configuration_fields_reject_nonintegers(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("n_treatments", 0),
+        ("n_covariates", 0),
+        ("n_latent", 0),
+        ("n_cells", 1),
+        ("draws_per_cell", 0),
+        ("T", 3),
+        ("seed", -1),
+    ),
+)
+def test_integer_configuration_fields_enforce_minima(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("n_treatments_active_range", (1.5, 2)),
+        ("n_covariates_active_range", (True, 2)),
+        ("n_latent_active_range", (2, 1)),
+        ("n_treatments_active_range", (1, 2, 3)),
+        ("n_covariates_active_range", None),
+    ),
+)
+def test_active_count_ranges_require_ordered_integer_pairs(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
 # --- deprecation / steering policy -----------------------------------------
 
 

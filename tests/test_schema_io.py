@@ -402,6 +402,27 @@ def test_validate_and_save_reject_complex_arrays(tmp_path, corpus):
 
 
 @pytest.mark.parametrize(
+    "array",
+    (
+        np.array(["text"]),
+        np.array([b"bytes"]),
+        np.zeros(1, dtype=[("field", "f4")]),
+    ),
+)
+def test_save_corpus_rejects_non_numeric_arrays(tmp_path, array):
+    with pytest.raises(ValueError, match="x must have a real numeric dtype"):
+        pg.save_corpus({"x": array}, tmp_path / "non-numeric.npz")
+
+
+def test_save_corpus_rejects_non_numeric_identifiability_array(tmp_path):
+    with pytest.raises(ValueError, match="identifiability.label must have a real numeric dtype"):
+        pg.save_corpus(
+            {"identifiability": {"label": np.array(["text"])}},
+            tmp_path / "non-numeric-label.npz",
+        )
+
+
+@pytest.mark.parametrize(
     "diagnostics",
     (np.array(["{}"]), np.array("{not json"), np.array("[]")),
 )
@@ -460,6 +481,28 @@ def test_validate_corpus_rejects_nonpositive_sales_scale(corpus):
     assert "sales_scale must be positive" in errors
 
 
+def test_validate_corpus_checks_temporal_split_and_sales_scale(corpus):
+    bad_support = dict(corpus)
+    bad_support["support_mask"] = np.ones_like(corpus["support_mask"])
+    assert "support_mask does not match the recorded temporal split" in (
+        DataGenerator.validate_corpus(bad_support)
+    )
+
+    bad_split_type = dict(corpus)
+    bad_split_type["is_future"] = corpus["is_future"].copy()
+    bad_split_type["is_future"][0] ^= 1
+    assert "support_mask does not match the recorded temporal split" in (
+        DataGenerator.validate_corpus(bad_split_type)
+    )
+
+    bad_scale = dict(corpus)
+    bad_scale["sales_scale"] = corpus["sales_scale"].copy()
+    bad_scale["sales_scale"][0] += 1.0
+    errors = DataGenerator.validate_corpus(bad_scale)
+    assert "sales_scale does not match supported sales observations" in errors
+    assert "sales_norm != sales_raw / sales_scale" in errors
+
+
 def test_validate_corpus_rejects_unverifiable_metric_version(corpus):
     broken = dict(corpus)
     diagnostics = dict(corpus["diagnostics"])
@@ -468,6 +511,17 @@ def test_validate_corpus_rejects_unverifiable_metric_version(corpus):
     broken["diagnostics"] = diagnostics
     errors = DataGenerator.validate_corpus(broken)
     assert "diagnostics signal metric_version is not supported" in errors
+
+
+def test_validate_corpus_handles_array_metric_version(corpus):
+    broken = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"]["metric_version"] = np.array([2, 2])
+    broken["diagnostics"] = diagnostics
+    assert "diagnostics signal metric_version is not supported" in (
+        DataGenerator.validate_corpus(broken)
+    )
 
 
 def test_validate_corpus_rejects_empty_identifiability_block(corpus):
@@ -747,6 +801,27 @@ def test_validate_corpus_rejects_offsetting_impossible_indirect_sources():
     errors = DataGenerator.validate_corpus(broken)
     assert "indirect_effects_by_source cc column is nonzero without an edge" in errors
     assert "indirect_effects_by_source zc column is nonzero without an edge" in errors
+
+
+def test_single_treatment_corpus_has_exactly_zero_cc_indirect_source():
+    generated = pg.sample_prior_predictive(
+        pg.make_scm_prior(
+            n_treatments=1,
+            n_covariates=1,
+            n_latent=1,
+            T=10,
+            n_cells=2,
+            draws_per_cell=1,
+            l_max=2,
+            adstock_burn_in=2,
+            seed=7,
+        )
+    )
+    assert np.array_equal(
+        generated["indirect_effects_by_source"][..., 0],
+        np.zeros((2, 10), dtype=np.float32),
+    )
+    assert DataGenerator.validate_corpus(generated) == []
 
 
 def test_validate_corpus_rejects_corrupt_cell_metadata(corpus):

@@ -512,6 +512,44 @@ class DataGenerator:
             ):
                 errors.append("is_future is not binary")
 
+        short_n_query = None
+        diagnostics = corpus.get("diagnostics")
+        if isinstance(diagnostics, dict) and isinstance(diagnostics.get("signal"), dict):
+            candidate = diagnostics.get("short_horizon_n_query")
+            if (
+                isinstance(candidate, (int, np.integer))
+                and not isinstance(candidate, (bool, np.bool_))
+                and 0 < candidate < T
+            ):
+                short_n_query = int(candidate)
+            else:
+                errors.append("diagnostics short_horizon_n_query must be an integer in (0, T)")
+        if short_n_query is not None:
+            expected_support_count = np.where(
+                corpus["is_future"] == 1,
+                T // 2,
+                T - short_n_query,
+            )
+            expected_support = (np.arange(T)[None, :] < expected_support_count[:, None]).astype(
+                np.uint8
+            )
+            if not np.array_equal(corpus["support_mask"], expected_support):
+                errors.append("support_mask does not match the recorded temporal split")
+
+            sales = corpus["sales_raw"].astype(np.float64)
+            expected_sales_scale = np.asarray(
+                [sales[i, expected_support[i] == 1].std() for i in range(N)],
+                dtype=np.float64,
+            )
+            bad_scale = ~(np.isfinite(expected_sales_scale) & (expected_sales_scale > 0.0))
+            if bad_scale.any():
+                full_std = sales[bad_scale].std(axis=1)
+                expected_sales_scale[bad_scale] = np.where(
+                    np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0
+                )
+            if not np.allclose(corpus["sales_scale"], expected_sales_scale, rtol=1e-5, atol=1e-7):
+                errors.append("sales_scale does not match supported sales observations")
+
         # Check is_val is binary
         if "is_val" in corpus:
             is_val = corpus["is_val"]
@@ -598,7 +636,10 @@ class DataGenerator:
                 return False
             return isinstance(result, (bool, np.bool_)) and bool(result)
 
-        if not _is_integer(metric_version) or metric_version != SIGNAL_METRIC_VERSION:
+        version_supported = (
+            _is_integer(metric_version) and int(metric_version) == SIGNAL_METRIC_VERSION
+        )
+        if not version_supported:
             errors.append("diagnostics signal metric_version is not supported")
         metric_layout = signal_diagnostics.get("metric_layout")
         try:
@@ -607,7 +648,7 @@ class DataGenerator:
             normalized_layout = None
         if normalized_layout != list(SIGNAL_METRIC_LAYOUT):
             errors.append("diagnostics signal metric_layout does not match signal_metrics")
-        if metric_version == SIGNAL_METRIC_VERSION:
+        if version_supported:
             if not _is_integer(signal_diagnostics.get("l_max")) or signal_diagnostics["l_max"] < 1:
                 errors.append("diagnostics signal l_max must be a positive integer")
             if (
@@ -911,7 +952,7 @@ class DataGenerator:
             if (residual > tolerance).any():
                 errors.append(f"{name} exceeds float32 storage tolerance")
 
-        if not errors and metric_version == SIGNAL_METRIC_VERSION:
+        if not errors and version_supported:
             eligible = direct & (corpus["active_c_mask"] == 1)
             expected_metrics, expected_valid = dense_signal_metrics(
                 corpus["spend_raw"],
@@ -998,6 +1039,13 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
     if isinstance(identifiability, dict) and not identifiability:
         raise ValueError("identifiability metadata must be omitted rather than empty")
 
+    def _is_real_numeric(array: np.ndarray) -> bool:
+        return bool(
+            np.issubdtype(array.dtype, np.integer)
+            or np.issubdtype(array.dtype, np.floating)
+            or np.issubdtype(array.dtype, np.bool_)
+        )
+
     # Convert diagnostics dict to JSON string if present
     save_dict = {}
     for k, v in corpus.items():
@@ -1026,6 +1074,8 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
                     raise ValueError(f"identifiability.{label} may not have object dtype")
                 if np.issubdtype(value.dtype, np.complexfloating):
                     raise ValueError(f"identifiability.{label} may not have complex dtype")
+                if not _is_real_numeric(value):
+                    raise ValueError(f"identifiability.{label} must have a real numeric dtype")
                 save_dict[f"identifiability__{label}"] = value
         else:
             if not isinstance(v, np.ndarray):
@@ -1034,6 +1084,8 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
                 raise ValueError(f"{k} may not have object dtype")
             if np.issubdtype(v.dtype, np.complexfloating):
                 raise ValueError(f"{k} may not have complex dtype")
+            if not _is_real_numeric(v):
+                raise ValueError(f"{k} must have a real numeric dtype")
             save_dict[k] = v
 
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -41,7 +41,13 @@ storage is float32/uint8/int32):
 | `demand` | (N, T, J) | latent demand series (truth) |
 | `g` | (N, S) | the packed DAG (all 8 edge blocks) |
 | `active_c_mask` / `active_m_mask` / `active_j_mask` | (N, K/M/J) | which slots are live |
-| `diagnostics` | dict | edge marginals, decomposition errors, signal block |
+| `diagnostics` | dict | edge marginals, decomposition errors, signal block, and `short_horizon_n_query` split metadata |
+
+`support_mask` is always a contiguous support prefix followed by a nonempty
+query suffix. `is_future=0` uses `diagnostics["short_horizon_n_query"]` query
+weeks; `is_future=1` uses the second half of the series. `sales_scale` is the
+standard deviation of supported sales, with the full-series standard deviation
+and then `1.0` as deterministic fallbacks for degenerate support windows.
 
 ### Channel, adstock, and intervention audit metadata
 

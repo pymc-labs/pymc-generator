@@ -278,6 +278,14 @@ class SCMPrior:
         }
 
     def validate(self) -> None:
+        def _integer(name: str, value, *, minimum: int) -> None:
+            if (
+                isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, np.integer))
+                or value < minimum
+            ):
+                raise ValueError(f"{name} must be an integer >= {minimum}, got {value!r}")
+
         def _finite_real(name: str, value, *, positive: bool = False, nonnegative: bool = False):
             if (
                 isinstance(value, (bool, np.bool_))
@@ -289,12 +297,16 @@ class SCMPrior:
                 domain = "positive" if positive else "nonnegative" if nonnegative else "finite"
                 raise ValueError(f"{name} must be a {domain} real scalar, got {value!r}")
 
-        if self.n_treatments < 1:
-            raise ValueError(f"n_treatments must be >= 1, got {self.n_treatments}")
-        if self.n_covariates < 1:
-            raise ValueError(f"n_covariates must be >= 1, got {self.n_covariates}")
-        if self.n_latent < 1:
-            raise ValueError(f"n_latent must be >= 1, got {self.n_latent}")
+        for name, minimum in (
+            ("n_treatments", 1),
+            ("n_covariates", 1),
+            ("n_latent", 1),
+            ("n_cells", 2),
+            ("draws_per_cell", 1),
+            ("T", 4),
+            ("seed", 0),
+        ):
+            _integer(name, getattr(self, name), minimum=minimum)
         _finite_real("query_frac", self.query_frac, positive=True)
         _finite_real("val_cell_frac", self.val_cell_frac, positive=True)
         if self.val_cell_frac >= 1.0:
@@ -313,12 +325,6 @@ class SCMPrior:
                 f"for T={self.T}, leaving only {self.T - self.n_query} support weeks. "
                 f"Need at least 2 support weeks for meaningful statistics."
             )
-        if self.n_cells < 2:
-            raise ValueError(f"n_cells must be >= 2, got {self.n_cells}")
-        if self.draws_per_cell < 1:
-            raise ValueError(f"draws_per_cell must be >= 1, got {self.draws_per_cell}")
-        if self.T < 4:
-            raise ValueError(f"T must be >= 4, got {self.T}")
         if isinstance(self.l_max, bool) or not isinstance(self.l_max, (int, np.integer)):
             raise ValueError("l_max must be an int (not bool)")
         if self.l_max < 1:
@@ -629,37 +635,32 @@ class SCMPrior:
                 "n_channel_shocks * max channel_shock_length must be <= T, got "
                 f"{self.n_channel_shocks} * {shock_len_hi} > {self.T}"
             )
-        # Validate variable-size DAG ranges
-        k_act_max = min(self.n_treatments_active_range[1], self.n_treatments)
-        m_act_max = min(self.n_covariates_active_range[1], self.n_covariates)
-        j_act_max = min(self.n_latent_active_range[1], self.n_latent)
-        if self.n_treatments_active_range[0] < 1:
-            raise ValueError(
-                f"n_treatments_active_range[0] must be >= 1, got {self.n_treatments_active_range[0]}"
-            )
-        if self.n_covariates_active_range[0] < 1:
-            raise ValueError(
-                f"n_covariates_active_range[0] must be >= 1, got {self.n_covariates_active_range[0]}"
-            )
-        if self.n_latent_active_range[0] < 1:
-            raise ValueError(
-                f"n_latent_active_range[0] must be >= 1, got {self.n_latent_active_range[0]}"
-            )
-        if k_act_max < self.n_treatments_active_range[0]:
-            raise ValueError(
-                f"n_treatments ({self.n_treatments}) must be >= "
-                f"n_treatments_active_range[0] ({self.n_treatments_active_range[0]})"
-            )
-        if m_act_max < self.n_covariates_active_range[0]:
-            raise ValueError(
-                f"n_covariates ({self.n_covariates}) must be >= "
-                f"n_covariates_active_range[0] ({self.n_covariates_active_range[0]})"
-            )
-        if j_act_max < self.n_latent_active_range[0]:
-            raise ValueError(
-                f"n_latent ({self.n_latent}) must be >= "
-                f"n_latent_active_range[0] ({self.n_latent_active_range[0]})"
-            )
+        # Validate variable-size DAG ranges. The upper bound may exceed the
+        # padded size and is intentionally clamped, but both declared bounds
+        # must still be ordered integers.
+        for range_name, size_name in (
+            ("n_treatments_active_range", "n_treatments"),
+            ("n_covariates_active_range", "n_covariates"),
+            ("n_latent_active_range", "n_latent"),
+        ):
+            value = getattr(self, range_name)
+            try:
+                lo, hi = value
+            except (TypeError, ValueError):
+                raise ValueError(f"{range_name} must be an integer (lo, hi) pair, got {value!r}")
+            if (
+                isinstance(lo, (bool, np.bool_))
+                or isinstance(hi, (bool, np.bool_))
+                or not isinstance(lo, (int, np.integer))
+                or not isinstance(hi, (int, np.integer))
+                or not 1 <= lo <= hi
+            ):
+                raise ValueError(
+                    f"{range_name} must have integer bounds satisfying 1 <= lo <= hi, got {value!r}"
+                )
+            size = getattr(self, size_name)
+            if lo > size:
+                raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
 
 
 def _resolve_budget(rng: np.random.Generator, spec: int | tuple[int, int], n_eligible: int) -> int:
@@ -1604,6 +1605,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     diagnostics = {
         "edge_types": list(layout.edge_types),
         "draws_per_cell": int(cfg.draws_per_cell),
+        "short_horizon_n_query": int(n_query),
         "elapsed_s": float(elapsed),
         "n_draws_evaluated": int(n_evaluated),
         "rejection_rate": float(n_rejected / max(n_evaluated, 1)),

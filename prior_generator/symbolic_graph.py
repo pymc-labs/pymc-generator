@@ -470,9 +470,12 @@ def build_symbolic_graph(
 
     # K == 0 is unsupported (the contributions stack above already requires
     # K >= 1), so the ie stacks need no separate guard.
-    ie_cc = pt.stack(ie_cc_cols, axis=1).sum(axis=1)
-    ie_zc = pt.stack(ie_zc_cols, axis=1).sum(axis=1)
-    ie_dc = pt.stack(ie_dc_cols, axis=1).sum(axis=1)
+    # Graph surgery against an absent edge family is exactly zero. Returning a
+    # literal zero avoids machine-epsilon subtraction residue in persisted truth
+    # labels, especially for the structurally edge-free K=1 C->C block.
+    ie_cc = pt.stack(ie_cc_cols, axis=1).sum(axis=1) if g_cc.any() else pt.zeros(T)
+    ie_zc = pt.stack(ie_zc_cols, axis=1).sum(axis=1) if g_zc.any() else pt.zeros(T)
+    ie_dc = pt.stack(ie_dc_cols, axis=1).sum(axis=1) if g_dc.any() else pt.zeros(T)
     indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)  # (T, 3): cc, zc, dc
 
     walk_y = _walk_column(eps_y, params["rw_y"], 0, T_full)
