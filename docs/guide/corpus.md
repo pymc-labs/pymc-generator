@@ -49,6 +49,18 @@ weeks; `is_future=1` uses the second half of the series. `sales_scale` is the
 standard deviation of supported sales, with the full-series standard deviation
 and then `1.0` as deterministic fallbacks for degenerate support windows.
 
+`diagnostics["signal"]["response_warmup_weeks"]` identifies a separate
+reproducibility boundary. It is `l_max - 1` when `adstock_burn_in > 0` and at
+least one eligible direct channel uses nonidentity adstock
+(`adstock_family != 0`); otherwise it is `0`. When
+`summarize_signal_metrics` lacks adstock metadata, it conservatively reports
+`l_max - 1` with burn-in. Reported weeks
+`0 .. response_warmup_weeks - 1` have a media response that depends on
+pre-window spend the corpus does not persist, so their targets are not functions
+of persisted inputs. This is not a train/query mask: `support_mask` remains only
+the temporal support/query split. With `adstock_burn_in == 0`, zero padding makes
+every reported response reproducible from persisted spend.
+
 ### Channel, adstock, and intervention audit metadata
 
 The following arrays are persisted for every corpus, including empty `(N, 0)`
@@ -142,8 +154,14 @@ all observable arrays remain byte-identical and the aggregate signal diagnostics
 remain available.
 
 The `diagnostics["signal"]` block includes the metric and adstock-kernel
-versions plus `l_max` and `adstock_burn_in`; use those stored values rather than
-assuming configuration defaults when recomputing a loaded shard.
+versions plus `l_max`, `adstock_burn_in`, and `response_warmup_weeks`; use those
+stored values rather than assuming configuration defaults when recomputing a
+loaded shard. Its kernel metadata is
+`adstock_kernel_semantics="normalized-causal-minmax-weibull-density"` at
+`adstock_kernel_version=3`, reflecting pymc-marketing's min-max rescaling before
+sum normalization. `frac_zero_contemporaneous_weight` reports the eligible direct
+channel share whose current-week normalized adstock weight is effectively zero.
+It is reported for inspection, not used to gate a corpus.
 
 ```python exec="1" source="material-block" result="text"
 from scm_docs import corpus
@@ -155,6 +173,13 @@ print("overall:", "PASS ✅" if ok else "see rows below")
 for line in lines:
     print(" ", line)
 ```
+
+The default gate also limits amplitude and collinearity failures:
+`frac_contrib_rel_std_lt_001 <= 0.10` caps the share of direct channels whose
+true contribution is too small to matter in loss units, and
+`frac_contrib_r2_gt_095 <= 0.10` caps the share whose contribution is a
+near-perfect linear combination of the baseline and other channels. A prior gate
+PASS alone did not certify either property.
 
 !!! note "Tiny demo corpus"
     The corpus on this page is deliberately small (4 tasks) so the docs build

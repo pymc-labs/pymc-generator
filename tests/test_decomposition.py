@@ -62,13 +62,47 @@ def test_full_per_node_additivity(corpus):
     assert err < 1e-3 * float(np.abs(corpus["sales_raw"]).max())
 
 
-def test_diagnostics_report_tight_identity(corpus):
-    d = corpus["diagnostics"]
-    # float64 pre-storage errors are near machine epsilon
-    assert d["decomposition_max_abs_error"] < 1e-9
-    assert d["telescoping_split_max_abs_error"] < 1e-9
-    assert d["full_decomposition_max_abs_error"] < 1e-9
-    assert d["baseline_decomposition_max_abs_error"] < 1e-9
+def test_diagnostics_report_persisted_identity_error(corpus):
+    """Diagnostics quantify reconstruction error from the stored float32 arrays."""
+    expected_decomposition = np.abs(
+        corpus["baseline_raw"]
+        + corpus["contributions_raw"].sum(axis=-1)
+        + corpus["indirect_effects"]
+        - corpus["sales_raw"]
+    ).max()
+    expected_telescoping = np.abs(
+        corpus["indirect_effects_by_source"].sum(axis=-1) - corpus["indirect_effects"]
+    ).max()
+    expected_full = np.abs(
+        corpus["baseline_intrinsic"]
+        + corpus["confounder_contribution"].sum(axis=-1)
+        + corpus["control_contribution"].sum(axis=-1)
+        + corpus["contributions_raw"].sum(axis=-1)
+        + corpus["indirect_effects_by_source"].sum(axis=-1)
+        - corpus["sales_raw"]
+    ).max()
+    expected_baseline = np.abs(
+        corpus["baseline_intrinsic"]
+        + corpus["confounder_contribution"].sum(axis=-1)
+        + corpus["control_contribution"].sum(axis=-1)
+        - corpus["baseline_raw"]
+    ).max()
+
+    diagnostics = corpus["diagnostics"]
+    assert diagnostics["decomposition_max_abs_error"] == float(expected_decomposition)
+    assert diagnostics["telescoping_split_max_abs_error"] == float(expected_telescoping)
+    assert diagnostics["full_decomposition_max_abs_error"] == float(expected_full)
+    assert diagnostics["baseline_decomposition_max_abs_error"] == float(expected_baseline)
+
+    # Equality locks the persisted-float32 measurement contract; the ceiling
+    # independently bounds the reconstruction residual itself.
+    for name in (
+        "decomposition_max_abs_error",
+        "telescoping_split_max_abs_error",
+        "full_decomposition_max_abs_error",
+        "baseline_decomposition_max_abs_error",
+    ):
+        assert diagnostics[name] < 1e-5
 
 
 def test_channels_positive_and_finite(corpus):

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from pytensor.graph.traversal import ancestors
 
+import prior_generator.symbolic_graph as symbolic_graph
 from prior_generator import make_scm_prior, sample_scm
 from prior_generator.describe import describe_scm
 from prior_generator.symbolic_graph import build_symbolic_graph
@@ -15,7 +16,12 @@ from prior_generator.world_model import (
     draw_worlds,
     sample_structure,
 )
-from prior_generator.worlds import _LEGACY_WORLD_PARAM_NAMES, SCM, _assemble_params
+from prior_generator.worlds import (
+    _LEGACY_WORLD_PARAM_NAMES,
+    SCM,
+    _assemble_channel_shock_schedule,
+    _assemble_params,
+)
 
 _RAW_EPS_NAMES = (
     "eps_d",
@@ -98,6 +104,28 @@ def _replay(
         eps=eps,
     )
     return {name: value.eval() for name, value in graph["outputs"].items()}
+
+
+def test_sampled_data_owns_accepted_arrays():
+    """Accepted outputs must not retain the full candidate-draw batch."""
+    world = sample_scm(_config(), seed=17, max_eps_draws=40)
+
+    assert all(values.flags.owndata and values.base is None for values in world.data.values())
+
+
+def test_channel_shock_schedule_rejects_overlapping_windows():
+    """Concrete replay scheduling must retain symbolic sum semantics."""
+    cfg = _config(n_channel_shocks=2)
+    drawn = {
+        "channel_shock_channel": np.array([[0, 0]], dtype="int64"),
+        "channel_shock_start": np.array([[0, 1]], dtype="int64"),
+        "channel_shock_length": np.array([[2, 2]], dtype="int64"),
+        "channel_shock_level": np.array([[1.0, 1.0]]),
+        "channel_shock_mask_full": np.zeros((1, cfg.T + cfg.adstock_burn_in, 2), dtype="int8"),
+    }
+
+    with pytest.raises(AssertionError, match="must not overlap"):
+        _assemble_channel_shock_schedule(drawn, 0, cfg)
 
 
 def test_expanded_audit_preserves_seeded_single_world_outputs():
@@ -341,6 +369,25 @@ def test_description_surfaces_equations_and_audit_locations():
     assert "world.exogenous" in description
 
 
+def test_random_walk_equation_uses_fixed_scale_divisor():
+    """The audit equation must match the injective fixed-scale walk implementation."""
+    equation = sample_scm(_config(), seed=73, max_eps_draws=40).equations["RW"]
+
+    assert "std(q)" not in equation
+    assert "1e-8" not in equation
+    assert "centred_walk_scale(T_full, width)" in equation
+    assert "sqrt(tr(A A^T) / T_full)" in equation
+    assert "world constants:" in equation
+
+
+def test_description_marks_unestimable_signal_metrics_not_applicable():
+    cfg = _config(T=4, l_max=8, adstock_burn_in=0)
+    world = _fixed_world(_edgeless_graph(), cfg)
+
+    assert not world.signal()["spearman_valid"].any()
+    assert "spearman=n/a" in describe_scm(world)
+
+
 def _edgeless_graph(n_treatments: int = 2, n_covariates: int = 2) -> dict:
     return {
         "g_cy": np.ones(n_treatments, dtype=int),
@@ -354,21 +401,44 @@ def _edgeless_graph(n_treatments: int = 2, n_covariates: int = 2) -> dict:
     }
 
 
-def test_saturation_anchor_has_no_noise_ancestors():
+def test_saturation_anchor_has_no_noise_ancestors(monkeypatch):
     """The response anchor must be a function of PARAMETERS, never of the draw.
 
     Deriving it from the realized series (its window mean) would make the
     "prior" a function of the noise it generates, and -- because the mean spans
     the whole window -- would let spend at a late week move the response at an
-    early one. A graph-ancestry check catches any reintroduction of either.
+    early one. Record every saturation call, then inspect its anchor through
+    every graph output, including the audit-only unshocked paths.
     """
-    cfg = _config()
+    cfg = _config(
+        n_channel_shocks=1,
+        channel_shock_length_range=(2, 2),
+        channel_shock_level_range=(0.5, 0.5),
+    )
     g = _edgeless_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(5))
-    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
-    anchor_ancestors = set(ancestors([model["saturation_scale"]]))
-    for noise in _RAW_EPS_NAMES:
-        assert model[noise] not in anchor_ancestors, noise
+    saturation_anchors = []
+    original_saturate_col = symbolic_graph._saturate_col
+
+    def record_saturation_anchor(ad_col, mean_ad, params, k):
+        saturation_anchors.append(mean_ad)
+        return original_saturate_col(ad_col, mean_ad, params, k)
+
+    monkeypatch.setattr(symbolic_graph, "_saturate_col", record_saturation_anchor)
+    model, out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+
+    assert {"channels_unshocked", "sales_unshocked"} <= set(out_names)
+    assert saturation_anchors
+    for output_name in out_names:
+        output_ancestors = set(ancestors([model[output_name]])) | {model[output_name]}
+        output_anchors = [anchor for anchor in saturation_anchors if anchor in output_ancestors]
+        if output_name == "sales_unshocked":
+            assert output_anchors
+        for anchor in output_anchors:
+            anchor_ancestors = set(ancestors([anchor])) | {anchor}
+            for noise in _RAW_EPS_NAMES:
+                assert model[noise] not in anchor_ancestors, f"{output_name}: {noise}"
+
     # ... while the contributions themselves obviously still depend on the draw.
     assert model["eps_c"] in set(ancestors([model["contributions"]]))
 
@@ -389,10 +459,22 @@ def test_saturation_anchor_equals_the_closed_form_expected_level():
 
 
 def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
-    """D carries no scale of its own; the loadings do. Checked on the drawn path."""
-    world = sample_scm(_config(adstock_burn_in=0), seed=11)
-    demand = np.asarray(world.data["demand"], dtype=float)
-    # burn_in=0 means the reported window IS the simulated horizon, so the
-    # walk's exact normalization is directly observable.
-    np.testing.assert_allclose(demand.mean(axis=0), 0.0, atol=1e-12)
-    np.testing.assert_allclose(demand.std(axis=0), 1.0, rtol=1e-6)
+    """D carries no scale of its own; the loadings do.
+
+    The walk is centred exactly, so the mean is 0 to machine precision. Its
+    amplitude is normalized by a CONSTANT rather than by its own realized
+    standard deviation, so the realized sd scatters around 1 instead of
+    equalling it -- that scatter is the price of keeping the innovations-to-path
+    map injective. What is pinned is the expectation.
+    """
+    cfg = _config(adstock_burn_in=0)
+    realized = []
+    # One seed from each three-seed block retains a representative moment
+    # estimate without retaining 24 costly world draws.
+    for seed in (0, 4, 6, 9, 14, 17, 19, 22):
+        demand = np.asarray(sample_scm(cfg, seed=seed).data["demand"], dtype=float)
+        # burn_in=0 means the reported window IS the simulated horizon.
+        np.testing.assert_allclose(demand.mean(axis=0), 0.0, atol=1e-12)
+        realized.append(float(demand.std()))
+    assert 0.85 <= float(np.mean(np.square(realized))) <= 1.20  # E[var] == 1 by construction
+    assert np.ptp(realized) > 0.1  # ... and it is genuinely random, not pinned

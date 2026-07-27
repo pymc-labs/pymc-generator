@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import prior_generator as pg
+import prior_generator.world_model as world_model
 from prior_generator import DataGenerator
 from prior_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
@@ -116,6 +117,77 @@ def test_g_layout_is_extended_8_block(corpus):
 
 def test_validate_corpus_accepts_generated(corpus):
     assert DataGenerator.validate_corpus(corpus) == []
+
+
+def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
+    """Persisted spend features stay ratios when the monetary unit changes."""
+    draw_worlds = world_model.draw_worlds
+    unit_scale = 1e-16
+
+    def draw_with_rescaled_spend(*args, **kwargs):
+        drawn = draw_worlds(*args, **kwargs)
+        drawn["channels"] = drawn["channels"] * unit_scale
+        return drawn
+
+    monkeypatch.setattr(world_model, "draw_worlds", draw_with_rescaled_spend)
+    cfg = pg.make_scm_prior(
+        n_treatments=3,
+        n_covariates=2,
+        n_latent=1,
+        n_treatments_active_range=(2, 2),
+        T=16,
+        n_cells=2,
+        draws_per_cell=1,
+        n_channel_shocks=1,
+        channel_shock_length_range=(2, 2),
+        seed=29,
+    )
+    generated = pg.sample_prior_predictive(cfg)
+
+    def normalized_spend(spend):
+        means = spend.mean(axis=1)
+        return np.divide(
+            spend, means[:, None, :], out=np.zeros_like(spend), where=means[:, None, :] != 0.0
+        )
+
+    def spend_shares(spend):
+        active = generated["active_c_mask"].astype(np.float64)[:, None, :]
+        active_sum = (spend * active).sum(axis=-1, keepdims=True)
+        return (
+            np.divide(spend, active_sum, out=np.zeros_like(spend), where=active_sum != 0.0) * active
+        )
+
+    def spend_cv_quantiles(spend):
+        means = spend.mean(axis=1)
+        cv = np.divide(
+            spend.std(axis=1), means, out=np.zeros_like(means), where=means != 0.0
+        ).ravel()
+        return np.quantile(cv, (0.1, 0.5, 0.9))
+
+    spend = generated["spend_raw"].astype(np.float64)
+    rescaled_spend = spend * 1e8
+    np.testing.assert_allclose(
+        generated["spend_norm"], normalized_spend(rescaled_spend), rtol=1e-5, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        generated["spend_share"], spend_shares(rescaled_spend), rtol=1e-5, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        spend_cv_quantiles(spend), spend_cv_quantiles(rescaled_spend), rtol=1e-5, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        [
+            generated["diagnostics"]["spend_cv_quantiles"][f"q{int(q * 100)}"]
+            for q in (0.1, 0.5, 0.9)
+        ],
+        spend_cv_quantiles(rescaled_spend),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    inactive = generated["active_c_mask"] == 0
+    for key in ("spend_raw", "spend_norm", "spend_share"):
+        assert not generated[key].transpose(0, 2, 1)[inactive].any(), key
+    assert DataGenerator.validate_corpus(generated) == []
 
 
 def test_validate_corpus_flags_missing_key(corpus):
@@ -239,6 +311,26 @@ def test_single_node_edge_marginals_are_defined_without_empty_mean_warning(recwa
     assert not any("Mean of empty slice" in str(item.message) for item in recwarn)
 
 
+def test_edge_base_rates_report_legacy_overrides():
+    overrides = {"cy": 0.11, "dc": 0.22, "db": 0.33, "zb": 0.44}
+    corpus = pg.sample_prior_predictive(
+        pg.make_scm_prior(
+            n_treatments=1,
+            n_covariates=1,
+            n_latent=1,
+            T=8,
+            l_max=1,
+            adstock_burn_in=0,
+            n_cells=2,
+            draws_per_cell=1,
+            edge_rate_overrides=overrides,
+            seed=419,
+        )
+    )
+    rates = corpus["diagnostics"]["edge_base_rates"]
+    assert {edge_type: rates[edge_type] for edge_type in overrides} == overrides
+
+
 def test_save_load_roundtrip(tmp_path, corpus):
     path = tmp_path / "corpus.npz"
     pg.save_corpus(corpus, path)
@@ -275,7 +367,7 @@ def test_numpy_scalar_diagnostics_validate_and_roundtrip(tmp_path, corpus):
             "metric_layout": np.asarray(SIGNAL_METRIC_LAYOUT),
             "l_max": np.int32(signal["l_max"]),
             "adstock_burn_in": np.int64(signal["adstock_burn_in"]),
-            "adstock_kernel_version": np.int64(2),
+            "adstock_kernel_version": np.int64(3),
         }
     )
     diagnostics["signal"] = signal
@@ -507,7 +599,7 @@ def test_validate_corpus_rejects_unverifiable_metric_version(corpus):
     broken = dict(corpus)
     diagnostics = dict(corpus["diagnostics"])
     diagnostics["signal"] = dict(diagnostics["signal"])
-    diagnostics["signal"]["metric_version"] = 1
+    diagnostics["signal"]["metric_version"] = 2
     broken["diagnostics"] = diagnostics
     errors = DataGenerator.validate_corpus(broken)
     assert "diagnostics signal metric_version is not supported" in errors
@@ -521,6 +613,36 @@ def test_validate_corpus_handles_array_metric_version(corpus):
     broken["diagnostics"] = diagnostics
     assert "diagnostics signal metric_version is not supported" in (
         DataGenerator.validate_corpus(broken)
+    )
+
+
+def test_validate_corpus_requires_current_signal_fields_and_edge_order(corpus):
+    missing_warmup = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"].pop("response_warmup_weeks")
+    missing_warmup["diagnostics"] = diagnostics
+    assert any(
+        "response_warmup_weeks" in error for error in DataGenerator.validate_corpus(missing_warmup)
+    )
+
+    missing_weight = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"].pop("frac_zero_contemporaneous_weight")
+    missing_weight["diagnostics"] = diagnostics
+    assert any(
+        "summary does not match recomputation" in error
+        for error in DataGenerator.validate_corpus(missing_weight)
+    )
+
+    reordered_edges = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["edge_types"] = list(reversed(diagnostics["edge_types"]))
+    reordered_edges["diagnostics"] = diagnostics
+    assert any(
+        "edge_types does not match" in error
+        for error in DataGenerator.validate_corpus(reordered_edges)
     )
 
 
@@ -556,6 +678,35 @@ def test_validate_corpus_rejects_corrupt_layout_metrics_and_family(corpus):
     assert any("adstock_family" in error for error in DataGenerator.validate_corpus(bad_family))
 
 
+@pytest.mark.parametrize("is_val_value", (0, 1))
+def test_validate_corpus_requires_nonempty_train_and_validation_sides(corpus, is_val_value):
+    broken = dict(corpus)
+    broken["is_val"] = np.full_like(corpus["is_val"], is_val_value)
+
+    assert "is_val must contain at least one training and one validation world" in (
+        DataGenerator.validate_corpus(broken)
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "old_value"),
+    (
+        ("adstock_kernel_semantics", "normalized-causal-weibull-pdf"),
+        ("adstock_kernel_version", 2),
+    ),
+)
+def test_validate_corpus_rejects_previous_adstock_kernel_metadata(corpus, field, old_value):
+    broken = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"][field] = old_value
+    broken["diagnostics"] = diagnostics
+
+    assert "diagnostics signal adstock kernel semantics are not supported" in (
+        DataGenerator.validate_corpus(broken)
+    )
+
+
 def test_datagenerator_generate_n_tasks():
     cfg = pg.make_scm_prior(
         n_treatments=4, n_covariates=2, n_latent=1, T=32, draws_per_cell=5, seed=1
@@ -566,6 +717,123 @@ def test_datagenerator_generate_n_tasks():
     assert corpus["is_val"].sum() >= 1
     assert corpus["channel_shock_mask"].shape[0] == 7
     assert corpus["channel_level"].shape[0] == 7
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("seed", (11, 23, 37))
+@pytest.mark.parametrize("n_tasks", (2, 3, 6, 12, 20))
+def test_datagenerator_small_task_counts_keep_cell_level_split(seed, n_tasks):
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=4,
+        l_max=1,
+        adstock_burn_in=0,
+        draws_per_cell=20,
+        nonlinearity="linear",
+        spend_cv_floor=0.0,
+        seed=seed,
+    )
+    corpus = DataGenerator(cfg).generate(n_tasks=n_tasks, validate=True)
+
+    assert corpus["spend_raw"].shape[0] == n_tasks
+    assert corpus["diagnostics"]["draws_per_cell"] == max(1, n_tasks // 2)
+    assert 0 < corpus["is_val"].sum() < n_tasks
+    cell_ids = np.unique(corpus["cell_id"])
+    assert cell_ids.size >= 2
+    for cell_id in cell_ids:
+        assert np.unique(corpus["is_val"][corpus["cell_id"] == cell_id]).size == 1
+
+
+def test_datagenerator_task_count_above_draws_per_cell_keeps_cell_level_split():
+    n_tasks = 3
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=4,
+        l_max=1,
+        adstock_burn_in=0,
+        draws_per_cell=2,
+        nonlinearity="linear",
+        spend_cv_floor=0.0,
+        seed=11,
+    )
+    corpus = DataGenerator(cfg).generate(n_tasks=n_tasks, validate=True)
+
+    assert corpus["spend_raw"].shape[0] == n_tasks
+    assert corpus["diagnostics"]["draws_per_cell"] == 2
+    assert 0 < corpus["is_val"].sum() < n_tasks
+    cell_ids = np.unique(corpus["cell_id"])
+    assert cell_ids.size >= 2
+    for cell_id in cell_ids:
+        assert np.unique(corpus["is_val"][corpus["cell_id"] == cell_id]).size == 1
+
+
+def test_datagenerator_rejects_one_task_cell_split():
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=8,
+        l_max=1,
+        adstock_burn_in=0,
+        draws_per_cell=2,
+    )
+    with pytest.raises(ValueError, match="n must be >= 2"):
+        DataGenerator(cfg).generate(n_tasks=1, validate=True)
+    with pytest.raises(ValueError, match="n must be >= 2"):
+        DataGenerator(cfg).generate_batches(n_tasks=1)
+
+
+@pytest.mark.parametrize(
+    ("n_tasks", "batch_size", "expected_sizes"),
+    (
+        (2, 2, (2,)),
+        (3, 2, (3,)),
+        (5, 2, (2, 3)),
+        (7, 3, (3, 4)),
+        (8, 3, (3, 3, 2)),
+    ),
+)
+def test_datagenerator_batches_preserve_tasks_without_one_world_batch(
+    n_tasks, batch_size, expected_sizes
+):
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=8,
+        l_max=1,
+        adstock_burn_in=0,
+        draws_per_cell=2,
+        nonlinearity="linear",
+        spend_cv_floor=0.0,
+        seed=91,
+    )
+
+    batches = DataGenerator(cfg).generate_batches(n_tasks=n_tasks, batch_size=batch_size)
+    sizes = tuple(batch["spend_raw"].shape[0] for batch in batches)
+
+    assert sizes == expected_sizes
+    assert sum(sizes) == n_tasks
+    assert all(size != 1 for size in sizes)
+
+
+def test_datagenerator_rejects_one_world_batch_size():
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=8,
+        l_max=1,
+        adstock_burn_in=0,
+        draws_per_cell=2,
+    )
+
+    with pytest.raises(ValueError, match="batch_size must be at least 2"):
+        DataGenerator(cfg).generate_batches(n_tasks=2, batch_size=1)
 
 
 def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
@@ -620,13 +888,17 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
             sales_scale=corpus["sales_scale"],
             l_max=cfg.l_max,
             adstock_burn_in=cfg.adstock_burn_in,
+            adstock_family=corpus["adstock_family"],
+            adstock_alpha=corpus["adstock_alpha"],
+            weibull_lam=corpus["weibull_lam"],
+            weibull_k=corpus["weibull_k"],
         )
         expected_signal["metric_version"] = SIGNAL_METRIC_VERSION
         expected_signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
         expected_signal["l_max"] = cfg.l_max
         expected_signal["adstock_burn_in"] = cfg.adstock_burn_in
-        expected_signal["adstock_kernel_semantics"] = "normalized-causal-weibull-pdf"
-        expected_signal["adstock_kernel_version"] = 2
+        expected_signal["adstock_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
+        expected_signal["adstock_kernel_version"] = 3
         assert corpus["diagnostics"]["signal"] == expected_signal
 
     for key, value in full.items():

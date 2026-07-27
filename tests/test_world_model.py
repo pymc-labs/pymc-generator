@@ -7,12 +7,21 @@ determinism, and batched draws — independently of the high-level wiring.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import pytensor.tensor as pt
 import pytest
 
+import prior_generator.world_model as world_model
 from prior_generator import make_scm_prior
 from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
+from prior_generator.world_model import (
+    _rw_prior_group,
+    build_world_model,
+    draw_worlds,
+    sample_structure,
+)
 
 
 @pytest.fixture(scope="module")
@@ -111,3 +120,80 @@ def test_single_draw_has_leading_axis(built):
     d = draw_worlds(model, out_names, seed=9, draws=1)
     assert d["sales"].shape == (1, 48)
     assert d["contributions"].shape == (1, 48, 4)
+
+
+def test_walk_scale_rejects_ambiguous_range_and_sigma():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _rw_prior_group(
+            "test",
+            1,
+            False,
+            (0.0, 0.0),
+            0.5,
+            std_sigma=1.0,
+            std_range=(1.0, 1.0),
+        )
+
+
+def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        T=12,
+        edge_budget={"cy": (2, 2)},
+    )
+    rng = np.random.default_rng(31)
+    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g_act = _slice_g_active(g, 2, 1, 1)
+    structural = sample_structure(g_act, cfg, rng)
+
+    def graph_with_colliding_beta(*_args, **_kwargs):
+        return {"outputs": {"beta": pt.as_tensor_variable(0.0)}}
+
+    monkeypatch.setattr(
+        "prior_generator.world_model.build_symbolic_graph",
+        graph_with_colliding_beta,
+    )
+    with pytest.raises(ValueError, match="collides with a different model variable"):
+        build_world_model(g_act, cfg, structural, cfg.T)
+
+
+def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch):
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        T=12,
+        edge_budget={"cy": (2, 2)},
+        confounding_strength_range=(0.2, 0.4),
+        n_channel_shocks=1,
+        channel_shock_length_range=(2, 3),
+        channel_shock_level_range=(0.5, 1.0),
+    )
+    rng = np.random.default_rng(31)
+    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g_act = _slice_g_active(g, 2, 1, 1)
+    structural = sample_structure(g_act, cfg, rng)
+
+    captured_graph: dict[str, Any] = {}
+    original_build_symbolic_graph = world_model.build_symbolic_graph
+
+    def capture_graph(*args, **kwargs):
+        graph = original_build_symbolic_graph(*args, **kwargs)
+        captured_graph["graph"] = graph
+        return graph
+
+    monkeypatch.setattr(world_model, "build_symbolic_graph", capture_graph)
+    model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.T)
+
+    names = (
+        "confounding_strength",
+        "channel_shock_length",
+        "channel_shock_level_multiplier",
+    )
+    assert set(names) <= {rv.name for rv in model.free_RVs}
+    assert set(names) <= set(out_names)
+    graph_outputs = captured_graph["graph"]["outputs"]
+    for name in names:
+        assert model[name] is graph_outputs[name]

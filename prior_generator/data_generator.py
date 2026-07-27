@@ -105,7 +105,7 @@ class DataGenerator:
         seed: int = 0,
         validate: bool = True,
     ) -> list[dict[str, np.ndarray]]:
-        """Generate data in batches.
+        """Generate data in batches of at least two worlds.
 
         Parameters
         ----------
@@ -118,6 +118,9 @@ class DataGenerator:
         validate : bool
             Whether to validate each batch.
 
+        Batches are at least two worlds because every corpus carries its own
+        cell-level train/validation split.
+
         Returns
         -------
         list of dict
@@ -125,19 +128,27 @@ class DataGenerator:
         """
         if n_tasks <= 0:
             raise ValueError(f"n_tasks must be positive, got {n_tasks}")
+        if n_tasks == 1:
+            raise ValueError("n=1 cannot form a cell-level train/validation split; n must be >= 2")
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if batch_size == 1:
+            raise ValueError(
+                "batch_size must be at least 2 for a cell-level train/validation split"
+            )
+
+        n_full_batches, remainder = divmod(n_tasks, batch_size)
+        batch_sizes = [batch_size] * n_full_batches
+        if remainder == 1 and batch_sizes:
+            batch_sizes[-1] += 1
+        elif remainder:
+            batch_sizes.append(remainder)
 
         batches = []
-        n_batches = (n_tasks + batch_size - 1) // batch_size
-
-        for i in range(n_batches):
-            batch_seed = seed + i
-            batch_tasks = min(batch_size, n_tasks - i * batch_size)
-
+        for i, batch_tasks in enumerate(batch_sizes):
             corpus = self.generate(
                 n_tasks=batch_tasks,
-                seed=batch_seed,
+                seed=seed + i,
                 validate=validate,
             )
             batches.append(corpus)
@@ -472,18 +483,28 @@ class DataGenerator:
         expected_spend_means = corpus["spend_raw"].astype(np.float64).mean(axis=1)
         if not np.allclose(corpus["spend_means"], expected_spend_means, rtol=1e-6, atol=1e-7):
             errors.append("spend_means != mean(spend_raw, axis=1)")
-        expected_spend_norm = corpus["spend_raw"].astype(np.float64) / (
-            corpus["spend_means"].astype(np.float64)[:, None, :] + 1e-8
+        spend_raw = corpus["spend_raw"].astype(np.float64)
+        spend_means = corpus["spend_means"].astype(np.float64)
+        expected_spend_norm = np.divide(
+            spend_raw,
+            spend_means[:, None, :],
+            out=np.zeros_like(spend_raw),
+            where=spend_means[:, None, :] != 0.0,
         )
         if not np.allclose(corpus["spend_norm"], expected_spend_norm, rtol=1e-5, atol=1e-7):
             errors.append("spend_norm does not match spend_raw / spend_means")
-        active_spend_sum = (
-            corpus["spend_raw"].astype(np.float64)
-            * corpus["active_c_mask"].astype(np.float64)[:, None, :]
-        ).sum(axis=-1, keepdims=True)
+        active_spend_sum = (spend_raw * corpus["active_c_mask"].astype(np.float64)[:, None, :]).sum(
+            axis=-1, keepdims=True
+        )
         expected_spend_share = (
-            corpus["spend_raw"].astype(np.float64) / (active_spend_sum + 1e-8)
-        ) * corpus["active_c_mask"].astype(np.float64)[:, None, :]
+            np.divide(
+                spend_raw,
+                active_spend_sum,
+                out=np.zeros_like(spend_raw),
+                where=active_spend_sum != 0.0,
+            )
+            * corpus["active_c_mask"].astype(np.float64)[:, None, :]
+        )
         if not np.allclose(corpus["spend_share"], expected_spend_share, rtol=1e-5, atol=1e-7):
             errors.append("spend_share does not match active-channel spend shares")
 
@@ -550,13 +571,15 @@ class DataGenerator:
             if not np.allclose(corpus["sales_scale"], expected_sales_scale, rtol=1e-5, atol=1e-7):
                 errors.append("sales_scale does not match supported sales observations")
 
-        # Check is_val is binary
+        # Check is_val is binary and contains both sides of the corpus split.
         if "is_val" in corpus:
             is_val = corpus["is_val"]
             if not np.all(
                 (np.abs(is_val.astype(float)) < 1e-9) | (np.abs(is_val.astype(float) - 1) < 1e-9)
             ):
                 errors.append("is_val is not binary")
+            elif not 0 < is_val.sum() < N:
+                errors.append("is_val must contain at least one training and one validation world")
 
         # Check g is binary
         if "g" in corpus:
@@ -598,7 +621,6 @@ class DataGenerator:
                 values = signal_metrics[..., index][signal_metric_valid[..., index].astype(bool)]
                 if ((values < low - 1e-6) | (values > high + 1e-6)).any():
                     errors.append(f"signal metric {name} is outside [{low}, {high}]")
-        diagnostics = corpus.get("diagnostics")
         if not isinstance(diagnostics, dict):
             errors.append("diagnostics must be a mapping")
             return errors
@@ -606,6 +628,13 @@ class DataGenerator:
         if not isinstance(signal_diagnostics, dict):
             errors.append("diagnostics signal must be a mapping")
             return errors
+        try:
+            normalized_edge_types = list(diagnostics.get("edge_types"))
+        except TypeError:
+            normalized_edge_types = None
+        if normalized_edge_types != list(EDGE_TYPES_EXTENDED):
+            errors.append("diagnostics edge_types does not match the canonical layout")
+
         metric_version = signal_diagnostics.get("metric_version")
 
         def _is_integer(value):
@@ -656,10 +685,27 @@ class DataGenerator:
                 or signal_diagnostics["adstock_burn_in"] < 0
             ):
                 errors.append("diagnostics signal adstock_burn_in must be a nonnegative integer")
+            response_warmup_weeks = signal_diagnostics.get("response_warmup_weeks")
+            if not _is_integer(response_warmup_weeks) or not 0 <= response_warmup_weeks < T:
+                errors.append(
+                    "diagnostics signal response_warmup_weeks must be a nonnegative integer below T"
+                )
+            frac_zero_contemporaneous_weight = signal_diagnostics.get(
+                "frac_zero_contemporaneous_weight"
+            )
+            if frac_zero_contemporaneous_weight is not None and (
+                not isinstance(frac_zero_contemporaneous_weight, (float, np.floating))
+                or not np.isfinite(frac_zero_contemporaneous_weight)
+                or not 0.0 <= frac_zero_contemporaneous_weight <= 1.0
+            ):
+                errors.append(
+                    "diagnostics signal frac_zero_contemporaneous_weight must be None or a float "
+                    "in [0, 1]"
+                )
             if (
                 signal_diagnostics.get("adstock_kernel_semantics")
-                != "normalized-causal-weibull-pdf"
-                or signal_diagnostics.get("adstock_kernel_version") != 2
+                != "normalized-causal-minmax-weibull-density"
+                or signal_diagnostics.get("adstock_kernel_version") != 3
             ):
                 errors.append("diagnostics signal adstock kernel semantics are not supported")
 
@@ -983,6 +1029,10 @@ class DataGenerator:
                 sales_scale=corpus["sales_scale"],
                 l_max=int(signal_diagnostics["l_max"]),
                 adstock_burn_in=int(signal_diagnostics["adstock_burn_in"]),
+                adstock_family=corpus["adstock_family"],
+                adstock_alpha=corpus["adstock_alpha"],
+                weibull_lam=corpus["weibull_lam"],
+                weibull_k=corpus["weibull_k"],
             )
             expected_signal.update(
                 {
@@ -990,8 +1040,8 @@ class DataGenerator:
                     "metric_layout": list(SIGNAL_METRIC_LAYOUT),
                     "l_max": int(signal_diagnostics["l_max"]),
                     "adstock_burn_in": int(signal_diagnostics["adstock_burn_in"]),
-                    "adstock_kernel_semantics": "normalized-causal-weibull-pdf",
-                    "adstock_kernel_version": 2,
+                    "adstock_kernel_semantics": "normalized-causal-minmax-weibull-density",
+                    "adstock_kernel_version": 3,
                 }
             )
             actual_signal = dict(signal_diagnostics)
@@ -999,16 +1049,9 @@ class DataGenerator:
             if not _diagnostic_equal(actual_signal, expected_signal):
                 errors.append("diagnostics signal summary does not match recomputation")
 
-        # Check null channels have zero contribution
-        if "g" in corpus and "contributions_raw" in corpus:
-            g = corpus["g"]
-            contribs = corpus["contributions_raw"]
-
-            # For each task, check that null channels (g_cy=0) have zero contribution
-            # This is a bit tricky because g_cy is embedded in the g vector
-            # We'll check that contributions are non-negative
-            if (contribs < 0).any():
-                errors.append("contributions_raw contains negative values")
+        # This corpus-level invariant enforces beta_additive_range >= 0 downstream.
+        if (corpus["contributions_raw"] < 0).any():
+            errors.append("contributions_raw contains negative values")
 
         return errors
 

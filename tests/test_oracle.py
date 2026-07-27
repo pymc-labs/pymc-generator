@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import numpy as np
 import pymc as pm
+import pytensor
 import pytest
 
 import prior_generator as pg
-from prior_generator.sampler import _slice_g_active, sample_g_additive
+from prior_generator.sampler import SCMPrior, _slice_g_active, sample_g_additive
 from prior_generator.signal_diagnostics import _adstock_numpy
 from prior_generator.world_model import build_oracle_model, build_world_model, sample_structure
 
@@ -41,7 +42,46 @@ SHARED_RV_NAMES = (
 
 
 def _small_cfg(**overrides):
-    return pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, T=28, seed=5, **overrides)
+    base = {"n_treatments": 2, "n_covariates": 1, "n_latent": 1, "T": 28, "seed": 5}
+    return pg.make_scm_prior(**{**base, **overrides})
+
+
+def _direct_only_graph(n_treatments: int = 2) -> dict[str, np.ndarray]:
+    """Return a one-control, one-latent graph with direct-only media effects."""
+    return {
+        "g_cy": np.ones(n_treatments, dtype=int),
+        "g_dc": np.zeros((1, n_treatments), dtype=int),
+        "g_dz": np.zeros((1, 1), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((1, n_treatments), dtype=int),
+        "g_cc": np.zeros((n_treatments, n_treatments), dtype=int),
+        "g_zz": np.zeros((1, 1), dtype=int),
+    }
+
+
+def _oracle_truth_point(oracle: pm.Model, values: dict[str, object]) -> dict[str, np.ndarray]:
+    """Encode a world draw as the oracle's transformed value-variable point."""
+    point = {}
+    for rv in oracle.free_RVs:
+        value = np.asarray(values[rv.name])
+        value_var = oracle.rvs_to_values[rv]
+        transform = oracle.rvs_to_transforms[rv]
+        if transform is None:
+            point[value_var.name] = value
+        else:
+            point[value_var.name] = transform.forward(value, *rv.owner.inputs).eval()
+    return point
+
+
+def _oracle_deterministic_at_truth(
+    oracle: pm.Model, values: dict[str, object], name: str
+) -> np.ndarray:
+    """Evaluate one oracle deterministic at a generator draw's true parameters."""
+    point = _oracle_truth_point(oracle, values)
+    deterministic = oracle.replace_rvs_by_values([oracle[name]])[0]
+    evaluate = pytensor.function(oracle.value_vars, deterministic, on_unused_input="ignore")
+    return np.asarray(evaluate(*[point[value_var.name] for value_var in oracle.value_vars]))
 
 
 @pytest.fixture(scope="module")
@@ -58,6 +98,7 @@ def world_and_oracle():
         "channels": world["channels"],
         "controls": world["controls"],
         "sales": world["sales"],
+        "saturation_scale": world["saturation_scale"],
     }
     oracle = build_oracle_model(g_act, cfg, structural, data)
     return gen_model, oracle, world
@@ -97,6 +138,7 @@ def test_baseline_walk_override_is_shared_by_generation_and_oracle():
             "channels": np.zeros((cfg.T, 2)),
             "controls": np.zeros((cfg.T, 1)),
             "sales": np.zeros(cfg.T),
+            "saturation_scale": np.ones(2),
         },
     )
     value = np.array([0.4])
@@ -109,15 +151,7 @@ def test_baseline_walk_override_is_shared_by_generation_and_oracle():
 def test_oracle_logp_finite_at_truth(world_and_oracle):
     """Total oracle logp (priors + likelihood) is finite at the drawn world."""
     _gen_model, oracle, world = world_and_oracle
-    point = {}
-    for rv in oracle.free_RVs:
-        val = np.asarray(world[rv.name])
-        value_var = oracle.rvs_to_values[rv]
-        transform = oracle.rvs_to_transforms[rv]
-        if transform is None:
-            point[value_var.name] = val
-        else:
-            point[value_var.name] = transform.forward(val, *rv.owner.inputs).eval()
+    point = _oracle_truth_point(oracle, world)
     logp = oracle.compile_logp()(point)
     assert np.isfinite(logp)
 
@@ -132,6 +166,123 @@ def test_oracle_deterministics_shapes(world_and_oracle):
     assert tuple(oracle["demand"].shape.eval()) == (T, J)
 
 
+def test_oracle_likelihood_starts_at_first_reproducible_response_week():
+    """The likelihood begins after, but not before, unpersisted adstock history."""
+    cfg = _small_cfg(
+        T=8,
+        l_max=4,
+        adstock_burn_in=4,
+        nonlinearity="linear",
+        adstock_family_probs={
+            "none": 0.0,
+            "geometric": 1.0,
+            "weibull": 0.0,
+        },
+        adstock_alpha_range=(0.79, 0.81),
+    )
+    g = _direct_only_graph()
+    structural = sample_structure(g, cfg, np.random.default_rng(20))
+    assert np.all(structural["adstock_family"] == 1)
+    generative, output_names, _ = build_world_model(g, cfg, structural, cfg.T)
+    drawn = {
+        name: value[0]
+        for name, value in pg.draw_worlds(
+            generative, output_names + SHARED_RV_NAMES, seed=21, draws=1
+        ).items()
+    }
+    oracle = build_oracle_model(
+        g,
+        cfg,
+        structural,
+        {key: drawn[key] for key in ("channels", "controls", "sales", "saturation_scale")},
+    )
+
+    warmup = cfg.l_max - 1
+    oracle_contributions = _oracle_deterministic_at_truth(oracle, drawn, "contributions")
+    truth = drawn["contributions_observed"]
+    assert tuple(oracle["sales"].shape.eval()) == (cfg.T - warmup,)
+    assert tuple(oracle["contributions"].shape.eval()) == (cfg.T, 2)
+    assert tuple(oracle["baseline"].shape.eval()) == (cfg.T,)
+    assert tuple(oracle["sales_mu"].shape.eval()) == (cfg.T,)
+    np.testing.assert_allclose(oracle_contributions[warmup], truth[warmup], rtol=0.0, atol=1e-15)
+    before_warmup_error = np.abs(oracle_contributions[warmup - 1] - truth[warmup - 1]).max()
+    assert before_warmup_error > 1e-3
+
+
+def test_oracle_rejects_likelihood_without_reproducible_weeks():
+    # K2 rejects this horizon at SCMPrior.validate(). Construct it directly to
+    # keep the direct build_oracle_model defensive guard covered.
+    cfg = SCMPrior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        T=4,
+        l_max=5,
+        adstock_burn_in=5,
+        adstock_family_probs={
+            "none": 0.0,
+            "geometric": 1.0,
+            "weibull": 0.0,
+        },
+    )
+    g = _direct_only_graph()
+    structural = sample_structure(g, cfg, np.random.default_rng(21))
+    assert np.all(structural["adstock_family"] == 1)
+
+    with pytest.raises(ValueError, match="no reproducible observations"):
+        build_oracle_model(
+            g,
+            cfg,
+            structural,
+            {
+                "channels": np.zeros((cfg.T, 2)),
+                "controls": np.zeros((cfg.T, 1)),
+                "sales": np.zeros(cfg.T),
+                "saturation_scale": np.ones(2),
+            },
+        )
+
+
+def test_identity_adstock_oracle_observes_and_reproduces_the_full_window():
+    """Identity kernels have no unpersisted response state to discard."""
+    # T=5 is the smallest K2-valid horizon for the old l_max=5 failure shape.
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        T=5,
+        l_max=5,
+        adstock_burn_in=5,
+        nonlinearity="linear",
+        edge_budget={
+            "cy": (1, 1),
+            "dc": 0,
+            "db": 0,
+            "zb": 0,
+            "dz": 0,
+            "zc": 0,
+            "cc": 0,
+            "zz": 0,
+        },
+    )
+    world = pg.sample_scm(cfg, seed=23, max_eps_draws=4)
+    assert np.array_equal(world.params["adstock_family"], np.array([0]))
+
+    oracle = world.oracle_model()
+    truth_values = {**world.params, **world.exogenous}
+    for group in ("rw_b", "rw_y"):
+        truth_values[f"{group}_mean"] = world.params[group]["mean"]
+        truth_values[f"{group}_std"] = world.params[group]["std"]
+    oracle_contributions = _oracle_deterministic_at_truth(oracle, truth_values, "contributions")
+    assert tuple(oracle["sales"].shape.eval()) == (cfg.T,)
+    np.testing.assert_allclose(
+        oracle_contributions,
+        world.data["contributions_observed"],
+        rtol=0.0,
+        atol=1e-15,
+    )
+
+
 def test_oracle_rejects_bad_shapes(world_and_oracle):
     gen_model, _oracle, world = world_and_oracle
     cfg = _small_cfg()
@@ -139,10 +290,19 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
     g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
+    missing_scale = {
+        "channels": world["channels"],
+        "controls": world["controls"],
+        "sales": world["sales"],
+    }
+    with pytest.raises(ValueError, match="saturation_scale"):
+        build_oracle_model(g_act, cfg, structural, missing_scale)
+
     bad = {
         "channels": world["channels"][:, :1],  # wrong K
         "controls": world["controls"],
         "sales": world["sales"],
+        "saturation_scale": world["saturation_scale"],
     }
     with pytest.raises(ValueError, match="data shapes"):
         build_oracle_model(g_act, cfg, structural, bad)
@@ -151,6 +311,7 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
         "channels": world["channels"],
         "controls": world["controls"],
         "sales": world["sales"][:, None],
+        "saturation_scale": world["saturation_scale"],
     }
     with pytest.raises(ValueError, match="sales must have shape"):
         build_oracle_model(g_act, cfg, structural, bad_sales)
@@ -159,6 +320,7 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
         "channels": np.empty((0, 2)),
         "controls": np.empty((0, 1)),
         "sales": np.empty(0),
+        "saturation_scale": np.ones(2),
     }
     with pytest.raises(ValueError, match="at least one observation"):
         build_oracle_model(g_act, cfg, structural, empty)
@@ -168,6 +330,7 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
             "channels": world["channels"].copy(),
             "controls": world["controls"].copy(),
             "sales": world["sales"].copy(),
+            "saturation_scale": world["saturation_scale"].copy(),
         }
         nonfinite[key].flat[0] = fill
         with pytest.raises(ValueError, match="finite"):
@@ -368,7 +531,13 @@ def test_nuts_smoke_recovers_params():
     std = post["beta"].std(("chain", "draw")).values
     # wide bounds: the truth within +/- 4 posterior sd of the posterior mean
     assert (np.abs(mean - true_beta)[direct] <= 4.0 * std[direct] + 0.25).all()
-    # the fitted sales mean tracks the observed sales
+    # The fitted sales mean tracks the observed likelihood window.
+    warmup = (
+        cfg.l_max - 1
+        if cfg.adstock_burn_in > 0
+        and np.any(direct & (np.asarray(world.params["adstock_family"]) != 0))
+        else 0
+    )
     mu = post["sales_mu"].mean(("chain", "draw")).values
-    r = np.corrcoef(mu, world.data["sales"])[0, 1]
+    r = np.corrcoef(mu[warmup:], world.data["sales"][warmup:])[0, 1]
     assert r > 0.8

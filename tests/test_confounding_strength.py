@@ -46,6 +46,18 @@ def test_degenerate_confounding_strength_is_constant_without_free_rv():
     assert np.array_equal(drawn["param_confounding_strength"], np.full(3, 0.35))
 
 
+def test_zero_confounding_range_preserves_disabled_draw_stream():
+    disabled_model, disabled_names, _ = _built(None)
+    zero_model, zero_names, _ = _built((0.0, 0.0))
+
+    disabled = draw_worlds(disabled_model, disabled_names, seed=23, draws=1)
+    zero = draw_worlds(zero_model, zero_names, seed=23, draws=1)
+    assert np.array_equal(zero["confounding_strength"], np.zeros(1))
+
+    for name in ("sales", "channels", "contributions"):
+        assert disabled[name].tobytes() == zero[name].tobytes()
+
+
 def test_nondegenerate_confounding_strength_varies_per_batched_world():
     model, out_names, _ = _built((0.1, 0.8))
     assert "confounding_strength" in {rv.name for rv in model.free_RVs}

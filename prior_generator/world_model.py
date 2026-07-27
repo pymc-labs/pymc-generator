@@ -137,9 +137,7 @@ def _channel_shock_schedule(
     S = int(cfg.n_channel_shocks)
     K = len(g_cy)
     if S == 0:
-        return {
-            "n_shocks": 0,
-        }
+        return {}
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1).astype("int64")
     if not len(direct):
@@ -174,31 +172,24 @@ def _channel_shock_schedule(
     starts_t = pt.stack(starts)
     levels = multipliers * c_level[channels]
 
-    def _mask(n_time: int, offset: int):
+    def _event_mask(n_time: int, offset: int):
         time = pt.arange(n_time)[:, None]
         active = (time >= (starts_t + offset)[None, :]) & (
             time < (starts_t + lengths + offset)[None, :]
         )
         selected = pt.eq(pt.arange(K)[:, None], channels[None, :]).T
-        return pt.cast(pt.any(active[:, :, None] & selected[None, :, :], axis=1), "int8")
+        return active[:, :, None] & selected[None, :, :]
 
-    mask = _mask(T, 0)
-    mask_full = _mask(T + burn_in, burn_in)
-    time_full = pt.arange(T + burn_in)[:, None]
-    active_full = (time_full >= (starts_t + burn_in)[None, :]) & (
-        time_full < (starts_t + lengths + burn_in)[None, :]
-    )
-    selected = pt.eq(pt.arange(K)[:, None], channels[None, :]).T
+    event_mask = _event_mask(T, 0)
+    mask = pt.cast(pt.any(event_mask, axis=1), "int8")
+    event_mask_full = _event_mask(T + burn_in, burn_in)
+    mask_full = pt.cast(pt.any(event_mask_full, axis=1), "int8")
     level_full = pt.sum(
-        pt.cast(active_full[:, :, None] & selected[None, :, :], "float64") * levels[None, :, None],
+        pt.cast(event_mask_full, "float64") * levels[None, :, None],
         axis=1,
     )
     return {
-        "n_shocks": S,
-        "mask_full": mask_full,
         "level_full": level_full,
-        "channel": channels,
-        "start_full": starts_t + burn_in,
         "channel_shock_mask": mask,
         "channel_shock_mask_full": mask_full,
         "channel_shock_channel": channels,
@@ -290,21 +281,26 @@ def _validate_oracle_channel_shocks(
 
 
 def _rw_prior_group(
-    name, n, positive, mean_range, std_sigma, smoothness, std_range=None, relative=False
+    name, n, positive, mean_range, smoothness, *, std_sigma=None, std_range=None, relative=False
 ):
     """One node group's random-walk priors (mean + std RVs, concrete smoothness).
 
     Must be called inside a ``pm.Model`` context. This is THE single
     definition of the walk priors — the generative draw and the posterior
     oracle both build their walk parameters here, so they cannot drift.
+    ``std_range`` and ``std_sigma`` are mutually exclusive scale definitions.
     """
+    if std_range is not None and std_sigma is not None:
+        raise ValueError("std_range and std_sigma are mutually exclusive")
     mean = _uniform(f"{name}_mean", mean_range[0], mean_range[1], n)
-    if std_range is not None:
+    if std_range is None:
+        if std_sigma is None:
+            raise ValueError("std_sigma is required when std_range is absent")
+        std = pm.HalfNormal(f"{name}_std", sigma=std_sigma, shape=n)
+    else:
         std = _uniform(f"{name}_std", std_range[0], std_range[1], n)
         if relative:  # scale-free: amplitude relative to the walk's level
             std = std * pt.softplus(mean)
-    else:
-        std = pm.HalfNormal(f"{name}_std", sigma=std_sigma, shape=n)
     return {"mean": mean, "std": std, "smoothness": smoothness, "positive_only": positive}
 
 
@@ -338,7 +334,6 @@ def _walk_priors(
             n_latent,
             False,
             (0.0, 0.0),
-            cfg.rw_std_sigma,
             structural["smoothness_d"],
             std_range=(1.0, 1.0),
         )
@@ -348,8 +343,8 @@ def _walk_priors(
             n_covariates,
             False,
             cfg.rw_mean_range,
-            cfg.rw_std_sigma,
             structural["smoothness_z"],
+            std_sigma=cfg.rw_std_sigma,
         )
     if "c" in include:
         out["rw_c"] = _rw_prior_group(
@@ -357,10 +352,9 @@ def _walk_priors(
             n_treatments,
             True,
             cfg.rw_positive_mean_range,
-            cfg.rw_channel_std_sigma,
             structural["smoothness_c"],
             std_range=cfg.rw_channel_std_range,
-            relative=cfg.rw_channel_std_range is not None,
+            relative=True,
         )
     if "b" in include:
         out["rw_b"] = _rw_prior_group(
@@ -368,12 +362,17 @@ def _walk_priors(
             1,
             False,
             cfg.rw_baseline_mean_range,
-            cfg.rw_baseline_std_sigma_effective,
             structural["smoothness_b"],
+            std_sigma=cfg.rw_baseline_std_sigma_effective,
         )
     if "y" in include:
         out["rw_y"] = _rw_prior_group(
-            "rw_y", 1, False, (0.0, 0.0), cfg.rw_sales_std_sigma, structural["smoothness_y"]
+            "rw_y",
+            1,
+            False,
+            (0.0, 0.0),
+            structural["smoothness_y"],
+            std_sigma=cfg.rw_sales_std_sigma,
         )
     return out
 
@@ -560,7 +559,10 @@ def build_world_model(
             "use_pulse": structural["use_pulse"],
         }
         if cfg.n_channel_shocks:
-            params["channel_shock"] = shock_outputs
+            params["channel_shock"] = {
+                "mask_full": shock_outputs["channel_shock_mask_full"],
+                "level_full": shock_outputs["level_full"],
+            }
 
         eps = {
             "eps_d": pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, J)),
@@ -575,10 +577,11 @@ def build_world_model(
         }
 
         # Preserve the legacy innovation dictionary and graph path exactly when
-        # the feature is disabled. When enabled, rho is a single per-world
-        # value and only the channel innovation supplied to the graph changes.
-        # The orthonormal mixture leaves every channel innovation's marginal
-        # variance at one while correlating it with the baseline innovation.
+        # confounding is disabled, including its explicit ``(0.0, 0.0)``
+        # spelling. When enabled, rho is a single per-world value and only the
+        # channel innovation supplied to the graph changes. The orthonormal
+        # mixture leaves every channel innovation's marginal variance at one
+        # while correlating it with the baseline innovation.
         if cfg.confounding_strength_range is None:
             confounding_strength = pt.as_tensor_variable(np.asarray(0.0, dtype="float64"))
         else:
@@ -587,10 +590,11 @@ def build_world_model(
                 confounding_strength = pt.as_tensor_variable(np.asarray(lo, dtype="float64"))
             else:
                 confounding_strength = pm.Uniform("confounding_strength", lo, hi)
-            eps["eps_c"] = (
-                pt.sqrt(1.0 - confounding_strength**2) * eps["eps_c"]
-                + confounding_strength * eps["eps_b"][:, None]
-            )
+            if float(hi) > 0.0:
+                eps["eps_c"] = (
+                    pt.sqrt(1.0 - confounding_strength**2) * eps["eps_c"]
+                    + confounding_strength * eps["eps_b"][:, None]
+                )
 
         graph = build_symbolic_graph(g_active, params, T, K, M, J, burn_in=burn_in, eps=eps)
         graph["outputs"]["confounding_strength"] = confounding_strength
@@ -624,11 +628,14 @@ def build_world_model(
             )
         out_names = tuple(graph["outputs"].keys())
         for name in out_names:
-            # A nondegenerate confounding strength is itself the named Uniform
-            # RV. It is already drawable by this output name; wrapping it in a
-            # Deterministic would register the same name twice.
-            if name not in model.named_vars:
-                pm.Deterministic(name, graph["outputs"][name])
+            # Source RVs may already own an output name. Any other collision
+            # would make ``model[name]`` silently resolve to the wrong tensor.
+            output = graph["outputs"][name]
+            existing = model.named_vars.get(name)
+            if existing is None:
+                pm.Deterministic(name, output)
+            elif existing is not output:
+                raise ValueError(f"graph output {name!r} collides with a different model variable")
 
         # Register every continuous parameter as a ``param_*`` deterministic so
         # a sampled single world has all concrete inputs needed to replay its
@@ -694,11 +701,10 @@ def build_oracle_model(
     data : dict
         The world's observables — ``"channels"`` (T, K), ``"controls"``
         (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``. The
-        optional ``"saturation_scale"`` (K,) pins the exact generation-time
-        nonlinear response anchor; legacy callers that omit it use the
-        reported-window adstock mean. When
-        channel shocks are enabled, it must also carry the world's known
-        design metadata: ``channel_shock_channel``, ``channel_shock_start``,
+        required ``"saturation_scale"`` (K,) pins the exact generation-time
+        nonlinear response anchor. When channel shocks are enabled, it must
+        also carry the world's known design metadata:
+        ``channel_shock_channel``, ``channel_shock_start``,
         ``channel_shock_length``, ``channel_shock_level_multiplier``, and
         ``channel_shock_level``, each with one entry per configured shock, plus
         per-channel ``channel_level``. The absolute level must match both
@@ -709,23 +715,19 @@ def build_oracle_model(
         so the oracle runs under the SAME narrowed prior the world was drawn
         from.
 
-    Returns
-    -------
     pm.Model
         Free RVs: the outcome-side priors (``beta``, mechanism shapes,
         ``delta_db``, ``rho_zb``, walk params) and the latent demand / baseline
         walk innovations. Deterministics ``contributions`` (T, K),
         ``baseline`` (T,), ``sales_mu`` (T,) and ``demand`` (T, J) expose the
         posterior series; compare ``contributions`` against the world's
-        ``contributions_observed`` truth.
+        ``contributions_observed`` truth. ``baseline`` is ``B`` without the
+        generative ``RW_Y`` term, unlike the persisted ``data["baseline"]``.
 
     Notes
     -----
-    **What is exact, and what is not.** Conditioning this generative process
-    exactly is not possible: every random walk is normalized in-place
-    (``walk * std / walk.std()``), so the sales-noise walk has no closed-form
-    density to invert. The oracle keeps everything *upstream* of the
-    observation exact and makes three explicit, documented concessions:
+    **What is exact, and what is not.** The oracle keeps everything *upstream*
+    of the observation exact and makes five explicit, documented concessions:
 
     1. **Structure-known**: the true DAG, mechanism families and walk
        smoothness are given. This is the structure-known oracle — an upper
@@ -740,18 +742,37 @@ def build_oracle_model(
         inferred from the sales residual via ``D -> B`` only. This does not
         posit ``p(C | eps_b)`` or claim exact conditioning.
     3. **iid sales-noise representation**: the generative sales noise
-       ``RW_Y`` (a smoothed, normalized walk with marginal sd exactly
-       ``rw_y_std``) is represented as iid ``Normal(0, rw_y_std)`` with the
-       SAME HalfNormal prior on the scale. The latent demand and baseline
-       walks stay exact (same ``T_full`` simulation, same transform, sliced
-       to the reported window).
-
-    Additionally the adstock convolution sees only the reported window
-    (zero-padded start) while generation used ``adstock_burn_in`` weeks of
-    real history — drop the first ``l_max`` weeks from comparisons. Held-level
-    shocks are no exception: they clamp observed spend before the convolution
-    and never touch response state, so the ordinary carryover from pre-shock
-    spend decays across a shock boundary exactly as it does anywhere else.
+       ``RW_Y`` (a smoothed walk with expected sd ``rw_y_std``) is represented
+       as iid ``Normal(0, rw_y_std)`` with the SAME HalfNormal prior on the
+       scale. Its per-week marginal sd is heteroscedastic across the window:
+       measured 0.76x–1.48x ``rw_y_std``, minimum at the edges and maximum
+       mid-window. The iid representation therefore understates mid-window
+       uncertainty. This concession is removable in principle: because the
+       walk is normalized by a constant it is an ordinary multivariate normal
+       with covariance ``(std / c) ** 2 * A A^T``. The latent demand and
+       baseline walks stay exact (same ``T_full`` simulation, same transform,
+       sliced to the reported window).
+    4. **Baseline label**: oracle ``baseline`` is ``B`` (including its
+       ``D -> B`` and ``Z -> B`` parent terms) without ``RW_Y``, while
+       persisted ``data["baseline"]`` is ``B + RW_Y``. ``RW_Y`` is not stored
+       separately, so baseline is not directly comparable. ``contributions`` is
+       exactly comparable with ``world.data["contributions_observed"]``; compare
+       ``sales_mu`` with observed ``sales`` for total fit. Baseline recovery has
+       an irreducible one-sales-noise-walk floor.
+    5. **Reproducible likelihood window**: the oracle convolves only reported
+       spend with a zero-padded start, whereas generation used real burn-in
+       history. When burn-in is enabled and at least one direct channel has a
+       non-identity adstock kernel, it therefore observes only
+       ``sales[l_max - 1:]``. If every direct channel has identity adstock,
+       persisted spend reproduces the full response and it observes all sales.
+       ``contributions``, ``baseline``, and ``sales_mu`` remain full-length
+       deterministics. For non-identity kernels at the truth, residual sd was
+       0.238 for weeks before ``l_max`` versus 0.0093 after, compared with
+       ``rw_y_std=0.0126``; ``|z|`` reached 57 sigma and full-window sigma
+       MLEs were inflated 1.65x–8.4x across five seeds. Held-level shocks are
+       no exception: they clamp observed spend before the convolution and
+       never touch response state, so ordinary carryover decays across a shock
+       boundary exactly as it does anywhere else.
     """
     n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
     n_covariates = len(g_active["g_zb"])  # observed controls
@@ -772,20 +793,30 @@ def build_oracle_model(
         )
     if not all(np.isfinite(value).all() for value in (channels, controls, sales)):
         raise ValueError("data channels, controls, and sales must contain only finite values")
-    saturation_scale = data.get("saturation_scale")
-    if saturation_scale is not None:
-        saturation_scale = np.asarray(saturation_scale, dtype="float64")
-        if saturation_scale.shape != (n_treatments,) or not (
-            np.isfinite(saturation_scale).all() and (saturation_scale > 0.0).all()
-        ):
-            raise ValueError(
-                "saturation_scale must be finite and positive with shape "
-                f"{(n_treatments,)}, got {saturation_scale!r}"
-            )
+    if "saturation_scale" not in data:
+        raise ValueError("data requires a saturation_scale")
+    saturation_scale = np.asarray(data["saturation_scale"], dtype="float64")
+    if saturation_scale.shape != (n_treatments,) or not (
+        np.isfinite(saturation_scale).all() and (saturation_scale > 0.0).all()
+    ):
+        raise ValueError(
+            "saturation_scale must be finite and positive with shape "
+            f"{(n_treatments,)}, got {saturation_scale!r}"
+        )
+    g_cy = np.asarray(g_active["g_cy"], dtype="float64")
+    adstock_family = np.asarray(structural["adstock_family"])
     burn_in = cfg.adstock_burn_in
+    warmup = cfg.l_max - 1 if burn_in > 0 and np.any((g_cy != 0.0) & (adstock_family != 0)) else 0
+    # K2 makes this unreachable after SCMPrior.validate(); retain it for callers
+    # that invoke build_oracle_model directly with an unvalidated config.
+    if warmup >= T:
+        raise ValueError(
+            "oracle likelihood has no reproducible observations: "
+            f"T={T} must exceed warmup={warmup} "
+            f"(l_max={cfg.l_max}, adstock_burn_in={burn_in})"
+        )
     T_full = T + burn_in
     W = slice(burn_in, None)
-    g_cy = np.asarray(g_active["g_cy"], dtype="float64")
     g_db = np.asarray(g_active["g_db"], dtype="float64")
     g_zb = np.asarray(g_active["g_zb"], dtype="float64")
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
@@ -831,19 +862,20 @@ def build_oracle_model(
         contrib_cols = []
         for k in range(n_treatments):
             ad_obs = _adstock_col(channels_t[:, k], mech_params, k)
-            scale_k = (
-                pt.maximum(ad_obs.mean(), 1e-8)
-                if saturation_scale is None
-                else pt.as_tensor_variable(saturation_scale[k])
-            )
+            scale_k = pt.as_tensor_variable(saturation_scale[k])
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
             contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
 
         sales_mu = pm.Deterministic("sales_mu", baseline + contributions.sum(axis=1))
         # iid representation of the RW_Y sales noise (same HalfNormal scale
-        # prior; see Notes on why the normalized walk cannot be inverted).
-        pm.Normal("sales", mu=sales_mu, sigma=rw["rw_y"]["std"][0], observed=sales)
+        # prior; see Notes -- an exact MvNormal density is now possible).
+        pm.Normal(
+            "sales",
+            mu=sales_mu[warmup:],
+            sigma=rw["rw_y"]["std"][0],
+            observed=sales[warmup:],
+        )
 
     return model
 

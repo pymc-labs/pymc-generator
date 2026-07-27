@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import numpy as np
 
+from .random_walk import _centred_walk_scale
 from .sampler import (
     ADSTOCK_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
@@ -36,35 +37,6 @@ ADSTOCK_NAMES = ADSTOCK_FAMILY_KEYS
 
 #: Saturation family names, indexed by ``params["sat_family"]``.
 SATURATION_NAMES = SATURATION_FAMILY_KEYS
-
-#: Graph outputs kept for every world, including decomposition and optional
-#: shock audit paths. Order must match ``build_symbolic_graph``'s outputs.
-SCM_OUT_NAMES = (
-    "demand",
-    "controls",
-    "channels",
-    "channels_base",
-    "saturation_scale",
-    "baseline",
-    "baseline_intrinsic",
-    "control_contribution",
-    "confounder_contribution",
-    "contributions",
-    "contributions_observed",
-    "indirect_effects",
-    "indirect_effects_by_source",
-    "sales",
-    "channels_unshocked",
-    "sales_unshocked",
-    "confounding_strength",
-    "channel_shock_mask",
-    "channel_shock_mask_full",
-    "channel_shock_channel",
-    "channel_shock_start",
-    "channel_shock_length",
-    "channel_shock_level_multiplier",
-    "channel_shock_level",
-)
 
 
 _EXOGENOUS_NAMES = (
@@ -122,10 +94,9 @@ class SCM:
     Attributes
     ----------
     data : dict
-        The :data:`SCM_OUT_NAMES` series at active sizes — e.g.
-        ``channels (T, K)``, ``sales (T,)``, ``contributions (T, K)``,
-        ``saturation_scale (K,)``, and ``indirect_effects_by_source (T, 3)``
-        in the locked (cc, zc, dc) order.
+        Active-size graph outputs — e.g. ``channels (T, K)``, ``sales (T,)``,
+        ``contributions (T, K)``, ``saturation_scale (K,)``, and
+        ``indirect_effects_by_source (T, 3)`` in the locked (cc, zc, dc) order.
     g : dict
         Active-size DAG blocks (``g_cy``, ``g_dc``, ``g_dz``, ``g_db``,
         ``g_zb``, ``g_zc``, ``g_cc``, ``g_zz``).
@@ -527,8 +498,22 @@ def _build_equations(world: SCM) -> dict[str, str]:
     """Readable vector assignments mirroring ``build_symbolic_graph`` exactly."""
     g, params = world.g, world.params
     K, M, J = world.K, world.M, world.J
-    burn_in = world.cfg.adstock_burn_in
     shocks_enabled = "channel_shock" in params
+    T_full = world.T + world.cfg.adstock_burn_in
+
+    def rw_scale(label: str, group: str, index: int) -> str:
+        smoothness = float(np.asarray(params[group]["smoothness"])[index])
+        width = max(1, int(round(smoothness * T_full / 4.0)))
+        scale = _centred_walk_scale(T_full, width)
+        return f"{label}: centred_walk_scale(T_full={T_full}, width={width})={scale:.17g}"
+
+    rw_scales = [
+        *(rw_scale(f"D{j + 1}", "rw_d", j) for j in range(J)),
+        *(rw_scale(f"Z{m + 1}", "rw_z", m) for m in range(M)),
+        *(rw_scale(f"C{k + 1}", "rw_c", k) for k in range(K)),
+        rw_scale("B", "rw_b", 0),
+        rw_scale("Y", "rw_y", 0),
+    ]
     equations: dict[str, str] = {
         "innovations": (
             "eps_c_eff = sqrt(1 - rho**2) * eps_c + rho * eps_b[:, None]; "
@@ -537,10 +522,13 @@ def _build_equations(world: SCM) -> dict[str, str]:
             "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent."
         ),
         "RW": (
-            "T_full = T + burn_in. For each innovation column, q = edge_padded_MA("
+            f"T_full = T + burn_in = {T_full}. For each innovation column, q = edge_padded_MA("
             "cumsum(eps), width=max(1, round(smoothness * T_full / 4))); "
-            "RW_full = mean + std * (q - mean(q)) / (std(q) + 1e-8); apply "
-            "softplus(RW_full) only when positive_only=True; RW = RW_full[burn_in:]."
+            "centred_walk_scale(T_full, width) = sqrt(tr(A A^T) / T_full), where "
+            "A = centre . movavg(width) . cumsum is fixed; "
+            "RW_full = mean + std * (q - mean(q)) / centred_walk_scale(T_full, width); "
+            f"world constants: {'; '.join(rw_scales)}. "
+            "Apply softplus(RW_full) only when positive_only=True; RW = RW_full[burn_in:]."
         ),
     }
     if shocks_enabled:
@@ -738,7 +726,7 @@ def sample_scm(
             rng_reference_names=out_names + _LEGACY_WORLD_PARAM_NAMES,
         )
         for b in range(max_eps_draws):
-            d = {nm: drawn[nm][b] for nm in out_names}
+            d = {nm: np.array(drawn[nm][b], copy=True) for nm in out_names}
             check = {
                 k: v for k, v in d.items() if k not in ("channels_base", "contributions_observed")
             }
@@ -779,8 +767,15 @@ def _assemble_channel_shock_schedule(
     level = np.array(drawn["channel_shock_level"][b], dtype="float64", copy=True)
     mask_full = np.array(drawn["channel_shock_mask_full"][b], copy=True)
     level_full = np.zeros(mask_full.shape, dtype="float64")
+    occupied = np.zeros(mask_full.shape[0], dtype=bool)
     for selected, start, duration, held_level in zip(channel, start_full, length, level):
-        level_full[int(start) : int(start + duration), int(selected)] = held_level
+        end = int(start + duration)
+        if occupied[int(start) : end].any():
+            raise AssertionError("channel shock windows must not overlap")
+        occupied[int(start) : end] = True
+        # This concrete replay schedule must agree with world_model's symbolic
+        # sum. Stratified slots make windows disjoint, so assignment is equivalent.
+        level_full[int(start) : end, int(selected)] = held_level
     return {
         "n_shocks": int(cfg.n_channel_shocks),
         "channel": channel,

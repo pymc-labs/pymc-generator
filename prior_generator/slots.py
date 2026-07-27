@@ -3,41 +3,24 @@
 This module is the design-freeze constants module: every other module imports
 slot ordering, sizes, and base rates from here — no magic numbers elsewhere.
 
-Node types:
-    C_1..C_K  media channels        (spend observed)
-    Z_1..Z_M  observed controls
-    D_1..D_J  latent demand factors (never observed)
-    B         baseline              (always present, always -> Y)
-    Y         sales/revenue         (sink)
+The additive SCM uses the extended 8-block edge layout
+(`EDGE_TYPES_EXTENDED`):
 
-Base edge set = {C->Y, D->C, D->B, Z->B} (`EDGE_TYPES`, the legacy 4-block
-layout); the additive SCM uses the extended 8-block layout
-(`EDGE_TYPES_EXTENDED`), which adds {D->Z, Z->C, C->C, Z->Z}.
+    {C->Y, D->C, D->Z, D->B, Z->B, Z->C, C->C, Z->Z}.
 
 Canonical g-vector ordering (LOCKED):
-
-    [ g_cy (K) | g_dc (J*K, row-major over (j, k)) | g_db (J) | g_zb (M) ]
-
-This matches the `pt.concatenate` order used in `exploration/01–03` restricted
-to the L0 edge set. Slots are defined relative to *node identities*: permuting
-channels permutes the cy block and the k-axis of the dc block identically —
-the permutation-equivariance tests (P1.4) rely on exactly this.
-
-Extended g-vector ordering (Phase 4, LOCKED once adopted):
 
     [ g_cy (K) | g_dc (J*K) | g_dz (J*M) | g_db (J) | g_zb (M)
     | g_zc (M*K) | g_cc (K*K - K) | g_zz (M*M - M) ]
 
 The cc and zz blocks EXCLUDE self-edges: the full (K, K) / (M, M) matrices
 carry a structurally-zero diagonal which is dropped on `pack` (row-major over
-ordered pairs (i, k) with i != k) and restored on `unpack`. Layouts opt into
-the extension via `SlotLayout(edge_types=EDGE_TYPES_EXTENDED)`; the default
-`edge_types` keeps the legacy 4-block layout byte-identical.
+ordered pairs (i, k) with i != k) and restored on `unpack`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 
 import numpy as np
@@ -62,24 +45,9 @@ P_DZ = 0.3  # D_j -> Z_m (extended layout)
 P_CC = 0.15  # C_i -> C_k, i != k (extended layout)
 P_ZZ = 0.1  # Z_i -> Z_m, i != m (extended layout)
 
-# Node-type ids for type embeddings (network + edge head)
-NODE_CHANNEL, NODE_CONTROL, NODE_DEMAND, NODE_BASELINE, NODE_SALES = 0, 1, 2, 3, 4
-N_NODE_TYPES = 5
-
-# Edge types in canonical block order, with (src_type, dst_type)
-EDGE_TYPES: tuple[str, ...] = ("cy", "dc", "db", "zb")
-# Extended block order (Phase 4): superset of EDGE_TYPES, new canonical order
+# Edge types in the locked canonical block order.
 EDGE_TYPES_EXTENDED: tuple[str, ...] = ("cy", "dc", "dz", "db", "zb", "zc", "cc", "zz")
-EDGE_TYPE_NODES: dict[str, tuple[int, int]] = {
-    "cy": (NODE_CHANNEL, NODE_SALES),
-    "dc": (NODE_DEMAND, NODE_CHANNEL),
-    "db": (NODE_DEMAND, NODE_BASELINE),
-    "zb": (NODE_CONTROL, NODE_BASELINE),
-    "dz": (NODE_DEMAND, NODE_CONTROL),
-    "zc": (NODE_CONTROL, NODE_CHANNEL),
-    "cc": (NODE_CHANNEL, NODE_CHANNEL),
-    "zz": (NODE_CONTROL, NODE_CONTROL),
-}
+
 EDGE_BASE_RATES: dict[str, float] = {
     "cy": P_CY,
     "dc": P_DC,
@@ -120,22 +88,19 @@ PRIOR_COND_LAYOUT: tuple[str, ...] = (
 class SlotLayout:
     """Canonical slot bookkeeping for one (K, M, J) configuration.
 
-    `edge_types` selects the blocks (and their order) in the flat g-vector.
-    The default is the legacy 4-block demo layout; pass
-    `edge_types=EDGE_TYPES_EXTENDED` for the Phase-4 extended layout.
+    `edge_types` is the locked canonical extended block order.
     """
 
     K: int = K_DEMO
     M: int = M_DEMO
     J: int = J_DEMO
-    edge_types: tuple[str, ...] = field(default=EDGE_TYPES)
+    edge_types: tuple[str, ...] = EDGE_TYPES_EXTENDED
 
     def __post_init__(self) -> None:
-        unknown = [et for et in self.edge_types if et not in EDGE_TYPES_EXTENDED]
-        if unknown:
-            raise ValueError(f"Unknown edge types {unknown}; known types: {EDGE_TYPES_EXTENDED}")
-        if len(set(self.edge_types)) != len(self.edge_types):
-            raise ValueError(f"Duplicate edge types in {self.edge_types}")
+        if self.edge_types != EDGE_TYPES_EXTENDED:
+            raise ValueError(
+                f"edge_types must match the locked canonical order {EDGE_TYPES_EXTENDED}"
+            )
 
     @cached_property
     def block_sizes(self) -> dict[str, int]:
@@ -179,33 +144,6 @@ class SlotLayout:
             "zz": (self.M, self.M),
         }
 
-    @cached_property
-    def names(self) -> list[str]:
-        """Human-readable slot names, canonical order (1-based node ids)."""
-        K, M, J = self.K, self.M, self.J
-        per_type: dict[str, list[str]] = {
-            "cy": [f"C{k + 1}->Y" for k in range(K)],
-            "dc": [f"D{j + 1}->C{k + 1}" for j in range(J) for k in range(K)],
-            "dz": [f"D{j + 1}->Z{m + 1}" for j in range(J) for m in range(M)],
-            "db": [f"D{j + 1}->B" for j in range(J)],
-            "zb": [f"Z{m + 1}->B" for m in range(M)],
-            "zc": [f"Z{m + 1}->C{k + 1}" for m in range(M) for k in range(K)],
-            "cc": [f"C{i + 1}->C{k + 1}" for i in range(K) for k in range(K) if i != k],
-            "zz": [f"Z{i + 1}->Z{m + 1}" for i in range(M) for m in range(M) if i != m],
-        }
-        names: list[str] = []
-        for et in self.edge_types:
-            names += per_type[et]
-        return names
-
-    @cached_property
-    def base_rates(self) -> np.ndarray:
-        """(n_slots,) Bernoulli base rate per slot, canonical order."""
-        out = np.empty(self.n_slots, dtype="float64")
-        for et in self.edge_types:
-            out[self.slices[et]] = EDGE_BASE_RATES[et]
-        return out
-
     # -- helpers ------------------------------------------------------------
     def _square_mask(self, n: int) -> np.ndarray:
         """(n, n) boolean off-diagonal mask (row-major True positions)."""
@@ -226,10 +164,10 @@ class SlotLayout:
         """Pack per-type arrays into the canonical flat g-vector.
 
         g_dc is (J, K) and is raveled row-major (j, k) — the locked order.
-        Extended blocks (only for layouts that include them): g_dz is (J, M),
-        g_zc is (M, K), g_cc is the FULL (K, K) matrix with an all-zero
-        diagonal (raises ValueError otherwise) packed by dropping the diagonal
-        row-major over (i, k) with i != k; g_zz is (M, M), same treatment.
+        Extended blocks: g_dz is (J, M), g_zc is (M, K), g_cc is the FULL
+        (K, K) matrix with an all-zero diagonal (raises ValueError otherwise)
+        packed by dropping the diagonal row-major over (i, k) with i != k;
+        g_zz is (M, M), same treatment.
         Works on a single task or a leading batch axis.
         """
         provided = {
@@ -294,7 +232,7 @@ class SlotLayout:
         """Inverse of `pack`; returns dict with shaped per-type arrays.
 
         Square blocks ("cc", "zz") come back as FULL matrices with a zero
-        diagonal. Only blocks present in `self.edge_types` are returned.
+        diagonal.
         """
         g_vec = np.asarray(g_vec)
         if g_vec.shape[-1] != self.n_slots:
@@ -315,50 +253,3 @@ class SlotLayout:
             else:
                 out[et] = block.reshape(*batch, *shape)
         return out
-
-    def _repack(self, parts: dict[str, np.ndarray]) -> np.ndarray:
-        """Pack from an unpack-style dict (only keys in `self.edge_types`)."""
-        return self.pack(
-            g_cy=parts.get("cy"),
-            g_dc=parts.get("dc"),
-            g_db=parts.get("db"),
-            g_zb=parts.get("zb"),
-            g_dz=parts.get("dz"),
-            g_zc=parts.get("zc"),
-            g_cc=parts.get("cc"),
-            g_zz=parts.get("zz"),
-        )
-
-    def permute_channels(self, g_vec: np.ndarray, perm: np.ndarray) -> np.ndarray:
-        """g-vector after relabeling channels by `perm` (slot k -> perm[k]).
-
-        `perm` maps NEW position -> OLD index, i.e. new_cy = old_cy[perm].
-        Extended layouts also permute the k-axis of zc and BOTH axes of the
-        full cc matrix. Used by the equivariance tests (P1.4).
-        """
-        parts = self.unpack(g_vec)
-        if "cy" in parts:
-            parts["cy"] = parts["cy"][..., perm]
-        if "dc" in parts:
-            parts["dc"] = parts["dc"][..., :, perm]
-        if "zc" in parts:
-            parts["zc"] = parts["zc"][..., :, perm]
-        if "cc" in parts:
-            parts["cc"] = parts["cc"][..., perm, :][..., :, perm]
-        return self._repack(parts)
-
-    def permute_controls(self, g_vec: np.ndarray, perm: np.ndarray) -> np.ndarray:
-        """g-vector after relabeling controls by `perm` (slot m -> perm[m])."""
-        parts = self.unpack(g_vec)
-        if "zb" in parts:
-            parts["zb"] = parts["zb"][..., perm]
-        if "dz" in parts:
-            parts["dz"] = parts["dz"][..., :, perm]
-        if "zc" in parts:
-            parts["zc"] = parts["zc"][..., perm, :]
-        if "zz" in parts:
-            parts["zz"] = parts["zz"][..., perm, :][..., :, perm]
-        return self._repack(parts)
-
-
-DEMO_LAYOUT = SlotLayout(K=K_DEMO, M=M_DEMO, J=J_DEMO)  # n_slots = 11

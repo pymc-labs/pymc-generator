@@ -53,6 +53,14 @@ that is the quantity an MMM fit on observables estimates. The do()-style
 `contributions` truth additionally removes upstream influence from spend and is
 not identifiable from the observables alone.
 
+The oracle's `baseline` deterministic is `B`, including its `D→B` and `Z→B`
+parent terms, but excluding `RW_Y`; the generator persists `baseline = B +
+RW_Y`. Because `RW_Y` is not persisted separately, those baselines are **not**
+directly comparable. `contributions` is exactly comparable with
+`world.data["contributions_observed"]`; compare `sales_mu` with
+`world.data["sales"]` for total mean fit. Baseline recovery carries an
+irreducible floor of one sales-noise walk.
+
 Because the oracle runs under the same prior the world was drawn from, the
 comparison is apples-to-apples for a PFN trained on corpora from the same
 config — including [ACE prior-conditioning](corpus.md#prior-conditioning-ace)
@@ -61,7 +69,7 @@ intervals, which `SCM.oracle_model()` picks up automatically when enabled.
 ## What the oracle is — and is not
 
 `build_oracle_model` keeps everything upstream of the observation exact, with
-three explicit concessions (all documented in the API reference):
+five explicit concessions (all documented in the API reference):
 
 1. **Structure-known.** The true DAG, mechanism families, and walk smoothness
    are given. This is the *structure-known* oracle — an **upper bound** for any
@@ -74,20 +82,30 @@ three explicit concessions (all documented in the API reference):
     channel–baseline correlation (rho, configured here as confounding strength);
     demand is inferred from the sales residual via `D → B` only. This is a
     plug-in-channel concession, not a claim of exact conditioning.
-3. **iid sales-noise representation.** Every random walk in the generator is
-   normalized in-place (`walk * std / walk.std()`), so the sales-noise walk has
-   no closed-form density to invert — exact `pm.observe`-style conditioning on
-   this graph is mathematically impossible. The oracle represents `RW_Y` as iid
-   `Normal(0, rw_y_std)` with the **same** `HalfNormal` prior on the scale. The
+3. **iid sales-noise representation.** The oracle represents `RW_Y` as iid
+   `Normal(0, rw_y_std)` with the **same** `HalfNormal` prior on the scale.
+   Since the walk is normalized by a constant rather than by its own realized
+   standard deviation, it is an ordinary multivariate normal and an exact
+   density does exist — this concession is removable, just not yet removed. The
    latent demand and baseline walks stay exact (same transform, same horizon,
    sliced to the reported window).
 
-Additionally, the adstock convolution sees only the reported window
-(zero-padded start) while generation used `adstock_burn_in` weeks of real
-history, so **drop the first `l_max` weeks** from band comparisons. The
-per-channel `saturation_scale` is a function of the drawn parameters alone; it
-is persisted and supplied by `SCM.oracle_model()` so the oracle anchors the
-nonlinear response exactly where generation did.
+4. **Baseline label.** The oracle's `baseline` is `B` (including its `D→B`
+   and `Z→B` parent terms) without `RW_Y`, whereas the generator persists
+   `B + RW_Y`. `RW_Y` is not stored separately, so baseline is not directly
+   comparable. `contributions` is exactly comparable with
+   `world.data["contributions_observed"]`; compare `sales_mu` with observed
+   `sales` for total fit. Baseline recovery has an irreducible one-walk floor.
+5. **Reproducible likelihood window.** The adstock convolution sees only the
+   reported window (zero-padded start) while generation used
+   `adstock_burn_in` weeks of real history. With positive burn-in and an
+   eligible direct nonidentity adstock kernel, the oracle observes only
+   `sales[l_max - 1:]`; otherwise every reported week is reproducible and the
+   likelihood uses the full window. The full-length deterministics remain
+   available for band comparison. The per-channel `saturation_scale` is a
+   function of the drawn parameters alone; it is persisted and supplied by
+   `SCM.oracle_model()` so the oracle anchors the nonlinear response exactly
+   where generation did.
 
 ### Held-level shocks
 

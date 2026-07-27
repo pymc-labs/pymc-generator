@@ -277,9 +277,13 @@ on its own, and `indirect_effects` is the *extra* sales explained by spend that 
 itself moved by demand, controls, or other channels.
 
 The identity is exact — **not** a Taylor approximation — because `Y` and the
-decomposition are built from the *same* symbolic quantities: `f_k` is one fixed
-function evaluated on two inputs, and the κ-relative saturation scale is computed
-once (from the observed channel) and reused for the base channel.
+decomposition are built from the *same* symbolic quantities: one fixed `f_k`,
+with one pinned anchor, is evaluated on every channel variant. The anchor is
+computed from drawn parameters alone: `softplus(softplus(rw_c_mean) +
+pulse_amp * pulse_prob + weighted expected Z→C / C→C parent terms)`, with
+parents accumulated in topological order. `D→C` drops out because the latent
+factor is pinned mean-zero. Thus `p(θ)` exists independently of noise, and a response at week
+`t` cannot depend on spend at a future week.
 
 `indirect_effects` is further split, by sequential graph surgery, into a
 **telescoping 3-way attribution** in the locked order `(cc, zc, dc)` —
@@ -323,14 +327,23 @@ and they bound what a model trained on this data can be expected to learn.
   presence of `D` is the core task.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
   triangle (`src < dst`), so the graph is always a DAG.
-- **κ-relative saturation.** Each saturation curve's knee is set relative to the
-  channel's own mean adstocked level, so every channel operates in a meaningful
-  regime regardless of its scale — and the same pinned scale is reused across the
-  decomposition so the identity holds exactly.
+- **κ-relative saturation.** Each curve's knee is set relative to a pinned,
+  parameter-only expected channel level:
+  `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted expected
+  Z→C / C→C parent terms)`. `D→C` contributes nothing because latent demand is
+  mean-zero. The same anchor is reused across every response variant, so the decomposition
+  identity is exact without making the response depend on realized or future
+  spend.
 - **Adstock burn-in.** The adstock convolution left-pads with zeros, which would
   make early weeks ramp up artificially. Worlds simulate `T + adstock_burn_in`
   weeks and report the last `T`, so the reported window sees real history
-  (`adstock_burn_in ≥ l_max`).
+  (`adstock_burn_in ≥ l_max`). With positive burn-in,
+  `diagnostics["signal"]["response_warmup_weeks"]` is `l_max - 1` only when an
+  eligible direct channel has a nonidentity adstock kernel; it is `0` for
+  identity-only direct paths and without burn-in. Weeks before a nonzero count
+  depend on unpersisted pre-window spend and are not functions of persisted
+  inputs. `support_mask` is the temporal train/query split, not this
+  response-warmup indicator.
 - **Realism filter.** A drawn world is only accepted if it *looks like data a
   modeller would actually get* — see below.
 - **Learnable signal.** Contribution targets should carry real week-to-week
@@ -420,15 +433,40 @@ A dict of stacked numpy arrays over `N` tasks and `T` weeks, with padded max siz
 <details>
 <summary>Full corpus schema (all keys)</summary>
 
-Observables & normalizations: `spend_raw`, `spend_norm`, `spend_share`,
-`spend_means`, `controls`, `sales_raw`, `sales_norm`, `sales_scale`.
-Ground truth: `contributions_raw`, `baseline_raw`, `baseline_intrinsic`,
-`control_contribution` (N,T,M), `confounder_contribution` (N,T,J), `demand`,
-`indirect_effects`, `indirect_effects_by_source` (N,T,3, order `cc,zc,dc`).
-Structure & masks: `g` (N,S packed), `active_c_mask`/`active_m_mask`/`active_j_mask`,
-`channel_active`, `K_active`/`M_active`/`J_active`.
-Splits & bookkeeping: `support_mask`, `is_future`, `is_val`, `cell_id`.
-Plus `diagnostics` (a dict, round-tripped through the `.npz` as JSON).
+Every top-level array key is listed below. `N` is worlds, `T` reported weeks,
+`K`/`M`/`J` are padded channel/control/latent slots, `S` is configured channel
+shocks, `S_graph` is the packed DAG width, and `P` is the locked
+prior-conditioning width.
+
+| Key | Shape | dtype |
+| --- | --- | --- |
+| `spend_raw`, `spend_norm`, `spend_share` | `(N, T, K)` | `float32` |
+| `spend_means`, `channel_level`, `saturation_scale`, `adstock_alpha`, `weibull_lam`, `weibull_k` | `(N, K)` | `float32` |
+| `controls` | `(N, T, M)` | `float32` |
+| `sales_raw`, `sales_norm`, `baseline_raw`, `baseline_intrinsic`, `indirect_effects` | `(N, T)` | `float32` |
+| `sales_scale`, `confounding_strength` | `(N,)` | `float32` |
+| `contributions_raw` | `(N, T, K)` | `float32` |
+| `control_contribution` | `(N, T, M)` | `float32` |
+| `confounder_contribution` | `(N, T, J)` | `float32` |
+| `demand` | `(N, T, J)` | `float32` |
+| `indirect_effects_by_source` | `(N, T, 3)` | `float32` |
+| `g` | `(N, S_graph)` | `uint8` |
+| `support_mask` | `(N, T)` | `uint8` |
+| `is_future`, `is_val` | `(N,)` | `uint8` |
+| `active_c_mask`, `channel_active` | `(N, K)` | `uint8` |
+| `active_m_mask` | `(N, M)` | `uint8` |
+| `active_j_mask` | `(N, J)` | `uint8` |
+| `adstock_family` | `(N, K)` | `uint8` |
+| `channel_shock_mask` | `(N, T, K)` | `uint8` |
+| `K_active`, `M_active`, `J_active`, `cell_id` | `(N,)` | `int32` |
+| `channel_shock_channel`, `channel_shock_start`, `channel_shock_length` | `(N, S)` | `int32` |
+| `channel_shock_level_multiplier`, `channel_shock_level` | `(N, S)` | `float32` |
+| `prior_cond` (iff `prior_conditioning=True`) | `(N, P)` | `float32` |
+
+`identifiability` is an optional nested metadata block (present when
+`include_identifiability_labels=True`) with `signal_metrics: float32 (N, K, 9)`
+and `signal_metric_valid: uint8 (N, K, 9)`. `diagnostics` is a JSON-round-tripped
+dict containing corpus-level metadata and the signal summary.
 
 </details>
 
@@ -469,20 +507,34 @@ scm = pg.sample_scm(sc.prior(T=104, seed=0), seed=0,
 
 | Symbol | Purpose |
 | --- | --- |
-| `make_scm_prior` | Build a validated additive-SCM `SCMPrior` (pins layout, enables diverse texture). |
+| `__version__` | Installed package version. |
+| `SCENARIOS` | Five named audit scenarios, each isolating a pathway. |
 | `SCMPrior` | The config: graph sizes, edge budgets, coefficient/noise ranges, prior ranges. |
-| `sample_prior_predictive` / `DataGenerator` | Generate an N-world corpus (dict of arrays). |
+| `DataGenerator` | Stateful corpus-generation facade. |
+| `SCM` | One accepted world with truth, parameters, and inspection helpers. |
+| `SIGNAL_METRIC_LAYOUT` / `SIGNAL_METRIC_VERSION` | Locked dense signal-label layout and its version. |
+| `make_scm_prior` | Build a validated additive-SCM `SCMPrior` (pins layout, enables diverse texture). |
+| `sample_prior_predictive` | Generate an N-world corpus (dict of arrays). |
 | `save_corpus` / `load_corpus` | Compressed `.npz` persistence. |
-| `sample_scm` / `SCM` | Draw one accepted world with its full ground truth. |
+| `sample_scm` | Draw one accepted world with its full ground truth. |
+| `build_world_model` | Build the structure-fixed PyMC generative world model. |
+| `build_oracle_model` | Build the observed-data, structure-known posterior oracle. |
+| `sample_structure` | Draw the concrete graph and mechanism structure for one world. |
+| `sample_prior_cond` | Draw one ACE prior-conditioning interval specification. |
+| `draw_worlds` | Draw seeded prior-predictive worlds from a built world model. |
 | `describe_scm` | Plain-text description of a world. |
 | `write_scm_bundle` | Write one world's auditable folder. |
 | `write_scenario_bundles` | Write the full five-scenario inspection set (the CLI's datasets). |
-| `SCENARIOS` | Five named audit scenarios, each isolating a pathway. |
 
 The public surface reads mathematically: **treatments** (`n_treatments`, media
 channels), **covariates** (`n_covariates`, controls), and **latent** factors
 (`n_latent`, hidden confounders) size the graph; `make_scm_prior` builds a prior;
 `sample_prior_predictive` / `sample_scm` draw from it.
+
+The [posterior oracle](docs/guide/oracle.md) is the same structure-fixed model
+with a world's observed spend, controls, and sales attached. Use
+`build_oracle_model` or `SCM.oracle_model()` as the structure-known posterior
+baseline rather than re-implementing the generated response.
 
 ## Reproducibility and validation
 
@@ -491,8 +543,11 @@ channels), **covariates** (`n_covariates`, controls), and **latent** factors
 - **Signal diagnostics.** `signal_diagnostics.per_channel_signal` reports, per
   direct channel, spend/contribution CV and high-frequency ratios, the
   spend↔contribution rank correlation, and a warmup ratio; the summary is embedded
-  in `corpus["diagnostics"]["signal"]` on every corpus. `check_signal_gate` is an
-  opt-in gate a caller can run against that summary to reject a too-flat corpus —
+  in `corpus["diagnostics"]["signal"]` on every corpus. The reported
+  `frac_zero_contemporaneous_weight` is the eligible-channel fraction whose
+  normalized adstock weight on the current week is effectively zero; it is
+  diagnostic only, not a gate row. `check_signal_gate` is an opt-in gate a caller
+  can run against that summary to reject a too-flat or unidentifiable corpus —
   generation itself does not enforce it.
 - **Invariants as tests.** The additive identity, the telescoping split, the full
   per-node decomposition, and zero-padding of inactive slots are asserted directly

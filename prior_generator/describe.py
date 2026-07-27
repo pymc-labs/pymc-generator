@@ -67,6 +67,13 @@ def _channel_lines(g: dict, params: dict) -> list[str]:
     return lines
 
 
+def _format_signal_metric(signal: dict, key: str, index: int) -> str:
+    """Render an estimable signal metric, or ``n/a`` when it is unavailable."""
+    if not signal[f"{key}_valid"][index]:
+        return "n/a"
+    return f"{signal[key][index]:.2f}"
+
+
 def describe_scm(world: SCM) -> str:
     """Render the full plain-text description of one :class:`SCM`.
 
@@ -145,10 +152,13 @@ def describe_scm(world: SCM) -> str:
     f.write("Signal metrics (per direct channel):\n")
     for i in range(len(signal["spend_cv"])):
         f.write(
-            f"  C{int(signal['channel'][i]) + 1}: spend_cv={signal['spend_cv'][i]:.2f} "
-            f"spend_hf={signal['spend_hf'][i]:.2f} contrib_cv={signal['contrib_cv'][i]:.2f} "
-            f"contrib_hf={signal['contrib_hf'][i]:.2f} spearman={signal['spearman'][i]:.2f} "
-            f"rel_std={signal['contrib_rel_std'][i]:.2f}\n"
+            f"  C{int(signal['channel'][i]) + 1}: "
+            f"spend_cv={_format_signal_metric(signal, 'spend_cv', i)} "
+            f"spend_hf={_format_signal_metric(signal, 'spend_hf', i)} "
+            f"contrib_cv={_format_signal_metric(signal, 'contrib_cv', i)} "
+            f"contrib_hf={_format_signal_metric(signal, 'contrib_hf', i)} "
+            f"spearman={_format_signal_metric(signal, 'spearman', i)} "
+            f"rel_std={_format_signal_metric(signal, 'contrib_rel_std', i)}\n"
         )
     return f.getvalue()
 

@@ -161,7 +161,6 @@ class SCMPrior:
     rw_baseline_mean_range: tuple[float, float] = (3.0, 8.0)  # baseline level
     rw_std_sigma: float = 1.0  # HalfNormal prior for walk std
     rw_baseline_std_sigma: float | None = None  # None follows rw_std_sigma
-    rw_channel_std_sigma: float = 0.6  # HalfNormal for channel walk std
     rw_sales_std_sigma: float = 0.25  # HalfNormal for sales-noise walk std
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
@@ -171,18 +170,15 @@ class SCMPrior:
     confounding_strength_range: tuple[float, float] | None = None
 
     # -- Channel texture (plan doc 05 signal fix) --------------------------
-    # High-frequency exogenous drive on the channel's own pre-softplus input:
-    # iid weekly noise (sigma ~ U(range)) and campaign pulses (per-week
-    # probability ~ U(prob_range), amplitude ~ U(amp_range)). Optional uniform
-    # walk-std range replacing the HalfNormal (which piles mass at 0 and
-    # produces flat contribution targets). The sigma/amp/std factors are
-    # RELATIVE to each channel's own level (softplus of its walk mean), so the
-    # texture is scale-free across small and large channels — like L1's
-    # log-space spend noise. adstock_burn_in simulates extra leading weeks and
-    # drops them so the adstock zero-padding warmup never reaches the reported
-    # window. Defaults disable the texture (flat targets); `make_scm_prior`
+    # ``rw_channel_std_range`` is the channel random-walk standard-deviation
+    # prior, relative to each channel's own level (softplus of its walk mean).
+    # That keeps channel variation scale-free across small and large channels.
+    # High-frequency exogenous drive on the channel's own pre-softplus input
+    # comes from iid weekly noise (sigma ~ U(range)) and campaign pulses
+    # (per-week probability ~ U(prob_range), amplitude ~ U(amp_range)).
+    # Defaults retain the deprecated smooth-walk-only texture; make_scm_prior
     # enables the diverse texture, which is the supported prior.
-    rw_channel_std_range: tuple[float, float] | None = None
+    rw_channel_std_range: tuple[float, float] = (0.15, 0.8)
     channel_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     channel_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
     channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
@@ -408,7 +404,8 @@ class SCMPrior:
             minimum: float | None = None,
             maximum: float | None = None,
             minimum_exclusive: bool = False,
-        ) -> None:
+            reason: str | None = None,
+        ) -> tuple[float, float]:
             value = getattr(self, name)
             try:
                 lo, hi = value
@@ -423,7 +420,11 @@ class SCMPrior:
                 and valid_min
                 and (maximum is None or hi <= maximum)
             ):
-                raise ValueError(f"{name} has invalid bounds {value!r}")
+                message = f"{name} has invalid bounds {value!r}"
+                if reason is not None:
+                    message += f"; {reason}"
+                raise ValueError(message)
+            return lo, hi
 
         _finite_range("adstock_alpha_range", minimum=0.0, maximum=1.0)
         _finite_range("weibull_lam_range", minimum=0.0, minimum_exclusive=True)
@@ -439,11 +440,37 @@ class SCMPrior:
             "rw_baseline_mean_range",
         ):
             _finite_range(name)
-        _finite_range("cc_coeff_range", minimum=0.0)
-        _finite_range("beta_additive_range", minimum=0.0)
-        _finite_range("rw_positive_mean_range", minimum=0.0, minimum_exclusive=True)
-        if self.rw_channel_std_range is not None:
-            _finite_range("rw_channel_std_range", minimum=0.0)
+        _finite_range(
+            "cc_coeff_range",
+            minimum=0.0,
+            reason="C->C coefficients amplify, not cannibalize",
+        )
+        _, beta_additive_hi = _finite_range(
+            "beta_additive_range",
+            minimum=0.0,
+            reason="channel effect amplitudes must be nonnegative",
+        )
+        if beta_additive_hi <= 0.0:
+            raise ValueError(
+                "beta_additive_range must have an upper bound > 0 because a zero-only "
+                f"amplitude contradicts every drawn C->Y edge, got {self.beta_additive_range!r}"
+            )
+        _finite_range(
+            "rw_positive_mean_range",
+            minimum=0.0,
+            minimum_exclusive=True,
+            reason="channel walks stay positive after softplus",
+        )
+        _, channel_std_hi = _finite_range(
+            "rw_channel_std_range",
+            minimum=0.0,
+            reason="channel walk amplitudes must be nonnegative",
+        )
+        if channel_std_hi <= 0.0:
+            raise ValueError(
+                "rw_channel_std_range must have an upper bound > 0 because a zero-only "
+                "channel-walk amplitude produces flat channel paths"
+            )
         _finite_range("channel_hf_sigma_range", minimum=0.0)
         _finite_range("channel_pulse_prob_range", minimum=0.0, maximum=0.5)
         _finite_range("channel_pulse_amp_range", minimum=0.0)
@@ -519,12 +546,7 @@ class SCMPrior:
             rate = getattr(self, name)
             if not np.isfinite(rate) or not 0.0 <= rate <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1], got {rate}")
-        if self.cc_coeff_range[0] < 0:
-            raise ValueError(
-                f"cc_coeff_range must be positive-only (C->C amplify, not cannibalize), "
-                f"got {self.cc_coeff_range}"
-            )
-        for name in ("rw_std_sigma", "rw_channel_std_sigma", "rw_sales_std_sigma"):
+        for name in ("rw_std_sigma", "rw_sales_std_sigma"):
             sigma = getattr(self, name)
             if (
                 isinstance(sigma, (bool, np.bool_))
@@ -556,11 +578,6 @@ class SCMPrior:
                     "confounding_strength_range must satisfy finite 0 <= lo <= hi <= 0.95, "
                     f"got {self.confounding_strength_range}"
                 )
-        if self.rw_positive_mean_range[0] <= 0:
-            raise ValueError(
-                f"rw_positive_mean_range must be positive (channel walks stay positive "
-                f"after softplus), got {self.rw_positive_mean_range}"
-            )
         # Channel texture
         if isinstance(self.adstock_burn_in, bool) or not isinstance(
             self.adstock_burn_in, (int, np.integer)
@@ -578,11 +595,12 @@ class SCMPrior:
                 f"l_max ({self.l_max}) — a partial burn-in leaves adstock warmup "
                 f"in the reported window"
             )
-        if self.rw_channel_std_range is not None and not (
-            0.0 <= self.rw_channel_std_range[0] <= self.rw_channel_std_range[1]
-        ):
+        if self.adstock_burn_in > 0 and self.T < self.l_max:
             raise ValueError(
-                f"rw_channel_std_range must satisfy 0 <= lo <= hi, got {self.rw_channel_std_range}"
+                f"T={self.T} must be >= l_max ({self.l_max}) with adstock_burn_in enabled: "
+                f"the first {self.l_max - 1} reported weeks carry a media response that "
+                "depends on unpersisted pre-window spend, so a corpus needs at least one "
+                "reproducible week"
             )
         for name in ("channel_hf_sigma_range", "channel_pulse_amp_range"):
             lo, hi = getattr(self, name)
@@ -725,7 +743,7 @@ def _scatter_triu(rng: np.random.Generator, n_act: int, count: int, out_full: np
     out_full[iu[0][sel], iu[1][sel]] = 1.0
 
 
-def sample_g(
+def _sample_g(
     rng: np.random.Generator,
     layout: SlotLayout,
     K_active: int | None = None,
@@ -852,7 +870,7 @@ def sample_g_additive(
 ) -> dict[str, np.ndarray]:
     """Draw one extended DAG cell for the additive SCM (Phase 4).
 
-    Extends :func:`sample_g` with the four new edge types. C->C and Z->Z
+    Extends :func:`_sample_g` with the four new edge types. C->C and Z->Z
     edges are restricted to the strict upper triangle (src index < dst
     index) which guarantees acyclicity. Base rates for the new types come
     from ``cfg`` (dz/zc/cc/zz_base_rate); legacy types keep the slots.py
@@ -871,7 +889,7 @@ def sample_g_additive(
     FULL square matrices with zero diagonals — plus active masks, active
     counts, and ``channel_active``.
     """
-    base = sample_g(
+    base = _sample_g(
         rng,
         layout,
         K_active=K_active,
@@ -941,6 +959,10 @@ def _signal_block(
     g_tasks: np.ndarray,
     active_c_mask: np.ndarray,
     sales_scale: np.ndarray,
+    adstock_family: np.ndarray,
+    adstock_alpha: np.ndarray,
+    weibull_lam: np.ndarray,
+    weibull_k: np.ndarray,
     signal_metrics: np.ndarray,
     signal_metric_valid: np.ndarray,
 ) -> dict:
@@ -957,22 +979,20 @@ def _signal_block(
         sales_scale=sales_scale,
         l_max=cfg.l_max,
         adstock_burn_in=cfg.adstock_burn_in,
+        adstock_family=adstock_family,
+        adstock_alpha=adstock_alpha,
+        weibull_lam=weibull_lam,
+        weibull_k=weibull_k,
     )
     out["metric_version"] = SIGNAL_METRIC_VERSION
     out["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
     out["l_max"] = int(cfg.l_max)
     out["adstock_burn_in"] = int(cfg.adstock_burn_in)
-    out["adstock_kernel_semantics"] = "normalized-causal-weibull-pdf"
-    out["adstock_kernel_version"] = 2
+    # pymc-marketing min-max rescales the density before sum-normalizing, so one lag
+    # has zero weight; a true normalized PDF would not have an exactly zero lag.
+    out["adstock_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
+    out["adstock_kernel_version"] = 3
     return out
-
-
-_TEMP_DECOMPOSITION_ERROR_KEYS = (
-    "_temp_decomposition_max_abs_error",
-    "_temp_telescoping_split_max_abs_error",
-    "_temp_full_decomposition_max_abs_error",
-    "_temp_baseline_decomposition_max_abs_error",
-)
 
 
 def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
@@ -1017,6 +1037,10 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
         g_tasks,
         active_c_mask,
         corpus["sales_scale"],
+        corpus["adstock_family"],
+        corpus["adstock_alpha"],
+        corpus["weibull_lam"],
+        corpus["weibull_k"],
         signal_metrics,
         signal_metric_valid,
     )
@@ -1028,9 +1052,18 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
     contributions = corpus["contributions_raw"].astype(np.float64)
     baseline = corpus["baseline_raw"].astype(np.float64)
     qs = (0.1, 0.5, 0.9)
-    cv_all = (spend.std(axis=1) / (spend.mean(axis=1) + 1e-12)).ravel()
+    spend_mean = spend.mean(axis=1)
+    cv_all = np.divide(
+        spend.std(axis=1), spend_mean, out=np.zeros_like(spend_mean), where=spend_mean != 0.0
+    ).ravel()
     contrib_tot = contributions.sum(axis=(1, 2))
-    media_share = contrib_tot / (contrib_tot + baseline.sum(axis=1) + 1e-12)
+    media_denominator = contrib_tot + baseline.sum(axis=1)
+    media_share = np.divide(
+        contrib_tot,
+        media_denominator,
+        out=np.zeros_like(contrib_tot),
+        where=media_denominator != 0.0,
+    )
 
     edge_marginals = {}
     for edge_type in layout.edge_types:
@@ -1049,16 +1082,43 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
             "spend_cv_quantiles": {f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs},
         }
     )
-    for key, diagnostic_key in zip(
-        _TEMP_DECOMPOSITION_ERROR_KEYS,
-        (
-            "decomposition_max_abs_error",
-            "telescoping_split_max_abs_error",
-            "full_decomposition_max_abs_error",
-            "baseline_decomposition_max_abs_error",
-        ),
-    ):
-        diagnostics[diagnostic_key] = float(np.max(corpus.pop(key)))
+    # These errors must describe the persisted float32 arrays rather than the
+    # pre-storage calculations used to produce them.
+    diagnostics.update(
+        {
+            "decomposition_max_abs_error": float(
+                np.abs(
+                    corpus["baseline_raw"]
+                    + corpus["contributions_raw"].sum(axis=-1)
+                    + corpus["indirect_effects"]
+                    - corpus["sales_raw"]
+                ).max()
+            ),
+            "telescoping_split_max_abs_error": float(
+                np.abs(
+                    corpus["indirect_effects_by_source"].sum(axis=-1) - corpus["indirect_effects"]
+                ).max()
+            ),
+            "full_decomposition_max_abs_error": float(
+                np.abs(
+                    corpus["baseline_intrinsic"]
+                    + corpus["confounder_contribution"].sum(axis=-1)
+                    + corpus["control_contribution"].sum(axis=-1)
+                    + corpus["contributions_raw"].sum(axis=-1)
+                    + corpus["indirect_effects_by_source"].sum(axis=-1)
+                    - corpus["sales_raw"]
+                ).max()
+            ),
+            "baseline_decomposition_max_abs_error": float(
+                np.abs(
+                    corpus["baseline_intrinsic"]
+                    + corpus["confounder_contribution"].sum(axis=-1)
+                    + corpus["control_contribution"].sum(axis=-1)
+                    - corpus["baseline_raw"]
+                ).max()
+            ),
+        }
+    )
     return corpus
 
 
@@ -1110,6 +1170,27 @@ def _warn_flat_texture(cfg: SCMPrior) -> None:
         )
 
 
+def _recompute_retained_cell_split(corpus: dict) -> None:
+    """Repair the train/validation split from the retained cell rows."""
+    cell_id = corpus["cell_id"]
+    retained_cells = np.unique(cell_id)
+    if retained_cells.size < 2:
+        raise ValueError(
+            "The retained corpus spans fewer than two cells and cannot form a "
+            "cell-level train/validation split"
+        )
+
+    # Preserve sampled assignments where possible, but only entire cells can
+    # move between splits or a graph would leak across train and validation.
+    original_val_cells = np.unique(cell_id[corpus["is_val"] == 1])
+    val_cells = np.intersect1d(retained_cells, original_val_cells, assume_unique=True)
+    if val_cells.size == 0:
+        val_cells = retained_cells[:1]
+    elif val_cells.size == retained_cells.size:
+        val_cells = val_cells[:-1]
+    corpus["is_val"] = np.isin(cell_id, val_cells).astype(np.uint8)
+
+
 def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
     """Draw a prior-predictive corpus: N SCMs and their data (dict of ndarrays).
 
@@ -1125,9 +1206,13 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
         The prior over SCMs (see :func:`prior_generator.make_scm_prior`).
     n : int, optional
         Number of worlds to return. If ``None`` (default), returns
-        ``prior.n_cells * prior.draws_per_cell`` worlds. Otherwise the cell
-        count is raised to cover ``n`` and the corpus is truncated to exactly
-        ``n``.
+        ``prior.n_cells * prior.draws_per_cell`` worlds. For ``n >= 2``, the
+        retained corpus always spans at least two cells. When
+        ``2 <= n <= prior.draws_per_cell``, generation temporarily uses
+        ``max(1, n // 2)`` draws per cell and enough cells for the first ``n``
+        rows to span that grid. This observable effective grid is reported by
+        ``diagnostics["draws_per_cell"]`` and ``cell_id``. ``n=1`` raises
+        because one world cannot carry a cell-level train/validation split.
 
     Notes
     -----
@@ -1139,16 +1224,26 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
     if n is not None:
         if n <= 0:
             raise ValueError(f"n must be positive, got {n}")
-        dpc = prior.draws_per_cell
-        prior = replace(prior, n_cells=max(2, (n + dpc - 1) // dpc))
+        if n == 1:
+            raise ValueError("n=1 cannot form a cell-level train/validation split; n must be >= 2")
+        draws_per_cell = prior.draws_per_cell
+        if n <= draws_per_cell:
+            effective_draws_per_cell = max(1, n // 2)
+            n_cells = max(2, (n + effective_draws_per_cell - 1) // effective_draws_per_cell)
+            prior = replace(
+                prior,
+                n_cells=n_cells,
+                draws_per_cell=effective_draws_per_cell,
+            )
+        else:
+            prior = replace(prior, n_cells=(n + draws_per_cell - 1) // draws_per_cell)
     corpus = _generate_corpus_additive(prior)
     if n is not None and corpus["spend_raw"].shape[0] > n:
         actual = corpus["spend_raw"].shape[0]
         for key, val in list(corpus.items()):
             if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == actual:
                 corpus[key] = val[:n]
-    if corpus["is_val"].sum() == 0:
-        corpus["is_val"][0] = 1  # keep at least one val world after truncation
+    _recompute_retained_cell_split(corpus)
     return _finalize_corpus(corpus, prior)
 
 
@@ -1442,29 +1537,6 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 control_contrib_pad[:, :M_active] = drawn["control_contribution"]
                 confounder_contrib_pad = np.zeros((T, J_max))
                 confounder_contrib_pad[:, :J_active] = drawn["confounder_contribution"]
-                decomposition_error = np.abs(
-                    drawn["baseline"]
-                    + contrib_pad.sum(axis=-1)
-                    + drawn["indirect_effects"]
-                    - drawn["sales"]
-                ).max()
-                telescoping_error = np.abs(
-                    drawn["indirect_effects_by_source"].sum(axis=-1) - drawn["indirect_effects"]
-                ).max()
-                full_decomposition_error = np.abs(
-                    drawn["baseline_intrinsic"]
-                    + confounder_contrib_pad.sum(axis=-1)
-                    + control_contrib_pad.sum(axis=-1)
-                    + contrib_pad.sum(axis=-1)
-                    + drawn["indirect_effects_by_source"].sum(axis=-1)
-                    - drawn["sales"]
-                ).max()
-                baseline_decomposition_error = np.abs(
-                    drawn["baseline_intrinsic"]
-                    + confounder_contrib_pad.sum(axis=-1)
-                    + control_contrib_pad.sum(axis=-1)
-                    - drawn["baseline"]
-                ).max()
 
                 accepted.append(
                     {
@@ -1481,7 +1553,6 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "indirect_effects_by_source": drawn["indirect_effects_by_source"],
                         "support": support,
                         "split_type": split_type,
-                        "sales_scale": sales_scale,
                         "confounding_strength": drawn["confounding_strength"],
                         "channel_shock_mask": shock_mask_pad,
                         "channel_shock_channel": drawn["channel_shock_channel"],
@@ -1495,10 +1566,6 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "adstock_alpha": adstock_alpha_pad,
                         "weibull_lam": weibull_lam_pad,
                         "weibull_k": weibull_k_pad,
-                        "_temp_decomposition_max_abs_error": decomposition_error,
-                        "_temp_telescoping_split_max_abs_error": telescoping_error,
-                        "_temp_full_decomposition_max_abs_error": full_decomposition_error,
-                        "_temp_baseline_decomposition_max_abs_error": baseline_decomposition_error,
                         "cell": cell,
                     }
                 )
@@ -1546,10 +1613,6 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     adstock_alpha = np.stack([tk["adstock_alpha"] for tk in tasks])
     weibull_lam = np.stack([tk["weibull_lam"] for tk in tasks])
     weibull_k = np.stack([tk["weibull_k"] for tk in tasks])
-    temp_decomposition_errors = {
-        key: np.asarray([tk[key] for tk in tasks], dtype=np.float64)
-        for key in _TEMP_DECOMPOSITION_ERROR_KEYS
-    }
 
     active_c_mask = np.stack([cell_gs[c]["active_c"] for c in cell_id])
     active_m_mask = np.stack([cell_gs[c]["active_m"] for c in cell_id])
@@ -1564,9 +1627,22 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     )
 
     spend_means = spend_raw.mean(axis=1)  # (N,K)
-    spend_norm = spend_raw / (spend_means[:, None, :] + 1e-8)
+    spend_norm = np.divide(
+        spend_raw,
+        spend_means[:, None, :],
+        out=np.zeros_like(spend_raw),
+        where=spend_means[:, None, :] != 0.0,
+    )
     active_spend_sum = (spend_raw * active_c_mask[:, None, :]).sum(axis=-1, keepdims=True)
-    spend_share = (spend_raw / (active_spend_sum + 1e-8)) * active_c_mask[:, None, :]
+    spend_share = (
+        np.divide(
+            spend_raw,
+            active_spend_sum,
+            out=np.zeros_like(spend_raw),
+            where=active_spend_sum != 0.0,
+        )
+        * active_c_mask[:, None, :]
+    )
 
     g_cells = np.stack(
         [
@@ -1616,6 +1692,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         sales_scale[bad_scale] = np.where(np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0)
     sales_norm = sales_raw / sales_scale[:, None]
 
+    effective_legacy_edge_rates = {**EDGE_BASE_RATES, **(cfg.edge_rate_overrides or {})}
+
     # -- static diagnostics --------------------------------------------------
     elapsed = time.perf_counter() - t_start
     diagnostics = {
@@ -1626,11 +1704,11 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "n_draws_evaluated": int(n_evaluated),
         "rejection_rate": float(n_rejected / max(n_evaluated, 1)),
         "edge_base_rates": {
-            "cy": float(EDGE_BASE_RATES["cy"]),
-            "dc": float(EDGE_BASE_RATES["dc"]),
+            "cy": float(effective_legacy_edge_rates["cy"]),
+            "dc": float(effective_legacy_edge_rates["dc"]),
             "dz": float(cfg.dz_base_rate),
-            "db": float(EDGE_BASE_RATES["db"]),
-            "zb": float(EDGE_BASE_RATES["zb"]),
+            "db": float(effective_legacy_edge_rates["db"]),
+            "zb": float(effective_legacy_edge_rates["zb"]),
             "zc": float(cfg.zc_base_rate),
             "cc": float(cfg.cc_base_rate),
             "zz": float(cfg.zz_base_rate),
@@ -1699,7 +1777,6 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "adstock_alpha": adstock_alpha.astype(np.float32),
         "weibull_lam": weibull_lam.astype(np.float32),
         "weibull_k": weibull_k.astype(np.float32),
-        **temp_decomposition_errors,
         "diagnostics": diagnostics,
     }
     if prior_cond_arr is not None:

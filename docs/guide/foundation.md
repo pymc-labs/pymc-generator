@@ -170,9 +170,11 @@ deliberate, and they bound what a model trained on this data can learn.
   baseline (`db`) — getting attribution right despite `D` is the core task.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
   triangle.
-- **κ-relative saturation.** Each curve's knee is set relative to the channel's
-  own mean adstocked level, and the same pinned scale is reused across the
-  decomposition so the identity holds exactly.
+- **κ-relative saturation.** Each curve's knee is set from a parameter-only
+  expected channel level:
+  `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted expected
+  Z→C / C→C parent terms)`. Latent `D→C` drops out because demand is mean-zero.
+  The same pinned scale is used for every decomposition variant.
 - **Adstock burn-in.** Worlds simulate `T + adstock_burn_in` weeks and report
   the last `T`, so the reported window sees real history.
 

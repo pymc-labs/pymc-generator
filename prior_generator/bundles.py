@@ -59,7 +59,7 @@ def write_scm_bundle(
     Path
         The bundle directory.
     """
-    d, g = world.data, world.g
+    d = world.data
     K, M, J, T = world.K, world.M, world.J, world.T
     weeks = np.arange(T)
     title = world.name if title is None else title

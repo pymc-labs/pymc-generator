@@ -126,14 +126,9 @@ ignore = [
     "N802",   # function name should be lowercase (allow K_max_effective etc.)
     "N803",   # argument name should be lowercase (allow X, Y for data)
     "N806",   # variable in function should be lowercase (allow X, Y)
-    "N812",   # lowercase imported as non-lowercase (allow np)
     "B007",   # loop control variable not used (common in graph setup)
-    "B011",   # assert False (OK in test contexts / assertion guards)
     "B904",   # raise from err (acceptable for optional-dependency re-raise)
     "B905",   # zip strict (not a correctness bug)
-    "E741",   # ambiguous variable name (l is fine in local scope)
-    "E402",   # module level import not at top of file (some tests use conditional imports)
-    "F841",   # local variable assigned but never used (some intentional)
 ]
 
 [tool.ruff.lint.isort]

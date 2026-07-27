@@ -5,13 +5,16 @@ from __future__ import annotations
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
+import pytest
 
-from prior_generator import DataGenerator, load_corpus, mechanisms, save_corpus
+from prior_generator import DataGenerator, load_corpus, make_scm_prior, mechanisms, save_corpus
 from prior_generator.signal_diagnostics import (
+    DEFAULT_GATE,
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
     _adstock_numpy,
     check_signal_gate,
+    contemporaneous_weight,
     dense_signal_metrics,
     per_channel_signal,
     signal_summary,
@@ -30,6 +33,8 @@ def _dense(
     sales = y[..., 0] + 10
     if baseline is None:
         baseline = np.zeros(x.shape[1], dtype=np.float32)
+    if "sales_scale" not in kwargs:
+        kwargs["sales_scale"] = np.ones(1, dtype=np.float32)
     return dense_signal_metrics(
         x, y, sales, np.asarray(baseline, dtype=np.float32)[None], np.ones((1, 1)), **kwargs
     )
@@ -37,6 +42,20 @@ def _dense(
 
 def _metric(name: str) -> int:
     return SIGNAL_METRIC_LAYOUT.index(name)
+
+
+def _direct_only_edge_budget() -> dict[str, int | tuple[int, int]]:
+    """Require one direct channel and exclude upstream channel parents."""
+    return {
+        "cy": (1, 1),
+        "dc": 0,
+        "db": 0,
+        "zb": 0,
+        "dz": 0,
+        "zc": 0,
+        "cc": 0,
+        "zz": 0,
+    }
 
 
 def test_numpy_adstock_matches_pytensor_mechanisms():
@@ -74,6 +93,53 @@ def test_degenerate_weibull_kernel_is_finite_and_consistent():
         )()[:, 0]
     assert np.array_equal(numpy_result, np.zeros_like(x))
     assert np.array_equal(symbolic_result, numpy_result)
+
+
+def test_symbolic_weibull_degenerate_kernels_match_numpy():
+    """Compiled symbolic parameters must follow NumPy's numeric-degeneracy decisions."""
+    x = np.array([0.2, 1.0, 0.5, 1.5, 0.7], dtype=np.float64)
+    lam_t = pt.dscalar("lam")
+    k_t = pt.dscalar("k")
+    symbolic_adstock = pytensor.function(
+        [lam_t, k_t],
+        mechanisms.apply_weibull_pdf_adstock(pt.as_tensor_variable(x[:, None]), lam_t, k_t, 4),
+    )
+
+    for lam, k in (
+        (1e-6, 60.0),  # Overflowed span is -inf symbolically.
+        (1.0, 1000.0),  # Identity-like library output is a degenerate kernel.
+        (1e200, 1e-200),  # Underflowed product creates a degenerate kernel.
+        (1e250, 1e-200),  # A second underflow must remain finite.
+        (1e6, 1e-6),  # Near-degenerate but valid kernel must not be zeroed.
+        (4.0, 2.0),  # Ordinary in-prior Weibull kernel must not be zeroed.
+    ):
+        with np.errstate(all="ignore"):
+            numpy_result = _adstock_numpy(x, 2, 0.0, lam, k, 4)
+            symbolic_result = symbolic_adstock(lam, k)[:, 0]
+        assert np.isfinite(symbolic_result).all()
+        assert np.array_equal(symbolic_result, np.zeros_like(symbolic_result)) == np.array_equal(
+            numpy_result, np.zeros_like(numpy_result)
+        )
+        assert np.allclose(symbolic_result, numpy_result)
+
+
+def test_symbolic_weibull_library_density_failure_is_zeroed():
+    """A non-finite library result must fail safe to a finite zero response."""
+    x = np.array([0.2, 1.0, 0.5, 1.5, 0.7, 0.3, 1.2, 0.8], dtype=np.float64)
+    lam_t = pt.dscalar("lam")
+    k_t = pt.dscalar("k")
+    symbolic_adstock = pytensor.function(
+        [lam_t, k_t],
+        mechanisms.apply_weibull_pdf_adstock(pt.as_tensor_variable(x[:, None]), lam_t, k_t, 8),
+    )
+
+    symbolic_result = symbolic_adstock(1e4, 100.0)[:, 0]
+    with np.errstate(all="ignore"):
+        numpy_result = _adstock_numpy(x, 2, 0.0, 1e4, 100.0, 8)
+    assert np.isfinite(numpy_result).all()
+    assert not np.array_equal(numpy_result, np.zeros_like(numpy_result))
+    assert np.isfinite(symbolic_result).all()
+    assert np.array_equal(symbolic_result, np.zeros_like(symbolic_result))
 
 
 def test_adstock_is_a_plain_normalized_causal_convolution():
@@ -135,7 +201,12 @@ def test_r2_and_signed_baseline_correlation_contracts():
     contributions[0, :, 1] = np.arange(6)
     contributions[0, :, 0] = 1.0 + 3.0 * baseline + contributions[0, :, 1]
     metrics, _ = dense_signal_metrics(
-        spend, contributions, np.ones((1, 6), dtype=np.float32), baseline[None], np.ones((1, 2))
+        spend,
+        contributions,
+        np.ones((1, 6), dtype=np.float32),
+        baseline[None],
+        np.ones((1, 2)),
+        sales_scale=np.ones(1),
     )
     assert np.isclose(metrics[0, 0, _metric("contrib_r2_explained_by_rest")], 1.0)
 
@@ -181,6 +252,7 @@ def test_r2_requires_residual_degrees_of_freedom_not_raw_column_count():
         np.ones((1, 3), dtype=np.float32),
         baseline[None],
         np.ones((1, 2)),
+        sales_scale=np.ones(1),
     )
     assert valid[0, 0, index] == 1
     assert metrics[0, 0, index] == 1.0
@@ -196,10 +268,16 @@ def test_short_constant_and_warmup_validity_contracts():
     assert constant_valid[0, 0, _metric("spearman")] == 1
     assert constant[0, 0, _metric("spearman")] == 0.0
 
-    x, y = np.arange(8), np.array([0, 3, 6, 1, 1, 1, 1, 1])
+    x = np.arange(8)
+    y = np.array([0, 3, 6, 1, 2, 1, 2, 1])
     with_warmup, warmup_valid = _dense(x, y, l_max=3)
     assert warmup_valid[0, 0, _metric("warmup_ratio")] == 1
     assert with_warmup[0, 0, _metric("warmup_ratio")] > 3.0
+
+    flat_suffix, flat_suffix_valid = _dense(x, np.array([0, 3, 6, 1, 1, 1, 1, 1]), l_max=3)
+    assert flat_suffix[0, 0, _metric("warmup_ratio")] == 0.0
+    assert flat_suffix_valid[0, 0, _metric("warmup_ratio")] == 0
+
     _, burned_valid = _dense(x, y, l_max=3, adstock_burn_in=3)
     assert burned_valid[0, 0, _metric("warmup_ratio")] == 0
 
@@ -211,7 +289,13 @@ def test_summary_uses_valid_denominators_and_gate_contracts():
     metrics[0, :, cv] = [0.2, 0.0]
     valid[0, 0, cv] = 1
     summary = summarize_signal_metrics(
-        metrics, valid, np.ones((1, 3)), np.ones((1, 2)), l_max=3, adstock_burn_in=3
+        metrics,
+        valid,
+        np.ones((1, 3)),
+        np.ones((1, 2)),
+        sales_scale=np.ones(1),
+        l_max=3,
+        adstock_burn_in=3,
     )
     assert summary["frac_contrib_cv_lt_010"] == 0.0
     assert summary["frac_spearman_lt_03"] is None
@@ -277,7 +361,7 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
     layout = SlotLayout(K=2, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
     direct = (loaded["g"][:, layout.slices["cy"]] == 1) & (loaded["active_c_mask"] == 1)
     signal_config = loaded["diagnostics"]["signal"]
-    assert signal_config["adstock_kernel_semantics"] == "normalized-causal-weibull-pdf"
+    assert signal_config["adstock_kernel_semantics"] == "normalized-causal-minmax-weibull-density"
     metrics, valid = dense_signal_metrics(
         loaded["spend_raw"],
         loaded["contributions_raw"],
@@ -352,12 +436,332 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
                 "metric_layout": list(SIGNAL_METRIC_LAYOUT),
                 "l_max": 8,
                 "adstock_burn_in": 0,
-                "adstock_kernel_semantics": "normalized-causal-weibull-pdf",
-                "adstock_kernel_version": 2,
+                "adstock_kernel_semantics": "normalized-causal-minmax-weibull-density",
+                "adstock_kernel_version": 3,
             },
         },
     }
     corpus["identifiability"]["signal_metrics"][0, 0, 0] = 1
     errors = DataGenerator.validate_corpus(corpus)
     assert any("ineligible" in error for error in errors)
-    assert SIGNAL_METRIC_VERSION == 2
+    assert SIGNAL_METRIC_VERSION == 3
+
+
+def test_scale_free_metrics_match_their_unscaled_definitions():
+    tiny_cv = 1e-13 * np.array([1, 2, 1, 2], dtype=np.float32)
+    tiny_cv_metrics, tiny_cv_valid = dense_signal_metrics(
+        tiny_cv[None, :, None],
+        tiny_cv[None, :, None],
+        np.ones((1, 4), dtype=np.float32),
+        np.zeros((1, 4), dtype=np.float32),
+        np.ones((1, 1), dtype=bool),
+        sales_scale=np.ones(1),
+        l_max=1,
+    )
+    for key in ("spend_cv", "contrib_cv"):
+        index = _metric(key)
+        assert tiny_cv_valid[0, 0, index] == 1
+        assert np.isclose(tiny_cv_metrics[0, 0, index], 1 / 3)
+
+    zero_mean = np.array([-1, 1, -1, 1], dtype=np.float32)
+    zero_mean_metrics, zero_mean_valid = dense_signal_metrics(
+        zero_mean[None, :, None],
+        zero_mean[None, :, None],
+        np.ones((1, 4), dtype=np.float32),
+        np.zeros((1, 4), dtype=np.float32),
+        np.ones((1, 1), dtype=bool),
+        sales_scale=np.ones(1),
+        l_max=1,
+    )
+    for key in ("spend_cv", "contrib_cv"):
+        index = _metric(key)
+        assert zero_mean_metrics[0, 0, index] == 0.0
+        assert zero_mean_valid[0, 0, index] == 0
+
+    tiny_corr = 1e-7 * np.array([1, 3, 1, 3, 1, 3], dtype=np.float32)
+    corr_metrics, corr_valid = dense_signal_metrics(
+        tiny_corr[None, :, None],
+        tiny_corr[None, :, None],
+        np.ones((1, 6), dtype=np.float32),
+        tiny_corr[None],
+        np.ones((1, 1), dtype=bool),
+        sales_scale=np.ones(1),
+        l_max=1,
+    )
+    corr_index = _metric("contrib_corr_baseline")
+    assert corr_valid[0, 0, corr_index] == 1
+    assert np.isclose(corr_metrics[0, 0, corr_index], 1.0)
+
+    warmup = 1e-13 * np.array([0, 3, 6, 1, 2, 1, 2, 1], dtype=np.float32)
+    warmup_metrics, warmup_valid = dense_signal_metrics(
+        np.arange(8, dtype=np.float32)[None, :, None],
+        warmup[None, :, None],
+        np.ones((1, 8), dtype=np.float32),
+        np.zeros((1, 8), dtype=np.float32),
+        np.ones((1, 1), dtype=bool),
+        sales_scale=np.ones(1),
+        l_max=3,
+    )
+    warmup_index = _metric("warmup_ratio")
+    assert warmup_valid[0, 0, warmup_index] == 1
+    expected_warmup_ratio = (warmup[:3].max() - warmup[:3].min()) / warmup[3:].std()
+    assert np.isclose(warmup_metrics[0, 0, warmup_index], expected_warmup_ratio)
+    assert warmup_metrics[0, 0, warmup_index] > 3.0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"adstock_family": np.array([[1.9]])}, "adstock_family"),
+        ({"adstock_family": np.array([[3]])}, "adstock_family"),
+        (
+            {
+                "adstock_family": np.array([[1]]),
+                "adstock_alpha": np.array([[np.nan]]),
+            },
+            "adstock_alpha",
+        ),
+        (
+            {
+                "adstock_family": np.array([[1]]),
+                "adstock_alpha": np.array([[-0.1]]),
+            },
+            "adstock_alpha",
+        ),
+        (
+            {
+                "adstock_family": np.array([[1]]),
+                "adstock_alpha": np.array([[1.1]]),
+            },
+            "adstock_alpha",
+        ),
+        (
+            {
+                "adstock_family": np.array([[2]]),
+                "weibull_lam": np.array([[np.nan]]),
+            },
+            "weibull_lam",
+        ),
+        (
+            {
+                "adstock_family": np.array([[2]]),
+                "weibull_lam": np.array([[0.0]]),
+            },
+            "weibull_lam",
+        ),
+        (
+            {
+                "adstock_family": np.array([[2]]),
+                "weibull_k": np.array([[np.nan]]),
+            },
+            "weibull_k",
+        ),
+        (
+            {
+                "adstock_family": np.array([[2]]),
+                "weibull_k": np.array([[0.0]]),
+            },
+            "weibull_k",
+        ),
+        ({"l_max": 0}, "l_max"),
+        ({"l_max": 1.5}, "l_max"),
+        ({"adstock_burn_in": -1}, "adstock_burn_in"),
+        ({"adstock_burn_in": 0.5}, "adstock_burn_in"),
+        ({"sales_scale": np.array([np.nan])}, "sales_scale"),
+        ({"sales_scale": np.array([0.0])}, "sales_scale"),
+        ({"sales_scale": np.array([-1.0])}, "sales_scale"),
+    ],
+)
+def test_dense_signal_metrics_rejects_invalid_diagnostic_inputs(kwargs, match):
+    base_kwargs = {"sales_scale": np.ones(1)}
+    base_kwargs.update(kwargs)
+    with pytest.raises(ValueError, match=match):
+        dense_signal_metrics(
+            np.ones((1, 8, 1)),
+            np.ones((1, 8, 1)),
+            np.arange(8, dtype=float)[None],
+            np.zeros((1, 8)),
+            np.ones((1, 1), dtype=bool),
+            **base_kwargs,
+        )
+
+
+def test_summary_validates_sales_and_sales_scale():
+    metrics = np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    valid = np.zeros_like(metrics, dtype=np.uint8)
+    mask = np.ones((1, 1), dtype=bool)
+    with pytest.raises(ValueError, match="sales"):
+        summarize_signal_metrics(
+            metrics, valid, np.array([[1.0, np.nan]]), mask, sales_scale=np.ones(1)
+        )
+    with pytest.raises(ValueError, match="sales_scale"):
+        summarize_signal_metrics(metrics, valid, np.ones((1, 2)), mask, sales_scale=np.zeros(1))
+
+
+def test_response_warmup_and_contemporaneous_diagnostics():
+    metrics = np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    valid = np.zeros_like(metrics, dtype=np.uint8)
+    sales = np.arange(8, dtype=float)[None]
+    mask = np.ones((1, 1), dtype=bool)
+    no_burn_in = summarize_signal_metrics(
+        metrics,
+        valid,
+        sales,
+        mask,
+        sales_scale=np.ones(1),
+        l_max=8,
+        adstock_burn_in=0,
+    )
+    assert no_burn_in["response_warmup_weeks"] == 0
+    assert no_burn_in["frac_zero_contemporaneous_weight"] is None
+
+    fallback = summarize_signal_metrics(
+        metrics,
+        valid,
+        sales,
+        mask,
+        sales_scale=np.ones(1),
+        l_max=8,
+        adstock_burn_in=8,
+    )
+    assert fallback["response_warmup_weeks"] > 0
+
+    eligible_identity = summarize_signal_metrics(
+        np.zeros((1, 2, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32),
+        np.zeros((1, 2, len(SIGNAL_METRIC_LAYOUT)), dtype=np.uint8),
+        sales,
+        np.array([[True, False]]),
+        sales_scale=np.ones(1),
+        l_max=8,
+        adstock_burn_in=8,
+        adstock_family=np.array([[0, 2]], dtype=np.uint8),
+    )
+    assert eligible_identity["response_warmup_weeks"] == 0
+
+    with_burn_in = summarize_signal_metrics(
+        metrics,
+        valid,
+        sales,
+        mask,
+        sales_scale=np.ones(1),
+        l_max=8,
+        adstock_burn_in=8,
+        adstock_family=np.array([[2]], dtype=np.uint8),
+        adstock_alpha=np.array([[0.0]], dtype=np.float32),
+        weibull_lam=np.array([[8.0]], dtype=np.float32),
+        weibull_k=np.array([[4.0]], dtype=np.float32),
+    )
+    assert with_burn_in["response_warmup_weeks"] > 0
+    assert with_burn_in["frac_zero_contemporaneous_weight"] == 1.0
+
+    assert contemporaneous_weight(2, 0.0, 8.0, 4.0, 8) == 0.0
+    assert contemporaneous_weight(1, 0.5, 1.0, 1.0, 8) > 0.0
+
+
+def test_response_warmup_matches_persisted_response_boundary():
+    """Persisted spend reproduces geometric response only after the reported boundary."""
+    cfg = make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_cells=2,
+        draws_per_cell=1,
+        T=8,
+        l_max=4,
+        adstock_burn_in=4,
+        nonlinearity="linear",
+        adstock_family_probs={
+            "none": 0.0,
+            "geometric": 1.0,
+            "weibull": 0.0,
+        },
+        adstock_alpha_range=(0.8, 0.8),
+        edge_budget=_direct_only_edge_budget(),
+        seed=73,
+    )
+    corpus = DataGenerator(cfg).generate(validate=True)
+    warmup = int(corpus["diagnostics"]["signal"]["response_warmup_weeks"])
+    assert 0 < warmup < cfg.T
+    assert np.all(corpus["adstock_family"][:, 0] == 1)
+
+    for task in range(corpus["spend_raw"].shape[0]):
+        spend = corpus["spend_raw"][task, :, 0].astype(np.float64)
+        contribution = corpus["contributions_raw"][task, :, 0].astype(np.float64)
+        adstock = _adstock_numpy(
+            spend,
+            int(corpus["adstock_family"][task, 0]),
+            float(corpus["adstock_alpha"][task, 0]),
+            float(corpus["weibull_lam"][task, 0]),
+            float(corpus["weibull_k"][task, 0]),
+            cfg.l_max,
+        )
+        response = adstock / float(corpus["saturation_scale"][task, 0])
+        # The corpus does not persist beta. Fit its one linear scale on the
+        # reproducible tail, so any early error isolates missing response state.
+        tail_response = response[warmup:]
+        tail_contribution = contribution[warmup:]
+        beta = float(
+            np.dot(tail_response, tail_contribution) / np.dot(tail_response, tail_response)
+        )
+        reconstructed = beta * response
+        relative_error = np.abs(reconstructed - contribution) / np.maximum(
+            np.abs(contribution), 1e-12
+        )
+        assert relative_error[:warmup].min() > 0.1
+        assert relative_error[warmup:].max() < 1e-4
+
+
+def test_identity_burn_in_corpus_has_no_response_warmup_and_self_validates():
+    """An all-linear, minimum-horizon corpus has no hidden response history."""
+    # T=5 is the first K2-valid horizon for the old l_max=5 self-rejection.
+    cfg = make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_cells=2,
+        draws_per_cell=1,
+        T=5,
+        l_max=5,
+        adstock_burn_in=5,
+        nonlinearity="linear",
+        edge_budget=_direct_only_edge_budget(),
+        seed=74,
+    )
+    corpus = DataGenerator(cfg).generate(validate=True)
+
+    assert np.all(corpus["adstock_family"] == 0)
+    assert corpus["diagnostics"]["signal"]["response_warmup_weeks"] == 0
+    assert DataGenerator.validate_corpus(corpus) == []
+
+
+def test_default_gate_rejects_low_amplitude_and_collinear_targets():
+    metrics = np.zeros((1, 2, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    valid = np.zeros_like(metrics, dtype=np.uint8)
+    for key, values in (
+        ("contrib_cv", (0.2, 0.2)),
+        ("contrib_hf", (0.2, 0.2)),
+        ("spearman", (0.5, 0.5)),
+        ("contrib_rel_std", (0.005, 0.02)),
+        ("contrib_r2_explained_by_rest", (0.96, 0.9)),
+    ):
+        index = _metric(key)
+        metrics[0, :, index] = values
+        valid[0, :, index] = 1
+
+    summary = summarize_signal_metrics(
+        metrics,
+        valid,
+        np.arange(3, dtype=float)[None],
+        np.ones((1, 2), dtype=bool),
+        sales_scale=np.ones(1),
+        l_max=3,
+        adstock_burn_in=3,
+    )
+    assert summary["frac_contrib_rel_std_lt_001"] == 0.5
+    assert summary["frac_contrib_r2_gt_095"] == 0.5
+    assert DEFAULT_GATE["frac_contrib_rel_std_lt_001"] == 0.10
+    assert DEFAULT_GATE["frac_contrib_r2_gt_095"] == 0.10
+    ok, lines = check_signal_gate(summary)
+    assert not ok
+    assert any("[FAIL] frac_contrib_rel_std_lt_001" in line for line in lines)
+    assert any("[FAIL] frac_contrib_r2_gt_095" in line for line in lines)

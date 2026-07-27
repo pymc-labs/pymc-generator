@@ -10,13 +10,14 @@ tensor via ``.values``. Parameters may be concrete floats or symbolic
 (pytensor / PyMC RV) scalars — both compose into the graph.
 
 κ-relative parameterization (FINDINGS D7, the ``kappa_adstock_adjusted``
-lesson): every family's half-point / scale parameter is expressed *relative to
-the mean of the (adstocked) input series* — either an explicit
-``kappa = kappa_mult * mean_x`` where the library function takes a
+lesson): every family's half-point / scale parameter is expressed relative to
+the caller-supplied, parameter-only operating point ``mean_x`` — either an
+explicit ``kappa = kappa_mult * mean_x`` where the library function takes a
 half-saturation argument, or by rescaling the input to ``x / mean_x`` so the
-remaining shape parameters are scale-free. Each wrapper has signature
+remaining shape parameters are scale-free. ``mean_x`` is an anchor, not a
+reduction over a realized series. Each wrapper has signature
 ``f(x, mean_x, **shape_params) -> tensor``, is monotone increasing in ``x``,
-and stays O(1) when ``x`` is on its own mean scale.
+and stays O(1) when ``x`` is on its anchor scale.
 
 Every family is normalized to a **unit asymptote** (or, for the unbounded
 ``root``, to ``f(mean_x) = 1``), so the channel's single amplitude is the
@@ -183,10 +184,27 @@ def apply_geometric_adstock(x, alpha, l_max: int) -> TensorVariable:
 
 
 def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
-    """Normalized Weibull-PDF adstock of a ``(T, 1)`` column over the time axis.
+    """Normalized min-max-rescaled Weibull-density adstock over the time axis.
 
     Delegates to ``pymc_marketing.mmm.transformers.weibull_adstock`` with
-    ``type="PDF"``, ``normalize=True``. ``lam``/``k`` may be floats or symbolic.
+    ``type="PDF"``, ``normalize=True``. The library min-max rescales the sampled
+    density before sum-normalizing, so this kernel is not a Weibull PDF:
+    ``min(w) == 0`` exactly and one or more lags are always annihilated. Under
+    the default prior (``lam ~ U(2, 8)``, ``k ~ U(1.5, 4)``, ``l_max = 8``),
+    45.0% of channels have zero current-week weight and 38.5% peak at lag >= 5
+    (measured over 200k draws). For a zero current-week weight,
+    ``contributions[t]`` is independent of ``channels[t]``;
+    ``frac_zero_contemporaneous_weight`` reports this diagnostic.
+
+    ``l_max == 1`` deliberately returns ``x`` rather than calling the library:
+    the singleton causal kernel is an identity, while the library's min-max
+    rescaling has ``min == max`` and returns NaN. ``lam``/``k`` may be floats
+    or symbolic.
+    At extreme scales where ``lam >> l_max`` and ``k`` is large, pymc-marketing's
+    density can underflow to denormals and yield NaN. This wrapper fails safe to
+    a zero kernel there; the NumPy diagnostic may still find a finite kernel, but
+    it runs only after generation, where the persisted zero contribution correctly
+    records no signal.
     """
     if int(l_max) == 1:
         return x
@@ -194,7 +212,10 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
     lam_t = pt.as_tensor_variable(lam)
     k_t = pt.as_tensor_variable(k)
     raw_weights = (k_t / lam_t) * pt.pow(lag / lam_t, k_t - 1) * pt.exp(-pt.pow(lag / lam_t, k_t))
-    weight_span = raw_weights.max() - raw_weights.min()
+    weight_min = raw_weights.min()
+    weight_span = raw_weights.max() - weight_min
+    minmax_weights = (raw_weights - weight_min) / weight_span
+    weight_total = minmax_weights.sum()
     out = _pmm.weibull_adstock(
         _as_time(x[:, 0]),
         lam=lam,
@@ -205,4 +226,17 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
         normalize=True,
     )
     values = out.values[:, None]
-    return pt.switch(pt.eq(weight_span, 0), pt.zeros_like(values), values)
+    # This guard MUST track signal_diagnostics._adstock_weights: oracle parameters are
+    # symbolic value variables, so no constant folding occurs and overflow can yield -inf.
+    kernel_is_valid = pt.and_(
+        pt.and_(pt.isfinite(weight_span), pt.invert(pt.eq(weight_span, 0))),
+        pt.and_(pt.isfinite(weight_total), pt.invert(pt.eq(weight_total, 0))),
+    )
+    # The diagnostic intentionally does not mirror a library-output failure: it runs after
+    # generation, so a channel zeroed here persists zero contributions and has no signal.
+    values_are_finite = pt.all(pt.isfinite(values))
+    return pt.switch(
+        pt.invert(pt.and_(kernel_is_valid, values_are_finite)),
+        pt.zeros_like(values),
+        values,
+    )

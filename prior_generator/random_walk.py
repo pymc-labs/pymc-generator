@@ -1,7 +1,7 @@
-"""Random-walk noise generator for the Phase-4 additive causal graph.
+"""Symbolic random-walk noise for the Phase-4 additive causal graph.
 
-Every node in the additive SCM (D, Z, C, B, Y) carries an independent
-random-walk noise term instead of flat Gaussian noise (plan doc 03, D1a).
+Every node in the additive SCM (D, Z, C, B, Y) carries a random-walk noise
+term instead of flat Gaussian noise (plan doc 03, D1a).
 The walk is always autocorrelated — a smoothed Brownian motion — and the
 ``smoothness`` parameter controls its texture:
 
@@ -9,46 +9,18 @@ The walk is always autocorrelated — a smoothed Brownian motion — and the
 * ``smoothness -> 1``: wide moving-average of the Brownian path — a soft,
   slow sinusoidal-like drift.
 
-Three entry points:
-
-* :func:`generate_random_walk` — concrete numpy walk (data generation).
-* :func:`sample_rw_params` — draw walk parameters from their priors.
-* :func:`symbolic_random_walk` — same math as a PyTensor expression so the
-  walk can live inside the symbolic causal graph (intervention-based
-  decomposition evaluates the same graph twice).
-
-The numpy and symbolic implementations share the identical smoothing
-algorithm (edge-padded moving average via cumulative sums) so that
-evaluating the symbolic walk with the same white noise reproduces the
-numpy walk bit-for-bit (tested in ``tests/data/test_random_walk.py``).
-
-PyTensor is imported lazily inside :func:`symbolic_random_walk` so the
-numpy path stays import-light.
+The symbolic expression lives inside the causal graph so intervention-based
+decomposition evaluates the same graph twice. PyTensor is imported lazily so
+importing this module stays light.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from functools import lru_cache
 
 import numpy as np
 
-__all__ = [
-    "generate_random_walk",
-    "sample_rw_params",
-    "softplus",
-    "symbolic_random_walk",
-]
-
-
-def softplus(x):
-    """Numerically stable softplus — THE positivity transform of this module.
-
-    Positive-only walks are ``softplus(pre-activation)``, so ``softplus(mean)``
-    is the canonical "level" anchor for anything that scales relative to a
-    positive walk (e.g. the channel-texture factors in ``symbolic_graph``).
-    Keep both call sites on this helper so they can never diverge.
-    """
-    return np.logaddexp(0.0, x)
+__all__ = ["symbolic_random_walk"]
 
 
 def _kernel_width(smoothness: float, T: int) -> int:
@@ -62,128 +34,59 @@ def _kernel_width(smoothness: float, T: int) -> int:
     return max(1, int(round(smoothness * T / 4.0)))
 
 
-def generate_random_walk(
-    T: int,
-    mean: float,
-    std: float,
-    smoothness: float,
-    positive_only: bool,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """Generate a random-walk time series.
+@lru_cache(maxsize=64)
+def _centred_walk_scale(T: int, width: int) -> float:
+    """RMS amplitude of the centred, smoothed Brownian path for unit innovations.
 
-    Parameters
-    ----------
-    T : int
-        Number of time steps.
-    mean : float
-        Center of the walk.
-    std : float
-        Amplitude constraint (target standard deviation of the walk before
-        the optional positivity transform).
-    smoothness : float
-        0.0 = raw Brownian motion (jagged), 1.0 = very smooth drift.
-        The walk is always autocorrelated — never white noise.
-    positive_only : bool
-        If True, constrain output to positive values via softplus (smooth,
-        differentiable). ``mean`` should be drawn from a positive range so
-        the walk stays clearly positive after softplus.
-    rng : np.random.Generator
-        Random number generator for reproducibility.
+    The walk is ``mean + std * (A @ eps) / c`` where ``A = centre . movavg .
+    cumsum`` is a FIXED linear operator and ``c`` is the constant returned
+    here, ``sqrt(tr(A A^T) / T)``. Dividing by this constant instead of by the
+    path's own realized standard deviation is what keeps the map injective:
+    normalizing by ``walk.std()`` makes ``eps -> walk`` invariant to
+    ``eps -> k * eps``, leaving the likelihood exactly flat along the radial
+    direction of a T-dimensional latent, which no amount of step-size tuning
+    can fix.
 
-    Returns
-    -------
-    np.ndarray of shape (T,)
-        The random walk time series (float64).
+    The price is that ``std`` becomes the walk's EXPECTED amplitude
+    (``E[var(walk)] == std ** 2``) rather than its exact realized one. The gain
+    is that the walk is now an ordinary multivariate normal with covariance
+    ``(std / c) ** 2 * A A^T`` -- a distribution with a density, which the
+    normalized version did not have.
+
+    In generation, ``T`` is the full horizon
+    ``T_full = T_reported + adstock_burn_in``. Thus ``std`` is the expected
+    pre-softplus standard deviation over ``T_full``, not over the reported
+    window and not the realized standard deviation of one path. ``smoothness``
+    maps to a kernel width in ``T_full`` weeks. Persisted scale and smoothness
+    labels therefore have a small irreducible mismatch against reported-window
+    measurements: observed reported-window standard deviation / declared
+    ``std`` ranges are 0.903–1.072 (rw_d), 0.893–1.062 (rw_b), 0.887–1.061
+    (rw_y), and 0.463–1.074 (rw_c). For positive-only walks, ``std`` is the
+    pre-softplus amplitude and is not directly comparable to the emitted
+    series' standard deviation.
+
+    Column ``j`` of ``A`` is the smoothed, centred step function
+    ``1[t >= j]``, so the whole operator is built in one ``(T, T)`` pass.
     """
-    if T < 1:
-        raise ValueError(f"T must be >= 1, got {T}")
-    if std < 0:
-        raise ValueError(f"std must be >= 0, got {std}")
-    eps = rng.standard_normal(T)
-    return _walk_from_eps_numpy(eps, mean, std, smoothness, positive_only)
+    steps = np.tril(np.ones((T, T)))  # steps[t, j] = 1 if t >= j (the cumsum operator)
+    columns = _smooth_columns_numpy(steps, width)
+    columns = columns - columns.mean(axis=0, keepdims=True)
+    return float(np.sqrt((columns**2).sum() / T))
 
 
-def _walk_from_eps_numpy(
-    eps: np.ndarray,
-    mean: float,
-    std: float,
-    smoothness: float,
-    positive_only: bool,
-) -> np.ndarray:
-    """Deterministic walk construction from white noise (numpy)."""
-    T = eps.shape[0]
-    raw = np.cumsum(eps)  # Brownian base — always a walk
-    w = _kernel_width(smoothness, T)
-    if w > 1:
-        left, right = w // 2, w - 1 - w // 2
-        padded = np.concatenate([np.full(left, raw[0]), raw, np.full(right, raw[-1])])
-        c = np.cumsum(padded)
-        window_sums = c[w - 1 :] - np.concatenate([[0.0], c[: T - 1]])
-        walk = window_sums / w
-    else:
-        walk = raw
-    walk = walk - walk.mean()
-    walk = walk * std / (walk.std() + 1e-8)
-    walk = walk + mean
-    if positive_only:
-        walk = softplus(walk)
-    return np.asarray(walk)
-
-
-def sample_rw_params(
-    positive_only: bool,
-    rng: np.random.Generator,
-    mean_range: tuple[float, float] = (-1.0, 1.0),
-    positive_mean_range: tuple[float, float] = (0.5, 3.0),
-    std_sigma: float = 1.0,
-    smoothness_alpha: float = 2.0,
-    smoothness_beta: float = 2.0,
-    std_range: tuple[float, float] | None = None,
-    std_relative: bool = False,
-) -> dict[str, Any]:
-    """Sample random-walk parameters from their priors (plan doc 4.0b).
-
-    Priors:
-
-    * ``mean ~ Uniform(mean_range)`` for signed nodes,
-      ``Uniform(positive_mean_range)`` for positive-only nodes (channels).
-    * ``std ~ HalfNormal(std_sigma)``, or ``Uniform(std_range)`` when
-      ``std_range`` is given. The HalfNormal piles mass at 0 (near-constant
-      walks); a uniform range floors the walk amplitude — used for channels,
-      whose contribution targets otherwise degenerate to flat lines.
-      With ``std_relative=True`` (positive-only walks only) the drawn factor
-      is multiplied by the walk's level ``softplus(mean)``, making the
-      amplitude scale-free across small and large nodes; the range then reads
-      like a CV range.
-    * ``smoothness ~ Beta(smoothness_alpha, smoothness_beta)``.
-
-    Returns
-    -------
-    dict
-        Keys ``mean``, ``std``, ``smoothness``, ``positive_only`` — plugs
-        directly into :func:`generate_random_walk` as keyword arguments.
-    """
-    if std_relative and not positive_only:
-        raise ValueError("std_relative=True requires positive_only=True (softplus level anchor)")
-    lo, hi = positive_mean_range if positive_only else mean_range
-    # Draw order (mean, std, smoothness) is LOCKED: it defines the RNG stream
-    # of every corpus generated so far, and std_range=None must reproduce
-    # legacy corpora byte-for-byte. std_relative multiplies AFTER the draw,
-    # consuming no extra RNG.
-    mean = float(rng.uniform(lo, hi))
-    if std_range is not None:
-        std = float(rng.uniform(std_range[0], std_range[1]))
-        if std_relative:
-            std *= float(softplus(mean))
-    else:
-        std = float(abs(rng.normal(0.0, std_sigma)))
-    return {
-        "mean": mean,
-        "std": std,
-        "smoothness": float(rng.beta(smoothness_alpha, smoothness_beta)),
-        "positive_only": positive_only,
-    }
+def _smooth_columns_numpy(raw: np.ndarray, width: int) -> np.ndarray:
+    """Edge-padded moving average down axis 0 used to build the scale operator."""
+    if width <= 1:
+        return raw
+    T = raw.shape[0]
+    left, right = width // 2, width - 1 - width // 2
+    padded = np.concatenate(
+        [np.repeat(raw[:1], left, axis=0), raw, np.repeat(raw[-1:], right, axis=0)]
+    )
+    cumulative = np.cumsum(padded, axis=0)
+    head = np.zeros((1, *raw.shape[1:]), dtype=cumulative.dtype)
+    window_sums = cumulative[width - 1 :] - np.concatenate([head, cumulative[: T - 1]])
+    return np.asarray(window_sums / width)
 
 
 def symbolic_random_walk(
@@ -196,9 +99,8 @@ def symbolic_random_walk(
 ):
     """Create a PyTensor symbolic random walk (plan doc 4.0c).
 
-    Same construction as :func:`generate_random_walk`, expressed
-    symbolically so the walk can be part of the causal graph. Concrete
-    values (``eps``, ``mean``, ``std``) are supplied at ``.eval()`` time.
+    The expression is part of the causal graph. Concrete values (``eps``,
+    ``mean``, ``std``) are supplied at ``.eval()`` time.
 
     Parameters
     ----------
@@ -235,7 +137,7 @@ def symbolic_random_walk(
     else:
         walk = raw
     walk = walk - walk.mean()
-    walk = walk * std / (walk.std() + 1e-8)
+    walk = walk * std / _centred_walk_scale(T, w)
     walk = walk + mean
     if positive_only:
         walk = pt.softplus(walk)

@@ -40,10 +40,14 @@ its own random walk. Direct contributions and indirect effects are:
     sales           == baseline_out + Σ_k contributions_k + indirect_effects
 
 The identity holds *exactly* (not a Taylor approximation) because both Y
-and the decomposition are built from the same symbolic quantities. So that
-``f_k`` is one fixed function evaluated on two inputs, the κ-relative
-saturation scale is computed from the **observed** adstocked channel and
-reused for the base channel.
+and the decomposition are built from the same symbolic quantities. Each
+``f_k`` is one fixed function evaluated on every path. Its κ-relative
+saturation scale comes from :func:`_expected_levels`, a parameter-only expected
+channel level: ``softplus(rw_c_mean)`` plus ``pulse_amp * pulse_prob`` and
+weighted expected Z->C / C->C parent levels in topological order, wrapped by
+the channel softplus. D->C drops out because latent demand has mean zero. It
+reads neither a window nor a realized series, so ``p(theta)`` remains
+well-defined and the week-t response cannot depend on later spend.
 """
 
 from __future__ import annotations
@@ -172,35 +176,21 @@ def _expected_levels(
     M: int,
     use_pulse: np.ndarray,
 ) -> list[TensorVariable]:
-    """Per-channel saturation anchor, computed from PARAMETERS ALONE.
+    """Per-channel saturation anchors from parameters alone.
 
-    The κ-relative response needs an operating point for each channel. Deriving
-    it from the realized adstocked series (its window mean) is what the older
-    graph did, and it has two costs: the anchor is a statistic of the very data
-    it helps generate, so no ``p(theta)`` exists independently of the noise; and
-    because the mean spans the whole window, ``do(C[t'])`` for a LATE ``t'``
-    would move the response at an EARLY ``t``.
+    The κ-relative response uses the channel-level output at a parameter-only
+    operating point. For each channel, it applies the channel softplus to:
 
-    This anchor is the expected pre-activation level instead:
+    * its own ``softplus(rw_c_mean)``;
+    * ``pulse_amp * pulse_prob`` when pulses are enabled;
+    * weighted expected levels of ``Z -> C`` and earlier ``C -> C`` parents,
+      accumulated in topological order.
 
-    * the channel's own positive walk contributes ``softplus(rw_c_mean)`` — the
-      walk is already softplus-transformed, and its pre-activation mean is
-      exactly ``rw_c_mean``;
-    * campaign pulses fire with probability ``pulse_prob`` and add
-      ``pulse_amp``, so they contribute ``pulse_amp * pulse_prob``;
-    * weekly jitter is mean-zero and contributes nothing to first order
-      (measured: adding its Jensen term over-corrects);
-    * ``D -> C`` contributes nothing because the latent factor is normalized to
-      mean zero;
-    * ``Z -> C`` and ``C -> C`` contribute their parents' expected levels, both
-      available in topological order.
-
-    Measured against the realized adstocked window mean over 36 channels of the
-    supported "diverse" texture, the ratio realized/anchor has median 1.11 with
-    a 5-95% range of 0.77-1.54 (sparse graph) and median 1.12 / 0.82-1.54
-    (dense graph). The residual spread is the realized walk wandering around
-    its own parameter-implied mean; no parameter-only anchor can remove it, and
-    ``kappa_mult`` spans far more than the offset.
+    ``D -> C`` drops out because the latent factor is normalized to mean zero;
+    weekly jitter is mean-zero and contributes nothing to this first-order
+    anchor. The construction reads neither a simulation window nor a realized
+    series, so ``p(theta)`` is defined independently of the noise and the
+    response at week ``t`` cannot depend on spend at later weeks.
     """
     z_levels: list[TensorVariable] = []
     gamma_zz = _arr(params["gamma_zz"], (M, M))
@@ -237,28 +227,26 @@ def _saturate_col(
     the decomposition and the per-source indirect split exact.
     """
     name = SATURATION_FAMILY_KEYS[int(params["sat_family"][k])]  # concrete structural family
-    # Shape params may be symbolic (RV) or concrete — passed straight through
-    # to the pymc-marketing-backed wrappers, which accept either.
+    # ``linear`` is the only family without a κ-relative wrapper. The
+    # name-to-wrapper dispatch lives in mechanisms; these branches only bind
+    # each wrapper's distinct shape parameters.
     if name == "linear":
         return cast(TensorVariable, ad_col / mean_ad)
+    family = mechanisms.SATURATION_FAMILIES[name]
     if name == "hill":
-        return mechanisms.hill_kappa_relative(
+        return family(
             ad_col,
             mean_ad,
             slope=params["hill_slope"][k],
             kappa_mult=params["hill_kappa_mult"][k],
         )
     if name == "logistic":
-        return mechanisms.logistic_kappa_relative(ad_col, mean_ad, lam=params["logistic_lam"][k])
+        return family(ad_col, mean_ad, lam=params["logistic_lam"][k])
     if name == "michaelis_menten":
-        return mechanisms.michaelis_menten_kappa_relative(
-            ad_col,
-            mean_ad,
-            kappa_mult=params["mm_kappa_mult"][k],
-        )
+        return family(ad_col, mean_ad, kappa_mult=params["mm_kappa_mult"][k])
     if name == "tanh":
-        return mechanisms.tanh_kappa_relative(ad_col, mean_ad, c=params["tanh_c"][k])
-    return mechanisms.root_kappa_relative(ad_col, mean_ad, alpha=params["root_alpha"][k])
+        return family(ad_col, mean_ad, c=params["tanh_c"][k])
+    return family(ad_col, mean_ad, alpha=params["root_alpha"][k])
 
 
 def build_symbolic_graph(
@@ -297,8 +285,9 @@ def build_symbolic_graph(
         contribution ramps 0 -> level over the first ``l_max`` weeks — an
         artifact that dominates smooth additive targets (measured 3–13x the
         steady-state std). With ``burn_in >= l_max`` the reported window sees
-        real history instead of zeros. The κ-relative saturation scale is
-        computed over the reported window only.
+        real history instead of zeros. The κ-relative saturation scale comes
+        from ``_expected_levels(...)``, so it uses drawn parameters alone and
+        is independent of this window and every realized series.
 
     Returns
     -------
@@ -541,10 +530,13 @@ def build_symbolic_graph(
     # These are intentionally audit-only paths.  They are drawn to decide
     # whether the *natural* world is realistic, never persisted in corpora.
     if params.get("channel_shock") is not None:
+        # Reuse the pinned parameter-only anchors. This leaves every persisted
+        # response array unchanged; only these audit-only outputs and
+        # realism-filter acceptance can move.
         unshocked_contribs = []
         for k in range(K):
             ad_unshocked = _adstock_col(c_unshocked_cols[k], params, k)[W]
-            scale_k = pt.maximum(ad_unshocked.mean(), 1e-8)
+            scale_k = sat_scale_cols[k]
             unshocked_contribs.append(
                 g_cy[k] * beta[k] * _saturate_col(ad_unshocked, scale_k, params, k)
             )

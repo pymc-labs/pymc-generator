@@ -63,7 +63,7 @@ def test_factory_diverse_texture_defaults():
     cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, l_max=8)
     assert cfg.channel_hf_sigma_range[1] > 0
     assert cfg.channel_pulse_prob_range[1] > 0
-    assert cfg.rw_channel_std_range is not None
+    assert cfg.rw_channel_std_range == (0.15, 0.8)
     assert cfg.adstock_burn_in == cfg.l_max
 
 
@@ -207,7 +207,7 @@ def test_lmax_must_be_a_positive_integer(l_max):
         SCMPrior(l_max=l_max).validate()
 
 
-@pytest.mark.parametrize("name", ("rw_std_sigma", "rw_channel_std_sigma", "rw_sales_std_sigma"))
+@pytest.mark.parametrize("name", ("rw_std_sigma", "rw_sales_std_sigma"))
 @pytest.mark.parametrize("value", (np.nan, np.inf, 0.0, -1.0))
 def test_random_walk_sigmas_must_be_finite_and_positive(name, value):
     with pytest.raises(ValueError, match=name):
@@ -233,10 +233,35 @@ def test_prior_ranges_fail_fast_on_invalid_bounds(name, value):
         SCMPrior(**{name: value}).validate()
 
 
+def test_beta_additive_range_requires_nonzero_amplitude():
+    with pytest.raises(ValueError, match="zero-only amplitude contradicts every drawn C->Y edge"):
+        SCMPrior(beta_additive_range=(0.0, 0.0)).validate()
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    (
+        (None, "finite \\(lo, hi\\) pair"),
+        ((0.0, 0.0), "upper bound > 0"),
+    ),
+)
+def test_channel_walk_std_range_is_required_and_nonzero(value, match):
+    with pytest.raises(ValueError, match=match):
+        SCMPrior(rw_channel_std_range=value).validate()
+
+
 @pytest.mark.parametrize("value", (np.nan, np.inf, 8.0, 8.5, True))
 def test_adstock_burn_in_must_be_an_integer(value):
     with pytest.raises(ValueError, match="adstock_burn_in"):
         SCMPrior(adstock_burn_in=value).validate()
+
+
+def test_burn_in_requires_at_least_one_reproducible_reported_week():
+    with pytest.raises(ValueError, match="unpersisted pre-window spend"):
+        SCMPrior(T=4, l_max=5, adstock_burn_in=5).validate()
+
+    SCMPrior(T=5, l_max=5, adstock_burn_in=5).validate()
+    SCMPrior(T=4, l_max=5, adstock_burn_in=0).validate()
 
 
 @pytest.mark.parametrize("value", (True, "bad", [1.0], np.nan, np.inf, 0.0))
