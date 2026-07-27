@@ -11,13 +11,16 @@ prior-generator owns that model — every world is one drawable `pm.Model`
 — and exposes its observed-data variant
 ([`build_oracle_model`](../reference/world-model.md#prior_generator.world_model.build_oracle_model)):
 the same structure and the *same prior definitions* with the world's dataset
-attached, so `pm.sample` yields the posterior a NUTS fit can actually reach.
-Consumers should use it for oracle baselines, never re-implement it.
+attached, so `pm.sample` yields the posterior a NUTS fit can usually reach.
+Weibull-adstock worlds are the exception: their two carryover parameters use
+Metropolis rather than NUTS. Consumers should use it for oracle baselines,
+never re-implement it.
 
 ## The recipe
 
-Draw a world, build its oracle from the world object itself, fit NUTS, and
-compare posterior contribution bands against the world's decomposition truth:
+Draw a world, build its oracle from the world object itself, fit it with
+`pm.sample`, and compare posterior contribution bands against the world's
+decomposition truth:
 
 ```python exec="1" source="material-block" result="text"
 import prior_generator as pg
@@ -69,7 +72,7 @@ intervals, which `SCM.oracle_model()` picks up automatically when enabled.
 ## What the oracle is — and is not
 
 `build_oracle_model` keeps everything upstream of the observation exact, with
-five explicit concessions (all documented in the API reference):
+six explicit concessions (all documented in the API reference):
 
 1. **Structure-known.** The true DAG, mechanism families, and walk smoothness
    are given. This is the *structure-known* oracle — an **upper bound** for any
@@ -106,6 +109,17 @@ five explicit concessions (all documented in the API reference):
    function of the drawn parameters alone; it is persisted and supplied by
    `SCM.oracle_model()` so the oracle anchors the nonlinear response exactly
    where generation did.
+6. **Weibull sampler downgrade.** pymc-marketing's `weibull_adstock` performs
+   min-max normalization with an upstream `Min` operation that has no PyTensor
+   pullback. For any Weibull-adstock channel, `pm.sample` consequently
+   uses Metropolis—not NUTS—for `weibull_lam` and `weibull_k`. Identity and
+   geometric-adstock channels differentiate cleanly and remain NUTS-eligible.
+   The package's own analytic Weibull guard is not the cause; its reductions
+   differentiate cleanly, and replacing the library normalization would break
+   load-bearing parity with a stock `WeibullAdstock`. Metropolis mixing on the
+   two carryover parameters makes their ESS suspect, so prefer
+   geometric-adstock worlds when using the oracle as a reference posterior.
+
 
 ### Held-level shocks
 

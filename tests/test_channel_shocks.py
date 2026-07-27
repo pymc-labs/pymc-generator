@@ -72,7 +72,14 @@ def _built(
 )
 def test_channel_shock_validation(kwargs):
     with pytest.raises(ValueError):
-        make_scm_prior(n_treatments=3, n_covariates=1, n_latent=1, T=12, **kwargs)
+        make_scm_prior(
+            n_treatments=3,
+            n_covariates=1,
+            n_latent=1,
+            T=12,
+            adstock_burn_in=0,
+            **kwargs,
+        )
 
 
 def test_disabled_schedule_has_empty_tensors_and_no_shock_rvs():
@@ -87,7 +94,7 @@ def test_disabled_schedule_has_empty_tensors_and_no_shock_rvs():
 
 def test_schedule_slots_containment_levels_and_burn_in_offset():
     model, names, param_names, cfg, g = _built(
-        T=10, S=3, length=(2, 3), level=(0.5, 1.5), burn_in=8
+        T=14, S=3, length=(2, 3), level=(0.5, 1.5), burn_in=8
     )
     d = draw_worlds(model, names + param_names, seed=3, draws=8)
     selected_level = np.take_along_axis(
@@ -138,6 +145,7 @@ def test_default_enabled_shock_is_visible_as_a_spend_plateau():
         n_covariates=1,
         n_latent=1,
         T=12,
+        adstock_burn_in=0,
         n_channel_shocks=1,
         channel_shock_level_range=(0.5, 0.5),
         edge_budget={"cy": (1, 1)},
@@ -348,6 +356,7 @@ def test_downstream_channel_recursion_sees_the_clamped_parent():
         n_covariates=1,
         n_latent=1,
         T=12,
+        adstock_burn_in=0,
         n_channel_shocks=1,
         channel_shock_length_range=(2, 2),
         channel_shock_level_range=(0.0, 0.0),

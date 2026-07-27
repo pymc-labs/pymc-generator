@@ -61,6 +61,25 @@ of persisted inputs. This is not a train/query mask: `support_mask` remains only
 the temporal support/query split. With `adstock_burn_in == 0`, zero padding makes
 every reported response reproducible from persisted spend.
 
+### Random-walk parameter labels
+
+Persisted `param_rw_*_std` labels describe the walk's **expected** standard
+deviation over the full simulated horizon
+`T_full = T + adstock_burn_in`. They are neither the realized standard
+deviation of one path nor a standard deviation measured only over the reported
+window. `smoothness` likewise maps to a moving-average kernel width in
+`T_full` weeks. For `positive_only` channel walks, `param_rw_c_std` is the
+pre-softplus amplitude, so it is not directly comparable to the standard
+deviation of the emitted spend series.
+
+Over eight worlds at `T=52` and `adstock_burn_in=8`, the reported-window
+standard-deviation / declared-`std` ranges were 0.903–1.072 for `rw_d`,
+0.893–1.062 for `rw_b`, 0.887–1.061 for `rw_y`, and 0.463–1.074 for `rw_c`.
+The `rw_c` low end is partly the pre-softplus artifact. Consequently, these
+labels have a small irreducible recovery floor when inferred from only the
+reported window.
+
+
 ### Channel, adstock, and intervention audit metadata
 
 The following arrays are persisted for every corpus, including empty `(N, 0)`

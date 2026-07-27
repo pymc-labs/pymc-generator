@@ -239,6 +239,16 @@ the base rates and budgets.
 - **Channel texture** — weekly-jitter `pm.Normal` and campaign-pulse
   `pm.Bernoulli`, with magnitudes scaled relative to each channel's own level.
 
+Persisted `param_rw_*_std` labels are the walks' **expected** standard
+deviations over `T_full = T + adstock_burn_in`, not a single path's realized
+or reported-window standard deviation; `smoothness` is a kernel width in
+`T_full` weeks. For positive-only channel walks, `param_rw_c_std` is a
+pre-softplus amplitude and is not directly comparable to emitted-spend
+standard deviation, leaving a small irreducible recovery floor from the
+reported window. See the [corpus guide](docs/guide/corpus.md#random-walk-parameter-labels)
+for measured ranges.
+
+
 Every graph output is registered as a `pm.Deterministic`, so a single **`pm.draw`**
 returns the parameters, the series, and the full decomposition jointly. Candidate
 draws are run through the [realism filter](#the-realism-filter); the first accepted
@@ -534,7 +544,12 @@ channels), **covariates** (`n_covariates`, controls), and **latent** factors
 The [posterior oracle](docs/guide/oracle.md) is the same structure-fixed model
 with a world's observed spend, controls, and sales attached. Use
 `build_oracle_model` or `SCM.oracle_model()` as the structure-known posterior
-baseline rather than re-implementing the generated response.
+baseline rather than re-implementing the generated response. A
+Weibull-adstock channel downgrades `weibull_lam` and `weibull_k` from NUTS to
+Metropolis because pymc-marketing's min-max Weibull normalization has an
+upstream `Min` without a PyTensor pullback; identity and geometric adstock
+remain NUTS-differentiable. Metropolis mixing makes those carryover parameters'
+ESS suspect, so prefer geometric-adstock worlds for a reference posterior.
 
 ## Reproducibility and validation
 

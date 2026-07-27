@@ -141,6 +141,7 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
         n_covariates=1,
         n_latent=1,
         T=12,
+        adstock_burn_in=0,
         edge_budget={"cy": (2, 2)},
     )
     rng = np.random.default_rng(31)
@@ -165,6 +166,7 @@ def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch
         n_covariates=1,
         n_latent=1,
         T=12,
+        adstock_burn_in=0,
         edge_budget={"cy": (2, 2)},
         confounding_strength_range=(0.2, 0.4),
         n_channel_shocks=1,

@@ -269,10 +269,17 @@ def _adstock_weights(
             weights = (
                 (shape / lam) * np.power(t / lam, shape - 1.0) * np.exp(-np.power(t / lam, shape))
             )
-        span = weights.max() - weights.min()
-        if not np.isfinite(span) or span == 0.0:
+        raw_weight_max = weights.max()
+        weight_min = weights.min()
+        span = raw_weight_max - weight_min
+        # This guard MUST track mechanisms.apply_weibull_pdf_adstock. The oracle passes
+        # symbolic value variables; a backend-dependent library-output guard would make
+        # FAST_COMPILE generation and the FAST_RUN oracle disagree whether a channel responds.
+        # 1e-300 is above the float64 denormal cliff (~5e-324), yet below any
+        # normal-magnitude density, so the analytic replica detects only underflow.
+        if not (raw_weight_max > 1e-300) or not np.isfinite(span) or span == 0.0:
             return None
-        weights = (weights - weights.min()) / span
+        weights = (weights - weight_min) / span
     total = weights.sum()
     if not np.isfinite(total) or total == 0.0:
         return None

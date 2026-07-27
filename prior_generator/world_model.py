@@ -677,7 +677,7 @@ def build_oracle_model(
     data: dict[str, np.ndarray],
     prior_cond: dict[str, tuple[float, float]] | None = None,
 ) -> pm.Model:
-    """The observed-data variant of :func:`build_world_model` — the NUTS oracle.
+    """The observed-data variant of :func:`build_world_model` — the posterior oracle.
 
     Builds a ``pm.Model`` for the SAME world structure with the world's
     dataset attached, so ``pm.sample`` yields the posterior over the
@@ -727,7 +727,7 @@ def build_oracle_model(
     Notes
     -----
     **What is exact, and what is not.** The oracle keeps everything *upstream*
-    of the observation exact and makes five explicit, documented concessions:
+    of the observation exact and makes six explicit, documented concessions:
 
     1. **Structure-known**: the true DAG, mechanism families and walk
        smoothness are given. This is the structure-known oracle — an upper
@@ -773,6 +773,17 @@ def build_oracle_model(
        no exception: they clamp observed spend before the convolution and
        never touch response state, so ordinary carryover decays across a shock
        boundary exactly as it does anywhere else.
+    6. **Weibull sampler downgrade**: pymc-marketing's ``weibull_adstock``
+       min-max normalization contains a ``Min`` operation without a PyTensor
+       pullback. When any channel uses Weibull adstock, ``pm.sample``
+       therefore assigns Metropolis—not NUTS—to ``weibull_lam`` and
+       ``weibull_k``. Identity and geometric adstock channels remain
+       differentiable. This is upstream rather than from this package's
+       analytic Weibull guard, whose reductions differentiate cleanly; replacing
+       the library normalization would abandon load-bearing library parity.
+       Metropolis mixing on those two carryover parameters makes their ESS less
+       trustworthy, so prefer geometric-adstock worlds when using the oracle as
+       a reference posterior.
     """
     n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
     n_covariates = len(g_active["g_zb"])  # observed controls

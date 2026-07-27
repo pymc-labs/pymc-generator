@@ -95,51 +95,50 @@ def test_degenerate_weibull_kernel_is_finite_and_consistent():
     assert np.array_equal(symbolic_result, numpy_result)
 
 
-def test_symbolic_weibull_degenerate_kernels_match_numpy():
-    """Compiled symbolic parameters must follow NumPy's numeric-degeneracy decisions."""
-    x = np.array([0.2, 1.0, 0.5, 1.5, 0.7], dtype=np.float64)
-    lam_t = pt.dscalar("lam")
-    k_t = pt.dscalar("k")
-    symbolic_adstock = pytensor.function(
-        [lam_t, k_t],
-        mechanisms.apply_weibull_pdf_adstock(pt.as_tensor_variable(x[:, None]), lam_t, k_t, 4),
-    )
-
-    for lam, k in (
-        (1e-6, 60.0),  # Overflowed span is -inf symbolically.
-        (1.0, 1000.0),  # Identity-like library output is a degenerate kernel.
-        (1e200, 1e-200),  # Underflowed product creates a degenerate kernel.
-        (1e250, 1e-200),  # A second underflow must remain finite.
-        (1e6, 1e-6),  # Near-degenerate but valid kernel must not be zeroed.
-        (4.0, 2.0),  # Ordinary in-prior Weibull kernel must not be zeroed.
-    ):
-        with np.errstate(all="ignore"):
-            numpy_result = _adstock_numpy(x, 2, 0.0, lam, k, 4)
-            symbolic_result = symbolic_adstock(lam, k)[:, 0]
-        assert np.isfinite(symbolic_result).all()
-        assert np.array_equal(symbolic_result, np.zeros_like(symbolic_result)) == np.array_equal(
-            numpy_result, np.zeros_like(numpy_result)
-        )
-        assert np.allclose(symbolic_result, numpy_result)
-
-
-def test_symbolic_weibull_library_density_failure_is_zeroed():
-    """A non-finite library result must fail safe to a finite zero response."""
+def test_weibull_guard_matches_numpy_across_compile_modes():
+    """Weibull degeneracy decisions must be identical in both symbolic backends."""
     x = np.array([0.2, 1.0, 0.5, 1.5, 0.7, 0.3, 1.2, 0.8], dtype=np.float64)
-    lam_t = pt.dscalar("lam")
-    k_t = pt.dscalar("k")
-    symbolic_adstock = pytensor.function(
-        [lam_t, k_t],
-        mechanisms.apply_weibull_pdf_adstock(pt.as_tensor_variable(x[:, None]), lam_t, k_t, 8),
-    )
+    compiled_adstock = {}
+    for l_max in (4, 8):
+        lam_t = pt.dscalar("lam")
+        k_t = pt.dscalar("k")
+        adstock = mechanisms.apply_weibull_pdf_adstock(
+            pt.as_tensor_variable(x[:, None]), lam_t, k_t, l_max
+        )
+        compiled_adstock[l_max] = (
+            pytensor.function([lam_t, k_t], adstock, mode="FAST_COMPILE"),
+            pytensor.function([lam_t, k_t], adstock, mode="FAST_RUN"),
+        )
 
-    symbolic_result = symbolic_adstock(1e4, 100.0)[:, 0]
-    with np.errstate(all="ignore"):
-        numpy_result = _adstock_numpy(x, 2, 0.0, 1e4, 100.0, 8)
-    assert np.isfinite(numpy_result).all()
-    assert not np.array_equal(numpy_result, np.zeros_like(numpy_result))
-    assert np.isfinite(symbolic_result).all()
-    assert np.array_equal(symbolic_result, np.zeros_like(symbolic_result))
+    for l_max, lam, k in (
+        (4, 1e-6, 60.0),  # Overflowed span is -inf.
+        (4, 1.0, 1000.0),  # Near-delta density exercises annihilated lags.
+        (4, 1e200, 1e-200),  # Underflowed product creates a degenerate kernel.
+        (4, 1e250, 1e-200),  # A second underflow must remain finite.
+        (4, 1e6, 1e-6),  # Near-degenerate but valid kernel must not be zeroed.
+        (4, 4.0, 2.0),  # Ordinary in-prior Weibull kernel must not be zeroed.
+        # Representatives of the 24 historical library-output mode flips on
+        # lam=logspace(0, 6, 61), k=logspace(0, 3, 61), l_max=8.
+        (8, 10.0**1.3, 10.0**2.9),
+        (8, 10.0**2.5, 10.0**2.3),
+        (8, 10.0**3.7, 10.0**2.05),
+        (8, 1e4, 100.0),
+    ):
+        fast_compile, fast_run = compiled_adstock[l_max]
+        with np.errstate(all="ignore"):
+            numpy_result = _adstock_numpy(x, 2, 0.0, lam, k, l_max)
+            fast_compile_result = fast_compile(lam, k)[:, 0]
+            fast_run_result = fast_run(lam, k)[:, 0]
+
+        # Removing the analytic floor and relying on a library-output isfinite
+        # guard makes the l_max=8 representatives disagree between modes.
+        np.testing.assert_allclose(fast_compile_result, fast_run_result, rtol=1e-12, atol=1e-12)
+        assert np.isfinite(fast_compile_result).all()
+        assert np.isfinite(fast_run_result).all()
+        numpy_is_zero = np.array_equal(numpy_result, np.zeros_like(numpy_result))
+        for symbolic_result in (fast_compile_result, fast_run_result):
+            assert np.array_equal(symbolic_result, np.zeros_like(symbolic_result)) == numpy_is_zero
+            np.testing.assert_allclose(symbolic_result, numpy_result, rtol=1e-12, atol=1e-12)
 
 
 def test_adstock_is_a_plain_normalized_causal_convolution():
@@ -711,9 +710,10 @@ def test_response_warmup_matches_persisted_response_boundary():
         assert relative_error[warmup:].max() < 1e-4
 
 
-def test_identity_burn_in_corpus_has_no_response_warmup_and_self_validates():
-    """An all-linear, minimum-horizon corpus has no hidden response history."""
-    # T=5 is the first K2-valid horizon for the old l_max=5 self-rejection.
+def test_identity_adstock_corpus_has_no_response_warmup_and_self_validates():
+    """An all-linear short-horizon corpus has no hidden response history."""
+    # Identity adstock has no response state, so this test isolates its diagnostics
+    # instead of exercising the burn-in query-window contract.
     cfg = make_scm_prior(
         n_treatments=1,
         n_covariates=1,
@@ -722,7 +722,7 @@ def test_identity_burn_in_corpus_has_no_response_warmup_and_self_validates():
         draws_per_cell=1,
         T=5,
         l_max=5,
-        adstock_burn_in=5,
+        adstock_burn_in=0,
         nonlinearity="linear",
         edge_budget=_direct_only_edge_budget(),
         seed=74,

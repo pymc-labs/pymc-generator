@@ -595,13 +595,24 @@ class SCMPrior:
                 f"l_max ({self.l_max}) — a partial burn-in leaves adstock warmup "
                 f"in the reported window"
             )
-        if self.adstock_burn_in > 0 and self.T < self.l_max:
-            raise ValueError(
-                f"T={self.T} must be >= l_max ({self.l_max}) with adstock_burn_in enabled: "
-                f"the first {self.l_max - 1} reported weeks carry a media response that "
-                "depends on unpersisted pre-window spend, so a corpus needs at least one "
-                "reproducible week"
-            )
+        if self.adstock_burn_in > 0:
+            warmup_boundary = self.l_max - 1
+            short_query_start = self.T - self.n_query
+            long_query_start = self.T // 2
+            # Check both split types even at degenerate probabilities: validation-split repair can
+            # force either type, and every scored target must have persisted response history.
+            if min(short_query_start, long_query_start) < warmup_boundary:
+                raise ValueError(
+                    "adstock burn-in query overlap: "
+                    f"T={self.T}, l_max={self.l_max}, n_query={self.n_query}; "
+                    f"short-horizon query start T - n_query={short_query_start}, "
+                    f"long-horizon query start T // 2={long_query_start}. With burn-in, "
+                    f"the first l_max - 1 = {warmup_boundary} reported weeks carry a media "
+                    "response that depends on unpersisted pre-window spend. Both the "
+                    "short-horizon (T - n_query) and long-horizon (T // 2) query windows must "
+                    "start at or after that boundary, otherwise tasks are scored on targets that "
+                    "are not a function of the persisted inputs."
+                )
         for name in ("channel_hf_sigma_range", "channel_pulse_amp_range"):
             lo, hi = getattr(self, name)
             if not 0.0 <= lo <= hi:

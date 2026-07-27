@@ -210,7 +210,7 @@ def test_oracle_likelihood_starts_at_first_reproducible_response_week():
 
 
 def test_oracle_rejects_likelihood_without_reproducible_weeks():
-    # K2 rejects this horizon at SCMPrior.validate(). Construct it directly to
+    # L1 rejects this horizon at SCMPrior.validate(). Construct it directly to
     # keep the direct build_oracle_model defensive guard covered.
     cfg = SCMPrior(
         n_treatments=2,
@@ -245,14 +245,15 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
 
 def test_identity_adstock_oracle_observes_and_reproduces_the_full_window():
     """Identity kernels have no unpersisted response state to discard."""
-    # T=5 is the smallest K2-valid horizon for the old l_max=5 failure shape.
+    # Identity adstock has no response state, so this deliberately short test
+    # disables burn-in instead of exercising the corpus query-window contract.
     cfg = pg.make_scm_prior(
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
         T=5,
         l_max=5,
-        adstock_burn_in=5,
+        adstock_burn_in=0,
         nonlinearity="linear",
         edge_budget={
             "cy": (1, 1),
@@ -281,6 +282,33 @@ def test_identity_adstock_oracle_observes_and_reproduces_the_full_window():
         rtol=0.0,
         atol=1e-15,
     )
+
+
+@pytest.mark.parametrize(
+    ("adstock_family", "has_gradient"),
+    [(0, True), (1, True), (2, False)],
+    ids=("identity", "geometric", "weibull"),
+)
+def test_oracle_logp_and_gradient_capability_by_adstock_family(
+    adstock_family: int, has_gradient: bool
+):
+    """Only pymc-marketing's Weibull normalization prevents an oracle gradient."""
+    cfg = _small_cfg(n_treatments=1, T=12, adstock_burn_in=0)
+    g = _direct_only_graph(1)
+    structural = sample_structure(g, cfg, np.random.default_rng(12))
+    structural["adstock_family"][:] = adstock_family
+    structural["sat_family"][:] = 0
+    model, output_names, parameter_names = build_world_model(g, cfg, structural, cfg.T)
+    drawn = pg.draw_worlds(model, output_names + parameter_names, seed=19, draws=1)
+    data = {name: drawn[name][0] for name in ("channels", "controls", "sales", "saturation_scale")}
+    oracle = build_oracle_model(g, cfg, structural, data)
+
+    assert np.isfinite(oracle.compile_logp()(oracle.initial_point()))
+    if has_gradient:
+        oracle.compile_dlogp()
+    else:
+        with pytest.raises(NotImplementedError):
+            oracle.compile_dlogp()
 
 
 def test_oracle_rejects_bad_shapes(world_and_oracle):

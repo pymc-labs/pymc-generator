@@ -256,12 +256,54 @@ def test_adstock_burn_in_must_be_an_integer(value):
         SCMPrior(adstock_burn_in=value).validate()
 
 
-def test_burn_in_requires_at_least_one_reproducible_reported_week():
-    with pytest.raises(ValueError, match="unpersisted pre-window spend"):
-        SCMPrior(T=4, l_max=5, adstock_burn_in=5).validate()
+def test_burn_in_rejects_reproduced_query_overlap():
+    with pytest.raises(ValueError, match="query overlap") as error:
+        pg.make_scm_prior(
+            n_treatments=1,
+            n_covariates=1,
+            n_latent=1,
+            T=8,
+            l_max=8,
+            adstock_burn_in=8,
+            query_frac=0.25,
+        )
 
-    SCMPrior(T=5, l_max=5, adstock_burn_in=5).validate()
-    SCMPrior(T=4, l_max=5, adstock_burn_in=0).validate()
+    message = str(error.value)
+    for detail in (
+        "T=8",
+        "l_max=8",
+        "n_query=2",
+        "short-horizon query start T - n_query=6",
+        "long-horizon query start T // 2=4",
+        "not a function of the persisted inputs",
+    ):
+        assert detail in message
+
+
+def test_burn_in_query_window_boundary_is_exact():
+    SCMPrior(T=14, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
+
+    with pytest.raises(ValueError, match="query overlap"):
+        SCMPrior(T=13, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
+
+
+def test_burn_in_rejects_short_horizon_overlap_even_when_long_split_is_certain():
+    with pytest.raises(ValueError, match="query overlap"):
+        SCMPrior(
+            T=20,
+            l_max=8,
+            adstock_burn_in=8,
+            query_frac=0.7,
+            p_long_horizon=1.0,
+        ).validate()
+
+
+def test_burn_in_query_window_guard_is_exempt_when_disabled():
+    SCMPrior(T=4, l_max=8, adstock_burn_in=0).validate()
+
+
+def test_burn_in_query_window_guard_is_exempt_for_a_single_lag_kernel():
+    SCMPrior(T=4, l_max=1, adstock_burn_in=1, query_frac=0.5).validate()
 
 
 @pytest.mark.parametrize("value", (True, "bad", [1.0], np.nan, np.inf, 0.0))

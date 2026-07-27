@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import numpy as np
 import pytensor.tensor as pt
 from pymc_marketing.mmm import transformers as _pmm
 from pytensor.tensor import TensorVariable
@@ -200,11 +201,10 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
     the singleton causal kernel is an identity, while the library's min-max
     rescaling has ``min == max`` and returns NaN. ``lam``/``k`` may be floats
     or symbolic.
-    At extreme scales where ``lam >> l_max`` and ``k`` is large, pymc-marketing's
-    density can underflow to denormals and yield NaN. This wrapper fails safe to
-    a zero kernel there; the NumPy diagnostic may still find a finite kernel, but
-    it runs only after generation, where the persisted zero contribution correctly
-    records no signal.
+    At extreme scales where ``lam >> l_max`` and ``k`` is large, the analytic
+    density can underflow into denormals. An analytic magnitude floor zeroes
+    this library-breakdown regime without inspecting library output; the NumPy
+    diagnostic uses the same floor, so the symbolic and numeric paths agree.
     """
     if int(l_max) == 1:
         return x
@@ -212,8 +212,9 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
     lam_t = pt.as_tensor_variable(lam)
     k_t = pt.as_tensor_variable(k)
     raw_weights = (k_t / lam_t) * pt.pow(lag / lam_t, k_t - 1) * pt.exp(-pt.pow(lag / lam_t, k_t))
+    raw_weight_max = raw_weights.max()
     weight_min = raw_weights.min()
-    weight_span = raw_weights.max() - weight_min
+    weight_span = raw_weight_max - weight_min
     minmax_weights = (raw_weights - weight_min) / weight_span
     weight_total = minmax_weights.sum()
     out = _pmm.weibull_adstock(
@@ -226,17 +227,20 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
         normalize=True,
     )
     values = out.values[:, None]
-    # This guard MUST track signal_diagnostics._adstock_weights: oracle parameters are
-    # symbolic value variables, so no constant folding occurs and overflow can yield -inf.
+    # This guard MUST track signal_diagnostics._adstock_weights. The oracle passes
+    # symbolic value variables; a backend-dependent library-output guard would make
+    # FAST_COMPILE generation and the FAST_RUN oracle disagree whether a channel responds.
+    # 1e-300 is above the float64 denormal cliff (~5e-324), yet below any
+    # normal-magnitude density, so the analytic replica detects only underflow.
     kernel_is_valid = pt.and_(
-        pt.and_(pt.isfinite(weight_span), pt.invert(pt.eq(weight_span, 0))),
-        pt.and_(pt.isfinite(weight_total), pt.invert(pt.eq(weight_total, 0))),
+        pt.and_(
+            pt.and_(pt.isfinite(weight_span), pt.invert(pt.eq(weight_span, 0))),
+            pt.and_(pt.isfinite(weight_total), pt.invert(pt.eq(weight_total, 0))),
+        ),
+        pt.gt(raw_weight_max, np.float64(1e-300)),
     )
-    # The diagnostic intentionally does not mirror a library-output failure: it runs after
-    # generation, so a channel zeroed here persists zero contributions and has no signal.
-    values_are_finite = pt.all(pt.isfinite(values))
     return pt.switch(
-        pt.invert(pt.and_(kernel_is_valid, values_are_finite)),
+        pt.invert(kernel_is_valid),
         pt.zeros_like(values),
         values,
     )

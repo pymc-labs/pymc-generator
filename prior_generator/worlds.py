@@ -180,14 +180,20 @@ class SCM:
         return float(np.abs(self.reconstruction() - self.data["sales"]).max())
 
     def oracle_model(self):
-        """The observed-data (NUTS oracle) ``pm.Model`` for THIS world.
+        """The observed-data posterior ``pm.Model`` for THIS world.
 
         Rebuilds :func:`prior_generator.world_model.build_oracle_model` from
         the world's own structure, config, observables and (when present)
         prior-conditioning intervals, so ``pm.sample(model=world.oracle_model())``
         yields the structure-known posterior on the world's dataset. Requires
         an SCM produced by ``sample_scm`` (which records the structural draw
-        in ``extras``). See the oracle guide for caveats.
+        in ``extras``). A Weibull-adstock channel downgrades
+        ``weibull_lam`` and ``weibull_k`` from NUTS to Metropolis: pymc-marketing's
+        min-max Weibull normalization has an upstream ``Min`` with no pullback.
+        Identity and geometric adstock remain NUTS-differentiable. Treat the
+        Metropolis parameters' ESS with suspicion and prefer geometric-adstock
+        worlds when using this as a reference posterior. See the oracle guide
+        for the other caveats.
         """
         from .world_model import build_oracle_model
 

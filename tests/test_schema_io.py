@@ -119,6 +119,14 @@ def test_validate_corpus_accepts_generated(corpus):
     assert DataGenerator.validate_corpus(corpus) == []
 
 
+def test_query_windows_do_not_overlap_response_warmup(corpus):
+    """Every query suffix begins after the non-reproducible response prefix."""
+    T = corpus["spend_raw"].shape[1]
+    n_query = int(corpus["diagnostics"]["short_horizon_n_query"])
+    warmup = int(corpus["diagnostics"]["signal"]["response_warmup_weeks"])
+    assert min(T - n_query, T // 2) >= warmup
+
+
 def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
     """Persisted spend features stay ratios when the monetary unit changes."""
     draw_worlds = world_model.draw_worlds
@@ -301,6 +309,7 @@ def test_single_node_edge_marginals_are_defined_without_empty_mean_warning(recwa
             n_covariates=1,
             n_latent=1,
             T=8,
+            adstock_burn_in=0,
             n_cells=2,
             draws_per_cell=1,
             seed=91,
