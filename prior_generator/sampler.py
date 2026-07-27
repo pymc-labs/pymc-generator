@@ -1274,8 +1274,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
       (C->Y or outgoing C->C).
     * ``confounding_strength`` (N,) float32 — the effective per-world shared
       baseline/channel innovation strength (all zeros when disabled).
-    * ``saturation_scale`` (N, K) float32 — the generation-time nonlinear
-      response anchor, zero-padded for inactive channels.
+    * ``saturation_scale`` (N, K) float32 — the per-channel nonlinear response
+      anchor, a function of the drawn parameters alone (never of the realized
+      series), zero-padded for inactive channels.
     * ``prior_cond`` (N, P) float32 — present IFF ``cfg.prior_conditioning``:
       the per-cell narrowed prior intervals as packed ``(low, width)`` pairs
       in ``PRIOR_COND_LAYOUT`` order, broadcast to worlds;

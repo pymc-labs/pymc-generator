@@ -163,6 +163,68 @@ def _clamp_channel(c_col: TensorVariable, params: dict, k: int) -> TensorVariabl
     )
 
 
+def _expected_levels(
+    params: dict,
+    g_zc: np.ndarray,
+    g_cc: np.ndarray,
+    g_zz: np.ndarray,
+    K: int,
+    M: int,
+    use_pulse: np.ndarray,
+) -> list[TensorVariable]:
+    """Per-channel saturation anchor, computed from PARAMETERS ALONE.
+
+    The κ-relative response needs an operating point for each channel. Deriving
+    it from the realized adstocked series (its window mean) is what the older
+    graph did, and it has two costs: the anchor is a statistic of the very data
+    it helps generate, so no ``p(theta)`` exists independently of the noise; and
+    because the mean spans the whole window, ``do(C[t'])`` for a LATE ``t'``
+    would move the response at an EARLY ``t``.
+
+    This anchor is the expected pre-activation level instead:
+
+    * the channel's own positive walk contributes ``softplus(rw_c_mean)`` — the
+      walk is already softplus-transformed, and its pre-activation mean is
+      exactly ``rw_c_mean``;
+    * campaign pulses fire with probability ``pulse_prob`` and add
+      ``pulse_amp``, so they contribute ``pulse_amp * pulse_prob``;
+    * weekly jitter is mean-zero and contributes nothing to first order
+      (measured: adding its Jensen term over-corrects);
+    * ``D -> C`` contributes nothing because the latent factor is normalized to
+      mean zero;
+    * ``Z -> C`` and ``C -> C`` contribute their parents' expected levels, both
+      available in topological order.
+
+    Measured against the realized adstocked window mean over 36 channels of the
+    supported "diverse" texture, the ratio realized/anchor has median 1.11 with
+    a 5-95% range of 0.77-1.54 (sparse graph) and median 1.12 / 0.82-1.54
+    (dense graph). The residual spread is the realized walk wandering around
+    its own parameter-implied mean; no parameter-only anchor can remove it, and
+    ``kappa_mult`` spans far more than the offset.
+    """
+    z_levels: list[TensorVariable] = []
+    gamma_zz = _arr(params["gamma_zz"], (M, M))
+    for m in range(M):
+        level = pt.as_tensor_variable(params["rw_z"]["mean"][m])
+        upstream = _dot_terms([lvl[None] for lvl in z_levels[:m]], g_zz[:m, m], gamma_zz[:m, m], 1)
+        z_levels.append(level + upstream.reshape(()))
+
+    rw_c_mean = params["rw_c"]["mean"]
+    pulse_amp = _arr(params.get("pulse_amp", np.zeros(K)), (K,))
+    pulse_prob = _arr(params.get("pulse_prob", np.zeros(K)), (K,))
+    v_zc = _arr(params["v_zc"], (M, K))
+    alpha_cc = _arr(params["alpha_cc"], (K, K))
+    c_levels: list[TensorVariable] = []
+    for k in range(K):
+        own = pt.softplus(rw_c_mean[k])
+        if use_pulse[k]:
+            own = own + pulse_amp[k] * pulse_prob[k]
+        term_z = _dot_terms([lvl[None] for lvl in z_levels], g_zc[:, k], v_zc[:, k], 1)
+        term_c = _dot_terms([lvl[None] for lvl in c_levels[:k]], g_cc[:k, k], alpha_cc[:k, k], 1)
+        c_levels.append(pt.softplus(own + term_z.reshape(()) + term_c.reshape(())))
+    return c_levels
+
+
 def _saturate_col(
     ad_col: TensorVariable, mean_ad: TensorVariable, params: dict, k: int
 ) -> TensorVariable:
@@ -406,6 +468,7 @@ def build_symbolic_graph(
     # These telescope exactly to indirect_effects because Y(zero all three) is
     # baseline + the direct (base-channel) contributions.
     ie_cc_cols, ie_zc_cols, ie_dc_cols = [], [], []
+    channel_levels = _expected_levels(params, g_zc, g_cc, g_zz, K, M, use_pulse)
     for k in range(K):
         # Adstock over the full simulated horizon, then slice to the reported
         # window: with burn_in >= l_max the window's convolution sees real
@@ -413,10 +476,11 @@ def build_symbolic_graph(
         # Held-level shocks clamp the channel BEFORE this convolution and never
         # touch its response state, so the same normalized causal kernel a
         # standard MMM applies reproduces this response exactly.
-        # The κ scale is a mean over the REPORTED window so f_k's operating
-        # point matches what the model observes.
+        # The κ scale is the channel's PARAMETER-ONLY expected level, never a
+        # statistic of the drawn series: that keeps theta independent of the
+        # noise and keeps the response at week t free of spend at t' > t.
         ad_obs = _adstock_col(c_cols[k], params, k)[W]
-        scale_k = pt.maximum(ad_obs.mean(), 1e-8).copy(name=f"sat_scale_{k}")
+        scale_k = pt.maximum(channel_levels[k], 1e-8).copy(name=f"sat_scale_{k}")
         sat_scale_cols.append(scale_k)
 
         # ONE response function per channel, applied to every variant: the

@@ -59,7 +59,7 @@ schedule arrays when shocks are disabled. `S` is the configured
 | --- | --- | --- | --- |
 | `confounding_strength` | `(N,)` | `float32` | drawn per-world rho (`0` when disabled) |
 | `channel_level` | `(N, K)` | `float32` | `softplus(rw_c_mean)` reference level |
-| `saturation_scale` | `(N, K)` | `float32` | generation-time response anchor (zero-padded for inactive channels) |
+| `saturation_scale` | `(N, K)` | `float32` | response anchor: expected channel level from parameters alone (zero-padded for inactive channels) |
 | `adstock_family` | `(N, K)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
 | `adstock_alpha` | `(N, K)` | `float32` | geometric decay parameter |
 | `weibull_lam` | `(N, K)` | `float32` | Weibull scale parameter |

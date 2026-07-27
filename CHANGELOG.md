@@ -115,6 +115,33 @@ While the project is on 0.x, minor versions may contain breaking changes.
   instead of being multiplied by a second, family-specific factor. Graph,
   spend, controls, demand, active masks and shock schedules are byte-identical;
   the response-path arrays and the frozen corpus hashes move.
+- **The latent factor is pinned to mean 0 / scale 1** (breaking): `rw_d_mean`
+  and `rw_d_std` are no longer drawn. A latent factor carries no scale of its
+  own — `(sigma_d, w_dc, u_dz, delta_db) -> (lam*sigma_d, w/lam, u/lam,
+  delta/lam)` left every observable identical, and `delta_db * mu_d` was
+  absorbed by `rw_b_mean`, so none of the loadings were recoverable. The whole
+  `D -> *` magnitude now lives in the loadings, which is what the data
+  identifies. Latent influence is consequently less dispersed across worlds
+  (the `HalfNormal` factor is gone); widen `db_coeff_range` / `dc_coeff_range`
+  / `dz_coeff_range` to restore spread — those knobs are now meaningful rather
+  than confounded.
+- **The saturation anchor is a function of parameters alone** (breaking):
+  `saturation_scale` was the mean of the realized adstocked series over the
+  reported window. Two costs: the "prior" was a statistic of the noise it
+  generates, so no `p(theta)` existed independently of `U`; and because the
+  mean spans the whole window, `do(C[t'])` for a late `t'` moved the response
+  at an early `t` — the model was anti-causal in time. The anchor is now the
+  expected channel level built from `softplus(rw_c_mean)`, `pulse_amp *
+  pulse_prob`, and the expected levels of `Z -> C` / `C -> C` parents in
+  topological order (`D -> C` drops out because the factor is now mean-zero).
+  Measured over 36 channels of the supported texture, realized/anchor has
+  median 1.11 with a 5-95% range of 0.77-1.54; the operating point is now at
+  the knee in expectation rather than pinned per world, which widens the
+  spread of channel curvature across the corpus.
+- **`indirect_effects_by_source` is documented as a convention**, not an
+  estimand: the total `indirect_effects` is order-free, its 3-way split is
+  defined by a fixed sequential zeroing order and a different order gives
+  different numbers.
 
 ## [0.0.1] - 2026-07-14
 

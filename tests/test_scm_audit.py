@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from pytensor.graph.traversal import ancestors
 
 from prior_generator import make_scm_prior, sample_scm
 from prior_generator.describe import describe_scm
@@ -163,7 +165,9 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
     drawn = draw_worlds(model, param_names, seed=7)
     assert drawn["param_w_dc"].shape == (1, 1, 2)
     assert drawn["param_u_dz"].shape == (1, 1, 2)
-    assert drawn["param_rw_d_mean"].shape == (1, 1)
+    # The latent factor is pinned to mean 0 / scale 1 -- still reported, never drawn.
+    assert drawn["param_rw_d_mean"] == pytest.approx(0.0)
+    assert drawn["param_rw_d_std"] == pytest.approx(1.0)
     assert drawn["param_rw_z_std"].shape == (1, 2)
     assert drawn["param_rw_c_mean"].shape == (1, 2)
     assert drawn["param_rw_b_std"].shape == (1, 1)
@@ -335,3 +339,60 @@ def test_description_surfaces_equations_and_audit_locations():
     assert "Exact replay audit:" in description
     assert "world.equation_parameters" in description
     assert "world.exogenous" in description
+
+
+def _edgeless_graph(n_treatments: int = 2, n_covariates: int = 2) -> dict:
+    return {
+        "g_cy": np.ones(n_treatments, dtype=int),
+        "g_dc": np.zeros((1, n_treatments), dtype=int),
+        "g_dz": np.zeros((1, n_covariates), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(n_covariates, dtype=int),
+        "g_zc": np.zeros((n_covariates, n_treatments), dtype=int),
+        "g_cc": np.zeros((n_treatments, n_treatments), dtype=int),
+        "g_zz": np.zeros((n_covariates, n_covariates), dtype=int),
+    }
+
+
+def test_saturation_anchor_has_no_noise_ancestors():
+    """The response anchor must be a function of PARAMETERS, never of the draw.
+
+    Deriving it from the realized series (its window mean) would make the
+    "prior" a function of the noise it generates, and -- because the mean spans
+    the whole window -- would let spend at a late week move the response at an
+    early one. A graph-ancestry check catches any reintroduction of either.
+    """
+    cfg = _config()
+    g = _edgeless_graph()
+    structural = sample_structure(g, cfg, np.random.default_rng(5))
+    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+    anchor_ancestors = set(ancestors([model["saturation_scale"]]))
+    for noise in _RAW_EPS_NAMES:
+        assert model[noise] not in anchor_ancestors, noise
+    # ... while the contributions themselves obviously still depend on the draw.
+    assert model["eps_c"] in set(ancestors([model["contributions"]]))
+
+
+def test_saturation_anchor_equals_the_closed_form_expected_level():
+    """Texture-free, upstream-free: the anchor is softplus(softplus(rw_c_mean)).
+
+    The channel walk is already softplus-transformed and the channel equation
+    applies a second softplus, so the expected level nests both.
+    """
+    cfg = _config(channel_hf_sigma_range=(0.0, 0.0), channel_pulse_prob_range=(0.0, 0.0))
+    world = sample_scm(cfg, seed=11)
+    walk_mean = np.asarray(world.params["rw_c"]["mean"], dtype=float)
+    expected = np.logaddexp(0.0, np.logaddexp(0.0, walk_mean))
+    np.testing.assert_allclose(
+        np.asarray(world.data["saturation_scale"], dtype=float), expected, rtol=1e-12
+    )
+
+
+def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
+    """D carries no scale of its own; the loadings do. Checked on the drawn path."""
+    world = sample_scm(_config(adstock_burn_in=0), seed=11)
+    demand = np.asarray(world.data["demand"], dtype=float)
+    # burn_in=0 means the reported window IS the simulated horizon, so the
+    # walk's exact normalization is directly observable.
+    np.testing.assert_allclose(demand.mean(axis=0), 0.0, atol=1e-12)
+    np.testing.assert_allclose(demand.std(axis=0), 1.0, rtol=1e-6)

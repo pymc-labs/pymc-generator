@@ -326,13 +326,21 @@ def _walk_priors(
     """
     out: dict[str, dict] = {}
     if "d" in include:
+        # A latent factor carries no scale or level of its own: both belong to
+        # its loadings. Leaving rw_d_mean / rw_d_std free made
+        # (sigma_d, w_dc, u_dz, delta_db) -> (lam*sigma_d, w/lam, u/lam, delta/lam)
+        # an exact symmetry of every observable, and delta_db*mu_d was
+        # absorbed by rw_b_mean, so neither factor was recoverable. Pinning the
+        # factor to mean 0 / scale 1 puts the whole D->* magnitude in the
+        # loadings, which is what the data identifies.
         out["rw_d"] = _rw_prior_group(
             "rw_d",
             n_latent,
             False,
-            cfg.rw_mean_range,
+            (0.0, 0.0),
             cfg.rw_std_sigma,
             structural["smoothness_d"],
+            std_range=(1.0, 1.0),
         )
     if "z" in include:
         out["rw_z"] = _rw_prior_group(

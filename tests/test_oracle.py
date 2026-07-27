@@ -32,8 +32,6 @@ SHARED_RV_NAMES = (
     "mm_kappa_mult",
     "tanh_c",
     "root_alpha",
-    "rw_d_mean",
-    "rw_d_std",
     "rw_b_mean",
     "rw_b_std",
     "rw_y_std",
@@ -262,8 +260,11 @@ def test_shocked_oracle_uses_known_schedule_without_schedule_rvs():
     # A held window clamps spend and nothing else, so pre-window carryover
     # decays into the intervention window instead of being discarded.
     mask = drawn["channel_shock_mask"][:, 0].astype(bool)
+    start = int(np.flatnonzero(mask)[0])
     contribution = pm.draw(oracle["contributions"], draws=1, random_seed=17)
-    assert (contribution[mask, 0] > 0.0).all()
+    assert (contribution[mask, 0] >= 0.0).all()
+    if start > 0 and data["channels"][start - 1, 0] > 0.0:
+        assert contribution[start, 0] > 0.0
 
 
 def test_shocked_oracle_response_matches_plain_adstock_of_the_clamped_series():

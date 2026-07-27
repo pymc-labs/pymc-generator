@@ -20,8 +20,23 @@ $$
   $\sum_k g^{cy}_k\,\beta_k\,\big(f_k(C_k) - f_k(C^{\text{base}}_k)\big)$.
 
 The identity is exact because `Y` and the decomposition are built from the *same*
-symbolic quantities — $f_k$ is one fixed function evaluated on two inputs, and the
-κ-relative saturation scale is computed once and reused.
+symbolic quantities — $f_k$ is one fixed function evaluated on two inputs, and its
+κ-relative saturation anchor is a function of the drawn *parameters* alone. That
+anchor choice matters causally: deriving it from the realized series (its window
+mean) would make the response at week $t$ depend on spend at every $t' > t$, so
+$do(C_{k,t'})$ for a late $t'$ would move an early $Y_t$. It is fixed once per
+world and reused by every intervention variant.
+
+!!! warning "The 3-way `indirect_effects_by_source` split is a convention"
+
+    `indirect_effects` above is a genuine causal quantity: it is order-free.
+    Its split into `(cc, zc, dc)` is not. Because $f_k$ and the channel
+    equation's softplus are both nonlinear, one-at-a-time interventions do not
+    sum to the total, so the split is *defined* by a fixed sequential zeroing
+    order. A different order, or a Shapley average over orders, gives different
+    numbers with equal claim to being "the" indirect effect. Treat the split as
+    a labelling choice, not an estimand — in particular, do not train against it
+    as though it were identified.
 
 ## Held-spend shocks do not break the identity
 

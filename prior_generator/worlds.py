@@ -619,7 +619,7 @@ def _build_equations(world: SCM) -> dict[str, str]:
         sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
         equations[f"f{k + 1}"] = (
             f"ad_C{k + 1} = adstock[{ad_name}](C{k + 1}_full); "
-            f"saturation_scale[{k}] = max(mean(ad_C{k + 1}[burn_in:]), 1e-8); "
+            f"saturation_scale[{k}] = max(E[C{k + 1}] from parameters, 1e-8); "
             f"f{k + 1}(X_full) = {sat_name}(adstock[{ad_name}](X_full)"
             f"[burn_in:], saturation_scale[{k}]); "
             f"gate[{k}] = g_cy[{k}] * beta[{k}]"
