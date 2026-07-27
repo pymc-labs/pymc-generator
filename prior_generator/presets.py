@@ -20,13 +20,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from .sampler import SCMPrior
+from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
 
-# Media-response family mixes for the ``nonlinearity`` axis.
-# Adstock:    (none, geometric, weibull)
-# Saturation: (none/linear, hill, logistic, michaelis_menten, tanh, root)
-_LINEAR_ADSTOCK: tuple[float, ...] = (1.0, 0.0, 0.0)
-_LINEAR_SATURATION: tuple[float, ...] = (1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+def _linear_family_probs(family_keys: tuple[str, ...]) -> dict[str, float]:
+    """Return a fresh categorical distribution that selects family id zero."""
+    return {family: 1.0 if index == 0 else 0.0 for index, family in enumerate(family_keys)}
 
 
 #: Channel-texture prior for ``texture="diverse"``: iid weekly execution noise,
@@ -144,8 +143,8 @@ def make_scm_prior(
         "edge_budget": edge_budget,
     }
     if nonlinearity == "linear":
-        kwargs["adstock_family_probs"] = _LINEAR_ADSTOCK
-        kwargs["saturation_family_probs"] = _LINEAR_SATURATION
+        kwargs["adstock_family_probs"] = _linear_family_probs(ADSTOCK_FAMILY_KEYS)
+        kwargs["saturation_family_probs"] = _linear_family_probs(SATURATION_FAMILY_KEYS)
     kwargs.update(_DIVERSE_TEXTURE)
     # burn-in follows the (possibly overridden) adstock length
     kwargs["adstock_burn_in"] = int(overrides.get("l_max", SCMPrior.l_max))

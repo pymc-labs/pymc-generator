@@ -1,12 +1,9 @@
 """Plain-text world descriptions — "get a description of the world".
 
 :func:`describe_scm` renders everything a human needs to audit one world:
-the DAG edges with their drawn coefficients, node connectivity, per-channel
-mechanism and texture parameters, the prior ranges the draw came from, the
+the vector-valued structural equations, DAG edges with drawn coefficients,
+node connectivity, realized mechanism and texture parameters, prior ranges,
 exact decomposition-identity check, and per-channel signal metrics.
-
-The format is byte-compatible with structural-pfn's inspection
-``description.txt`` files.
 """
 
 from __future__ import annotations
@@ -26,6 +23,27 @@ from .worlds import (
 )
 
 
+def _saturation_description(params: dict, k: int, family: str) -> str:
+    """Render only the shape parameters used by a saturation family."""
+    if family == "hill":
+        return (
+            f"hill(slope={params['hill_slope'][k]:.2f},"
+            f"kappa_mult={params['hill_kappa_mult'][k]:.2f})"
+        )
+    if family == "logistic":
+        return f"logistic(lam={params['logistic_lam'][k]:.2f})"
+    if family == "michaelis_menten":
+        return (
+            f"michaelis_menten(alpha={params['mm_alpha'][k]:.2f},"
+            f"kappa_mult={params['mm_kappa_mult'][k]:.2f})"
+        )
+    if family == "tanh":
+        return f"tanh(b={params['tanh_b'][k]:.2f},c={params['tanh_c'][k]:.2f})"
+    if family == "root":
+        return f"root(alpha={params['root_alpha'][k]:.2f})"
+    return family
+
+
 def _channel_lines(g: dict, params: dict) -> list[str]:
     K = len(g["g_cy"])
     lines = []
@@ -42,7 +60,7 @@ def _channel_lines(g: dict, params: dict) -> list[str]:
                 if ad == "weibull"
                 else ""
             ),
-            f"saturation={sat}",
+            f"saturation={_saturation_description(params, k, sat)}",
             f"walk(mean={params['rw_c']['mean'][k]:.2f},std={params['rw_c']['std'][k]:.2f},"
             f"smooth={params['rw_c']['smoothness'][k]:.2f})",
             f"hf_sigma={params['hf_sigma'][k]:.2f}",
@@ -57,8 +75,8 @@ def describe_scm(world: SCM) -> str:
 
     Sections: title + purpose, sizes, edge budget, edge census, active edges
     with drawn coefficients, node connectivity, per-channel mechanism +
-    texture, the texture prior ranges, the decomposition-identity error, and
-    per-direct-channel signal metrics.
+    texture, prior ranges, vector-valued structural equations, exact replay
+    inputs, decomposition-identity error, and per-direct-channel signal metrics.
     """
     g, params, cfg = world.g, world.params, world.cfg
     edges = edges_with_coeffs(g, params)
@@ -113,6 +131,17 @@ def describe_scm(world: SCM) -> str:
     f.write(f"  beta_additive_range={cfg.beta_additive_range}\n")
     f.write("  saturation prior ranges: ")
     f.write(json.dumps(SATURATION_PRIOR_RANGES) + "\n\n")
+    f.write("Structural equations (vector-valued; active parents only):\n")
+    for symbol, equation in world.equations.items():
+        f.write(f"  {symbol}: {equation}\n")
+    f.write("\nExact replay audit:\n")
+    f.write(
+        "  world.params is build_symbolic_graph-ready, including any full-horizon shock schedule.\n"
+    )
+    f.write(
+        "  world.equation_parameters is the sparse executed-parameter audit; "
+        "world.exogenous holds defensive copies of raw full-horizon innovations.\n\n"
+    )
     f.write("Decomposition identity (baseline_intrinsic + confounder + control\n")
     f.write("  + direct contributions + indirect_by_source == sales):\n")
     f.write(f"  max |error| = {ident_err:.2e}\n\n")

@@ -10,6 +10,14 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **Auditable single-world structural equations**: `SCM.equations` renders the
+  executed vector-valued Pearl SCM for every `D`, `Z`, `C`, `B`, and `Y` node;
+  `SCM.equation_parameters` exposes the realized active coefficients and
+  family-specific response parameters; and `SCM.exogenous` returns defensive
+  copies of the accepted full-horizon innovations. `SCM.params` now contains
+  every continuous mechanism and random-walk parameter plus realized shock
+  state, making exact graph replay possible without changing the corpus schema.
+
 - **Baseline, confounding, and intervention metadata**: `rw_baseline_std_sigma`
   now defaults to `None`, dynamically following `rw_std_sigma` for the `RW_B`
   baseline walk only; it can be set explicitly without changing other walks.
@@ -57,6 +65,13 @@ While the project is on 0.x, minor versions may contain breaking changes.
   at build time (markdown-exec), and a runnable examples notebook executed by
   mkdocs-jupyter. Added a `docs` extra, a GitHub Pages workflow
   (`.github/workflows/docs.yml`), and build instructions in `CONTRIBUTING.md`.
+
+### Changed
+
+- **Named mechanism-family probabilities**: `adstock_family_probs` and
+  `saturation_family_probs` are now dictionaries keyed by canonical family
+  names instead of positional tuples. Exact key validation prevents silent
+  family-order mistakes; legacy tuple inputs are intentionally rejected.
 
 ## [0.0.1] - 2026-07-14
 

@@ -17,18 +17,25 @@ structure draws and the per-round pm.draw seeds.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
-from .sampler import SCMPrior, _additive_task_ok, _slice_g_active, sample_g_additive
+from .sampler import (
+    ADSTOCK_FAMILY_KEYS,
+    SATURATION_FAMILY_KEYS,
+    SCMPrior,
+    _additive_task_ok,
+    _slice_g_active,
+    sample_g_additive,
+)
 from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION, per_channel_signal
 
 #: Adstock family names, indexed by ``params["adstock_family"]``.
-ADSTOCK_NAMES = ("none", "geometric", "weibull")
+ADSTOCK_NAMES = ADSTOCK_FAMILY_KEYS
 
 #: Saturation family names, indexed by ``params["sat_family"]``.
-SATURATION_NAMES = ("linear", "hill", "logistic", "michaelis_menten", "tanh", "root")
+SATURATION_NAMES = SATURATION_FAMILY_KEYS
 
 #: Graph outputs kept for every world, including decomposition and optional
 #: shock audit paths. Order must match ``build_symbolic_graph``'s outputs.
@@ -58,6 +65,54 @@ SCM_OUT_NAMES = (
     "channel_shock_level_multiplier",
     "channel_shock_level",
 )
+
+
+_EXOGENOUS_NAMES = (
+    "eps_d",
+    "eps_z",
+    "eps_c",
+    "eps_b",
+    "eps_y",
+    "eps_c_hf",
+    "eps_c_pulse",
+)
+
+_LEGACY_WORLD_PARAM_NAMES = tuple(
+    f"param_{name}"
+    for name in (
+        "beta",
+        "w_dc",
+        "u_dz",
+        "v_zc",
+        "alpha_cc",
+        "gamma_zz",
+        "delta_db",
+        "rho_zb",
+        "adstock_alpha",
+        "weibull_lam",
+        "weibull_k",
+        "hf_sigma",
+        "pulse_amp",
+        "pulse_prob",
+        "rw_c_mean",
+        "channel_level",
+        "rw_c_std",
+        "confounding_strength",
+    )
+)
+
+
+def _copy_audit_value(value: Any) -> Any:
+    """Recursively copy audit data without exposing a private array backing."""
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, dict):
+        return {key: _copy_audit_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_audit_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_audit_value(item) for item in value)
+    return value
 
 
 @dataclass
@@ -97,6 +152,7 @@ class SCM:
     purpose: str = ""
     seed: int | None = None
     extras: dict = field(default_factory=dict)
+    _exogenous: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
 
     @property
     def T(self) -> int:
@@ -113,6 +169,29 @@ class SCM:
     @property
     def J(self) -> int:
         return int(self.data["demand"].shape[1])
+
+    @property
+    def exogenous(self) -> dict[str, np.ndarray]:
+        """Raw full-horizon innovation draws, returned as defensive copies.
+
+        ``eps_c`` is the independent, pre-mixture channel innovation. The
+        graph uses ``sqrt(1-rho**2) * eps_c + rho * eps_b[:, None]`` when
+        confounding is enabled. ``eps_c_pulse`` is a 0/1 Bernoulli fire.
+        """
+        return cast(dict[str, np.ndarray], _copy_audit_value(self._exogenous))
+
+    @property
+    def equations(self) -> dict[str, str]:
+        """Readable vector-valued structural assignments for this exact world."""
+        return cast(dict[str, str], _copy_audit_value(_build_equations(self)))
+
+    @property
+    def equation_parameters(self) -> dict[str, Any]:
+        """Executed equation inputs, returned as recursively defensive copies."""
+        return cast(
+            dict[str, Any],
+            _copy_audit_value(_build_equation_parameters(self)),
+        )
 
     def reconstruction(self) -> np.ndarray:
         """Σ of all true components — equals ``sales`` up to float error."""
@@ -320,6 +399,260 @@ def mechanism_label(params: dict, k: int) -> str:
     return f"{sat}·{ad}"
 
 
+def _rw_parameters(params: dict, group: str, index: int) -> dict[str, float | bool]:
+    """Concrete inputs for one executed random-walk column."""
+    values = params[group]
+    return {
+        "mean": float(np.asarray(values["mean"])[index]),
+        "std": float(np.asarray(values["std"])[index]),
+        "smoothness": float(np.asarray(values["smoothness"])[index]),
+        "positive_only": bool(values["positive_only"]),
+    }
+
+
+def _channel_response_parameters(world: SCM, k: int) -> dict[str, Any]:
+    """The family-specific response inputs actually consumed for channel ``k``."""
+    params = world.params
+    ad_name = ADSTOCK_NAMES[int(params["adstock_family"][k])]
+    sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
+    adstock: dict[str, Any] = {"family": ad_name, "l_max": int(params["l_max"])}
+    if ad_name == "geometric":
+        adstock["alpha"] = float(np.asarray(params["adstock_alpha"])[k])
+    elif ad_name == "weibull":
+        adstock["lam"] = float(np.asarray(params["weibull_lam"])[k])
+        adstock["k"] = float(np.asarray(params["weibull_k"])[k])
+
+    saturation: dict[str, Any] = {
+        "family": sat_name,
+        "scale": float(np.asarray(world.data["saturation_scale"])[k]),
+    }
+    if sat_name == "hill":
+        saturation["slope"] = float(np.asarray(params["hill_slope"])[k])
+        saturation["kappa_mult"] = float(np.asarray(params["hill_kappa_mult"])[k])
+    elif sat_name == "logistic":
+        saturation["lam"] = float(np.asarray(params["logistic_lam"])[k])
+    elif sat_name == "michaelis_menten":
+        saturation["alpha"] = float(np.asarray(params["mm_alpha"])[k])
+        saturation["kappa_mult"] = float(np.asarray(params["mm_kappa_mult"])[k])
+    elif sat_name == "tanh":
+        saturation["b"] = float(np.asarray(params["tanh_b"])[k])
+        saturation["c"] = float(np.asarray(params["tanh_c"])[k])
+    elif sat_name == "root":
+        saturation["alpha"] = float(np.asarray(params["root_alpha"])[k])
+
+    g_cy = int(np.asarray(world.g["g_cy"])[k])
+    gate: dict[str, float | int] = {"g_cy": g_cy, "value": 0.0}
+    if g_cy:
+        beta = float(np.asarray(params["beta"])[k])
+        gate.update({"beta": beta, "value": beta})
+    return {
+        "adstock": adstock,
+        "saturation": saturation,
+        "gate": gate,
+    }
+
+
+def _build_equation_parameters(world: SCM) -> dict[str, Any]:
+    """Build the concrete, sparse parameter audit for the executed SCM."""
+    g, params = world.g, world.params
+    K, M, J = world.K, world.M, world.J
+    values: dict[str, Any] = {
+        "innovations": {
+            "rho": float(np.asarray(params["confounding_strength"])),
+            "eps_c": "raw independent pre-mixture innovation",
+            "eps_c_pulse": "0/1 Bernoulli fire",
+        }
+    }
+    for j in range(J):
+        values[f"D{j + 1}"] = {"random_walk": _rw_parameters(params, "rw_d", j)}
+    for m in range(M):
+        parents: dict[str, float] = {}
+        for j in range(J):
+            if g["g_dz"][j, m]:
+                parents[f"D{j + 1}"] = float(np.asarray(params["u_dz"])[j, m])
+        for m_parent in range(m):
+            if g["g_zz"][m_parent, m]:
+                parents[f"Z{m_parent + 1}"] = float(np.asarray(params["gamma_zz"])[m_parent, m])
+        values[f"Z{m + 1}"] = {"random_walk": _rw_parameters(params, "rw_z", m)}
+        if parents:
+            values[f"Z{m + 1}"]["parents"] = parents
+    for k in range(K):
+        parents = {}
+        for j in range(J):
+            if g["g_dc"][j, k]:
+                parents[f"D{j + 1}"] = float(np.asarray(params["w_dc"])[j, k])
+        for m in range(M):
+            if g["g_zc"][m, k]:
+                parents[f"Z{m + 1}"] = float(np.asarray(params["v_zc"])[m, k])
+        for k_parent in range(k):
+            if g["g_cc"][k_parent, k]:
+                parents[f"C{k_parent + 1}"] = float(np.asarray(params["alpha_cc"])[k_parent, k])
+        values[f"C{k + 1}"] = {
+            "random_walk": _rw_parameters(params, "rw_c", k),
+            "texture": {
+                "use_hf": bool(np.asarray(params["use_hf"])[k]),
+                "hf_sigma": float(np.asarray(params["hf_sigma"])[k]),
+                "use_pulse": bool(np.asarray(params["use_pulse"])[k]),
+                "pulse_amp": float(np.asarray(params["pulse_amp"])[k]),
+                "pulse_prob": float(np.asarray(params["pulse_prob"])[k]),
+            },
+            "response": _channel_response_parameters(world, k),
+        }
+        if parents:
+            values[f"C{k + 1}"]["parents"] = parents
+    b_parents: dict[str, float] = {}
+    for j in range(J):
+        if g["g_db"][j]:
+            b_parents[f"D{j + 1}"] = float(np.asarray(params["delta_db"])[j])
+    for m in range(M):
+        if g["g_zb"][m]:
+            b_parents[f"Z{m + 1}"] = float(np.asarray(params["rho_zb"])[m])
+    values["B"] = {"random_walk": _rw_parameters(params, "rw_b", 0)}
+    if b_parents:
+        values["B"]["parents"] = b_parents
+    values["Y"] = {"random_walk": _rw_parameters(params, "rw_y", 0)}
+    if "channel_shock" in params:
+        schedule = params["channel_shock"]
+        values["channel_shocks"] = {
+            "n_shocks": int(schedule["n_shocks"]),
+            "channel": schedule["channel"],
+            "start_full": schedule["start_full"],
+            "mask_full": schedule["mask_full"],
+            "level_full": schedule["level_full"],
+        }
+    return values
+
+
+def _join_terms(base: str, terms: list[str]) -> str:
+    return " + ".join([base, *terms]) if terms else base
+
+
+def _build_equations(world: SCM) -> dict[str, str]:
+    """Readable vector assignments mirroring ``build_symbolic_graph`` exactly."""
+    g, params = world.g, world.params
+    K, M, J = world.K, world.M, world.J
+    burn_in = world.cfg.adstock_burn_in
+    shocks_enabled = "channel_shock" in params
+    equations: dict[str, str] = {
+        "innovations": (
+            "eps_c_eff = sqrt(1 - rho**2) * eps_c + rho * eps_b[:, None]; "
+            "eps_c is the raw independent pre-mixture channel innovation and "
+            "eps_c_pulse is a 0/1 Bernoulli fire. rho=0 gives mutually independent "
+            "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent."
+        ),
+        "RW": (
+            "T_full = T + burn_in. For each innovation column, q = edge_padded_MA("
+            "cumsum(eps), width=max(1, round(smoothness * T_full / 4))); "
+            "RW_full = mean + std * (q - mean(q)) / (std(q) + 1e-8); apply "
+            "softplus(RW_full) only when positive_only=True; RW = RW_full[burn_in:]."
+        ),
+    }
+    if shocks_enabled:
+        equations["channel_shocks"] = (
+            "The exact full-horizon channel_shock mask and held levels clamp each "
+            "channel before adstock. Reset-aware adstock uses zero-prefixed suffixes "
+            "at each start; later resets override earlier ones. C_base, C_no_cc, "
+            "and C_no_cc_zc share the same clamp."
+        )
+
+    for j in range(J):
+        equations[f"D{j + 1}"] = (
+            f"D{j + 1}_full = RW_full(eps_d[:, {j}], rw_d[{j}]); D{j + 1} = D{j + 1}_full[burn_in:]"
+        )
+    for m in range(M):
+        terms: list[str] = []
+        for j in range(J):
+            if g["g_dz"][j, m]:
+                terms.append(f"u_dz[{j}, {m}] * D{j + 1}_full")
+        for m_parent in range(m):
+            if g["g_zz"][m_parent, m]:
+                terms.append(f"gamma_zz[{m_parent}, {m}] * Z{m_parent + 1}_full")
+        equations[f"Z{m + 1}"] = (
+            f"Z{m + 1}_full = {_join_terms(f'RW_full(eps_z[:, {m}], rw_z[{m}])', terms)}; "
+            f"Z{m + 1} = Z{m + 1}_full[burn_in:]"
+        )
+
+    def clamp(expression: str, k: int) -> str:
+        return f"clamp_shock_{k + 1}({expression})" if shocks_enabled else expression
+
+    for k in range(K):
+        d_terms = [f"w_dc[{j}, {k}] * D{j + 1}_full" for j in range(J) if g["g_dc"][j, k]]
+        z_terms = [f"v_zc[{m}, {k}] * Z{m + 1}_full" for m in range(M) if g["g_zc"][m, k]]
+        c_terms = [
+            f"alpha_cc[{k_parent}, {k}] * C{k_parent + 1}_full"
+            for k_parent in range(k)
+            if g["g_cc"][k_parent, k]
+        ]
+        natural_c_terms = [
+            f"alpha_cc[{k_parent}, {k}] * C{k_parent + 1}_unshocked_full"
+            for k_parent in range(k)
+            if g["g_cc"][k_parent, k]
+        ]
+        own = f"RW_full(eps_c_eff[:, {k}], rw_c[{k}])"
+        hf_on = bool(np.asarray(params["use_hf"])[k])
+        pulse_on = bool(np.asarray(params["use_pulse"])[k])
+        if hf_on:
+            own += f" + hf_sigma[{k}] * eps_c_hf[:, {k}]"
+        if pulse_on:
+            own += f" + pulse_amp[{k}] * eps_c_pulse[:, {k}]"
+        observed_inner = _join_terms(f"own_C{k + 1}_full", [*d_terms, *z_terms, *c_terms])
+        natural_inner = _join_terms(f"own_C{k + 1}_full", [*d_terms, *z_terms, *natural_c_terms])
+        equations[f"C{k + 1}"] = (
+            f"use_hf[{k}]={hf_on}; use_pulse[{k}]={pulse_on}; "
+            f"own_C{k + 1}_full = {own}; "
+            f"C{k + 1}_unshocked_full = softplus({natural_inner}); "
+            f"C{k + 1}_full = {clamp(f'softplus({observed_inner})', k)}; "
+            f"C{k + 1} = C{k + 1}_full[burn_in:]"
+        )
+        equations[f"C_base{k + 1}"] = (
+            f"C_base{k + 1}_full = {clamp(f'softplus(own_C{k + 1}_full)', k)}; "
+            f"C_base{k + 1} = C_base{k + 1}_full[burn_in:]"
+        )
+        no_cc_inner = _join_terms(f"own_C{k + 1}_full", [*d_terms, *z_terms])
+        equations[f"C_no_cc{k + 1}"] = (
+            f"C_no_cc{k + 1}_full = {clamp(f'softplus({no_cc_inner})', k)}; "
+            f"C_no_cc{k + 1} = C_no_cc{k + 1}_full[burn_in:]"
+        )
+        no_cc_zc_inner = _join_terms(f"own_C{k + 1}_full", d_terms)
+        equations[f"C_no_cc_zc{k + 1}"] = (
+            f"C_no_cc_zc{k + 1}_full = {clamp(f'softplus({no_cc_zc_inner})', k)}; "
+            f"C_no_cc_zc{k + 1} = C_no_cc_zc{k + 1}_full[burn_in:]"
+        )
+        ad_name = ADSTOCK_NAMES[int(params["adstock_family"][k])]
+        sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
+        equations[f"f{k + 1}"] = (
+            f"ad_C{k + 1} = adstock_with_resets[{ad_name}](C{k + 1}_full); "
+            f"saturation_scale[{k}] = max(mean(ad_C{k + 1}[burn_in:]), 1e-8); "
+            f"f{k + 1}(X_full) = {sat_name}(adstock_with_resets[{ad_name}](X_full)"
+            f"[burn_in:], saturation_scale[{k}]); "
+            f"gate[{k}] = g_cy[{k}] * beta[{k}]"
+        )
+
+    b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(J) if g["g_db"][j]] + [
+        f"rho_zb[{m}] * Z{m + 1}_full" for m in range(M) if g["g_zb"][m]
+    ]
+    equations["B"] = (
+        f"B_full = {_join_terms('RW_full(eps_b, rw_b[0])', b_terms)}; B = B_full[burn_in:]"
+    )
+    equations["contributions"] = (
+        "contributions[:, k] = gate[k] * f{k}(C_base{k}_full); "
+        "contributions_observed[:, k] = gate[k] * f{k}(C{k}_full), for k=1..K."
+    )
+    equations["indirect_effects"] = (
+        "IE_cc = sum_k gate[k] * (f{k}(C{k}_full) - f{k}(C_no_cc{k}_full)); "
+        "IE_zc = sum_k gate[k] * (f{k}(C_no_cc{k}_full) - f{k}(C_no_cc_zc{k}_full)); "
+        "IE_dc = sum_k gate[k] * (f{k}(C_no_cc_zc{k}_full) - f{k}(C_base{k}_full)); "
+        "indirect_effects_by_source = [IE_cc, IE_zc, IE_dc]; "
+        "indirect_effects = sum_k(contributions_observed[:, k] - contributions[:, k])."
+    )
+    equations["Y"] = (
+        "baseline = (B_full + RW_full(eps_y, rw_y[0]))[burn_in:]; "
+        "baseline_intrinsic = (RW_full(eps_b, rw_b[0]) + RW_full(eps_y, rw_y[0]))"
+        "[burn_in:]; Y (sales) = baseline + sum_k contributions_observed[:, k]."
+    )
+    return equations
+
+
 def sample_scm(
     cfg: SCMPrior,
     seed: int = 0,
@@ -397,7 +730,16 @@ def sample_scm(
 
     for _round in range(max_param_rounds):
         draw_seed = int(rng.integers(2**31 - 1))
-        drawn = draw_worlds(model, out_names + param_names, draw_seed, draws=max_eps_draws)
+        # Keep the raw accepted-candidate innovations in this same draw as the
+        # outputs and parameters. In a confounded world model["eps_c"] remains
+        # the independent pre-mixture Normal RV; the graph receives eps_c_eff.
+        drawn = draw_worlds(
+            model,
+            out_names + param_names + _EXOGENOUS_NAMES,
+            draw_seed,
+            draws=max_eps_draws,
+            rng_reference_names=out_names + _LEGACY_WORLD_PARAM_NAMES,
+        )
         for b in range(max_eps_draws):
             d = {nm: drawn[nm][b] for nm in out_names}
             check = {
@@ -415,44 +757,73 @@ def sample_scm(
                 return SCM(
                     data=d,
                     g=g_act,
-                    params=_assemble_params(drawn, b, structural),
+                    params=_assemble_params(drawn, b, structural, param_names, cfg),
                     cfg=cfg,
                     name=name,
                     purpose=purpose,
                     seed=seed,
                     extras=extras,
+                    _exogenous={
+                        exogenous_name: np.array(drawn[exogenous_name][b], copy=True)
+                        for exogenous_name in _EXOGENOUS_NAMES
+                    },
                 )
     raise RuntimeError(f"world {name!r}: no accepted draw in {max_param_rounds} rounds")
 
 
-def _assemble_params(drawn: dict, b: int, structural: dict) -> dict:
-    """Assemble the per-world reported params (candidate ``b``) into the shape
-    descriptions / bundles expect: drawn ``param_*`` values plus the concrete
-    structural families and per-channel walk smoothness."""
-    keys = (
-        "beta",
-        "w_dc",
-        "u_dz",
-        "v_zc",
-        "alpha_cc",
-        "gamma_zz",
-        "delta_db",
-        "rho_zb",
-        "adstock_alpha",
-        "weibull_lam",
-        "weibull_k",
-        "hf_sigma",
-        "pulse_amp",
-        "pulse_prob",
-        "confounding_strength",
-        "channel_level",
-    )
-    params = {k: drawn[f"param_{k}"][b] for k in keys}
-    params["adstock_family"] = structural["adstock_family"]
-    params["sat_family"] = structural["sat_family"]
-    params["rw_c"] = {
-        "mean": drawn["param_rw_c_mean"][b],
-        "std": drawn["param_rw_c_std"][b],
-        "smoothness": structural["smoothness_c"],
+def _assemble_channel_shock_schedule(
+    drawn: dict[str, np.ndarray], b: int, cfg: SCMPrior
+) -> dict[str, Any]:
+    """Reconstruct the accepted full-horizon shock inputs for graph replay."""
+    channel = np.array(drawn["channel_shock_channel"][b], dtype="int64", copy=True)
+    start_full = np.array(drawn["channel_shock_start"][b], dtype="int64", copy=True)
+    start_full += cfg.adstock_burn_in
+    length = np.array(drawn["channel_shock_length"][b], dtype="int64", copy=True)
+    level = np.array(drawn["channel_shock_level"][b], dtype="float64", copy=True)
+    mask_full = np.array(drawn["channel_shock_mask_full"][b], copy=True)
+    level_full = np.zeros(mask_full.shape, dtype="float64")
+    for selected, start, duration, held_level in zip(channel, start_full, length, level):
+        level_full[int(start) : int(start + duration), int(selected)] = held_level
+    return {
+        "n_shocks": int(cfg.n_channel_shocks),
+        "channel": channel,
+        "start_full": start_full,
+        "mask_full": mask_full,
+        "level_full": level_full,
     }
+
+
+def _assemble_params(
+    drawn: dict[str, np.ndarray],
+    b: int,
+    structural: dict,
+    param_names: tuple[str, ...],
+    cfg: SCMPrior,
+) -> dict[str, Any]:
+    """Build the exact concrete input dictionary consumed by ``build_symbolic_graph``."""
+    params: dict[str, Any] = {
+        param_name.removeprefix("param_"): np.array(drawn[param_name][b], copy=True)
+        for param_name in param_names
+    }
+    params["l_max"] = cfg.l_max
+    params["adstock_family"] = np.array(structural["adstock_family"], copy=True)
+    params["sat_family"] = np.array(structural["sat_family"], copy=True)
+    params["use_hf"] = np.array(structural["use_hf"], copy=True)
+    params["use_pulse"] = np.array(structural["use_pulse"], copy=True)
+    for suffix, positive_only in (
+        ("d", False),
+        ("z", False),
+        ("c", True),
+        ("b", False),
+        ("y", False),
+    ):
+        group = f"rw_{suffix}"
+        params[group] = {
+            "mean": params.pop(f"{group}_mean"),
+            "std": params.pop(f"{group}_std"),
+            "smoothness": np.array(structural[f"smoothness_{suffix}"], copy=True),
+            "positive_only": positive_only,
+        }
+    if cfg.n_channel_shocks:
+        params["channel_shock"] = _assemble_channel_shock_schedule(drawn, b, cfg)
     return params

@@ -92,15 +92,6 @@ def root_saturation(x: TensorVariable, alpha: TensorVariable) -> TensorVariable:
 # Saturation families — κ-relative wrappers (FINDINGS D7)
 # --------------------------------------------------------------------------
 
-#: Canonical family order — index in this tuple is the family id used per
-#: channel (e.g. a per-channel categorical over families).
-SATURATION_FAMILY_ORDER: tuple[str, ...] = (
-    "hill",
-    "logistic",
-    "michaelis_menten",
-    "tanh",
-    "root",
-)
 
 #: Sensible Uniform prior ranges per family shape parameter. Chosen so that on
 #: an input with mean 1 every family is monotone increasing and O(1)-scaled

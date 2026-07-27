@@ -8,8 +8,45 @@ import numpy as np
 import pytest
 
 import prior_generator as pg
-from prior_generator.sampler import SCMPrior
+from prior_generator.sampler import (
+    ADSTOCK_FAMILY_KEYS,
+    SATURATION_FAMILY_KEYS,
+    SCMPrior,
+)
 from prior_generator.slots import EDGE_TYPES_EXTENDED
+from prior_generator.world_model import sample_structure
+
+_DEFAULT_ADSTOCK_FAMILY_PROBS = {
+    "none": 0.15,
+    "geometric": 0.425,
+    "weibull": 0.425,
+}
+_DEFAULT_SATURATION_FAMILY_PROBS = {
+    "linear": 0.15,
+    "hill": 0.17,
+    "logistic": 0.17,
+    "michaelis_menten": 0.17,
+    "tanh": 0.17,
+    "root": 0.17,
+}
+
+
+def _default_family_probs(name: str) -> dict[str, float]:
+    if name == "adstock_family_probs":
+        return dict(_DEFAULT_ADSTOCK_FAMILY_PROBS)
+    return dict(_DEFAULT_SATURATION_FAMILY_PROBS)
+
+
+def _structure_test_graph() -> dict[str, np.ndarray]:
+    return {
+        "g_cy": np.ones(11),
+        "g_zb": np.ones(2),
+        "g_db": np.ones(1),
+    }
+
+
+def _one_hot_family_probs(family_keys: tuple[str, ...], selected: str) -> dict[str, float]:
+    return {key: 1.0 if key == selected else 0.0 for key in family_keys}
 
 
 def test_factory_pins_additive_schema():
@@ -30,10 +67,111 @@ def test_factory_diverse_texture_defaults():
     assert cfg.adstock_burn_in == cfg.l_max
 
 
+def test_family_probability_defaults_are_exact_and_independent():
+    first = SCMPrior()
+    second = SCMPrior()
+
+    assert tuple(first.adstock_family_probs) == ADSTOCK_FAMILY_KEYS
+    assert first.adstock_family_probs == _DEFAULT_ADSTOCK_FAMILY_PROBS
+    assert tuple(first.saturation_family_probs) == SATURATION_FAMILY_KEYS
+    assert first.saturation_family_probs == _DEFAULT_SATURATION_FAMILY_PROBS
+    assert first.adstock_family_probs is not second.adstock_family_probs
+    assert first.saturation_family_probs is not second.saturation_family_probs
+
+    first.adstock_family_probs["none"] = 0.0
+    first.saturation_family_probs["linear"] = 0.0
+
+    assert second.adstock_family_probs == _DEFAULT_ADSTOCK_FAMILY_PROBS
+    assert second.saturation_family_probs == _DEFAULT_SATURATION_FAMILY_PROBS
+
+
 def test_factory_linear_nonlinearity():
     cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="linear")
-    assert cfg.adstock_family_probs == (1.0, 0.0, 0.0)
-    assert cfg.saturation_family_probs == (1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    other = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="linear")
+    assert cfg.adstock_family_probs == {
+        "none": 1.0,
+        "geometric": 0.0,
+        "weibull": 0.0,
+    }
+    assert cfg.saturation_family_probs == {
+        "linear": 1.0,
+        "hill": 0.0,
+        "logistic": 0.0,
+        "michaelis_menten": 0.0,
+        "tanh": 0.0,
+        "root": 0.0,
+    }
+    assert cfg.adstock_family_probs is not other.adstock_family_probs
+    assert cfg.saturation_family_probs is not other.saturation_family_probs
+
+
+@pytest.mark.parametrize(
+    ("adstock_family", "saturation_family", "adstock_id", "saturation_id"),
+    (
+        ("none", "linear", 0, 0),
+        ("geometric", "hill", 1, 1),
+        ("geometric", "logistic", 1, 2),
+        ("weibull", "michaelis_menten", 2, 3),
+        ("weibull", "tanh", 2, 4),
+        ("none", "root", 0, 5),
+    ),
+)
+def test_sample_structure_uses_canonical_family_ids(
+    adstock_family, saturation_family, adstock_id, saturation_id
+):
+    cfg = SCMPrior(
+        adstock_family_probs=_one_hot_family_probs(ADSTOCK_FAMILY_KEYS, adstock_family),
+        saturation_family_probs=_one_hot_family_probs(SATURATION_FAMILY_KEYS, saturation_family),
+    )
+
+    structural = sample_structure(_structure_test_graph(), cfg, np.random.default_rng(7))
+
+    assert np.all(structural["adstock_family"] == adstock_id)
+    assert np.all(structural["sat_family"] == saturation_id)
+
+
+@pytest.mark.parametrize(
+    ("probability_name", "family_keys", "probabilities", "structural_name"),
+    (
+        (
+            "adstock_family_probs",
+            ADSTOCK_FAMILY_KEYS,
+            {"none": 0.11, "geometric": 0.28, "weibull": 0.61},
+            "adstock_family",
+        ),
+        (
+            "saturation_family_probs",
+            SATURATION_FAMILY_KEYS,
+            {
+                "linear": 0.05,
+                "hill": 0.10,
+                "logistic": 0.15,
+                "michaelis_menten": 0.20,
+                "tanh": 0.22,
+                "root": 0.28,
+            },
+            "sat_family",
+        ),
+    ),
+)
+def test_sample_structure_ignores_family_probability_mapping_order(
+    probability_name, family_keys, probabilities, structural_name
+):
+    canonical = SCMPrior(**{probability_name: probabilities})
+    scrambled = SCMPrior(
+        **{probability_name: {key: probabilities[key] for key in reversed(family_keys)}}
+    )
+
+    canonical_structure = sample_structure(
+        _structure_test_graph(), canonical, np.random.default_rng(19)
+    )
+    scrambled_structure = sample_structure(
+        _structure_test_graph(), scrambled, np.random.default_rng(19)
+    )
+
+    np.testing.assert_array_equal(
+        canonical_structure[structural_name], scrambled_structure[structural_name]
+    )
 
 
 def test_factory_overrides_win():
@@ -142,21 +280,75 @@ def test_scalar_domain_parameters_fail_fast(name, value):
     (
         ("adstock_family_probs", None),
         ("adstock_family_probs", 1),
-        ("adstock_family_probs", (np.nan, 0.5, 0.5)),
-        ("adstock_family_probs", (True, 0.0, 0.0)),
-        ("adstock_family_probs", (-0.1, 0.5, 0.6)),
-        ("adstock_family_probs", (0.3, 0.3, 0.40001)),
+        ("adstock_family_probs", (0.15, 0.425, 0.425)),
         ("saturation_family_probs", None),
         ("saturation_family_probs", 1),
-        ("saturation_family_probs", (np.inf, 0.0, 0.0, 0.0, 0.0, 0.0)),
-        ("saturation_family_probs", (False, 0.2, 0.2, 0.2, 0.2, 0.2)),
-        ("saturation_family_probs", (1.1, 0.0, 0.0, 0.0, 0.0, -0.1)),
-        ("saturation_family_probs", (0.15, 0.17, 0.17, 0.17, 0.17, 0.0)),
+        ("saturation_family_probs", (0.15, 0.17, 0.17, 0.17, 0.17, 0.17)),
     ),
 )
-def test_family_probabilities_fail_fast(name, value):
+def test_family_probabilities_require_named_dicts(name, value):
     with pytest.raises(ValueError, match=name):
         SCMPrior(**{name: value}).validate()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        (
+            "adstock_family_probs",
+            {
+                key: value
+                for key, value in _DEFAULT_ADSTOCK_FAMILY_PROBS.items()
+                if key != "weibull"
+            },
+        ),
+        (
+            "adstock_family_probs",
+            {**_DEFAULT_ADSTOCK_FAMILY_PROBS, "extra": 0.0},
+        ),
+        (
+            "saturation_family_probs",
+            {
+                key: value
+                for key, value in _DEFAULT_SATURATION_FAMILY_PROBS.items()
+                if key != "root"
+            },
+        ),
+        (
+            "saturation_family_probs",
+            {**_DEFAULT_SATURATION_FAMILY_PROBS, "extra": 0.0},
+        ),
+        (
+            "saturation_family_probs",
+            {
+                ("none" if key == "linear" else key): value
+                for key, value in _DEFAULT_SATURATION_FAMILY_PROBS.items()
+            },
+        ),
+    ),
+)
+def test_family_probabilities_require_exact_canonical_keys(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
+@pytest.mark.parametrize("name", ("adstock_family_probs", "saturation_family_probs"))
+@pytest.mark.parametrize("value", (True, np.nan, np.inf, -0.1, 1.1))
+def test_family_probabilities_reject_invalid_values(name, value):
+    probabilities = _default_family_probs(name)
+    probabilities[next(iter(probabilities))] = value
+
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: probabilities}).validate()
+
+
+@pytest.mark.parametrize("name", ("adstock_family_probs", "saturation_family_probs"))
+def test_family_probabilities_must_sum_to_one(name):
+    probabilities = _default_family_probs(name)
+    probabilities[next(iter(probabilities))] = 0.0
+
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: probabilities}).validate()
 
 
 @pytest.mark.parametrize(

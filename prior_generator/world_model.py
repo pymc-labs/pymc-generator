@@ -33,7 +33,7 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from . import mechanisms
-from .sampler import SCMPrior
+from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
 from .symbolic_graph import (
     _adstock_col_with_resets,
     _saturate_col,
@@ -54,10 +54,14 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     M = len(g_active["g_zb"])
     J = len(g_active["g_db"])
     ad_fam = rng.choice(
-        len(cfg.adstock_family_probs), size=K, p=np.asarray(cfg.adstock_family_probs)
+        len(ADSTOCK_FAMILY_KEYS),
+        size=K,
+        p=np.asarray([cfg.adstock_family_probs[key] for key in ADSTOCK_FAMILY_KEYS]),
     )
     sat_fam = rng.choice(
-        len(cfg.saturation_family_probs), size=K, p=np.asarray(cfg.saturation_family_probs)
+        len(SATURATION_FAMILY_KEYS),
+        size=K,
+        p=np.asarray([cfg.saturation_family_probs[key] for key in SATURATION_FAMILY_KEYS]),
     )
 
     def _smooth(n: int) -> np.ndarray:
@@ -633,12 +637,12 @@ def build_world_model(
             if name not in model.named_vars:
                 pm.Deterministic(name, graph["outputs"][name])
 
-        # Register the continuous params that world descriptions / bundles
-        # report (edge coefficients + per-channel mechanism/texture params) as
-        # "param_*" deterministics, so a single draw yields their concrete
-        # per-world values alongside the series. Families / smoothness are
-        # concrete already (from `structural`) and are not drawn here.
-        report_specs = {
+        # Register every continuous parameter as a ``param_*`` deterministic so
+        # a sampled single world has all concrete inputs needed to replay its
+        # structural graph. Families / smoothness are concrete already (from
+        # ``structural``) and are reported with their corresponding groups.
+        report_specs: dict[str, Any] = {
+            # linear edge coefficients
             "beta": params["beta"],
             "w_dc": params["w_dc"],
             "u_dz": params["u_dz"],
@@ -647,17 +651,18 @@ def build_world_model(
             "gamma_zz": params["gamma_zz"],
             "delta_db": params["delta_db"],
             "rho_zb": params["rho_zb"],
-            "adstock_alpha": params["adstock_alpha"],
-            "weibull_lam": params["weibull_lam"],
-            "weibull_k": params["weibull_k"],
+            # every per-channel mechanism shape parameter
+            **{name: params[name] for name in _MECHANISM_PARAM_NAMES},
+            # channel texture magnitudes and fire probability
             "hf_sigma": params["hf_sigma"],
             "pulse_amp": params["pulse_amp"],
             "pulse_prob": params["pulse_prob"],
-            "rw_c_mean": rw_c["mean"],
-            "channel_level": c_level,
-            "rw_c_std": rw_c["std"],
-            "confounding_strength": confounding_strength,
         }
+        for group_name in ("rw_d", "rw_z", "rw_c", "rw_b", "rw_y"):
+            report_specs[f"{group_name}_mean"] = rw[group_name]["mean"]
+            report_specs[f"{group_name}_std"] = rw[group_name]["std"]
+        report_specs["channel_level"] = c_level
+        report_specs["confounding_strength"] = confounding_strength
         param_names = tuple(f"param_{k}" for k in report_specs)
         for key, tensor in report_specs.items():
             pm.Deterministic(f"param_{key}", tensor)
@@ -860,6 +865,8 @@ def draw_worlds(
     seed: int,
     draws: int = 1,
     mode: str = "FAST_COMPILE",
+    *,
+    rng_reference_names: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
     """Draw ``draws`` worlds from a built model, seeded for reproducibility.
 
@@ -868,17 +875,53 @@ def draw_worlds(
     callers can index world ``i`` as ``arr[i]`` regardless of ``draws``. ``mode``
     defaults to the python-backend ``FAST_COMPILE``: each world is a small
     one-off graph, so the C-backend compile cost of ``FAST_RUN`` dominates.
+
+    ``rng_reference_names`` pins random-variable stream assignment to an older
+    output contract while drawing an expanded set of audit outputs. Every RNG
+    already reachable from the reference keeps its prior seeded stream; newly
+    reachable RNGs are appended. This lets APIs expose additional realized
+    inputs without changing existing seeded worlds.
     """
-    with model:
-        vals = pm.draw(
-            [model[name] for name in out_names],
-            draws=draws,
-            random_seed=np.random.default_rng(seed),
-            mode=mode,
+    if rng_reference_names is None:
+        with model:
+            vals = pm.draw(
+                [model[name] for name in out_names],
+                draws=draws,
+                random_seed=np.random.default_rng(seed),
+                mode=mode,
+            )
+    else:
+        from pymc.pytensorf import (
+            collect_default_updates,
+            reseed_rngs,
         )
+        from pymc.pytensorf import (
+            compile as compile_pymc,
+        )
+        from pymc.util import _get_seeds_per_chain
+
+        out_vars = [model[name] for name in out_names]
+        reference_vars = [model[name] for name in rng_reference_names]
+        (compile_seed,) = _get_seeds_per_chain(np.random.default_rng(seed), 1)
+        with model:
+            draw_fn = compile_pymc(
+                inputs=[],
+                outputs=out_vars,
+                random_seed=compile_seed,
+                mode=mode,
+            )
+        reference_rngs = list(collect_default_updates(inputs=[], outputs=reference_vars))
+        output_rngs = list(collect_default_updates(inputs=[], outputs=out_vars))
+        ordered_rngs = reference_rngs + [rng for rng in output_rngs if rng not in reference_rngs]
+        reseed_rngs(ordered_rngs, compile_seed)
+        if draws == 1:
+            vals = draw_fn()
+        else:
+            vals = [np.stack(values) for values in zip(*(draw_fn() for _ in range(draws)))]
+
     # pm.draw drops the leading axis when draws == 1; restore it for a uniform
     # (draws, *shape) contract.
     return {
-        name: (np.asarray(v)[None] if draws == 1 else np.asarray(v))
-        for name, v in zip(out_names, vals)
+        name: (np.asarray(value)[None] if draws == 1 else np.asarray(value))
+        for name, value in zip(out_names, vals)
     }

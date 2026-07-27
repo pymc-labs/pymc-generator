@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Install Graphviz
+        run: sudo apt-get update && sudo apt-get install --yes graphviz
+
       # The docs execute real code (markdown-exec blocks + the examples
       # notebook), so we need the full modeling stack — an editable install
       # pulls it from [project.dependencies], including the git-URL

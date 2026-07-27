@@ -65,6 +65,8 @@ docs = [
     "markdown-exec>=1.12.3",
     "mkdocs-jupyter>=0.26.3",
     "pymdown-extensions>=11.0.1",
+    # Python bindings; the system Graphviz executable is installed separately.
+    "graphviz>=0.20",
     "nbformat>=5.10.4",
     "ipykernel>=7.3.0",
 ]
@@ -102,10 +104,10 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
-    # Docs notebook: cell-scoped conventions (re-imports per cell so each cell
-    # runs standalone) intentionally trip ruff's cross-cell import rules. It is
-    # generated from docs_gen/build_examples_nb.py, which IS linted.
+    # Docs notebooks: cell-scoped conventions intentionally trip ruff's
+    # cross-cell import rules. Their docs_gen/build_*_nb.py builders are linted.
     "docs/examples/index.ipynb",
+    "docs/examples/simple-model.ipynb",
 ]
 
 [tool.ruff.lint]

@@ -56,13 +56,11 @@ from pytensor.tensor import TensorVariable
 
 from . import mechanisms
 from .random_walk import symbolic_random_walk
+from .sampler import SATURATION_FAMILY_KEYS
 
 __all__ = ["build_symbolic_graph"]
 
-# Adstock family ids (match sampler L1 convention): 0=none, 1=geometric, 2=weibull
-# Saturation family ids: 0=none(linear), 1=hill, 2=logistic, 3=michaelis_menten,
-# 4=tanh, 5=root
-_SAT_FAMILY_NAMES = ("none", "hill", "logistic", "michaelis_menten", "tanh", "root")
+# Mechanism family ids are projected in sampler canonical order.
 
 
 def _check_strict_upper(mat: np.ndarray, name: str) -> None:
@@ -200,10 +198,10 @@ def _saturate_col(
     variants — with an identical, pinned saturation scale. This is what makes
     the decomposition and the per-source indirect split exact.
     """
-    name = _SAT_FAMILY_NAMES[int(params["sat_family"][k])]  # family is concrete/structural
+    name = SATURATION_FAMILY_KEYS[int(params["sat_family"][k])]  # concrete structural family
     # Shape params may be symbolic (RV) or concrete — passed straight through
     # to the pymc-marketing-backed wrappers, which accept either.
-    if name == "none":
+    if name == "linear":
         return cast(TensorVariable, ad_col / mean_ad)
     if name == "hill":
         return mechanisms.hill_kappa_relative(

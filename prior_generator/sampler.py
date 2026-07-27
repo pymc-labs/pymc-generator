@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import time
 import warnings
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -44,6 +44,34 @@ from .slots import (
     T_DEMO,
     SlotLayout,
 )
+
+#: Canonical categorical orders for media-response mechanism family ids.
+ADSTOCK_FAMILY_KEYS: tuple[str, ...] = ("none", "geometric", "weibull")
+SATURATION_FAMILY_KEYS: tuple[str, ...] = (
+    "linear",
+    "hill",
+    "logistic",
+    "michaelis_menten",
+    "tanh",
+    "root",
+)
+
+
+def _default_adstock_family_probs() -> dict[str, float]:
+    """Return a fresh default categorical distribution over adstock families."""
+    return dict(zip(ADSTOCK_FAMILY_KEYS, (0.15, 0.425, 0.425), strict=True))
+
+
+def _default_saturation_family_probs() -> dict[str, float]:
+    """Return a fresh default categorical distribution over saturation families."""
+    return dict(
+        zip(
+            SATURATION_FAMILY_KEYS,
+            (0.15, 0.17, 0.17, 0.17, 0.17, 0.17),
+            strict=True,
+        )
+    )
+
 
 #: Maximum draw rounds per cell before giving up (post-filter top-up loop).
 MAX_TOPUPS_PER_CELL = 8
@@ -102,10 +130,12 @@ class SCMPrior:
     # Per-channel media-response mechanism priors (realized as PyMC
     # distributions in prior_generator.world_model.build_world_model):
     adstock_alpha_range: tuple[float, float] = (0.2, 0.8)
-    # Adstock families: 0=none, 1=geometric, 2=weibull
-    adstock_family_probs: tuple[float, ...] = (0.15, 0.425, 0.425)
-    # Saturation families: 0=none(linear), 1=hill, 2=logistic, 3=michaelis_menten, 4=tanh, 5=root
-    saturation_family_probs: tuple[float, ...] = (0.15, 0.17, 0.17, 0.17, 0.17, 0.17)
+    # Adstock family probabilities by ``ADSTOCK_FAMILY_KEYS``.
+    adstock_family_probs: dict[str, float] = field(default_factory=_default_adstock_family_probs)
+    # Saturation family probabilities by ``SATURATION_FAMILY_KEYS``.
+    saturation_family_probs: dict[str, float] = field(
+        default_factory=_default_saturation_family_probs
+    )
     # Weibull adstock prior ranges
     weibull_lam_range: tuple[float, float] = (2.0, 8.0)
     weibull_k_range: tuple[float, float] = (1.5, 4.0)
@@ -340,50 +370,35 @@ class SCMPrior:
                 f"val_cell_frac={self.val_cell_frac} gives {n_val_cells} val cells "
                 f"out of {self.n_cells}; need at least 1 train and 1 val cell"
             )
-        # Validate mechanism diversity probabilities
-        try:
-            n_adstock_probs = len(self.adstock_family_probs)
-        except TypeError:
-            n_adstock_probs = -1
-        if n_adstock_probs != 3:
-            raise ValueError(
-                f"adstock_family_probs must have 3 entries (none/geometric/weibull), "
-                f"got {n_adstock_probs}"
-            )
-        if any(
-            isinstance(prob, (bool, np.bool_))
-            or not isinstance(prob, (int, float, np.integer, np.floating))
-            or not np.isfinite(prob)
-            or not 0.0 <= prob <= 1.0
-            for prob in self.adstock_family_probs
-        ):
-            raise ValueError("adstock_family_probs entries must be finite probabilities")
-        if not np.isclose(sum(self.adstock_family_probs), 1.0, rtol=0.0, atol=1e-8):
-            raise ValueError(
-                f"adstock_family_probs must sum to 1.0, got {sum(self.adstock_family_probs)}"
-            )
-        try:
-            n_saturation_probs = len(self.saturation_family_probs)
-        except TypeError:
-            n_saturation_probs = -1
-        if n_saturation_probs != 6:
-            raise ValueError(
-                f"saturation_family_probs must have 6 entries "
-                f"(none/hill/logistic/michaelis_menten/tanh/root), "
-                f"got {n_saturation_probs}"
-            )
-        if any(
-            isinstance(prob, (bool, np.bool_))
-            or not isinstance(prob, (int, float, np.integer, np.floating))
-            or not np.isfinite(prob)
-            or not 0.0 <= prob <= 1.0
-            for prob in self.saturation_family_probs
-        ):
-            raise ValueError("saturation_family_probs entries must be finite probabilities")
-        if not np.isclose(sum(self.saturation_family_probs), 1.0, rtol=0.0, atol=1e-8):
-            raise ValueError(
-                f"saturation_family_probs must sum to 1.0, got {sum(self.saturation_family_probs)}"
-            )
+
+        # Validate mechanism diversity probabilities.
+        def _family_probabilities(name: str, probabilities, family_keys: tuple[str, ...]) -> None:
+            if not isinstance(probabilities, dict):
+                raise ValueError(
+                    f"{name} must be a dict with exactly keys {family_keys}, got {probabilities!r}"
+                )
+            if set(probabilities) != set(family_keys):
+                raise ValueError(
+                    f"{name} must have exactly keys {family_keys}, got {tuple(probabilities)!r}"
+                )
+            if any(
+                isinstance(probability, (bool, np.bool_))
+                or not isinstance(probability, (int, float, np.integer, np.floating))
+                or not np.isfinite(probability)
+                or not 0.0 <= probability <= 1.0
+                for probability in (probabilities[key] for key in family_keys)
+            ):
+                raise ValueError(f"{name} entries must be finite probabilities")
+            total = sum(probabilities[key] for key in family_keys)
+            if not np.isclose(total, 1.0, rtol=0.0, atol=1e-8):
+                raise ValueError(f"{name} must sum to 1.0, got {total}")
+
+        _family_probabilities(
+            "adstock_family_probs", self.adstock_family_probs, ADSTOCK_FAMILY_KEYS
+        )
+        _family_probabilities(
+            "saturation_family_probs", self.saturation_family_probs, SATURATION_FAMILY_KEYS
+        )
 
         def _finite_range(
             name: str,

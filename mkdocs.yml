@@ -156,7 +156,9 @@ nav:
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
       - The posterior oracle: guide/oracle.md
-  - Examples: examples/index.ipynb
+  - Examples:
+      - End-to-end tour: examples/index.ipynb
+      - Simple configurable corpus: examples/simple-model.ipynb
   - API reference:
       - Overview: reference/index.md
       - Configuration: reference/config.md
