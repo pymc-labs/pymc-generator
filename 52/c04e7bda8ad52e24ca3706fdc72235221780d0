@@ -1,0 +1,80 @@
+docs/examples/simple-model.ipynb
+  s_6cdb3f9eca54e6::t_7500216f45d56d 259
+  s_6cdb3f9eca54e6::t_d9336428088dd9 262,265,291,300,303-306,341-345,351-355,365-369,380-385,387-413,416,418-421,423-427,430,437-446,448-452,454-456,458,464,472,474-475,478,484,486-495,498,500-503,506,508-509,514,520,526,532,540,552,566,572,586,592,598,604,612,644,650,656,664,670,676,684,690,696,704,712,726,732,738,746,752,760,766,792,800,806,812,844,850,863
+  s_1e80542f8cbd62::t_0a056d7e4dbb53 263-264,447,453
+  s_6cdb3f9eca54e6::t_cb6e920edce76b 513
+  s_6cdb3f9eca54e6::t_e07c5d023987d3 515
+  s_6cdb3f9eca54e6::t_797b30aaa4e09d 517-519
+  s_6cdb3f9eca54e6::t_b099f8183b4bdd 521-523
+  s_6cdb3f9eca54e6::t_8f77588cff0b3e 525
+  s_6cdb3f9eca54e6::t_6bd0d5bc912186 527-529
+  s_6cdb3f9eca54e6::t_8fb53800c7af83 531
+  s_6cdb3f9eca54e6::t_1b673ac73dcacb 533-535
+  s_6cdb3f9eca54e6::t_b501c13349446d 537-539
+  s_6cdb3f9eca54e6::t_c345768979d08d 541
+  s_6cdb3f9eca54e6::t_f04bd73704eb4d 567-571
+  s_6cdb3f9eca54e6::t_dd610936de76fa 573-575
+  s_6cdb3f9eca54e6::t_2eeb0adbfa5e34 587
+  s_6cdb3f9eca54e6::t_e1ba045db27b8e 591
+  s_6cdb3f9eca54e6::t_56dd496fe7f828 593-595
+  s_6cdb3f9eca54e6::t_40c0a5b83f7d3f 597
+  s_6cdb3f9eca54e6::t_963665ddb3fb8a 599-601
+  s_6cdb3f9eca54e6::t_5e6c9bb3e87831 603
+  s_6cdb3f9eca54e6::t_98f8270c1b863e 605-607
+  s_6cdb3f9eca54e6::t_2a8a45a4c7d522 609-611
+  s_6cdb3f9eca54e6::t_a3cbacd8ba4420 613
+  s_6cdb3f9eca54e6::t_df7dad44280015 641-643
+  s_6cdb3f9eca54e6::t_c443959662482b 645-649
+  s_6cdb3f9eca54e6::t_5ae78e1eb35d88 651-655
+  s_6cdb3f9eca54e6::t_d5db5a16b98850 657-659,661-663
+  s_6cdb3f9eca54e6::t_cd66d96a248c3a 665-669
+  s_6cdb3f9eca54e6::t_9eeb55eff89f0d 671-675
+  s_6cdb3f9eca54e6::t_5cefcc3893f2ee 677-679,681-683
+  s_6cdb3f9eca54e6::t_7ed6560dabef3f 685-689
+  s_6cdb3f9eca54e6::t_5d55ae59e76845 691-695
+  s_6cdb3f9eca54e6::t_d486cc2288e1d8 697-699
+  s_6cdb3f9eca54e6::t_e55e0bae6974cc 705-707,709-711
+  s_6cdb3f9eca54e6::t_4d92b866364ef0 713
+  s_6cdb3f9eca54e6::t_327f0b7596e767 727
+  s_6cdb3f9eca54e6::t_3fdb0f94fe5396 729-731
+  s_6cdb3f9eca54e6::t_5d8c4b5ef9e1fc 733-737
+  s_6cdb3f9eca54e6::t_873b5e3d6a0841 739-741,743-745
+  s_6cdb3f9eca54e6::t_21a67008e54145 747
+  s_6cdb3f9eca54e6::t_b3fe6b7455f59d 753-755
+  s_6cdb3f9eca54e6::t_6c30560c89ff0b 761
+  s_6cdb3f9eca54e6::t_758c0e95e35a78 763-765
+  s_6cdb3f9eca54e6::t_beec28e110d146 767
+  s_6cdb3f9eca54e6::t_2cef94a060ff4c 797-799
+  s_6cdb3f9eca54e6::t_ba51d1caf7fc20 801-803
+  s_6cdb3f9eca54e6::t_d79ff618c663fb 805
+  s_6cdb3f9eca54e6::t_ab80ad8b309072 807-809
+  s_6cdb3f9eca54e6::t_d024164ff41603 811
+  s_6cdb3f9eca54e6::t_93d8a15c20f3b2 813-815
+  s_6cdb3f9eca54e6::t_3520f0c3488642 843
+  s_6cdb3f9eca54e6::t_f6586bd8f7cdb2 845-847
+  s_6cdb3f9eca54e6::t_a5a5c9bf624276 864-866
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "52c04e7bda8ad52e24ca3706fdc72235221780d0",
+  "prompts": {},
+  "sessions": {
+    "s_1e80542f8cbd62": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_06193bc84ffeO1O02DP5qFKByD",
+        "model": "kimi-k2.7-code"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    },
+    "s_6cdb3f9eca54e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_066e0a83dffet2I7yq3qoEkf6v",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
