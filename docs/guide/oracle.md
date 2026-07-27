@@ -89,7 +89,7 @@ generation-time per-channel `saturation_scale` is persisted and supplied by
 `SCM.oracle_model()`, preventing that initial-history difference from shifting
 the nonlinear response anchor after carryover itself has converged.
 
-### Held-level carryover-reset shocks
+### Held-level shocks
 
 When channel shocks are enabled, `SCM.oracle_model()` also passes the world's
 reported shock channel, start, length, and held-level multiplier to the
@@ -97,17 +97,15 @@ oracle, together with the realized absolute held level. The oracle rejects a
 schedule whose claimed held level does not match the recorded spend window or
 `multiplier * channel_level`.
 This metadata is **additional observed design state**, not an inferred
-schedule and not a free random variable in the oracle. The oracle validates the
-configured schedule and uses each reported start to reset that channel's
-adstock history with the same response helper used by generation. Consequently,
-a zero-level held window has exactly zero direct response, including immediately
-after positive pre-window spend; repeated shocks on one channel use the latest
-reset.
+schedule and not a free random variable in the oracle. Because a shock only
+clamps observed spend, the clamped window is already baked into the channel
+matrix the oracle reads as data; the oracle builds no schedule tensors and
+applies the same plain adstock kernel used everywhere else.
 
 These are not conventional spend-only lift tests: a shock holds a channel to an
-absolute level and surgically resets its carryover response state. Outside such
-known reset boundaries, the reported-window zero-padding caveat above still
-applies.
+absolute level rather than perturbing it. It leaves the response state alone,
+so ordinary carryover from pre-window spend decays into a held window and the
+reported-window zero-padding caveat above applies uniformly.
 
 ## Guarantees that cannot drift
 

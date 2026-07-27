@@ -36,9 +36,9 @@ high-frequency and regression/correlation metrics require at least two points.
 
 All metrics use the full reported window except `spearman`: it compares the
 contribution with observed spend adstocked **once** using the world's actual
-geometric or Weibull parameters and any recorded reset starts, then discards
-the first `l_max` observations. It does not adstock a contribution a second
-time. `warmup_ratio` is N/A when `adstock_burn_in >= l_max` (its aggregate
+geometric or Weibull parameters, then discards the first `l_max` observations.
+It does not adstock a contribution a second time.
+`warmup_ratio` is N/A when `adstock_burn_in >= l_max` (its aggregate
 artifact fraction is reported as `0.0` with sufficient burn-in); it is also
 invalid when the window is too short.
 

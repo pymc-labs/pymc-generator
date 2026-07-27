@@ -275,7 +275,7 @@ def test_numpy_scalar_diagnostics_validate_and_roundtrip(tmp_path, corpus):
             "metric_layout": np.asarray(SIGNAL_METRIC_LAYOUT),
             "l_max": np.int32(signal["l_max"]),
             "adstock_burn_in": np.int64(signal["adstock_burn_in"]),
-            "adstock_kernel_version": np.int64(1),
+            "adstock_kernel_version": np.int64(2),
         }
     )
     diagnostics["signal"] = signal
@@ -607,8 +607,6 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
             adstock_alpha=corpus["adstock_alpha"],
             weibull_lam=corpus["weibull_lam"],
             weibull_k=corpus["weibull_k"],
-            channel_shock_channel=corpus["channel_shock_channel"],
-            channel_shock_start=corpus["channel_shock_start"],
             l_max=cfg.l_max,
             adstock_burn_in=cfg.adstock_burn_in,
         )
@@ -627,8 +625,8 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         expected_signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
         expected_signal["l_max"] = cfg.l_max
         expected_signal["adstock_burn_in"] = cfg.adstock_burn_in
-        expected_signal["adstock_kernel_semantics"] = "normalized-causal-reset-aware-weibull-pdf"
-        expected_signal["adstock_kernel_version"] = 1
+        expected_signal["adstock_kernel_semantics"] = "normalized-causal-weibull-pdf"
+        expected_signal["adstock_kernel_version"] = 2
         assert corpus["diagnostics"]["signal"] == expected_signal
 
     for key, value in full.items():

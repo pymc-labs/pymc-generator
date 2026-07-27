@@ -31,8 +31,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   `confounding_strength_range` optionally draws a per-world `rho` in `[0, 0.95]`
   that mixes baseline innovations into channel innovations with preserved marginal
   variance, and persists the resulting scalar. Corpus worlds can also include
-  stratified, non-overlapping random channel-shock schedules with reset-aware
-  adstock responses and typed audit metadata.
+  stratified, non-overlapping random channel-shock schedules with typed audit
+  metadata.
 - **Persisted signal features v2**: corpora now store dense per-direct-channel
   signal metrics and validity masks under the `identifiability` metadata block,
   together with a versioned layout in `diagnostics["signal"]`. Metrics are
@@ -79,6 +79,42 @@ While the project is on 0.x, minor versions may contain breaking changes.
   `saturation_family_probs` are now dictionaries keyed by canonical family
   names instead of positional tuples. Exact key validation prevents silent
   family-order mistakes; legacy tuple inputs are intentionally rejected.
+- **Held-level shocks no longer reset adstock state** (breaking): a channel
+  shock now only clamps observed spend for its window. The clamped path feeds
+  the ordinary normalized causal adstock kernel, so carryover from pre-shock
+  spend decays into a held window instead of being discarded, and a zero held
+  level reaches an exactly zero direct response only once the full kernel span
+  lies inside the window. The previous response-state surgery put generated
+  worlds outside the function class a stock `GeometricAdstock`/`WeibullAdstock`
+  can represent, which broke carryover recovery for any downstream MMM fit;
+  with `adstock_burn_in=0` the generated contributions are now reproducible
+  from observed spend to machine precision. `dense_signal_metrics`,
+  `per_channel_signal`, and `signal_summary` drop their now-meaningless
+  `channel_shock_channel` / `channel_shock_start` arguments, the oracle builds
+  no shock tensors (it still validates the schedule against observed spend),
+  and `diagnostics["signal"]` reports
+  `adstock_kernel_semantics="normalized-causal-weibull-pdf"` at
+  `adstock_kernel_version=2`. Corpora written with kernel version 1 no longer
+  validate.
+- **One amplitude per channel** (breaking): the `michaelis_menten` and `tanh`
+  saturation families no longer draw their own asymptote (`mm_alpha`,
+  `tanh_b`). Both are pinned to 1, leaving the structural `beta` gate as each
+  channel's single amplitude — the convention pymc-marketing itself follows,
+  adding a `beta` scale only to families whose transformer is bounded and
+  omitting it for `michaelis_menten` / `tanh` / `hill_saturation_sigmoid`,
+  whose transformers already expose an asymptote. Carrying both made the
+  contribution identify only the product: on a fitted oracle the posterior
+  correlation between `beta` and `mm_alpha` was -0.98, each factor was ~35%
+  off, and their product was recovered to 0.1-0.3%. `SATURATION_PRIOR_RANGES`
+  drops `michaelis_menten.alpha` and `tanh.b`; the oracle and generative
+  models drop the matching RVs; `SCM.equation_parameters` and
+  `describe_scm` no longer report them. The shape space of both families is
+  unchanged — `(b, c) -> (λb, c/λ)` was a pure rescaling — but generated
+  worlds change: the effective amplitude of `michaelis_menten` and `tanh`
+  channels is now `beta_additive_range` alone, matching every other family
+  instead of being multiplied by a second, family-specific factor. Graph,
+  spend, controls, demand, active masks and shock schedules are byte-identical;
+  the response-path arrays and the frozen corpus hashes move.
 
 ## [0.0.1] - 2026-07-14
 

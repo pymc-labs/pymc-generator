@@ -295,8 +295,8 @@ def test_response_audit_contains_only_family_specific_shape_parameters():
         (0, 0, {"family", "l_max"}, {"family", "scale"}),
         (1, 1, {"family", "l_max", "alpha"}, {"family", "scale", "slope", "kappa_mult"}),
         (2, 2, {"family", "l_max", "lam", "k"}, {"family", "scale", "lam"}),
-        (0, 3, {"family", "l_max"}, {"family", "scale", "alpha", "kappa_mult"}),
-        (1, 4, {"family", "l_max", "alpha"}, {"family", "scale", "b", "c"}),
+        (0, 3, {"family", "l_max"}, {"family", "scale", "kappa_mult"}),
+        (1, 4, {"family", "l_max", "alpha"}, {"family", "scale", "c"}),
         (2, 5, {"family", "l_max", "lam", "k"}, {"family", "scale", "alpha"}),
     )
     adstock_sources = {
@@ -308,8 +308,8 @@ def test_response_audit_contains_only_family_specific_shape_parameters():
         0: {},
         1: {"slope": "hill_slope", "kappa_mult": "hill_kappa_mult"},
         2: {"lam": "logistic_lam"},
-        3: {"alpha": "mm_alpha", "kappa_mult": "mm_kappa_mult"},
-        4: {"b": "tanh_b", "c": "tanh_c"},
+        3: {"kappa_mult": "mm_kappa_mult"},
+        4: {"c": "tanh_c"},
         5: {"alpha": "root_alpha"},
     }
     for adstock_id, saturation_id, adstock_keys, saturation_keys in cases:

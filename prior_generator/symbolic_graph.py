@@ -148,30 +148,6 @@ def _adstock_col(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
     return cast(TensorVariable, out[:, 0])
 
 
-def _adstock_col_with_resets(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
-    """Adstock a channel, resetting its response history at its shock starts.
-
-    A reset is response-state surgery rather than a change to the natural
-    channel path: after a shock starts, its response is the ordinary adstock
-    of the input suffix beginning at that start.  Schedule slots are ordered,
-    so applying the corresponding switches in schedule order makes a later
-    shock on the same channel override an earlier reset.
-    """
-    schedule = params.get("channel_shock")
-    if schedule is None:
-        return _adstock_col(c_col, params, k)
-
-    out = _adstock_col(c_col, params, k)
-    time = pt.arange(c_col.shape[0])
-    for s in range(int(schedule["n_shocks"])):
-        start = schedule["start_full"][s]
-        applies = pt.eq(schedule["channel"][s], k)
-        suffix = c_col * pt.cast(time >= start, c_col.dtype)
-        reset_out = _adstock_col(suffix, params, k)
-        out = pt.switch(applies & (time >= start), reset_out, out)
-    return out
-
-
 def _clamp_channel(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
     """Apply this channel's absolute held-level shock windows, when enabled."""
     schedule = params.get("channel_shock")
@@ -216,16 +192,10 @@ def _saturate_col(
         return mechanisms.michaelis_menten_kappa_relative(
             ad_col,
             mean_ad,
-            alpha=params["mm_alpha"][k],
             kappa_mult=params["mm_kappa_mult"][k],
         )
     if name == "tanh":
-        return mechanisms.tanh_kappa_relative(
-            ad_col,
-            mean_ad,
-            b=params["tanh_b"][k],
-            c=params["tanh_c"][k],
-        )
+        return mechanisms.tanh_kappa_relative(ad_col, mean_ad, c=params["tanh_c"][k])
     return mechanisms.root_kappa_relative(ad_col, mean_ad, alpha=params["root_alpha"][k])
 
 
@@ -440,9 +410,12 @@ def build_symbolic_graph(
         # Adstock over the full simulated horizon, then slice to the reported
         # window: with burn_in >= l_max the window's convolution sees real
         # pre-window history instead of the zero padding (warmup artifact).
+        # Held-level shocks clamp the channel BEFORE this convolution and never
+        # touch its response state, so the same normalized causal kernel a
+        # standard MMM applies reproduces this response exactly.
         # The κ scale is a mean over the REPORTED window so f_k's operating
         # point matches what the model observes.
-        ad_obs = _adstock_col_with_resets(c_cols[k], params, k)[W]
+        ad_obs = _adstock_col(c_cols[k], params, k)[W]
         scale_k = pt.maximum(ad_obs.mean(), 1e-8).copy(name=f"sat_scale_{k}")
         sat_scale_cols.append(scale_k)
 
@@ -453,9 +426,9 @@ def build_symbolic_graph(
             return _saturate_col(ad_col, _scale, params, _k)
 
         f_obs = _f(ad_obs)
-        f_base = _f(_adstock_col_with_resets(c_base_cols[k], params, k)[W])
-        f_no_cc = _f(_adstock_col_with_resets(c_no_cc_cols[k], params, k)[W])
-        f_no_cc_zc = _f(_adstock_col_with_resets(c_no_cc_zc_cols[k], params, k)[W])
+        f_base = _f(_adstock_col(c_base_cols[k], params, k)[W])
+        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k)[W])
+        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k)[W])
         gate = g_cy[k] * beta[k]  # g concrete, beta possibly symbolic
         contrib_obs_cols.append(gate * f_obs)
         contrib_base_cols.append(gate * f_base)

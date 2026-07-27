@@ -188,7 +188,9 @@ class SCMPrior:
     channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
     adstock_burn_in: int = 0
 
-    # Symbolic, per-draw carryover-reset held-level channel shocks.
+    # Symbolic, per-draw held-level channel shocks. A shock clamps observed
+    # spend for its window; it never touches the channel's response state, so
+    # the clamped path adstocks with the ordinary normalized causal kernel.
     n_channel_shocks: int = 0
     channel_shock_length_range: tuple[int, int] = (2, 2)
     channel_shock_level_range: tuple[float, float] = (0.0, 0.0)
@@ -960,8 +962,8 @@ def _signal_block(
     out["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
     out["l_max"] = int(cfg.l_max)
     out["adstock_burn_in"] = int(cfg.adstock_burn_in)
-    out["adstock_kernel_semantics"] = "normalized-causal-reset-aware-weibull-pdf"
-    out["adstock_kernel_version"] = 1
+    out["adstock_kernel_semantics"] = "normalized-causal-weibull-pdf"
+    out["adstock_kernel_version"] = 2
     return out
 
 
@@ -1000,8 +1002,6 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
         adstock_alpha=corpus["adstock_alpha"],
         weibull_lam=corpus["weibull_lam"],
         weibull_k=corpus["weibull_k"],
-        channel_shock_channel=corpus["channel_shock_channel"],
-        channel_shock_start=corpus["channel_shock_start"],
         l_max=cfg.l_max,
         adstock_burn_in=cfg.adstock_burn_in,
     )

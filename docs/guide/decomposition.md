@@ -26,17 +26,18 @@ symbolic quantities — $f_k$ is one fixed function evaluated on two inputs, and
 ## Held-spend shocks do not break the identity
 
 When channel shocks are enabled, a scheduled reported-window interval clamps a
-direct channel to its recorded held level and resets that channel's adstock
-history at the interval start. In particular, a zero held level has an exactly
-zero direct contribution throughout the interval: carryover from pre-shock
-spend cannot leak into it. Repeated shocks reset again, with the most recent
-reset defining later carryover.
+direct channel to its recorded held level. That is the shock's *only* effect:
+the clamped path then feeds the ordinary normalized causal adstock kernel, so
+carryover from pre-shock spend decays across the interval exactly as it decays
+anywhere else. A zero held level therefore drives the direct contribution to
+zero only once the whole kernel span sits inside the interval — which is
+precisely what a standard MMM adstock reproduces from the same observed spend.
 
 These interventions change the observed channel path (and can propagate to
 downstream channels), but all decomposition terms are evaluated on the same
 intervened graph. The additive identity, telescoping indirect split, baseline
 split, and full reconstruction therefore hold inside and outside shock masks,
-with only dtype-scaled rounding after float32 corpus persistence. Schedule/reset
+with only dtype-scaled rounding after float32 corpus persistence. Schedule
 metadata is observable in the corpus; see
 [Generating a corpus](corpus.md#channel-adstock-and-intervention-audit-metadata).
 

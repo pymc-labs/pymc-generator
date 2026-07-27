@@ -35,7 +35,7 @@ import pytensor.tensor as pt
 from . import mechanisms
 from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
 from .symbolic_graph import (
-    _adstock_col_with_resets,
+    _adstock_col,
     _saturate_col,
     _walk_column,
     build_symbolic_graph,
@@ -209,18 +209,20 @@ def _channel_shock_schedule(
     }
 
 
-def _oracle_channel_shock_schedule(
+def _validate_oracle_channel_shocks(
     cfg: SCMPrior, g_cy: np.ndarray, data: dict[str, np.ndarray], T: int
-) -> dict[str, Any] | None:
-    """Validate and freeze a world's reported-window reset schedule for the oracle.
+) -> None:
+    """Validate a world's reported-window held-level schedule for the oracle.
 
     Channel shocks are known intervention-design state, not latent variables in
-    the observed-data model. The oracle validates the complete reported schedule
-    and its held levels against observed spend without recreating schedule RVs.
+    the observed-data model. They clamp observed spend and nothing else, so the
+    oracle needs no schedule tensors — it reads the already-clamped channels as
+    data. This still checks the complete reported schedule and its held levels
+    against that observed spend so corrupt metadata fails loudly.
     """
     S = int(cfg.n_channel_shocks)
     if S == 0:
-        return None
+        return
 
     def _event_int(name: str) -> np.ndarray:
         if name not in data:
@@ -285,14 +287,6 @@ def _oracle_channel_shock_schedule(
         observed = np.asarray(data["channels"])[start[s] : start[s] + length[s], channel[s]]
         if not np.allclose(observed, level[s], rtol=1e-6, atol=1e-7):
             raise ValueError("channel shock held level does not match observed spend")
-
-    return {
-        "n_shocks": S,
-        "channel": pt.as_tensor_variable(channel),
-        # The oracle's channel matrix starts at reported week zero, unlike the
-        # generator's full-horizon channel matrix.
-        "start_full": pt.as_tensor_variable(start),
-    }
 
 
 def _rw_prior_group(
@@ -384,9 +378,7 @@ _MECHANISM_PARAM_NAMES: tuple[str, ...] = (
     "hill_slope",
     "hill_kappa_mult",
     "logistic_lam",
-    "mm_alpha",
     "mm_kappa_mult",
-    "tanh_b",
     "tanh_c",
     "root_alpha",
 )
@@ -447,19 +439,12 @@ def _uniform_prior_specs(
             spr["logistic"]["lam"][1],
             n_t,
         ),
-        "mm_alpha": (
-            "mm_alpha",
-            spr["michaelis_menten"]["alpha"][0],
-            spr["michaelis_menten"]["alpha"][1],
-            n_t,
-        ),
         "mm_kappa_mult": (
             "mm_kappa_mult",
             spr["michaelis_menten"]["kappa_mult"][0],
             spr["michaelis_menten"]["kappa_mult"][1],
             n_t,
         ),
-        "tanh_b": ("tanh_b", spr["tanh"]["b"][0], spr["tanh"]["b"][1], n_t),
         "tanh_c": ("tanh_c", spr["tanh"]["c"][0], spr["tanh"]["c"][1], n_t),
         "root_alpha": ("root_alpha", spr["root"]["alpha"][0], spr["root"]["alpha"][1], n_t),
         # channel texture factors (relative to the channel level)
@@ -755,11 +740,10 @@ def build_oracle_model(
 
     Additionally the adstock convolution sees only the reported window
     (zero-padded start) while generation used ``adstock_burn_in`` weeks of
-    real history — drop the first ``l_max`` weeks from comparisons. Known
-    carryover-reset shocks are an exception to the ordinary initial-history
-    issue: their reported starts are observed design state and reset the
-    oracle response history exactly as in generation. They are held-level
-    interventions, not conventional spend-only lift tests.
+    real history — drop the first ``l_max`` weeks from comparisons. Held-level
+    shocks are no exception: they clamp observed spend before the convolution
+    and never touch response state, so the ordinary carryover from pre-shock
+    spend decays across a shock boundary exactly as it does anywhere else.
     """
     n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
     n_covariates = len(g_active["g_zb"])  # observed controls
@@ -797,7 +781,7 @@ def build_oracle_model(
     g_db = np.asarray(g_active["g_db"], dtype="float64")
     g_zb = np.asarray(g_active["g_zb"], dtype="float64")
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
-    oracle_schedule = _oracle_channel_shock_schedule(cfg, g_cy, data, T)
+    _validate_oracle_channel_shocks(cfg, g_cy, data, T)
 
     with pm.Model() as model:
         # Shared prior definitions — identical names, ranges and shapes to the
@@ -815,8 +799,6 @@ def build_oracle_model(
             "sat_family": structural["sat_family"],
             **mech,
         }
-        if oracle_schedule is not None:
-            mech_params["channel_shock"] = oracle_schedule
 
         # Observed inputs enter as constants (static shapes — the adstock
         # convolution indexes by the static time length).
@@ -835,13 +817,12 @@ def build_oracle_model(
         term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (T,)
         baseline = pm.Deterministic("baseline", term_bd + term_bz + walk_b[W])
 
-        # Media response on the OBSERVED spend: same reset-aware adstock /
-        # κ-relative saturation code as generation. The observed reset-aware
-        # response also pins the saturation scale; schedule metadata is known
-        # design state and creates no oracle RVs.
+        # Media response on the OBSERVED spend: the same adstock / κ-relative
+        # saturation code as generation. Held-level windows are already baked
+        # into the observed channel matrix, so no schedule tensors are needed.
         contrib_cols = []
         for k in range(n_treatments):
-            ad_obs = _adstock_col_with_resets(channels_t[:, k], mech_params, k)
+            ad_obs = _adstock_col(channels_t[:, k], mech_params, k)
             scale_k = (
                 pt.maximum(ad_obs.mean(), 1e-8)
                 if saturation_scale is None

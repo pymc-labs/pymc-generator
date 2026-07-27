@@ -269,8 +269,6 @@ class SCM:
             adstock_alpha=np.asarray(self.params["adstock_alpha"])[None],
             weibull_lam=np.asarray(self.params["weibull_lam"])[None],
             weibull_k=np.asarray(self.params["weibull_k"])[None],
-            channel_shock_channel=np.asarray(d["channel_shock_channel"])[None],
-            channel_shock_start=np.asarray(d["channel_shock_start"])[None],
             adstock_burn_in=self.cfg.adstock_burn_in,
         )
         out: dict[str, Any] = dict(per)
@@ -432,10 +430,8 @@ def _channel_response_parameters(world: SCM, k: int) -> dict[str, Any]:
     elif sat_name == "logistic":
         saturation["lam"] = float(np.asarray(params["logistic_lam"])[k])
     elif sat_name == "michaelis_menten":
-        saturation["alpha"] = float(np.asarray(params["mm_alpha"])[k])
         saturation["kappa_mult"] = float(np.asarray(params["mm_kappa_mult"])[k])
     elif sat_name == "tanh":
-        saturation["b"] = float(np.asarray(params["tanh_b"])[k])
         saturation["c"] = float(np.asarray(params["tanh_c"])[k])
     elif sat_name == "root":
         saturation["alpha"] = float(np.asarray(params["root_alpha"])[k])
@@ -550,9 +546,10 @@ def _build_equations(world: SCM) -> dict[str, str]:
     if shocks_enabled:
         equations["channel_shocks"] = (
             "The exact full-horizon channel_shock mask and held levels clamp each "
-            "channel before adstock. Reset-aware adstock uses zero-prefixed suffixes "
-            "at each start; later resets override earlier ones. C_base, C_no_cc, "
-            "and C_no_cc_zc share the same clamp."
+            "channel before adstock; the clamped path then adstocks with the "
+            "ordinary normalized causal kernel, so carryover from pre-shock spend "
+            "decays across a held window instead of being discarded. C_base, "
+            "C_no_cc, and C_no_cc_zc share the same clamp."
         )
 
     for j in range(J):
@@ -621,9 +618,9 @@ def _build_equations(world: SCM) -> dict[str, str]:
         ad_name = ADSTOCK_NAMES[int(params["adstock_family"][k])]
         sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
         equations[f"f{k + 1}"] = (
-            f"ad_C{k + 1} = adstock_with_resets[{ad_name}](C{k + 1}_full); "
+            f"ad_C{k + 1} = adstock[{ad_name}](C{k + 1}_full); "
             f"saturation_scale[{k}] = max(mean(ad_C{k + 1}[burn_in:]), 1e-8); "
-            f"f{k + 1}(X_full) = {sat_name}(adstock_with_resets[{ad_name}](X_full)"
+            f"f{k + 1}(X_full) = {sat_name}(adstock[{ad_name}](X_full)"
             f"[burn_in:], saturation_scale[{k}]); "
             f"gate[{k}] = g_cy[{k}] * beta[{k}]"
         )

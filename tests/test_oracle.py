@@ -15,7 +15,7 @@ import pytest
 
 import prior_generator as pg
 from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.signal_diagnostics import _reset_adstock_numpy
+from prior_generator.signal_diagnostics import _adstock_numpy
 from prior_generator.world_model import build_oracle_model, build_world_model, sample_structure
 
 #: Free RVs the two models must define identically (same name, same prior).
@@ -29,9 +29,7 @@ SHARED_RV_NAMES = (
     "hill_slope",
     "hill_kappa_mult",
     "logistic_lam",
-    "mm_alpha",
     "mm_kappa_mult",
-    "tanh_b",
     "tanh_c",
     "root_alpha",
     "rw_d_mean",
@@ -256,21 +254,21 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
     return cfg, g, structural, drawn, data
 
 
-def test_shocked_oracle_uses_known_schedule_without_schedule_rvs_and_zero_response():
+def test_shocked_oracle_uses_known_schedule_without_schedule_rvs():
     cfg, g, structural, drawn, data = _shocked_oracle_world()
     oracle = build_oracle_model(g, cfg, structural, data)
 
     assert not any(rv.name.startswith("channel_shock") for rv in oracle.free_RVs)
-    # Held zero spend begins a new response history, so pre-window carryover
-    # cannot leak into the direct response in the intervention window.
+    # A held window clamps spend and nothing else, so pre-window carryover
+    # decays into the intervention window instead of being discarded.
     mask = drawn["channel_shock_mask"][:, 0].astype(bool)
     contribution = pm.draw(oracle["contributions"], draws=1, random_seed=17)
-    assert np.array_equal(contribution[mask, 0], np.zeros(mask.sum()))
+    assert (contribution[mask, 0] > 0.0).all()
 
 
-def test_shocked_oracle_repeated_reset_boundaries_match_independent_numpy_reference():
+def test_shocked_oracle_response_matches_plain_adstock_of_the_clamped_series():
     cfg, g, structural, _drawn, data = _shocked_oracle_world(n_shocks=2, level=(0.5, 0.5))
-    # Make the reset behavior independent of a random schedule realization.
+    # Make the response independent of a random schedule realization.
     data.update(
         {
             "channels": np.array(
@@ -292,14 +290,13 @@ def test_shocked_oracle_repeated_reset_boundaries_match_independent_numpy_refere
             draws=1,
             random_seed=29,
         )
-    adstock = _reset_adstock_numpy(
+    adstock = _adstock_numpy(
         data["channels"][:, 0],
         family=1,
         alpha=alpha[0],
         lam=1.0,
         shape=1.0,
         l_max=cfg.l_max,
-        starts=data["channel_shock_start"],
     )
     expected = beta[0] * adstock / data["saturation_scale"][0]
     np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-14)

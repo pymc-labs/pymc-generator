@@ -11,7 +11,6 @@ from prior_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
     _adstock_numpy,
-    _reset_adstock_numpy,
     check_signal_gate,
     dense_signal_metrics,
     per_channel_signal,
@@ -77,13 +76,13 @@ def test_degenerate_weibull_kernel_is_finite_and_consistent():
     assert np.array_equal(symbolic_result, numpy_result)
 
 
-def test_reset_adstock_is_chronological():
+def test_adstock_is_a_plain_normalized_causal_convolution():
     x = np.arange(1, 9, dtype=np.float64)
-    result = _reset_adstock_numpy(x, 1, 0.5, 1.0, 1.0, 3, np.array([5, 2]))
-    expected = _adstock_numpy(x, 1, 0.5, 1.0, 1.0, 3)
-    expected[2:] = _adstock_numpy(x[2:], 1, 0.5, 1.0, 1.0, 3)
-    expected[5:] = _adstock_numpy(x[5:], 1, 0.5, 1.0, 1.0, 3)
-    assert np.array_equal(result, expected)
+    result = _adstock_numpy(x, 1, 0.5, 1.0, 1.0, 3)
+    weights = np.array([1.0, 0.5, 0.25])
+    weights /= weights.sum()
+    expected = np.convolve(x, weights, mode="full")[: x.size]
+    assert np.allclose(result, expected)
 
 
 def test_spearman_uses_once_adstocked_observed_spend_and_lmax_suffix():
@@ -278,9 +277,7 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
     layout = SlotLayout(K=2, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
     direct = (loaded["g"][:, layout.slices["cy"]] == 1) & (loaded["active_c_mask"] == 1)
     signal_config = loaded["diagnostics"]["signal"]
-    assert signal_config["adstock_kernel_semantics"] == (
-        "normalized-causal-reset-aware-weibull-pdf"
-    )
+    assert signal_config["adstock_kernel_semantics"] == "normalized-causal-weibull-pdf"
     metrics, valid = dense_signal_metrics(
         loaded["spend_raw"],
         loaded["contributions_raw"],
@@ -292,8 +289,6 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
         adstock_alpha=loaded["adstock_alpha"],
         weibull_lam=loaded["weibull_lam"],
         weibull_k=loaded["weibull_k"],
-        channel_shock_channel=loaded["channel_shock_channel"],
-        channel_shock_start=loaded["channel_shock_start"],
         l_max=signal_config["l_max"],
         adstock_burn_in=signal_config["adstock_burn_in"],
     )
@@ -357,8 +352,8 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
                 "metric_layout": list(SIGNAL_METRIC_LAYOUT),
                 "l_max": 8,
                 "adstock_burn_in": 0,
-                "adstock_kernel_semantics": "normalized-causal-reset-aware-weibull-pdf",
-                "adstock_kernel_version": 1,
+                "adstock_kernel_semantics": "normalized-causal-weibull-pdf",
+                "adstock_kernel_version": 2,
             },
         },
     }

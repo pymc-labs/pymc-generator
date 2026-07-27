@@ -9,7 +9,7 @@ import pytest
 
 from prior_generator import load_corpus, make_scm_prior, sample_prior_predictive, save_corpus
 from prior_generator.sampler import _additive_task_ok
-from prior_generator.symbolic_graph import _adstock_col, _adstock_col_with_resets
+from prior_generator.symbolic_graph import _adstock_col, _clamp_channel
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
@@ -151,11 +151,9 @@ def test_default_enabled_shock_is_visible_as_a_spend_plateau():
 
 
 @pytest.mark.parametrize("adstock_family", (1, 2), ids=("geometric", "weibull"))
-def test_shocks_hold_observed_spend_zero_direct_response_and_natural_spend_resumes(
-    adstock_family,
-):
-    """A held window is absolute, resets response history, and changes no natural path."""
-    model, names, _, _, _ = _built(
+def test_shocks_hold_observed_spend_and_natural_spend_resumes(adstock_family):
+    """A held window is absolute, decays ordinary carryover, and changes no natural path."""
+    model, names, _, cfg, _ = _built(
         T=16,
         K=1,
         S=1,
@@ -165,12 +163,15 @@ def test_shocks_hold_observed_spend_zero_direct_response_and_natural_spend_resum
     )
     d = draw_worlds(model, names, seed=19, draws=1)
     mask = d["channel_shock_mask"][0, :, 0].astype(bool)
+    start = int(np.flatnonzero(mask)[0])
     assert np.array_equal(d["channels"][0, mask, 0], np.zeros(mask.sum()))
-    # Reset-aware adstock makes a zero window have no direct response despite
-    # positive spend immediately before it (the no-input graph has softplus > 0).
-    assert (d["channels_unshocked"][0, : np.flatnonzero(mask)[0], 0] > 0).all()
-    assert np.array_equal(d["contributions"][0, mask, 0], np.zeros(mask.sum()))
-    assert np.array_equal(d["contributions_observed"][0, mask, 0], np.zeros(mask.sum()))
+    assert (d["channels_unshocked"][0, :start, 0] > 0).all()
+    # No response-state surgery: pre-shock spend keeps decaying through the
+    # kernel, so the first held week still carries a strictly positive
+    # response even though its own spend is zero.
+    held = d["contributions_observed"][0, mask, 0]
+    assert held[0] > 0.0
+    assert mask.sum() < cfg.l_max  # the window is shorter than the kernel span
     # This one-channel graph has no C parents, so outside intervention windows
     # the observed and natural spend paths are identical (including resumption).
     assert np.array_equal(d["channels"][0, ~mask, 0], d["channels_unshocked"][0, ~mask, 0])
@@ -359,8 +360,9 @@ def test_downstream_channel_recursion_sees_the_clamped_parent():
 
 
 @pytest.mark.parametrize("family", (1, 2), ids=("geometric", "weibull"))
-def test_adstock_resets_discard_pre_window_history_and_latest_reset_wins(family):
-    c = pt.as_tensor_variable(np.array([4.0, 3.0, 0.0, 0.0, 7.0, 8.0]))
+def test_held_windows_adstock_with_the_plain_kernel(family):
+    """Clamping is the only shock effect: the response is the plain adstock of it."""
+    clamped = np.array([4.0, 3.0, 0.0, 0.0, 7.0, 8.0])
     params = {
         "l_max": 4,
         "adstock_family": np.array([family]),
@@ -368,15 +370,19 @@ def test_adstock_resets_discard_pre_window_history_and_latest_reset_wins(family)
         "weibull_lam": np.array([2.0]),
         "weibull_k": np.array([2.0]),
         "channel_shock": {
-            "n_shocks": 2,
-            "channel": pt.as_tensor_variable(np.array([0, 0], dtype="int64")),
-            "start_full": pt.as_tensor_variable(np.array([2, 4], dtype="int64")),
+            "n_shocks": 1,
+            "channel": pt.as_tensor_variable(np.array([0], dtype="int64")),
+            "start_full": pt.as_tensor_variable(np.array([2], dtype="int64")),
+            "mask_full": pt.as_tensor_variable(
+                np.array([[0], [0], [1], [1], [0], [0]], dtype="int8")
+            ),
+            "level_full": pt.as_tensor_variable(np.zeros((6, 1))),
         },
     }
-    reset = _adstock_col_with_resets(c, params, 0)
-    # The second reset must supersede the first: after t=4 this is precisely
-    # the ordinary adstock of the suffix starting at t=4, not a carryover.
-    suffix = _adstock_col(c * pt.cast(pt.arange(6) >= 4, "float64"), params, 0)
-    got, expected = pytensor.function([], [reset, suffix])()
-    assert np.array_equal(got[2:4], np.zeros(2))
-    assert np.array_equal(got[4:], expected[4:])
+    natural = pt.as_tensor_variable(np.array([4.0, 3.0, 5.0, 6.0, 7.0, 8.0]))
+    shocked = _adstock_col(_clamp_channel(natural, params, 0), params, 0)
+    reference = _adstock_col(pt.as_tensor_variable(clamped), params, 0)
+    got, expected = pytensor.function([], [shocked, reference])()
+    assert np.allclose(got, expected)
+    # Carryover crosses the window boundary instead of being discarded.
+    assert got[2] > 0.0

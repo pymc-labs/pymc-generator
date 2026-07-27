@@ -51,7 +51,7 @@ structure-known upper-bound oracle, not exact joint conditioning.
 
 ## Channel shocks
 
-The optional reset-aware held-level intervention API is:
+The optional held-level intervention API is:
 
 ```python
 from prior_generator import make_scm_prior
@@ -82,13 +82,16 @@ as `channel_shock_level_multiplier * softplus(rw_c_mean)` for the selected
 channel. Starts are reported-window indices (not burn-in-offset full-horizon
 indices).
 
-During an event, observed spend is clamped to that level and the affected
-channel's adstock state resets at the event start. A zero held level therefore
-has an exactly zero direct response even if it follows positive spend. With
-multiple shocks on a channel, the latest reset supersedes earlier carryover;
-outside an event the natural spend process resumes. Downstream channel
-recursion still observes the clamped parent. This is a known intervention
-design with reset state, **not** a conventional spend-only lift test.
+During an event, observed spend is clamped to that level. Clamping is the whole
+intervention: the clamped path then feeds the ordinary normalized causal
+adstock kernel, so carryover from pre-event spend decays into the window rather
+than being discarded, and a zero held level reaches an exactly zero direct
+response only once the full kernel span lies inside the window. Outside an
+event the natural spend process resumes, and downstream channel recursion still
+observes the clamped parent. This keeps every generated response inside the
+function class a standard MMM adstock can represent from the same observed
+spend. It is a known held-level intervention design, **not** a conventional
+spend-only lift test.
 
 ## Identifiability labels
 

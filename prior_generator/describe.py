@@ -33,12 +33,9 @@ def _saturation_description(params: dict, k: int, family: str) -> str:
     if family == "logistic":
         return f"logistic(lam={params['logistic_lam'][k]:.2f})"
     if family == "michaelis_menten":
-        return (
-            f"michaelis_menten(alpha={params['mm_alpha'][k]:.2f},"
-            f"kappa_mult={params['mm_kappa_mult'][k]:.2f})"
-        )
+        return f"michaelis_menten(kappa_mult={params['mm_kappa_mult'][k]:.2f})"
     if family == "tanh":
-        return f"tanh(b={params['tanh_b'][k]:.2f},c={params['tanh_c'][k]:.2f})"
+        return f"tanh(c={params['tanh_c'][k]:.2f})"
     if family == "root":
         return f"root(alpha={params['root_alpha'][k]:.2f})"
     return family

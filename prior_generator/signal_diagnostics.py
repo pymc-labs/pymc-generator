@@ -151,24 +151,6 @@ def _adstock_numpy(
     return np.convolve(x, weights, mode="full")[: x.size]
 
 
-def _reset_adstock_numpy(
-    x: np.ndarray,
-    family: int,
-    alpha: float,
-    lam: float,
-    shape: float,
-    l_max: int,
-    starts: np.ndarray,
-) -> np.ndarray:
-    """Match symbolic response-state resets, in chronological shock order."""
-    out = _adstock_numpy(x, family, alpha, lam, shape, l_max)
-    for start in np.sort(starts.astype(int)):
-        if 0 <= start < x.size:
-            suffix = _adstock_numpy(x[start:], family, alpha, lam, shape, l_max)
-            out[start:] = suffix
-    return out
-
-
 def dense_signal_metrics(
     spend: np.ndarray,
     contributions: np.ndarray,
@@ -181,8 +163,6 @@ def dense_signal_metrics(
     adstock_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
-    channel_shock_channel: np.ndarray | None = None,
-    channel_shock_start: np.ndarray | None = None,
     l_max: int = 8,
     adstock_burn_in: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -221,22 +201,6 @@ def dense_signal_metrics(
     metrics = np.zeros((N, K, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
     valid = np.zeros_like(metrics, dtype=np.uint8)
     metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
-    shock_channels = (
-        np.empty((N, 0), dtype=int)
-        if channel_shock_channel is None
-        else np.asarray(channel_shock_channel)
-    )
-    shock_starts = (
-        np.empty((N, 0), dtype=int)
-        if channel_shock_start is None
-        else np.asarray(channel_shock_start)
-    )
-    if (
-        shock_channels.shape != shock_starts.shape
-        or shock_channels.ndim != 2
-        or shock_channels.shape[0] != N
-    ):
-        raise ValueError("shock schedule arrays must share shape (N, S)")
     for n, k in zip(*np.nonzero(mask)):
         x, y = spend[n, :, k], contributions[n, :, k]
         std_x, std_y = x.std(), y.std()
@@ -252,10 +216,7 @@ def dense_signal_metrics(
             metrics[n, k, metric_index["spend_hf"]] = _hf_ratio(x[None])[0]
             metrics[n, k, metric_index["contrib_hf"]] = _hf_ratio(y[None])[0]
             valid[n, k, [metric_index["spend_hf"], metric_index["contrib_hf"]]] = 1
-        starts = shock_starts[n, shock_channels[n] == k]
-        ad_x = _reset_adstock_numpy(
-            x, int(fam[n, k]), alpha[n, k], wlam[n, k], wk[n, k], l_max, starts
-        )
+        ad_x = _adstock_numpy(x, int(fam[n, k]), alpha[n, k], wlam[n, k], wk[n, k], l_max)
         # Visibility intentionally compares once-adstocked observed spend; do
         # not adstock a contribution that already contains the response.
         if T - l_max >= 3:
@@ -310,8 +271,6 @@ def per_channel_signal(
     adstock_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
-    channel_shock_channel: np.ndarray | None = None,
-    channel_shock_start: np.ndarray | None = None,
     adstock_burn_in: int = 0,
 ) -> dict[str, np.ndarray]:
     """Per-(task, direct channel) signal metrics.
@@ -346,8 +305,6 @@ def per_channel_signal(
         adstock_alpha=adstock_alpha,
         weibull_lam=weibull_lam,
         weibull_k=weibull_k,
-        channel_shock_channel=channel_shock_channel,
-        channel_shock_start=channel_shock_start,
         adstock_burn_in=adstock_burn_in,
     )
     if baseline is None:
@@ -445,8 +402,6 @@ def signal_summary(
     adstock_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
-    channel_shock_channel: np.ndarray | None = None,
-    channel_shock_start: np.ndarray | None = None,
     adstock_burn_in: int = 0,
 ) -> dict:
     """Corpus-level signal report: metric quantiles + degenerate fractions.
@@ -479,8 +434,6 @@ def signal_summary(
         adstock_alpha=adstock_alpha,
         weibull_lam=weibull_lam,
         weibull_k=weibull_k,
-        channel_shock_channel=channel_shock_channel,
-        channel_shock_start=channel_shock_start,
         adstock_burn_in=adstock_burn_in,
     )
     if baseline is None:

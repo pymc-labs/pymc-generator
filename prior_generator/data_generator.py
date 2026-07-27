@@ -658,8 +658,8 @@ class DataGenerator:
                 errors.append("diagnostics signal adstock_burn_in must be a nonnegative integer")
             if (
                 signal_diagnostics.get("adstock_kernel_semantics")
-                != "normalized-causal-reset-aware-weibull-pdf"
-                or signal_diagnostics.get("adstock_kernel_version") != 1
+                != "normalized-causal-weibull-pdf"
+                or signal_diagnostics.get("adstock_kernel_version") != 2
             ):
                 errors.append("diagnostics signal adstock kernel semantics are not supported")
 
@@ -965,8 +965,6 @@ class DataGenerator:
                 adstock_alpha=corpus["adstock_alpha"],
                 weibull_lam=corpus["weibull_lam"],
                 weibull_k=corpus["weibull_k"],
-                channel_shock_channel=channels,
-                channel_shock_start=starts,
                 l_max=int(signal_diagnostics["l_max"]),
                 adstock_burn_in=int(signal_diagnostics["adstock_burn_in"]),
             )
@@ -992,8 +990,8 @@ class DataGenerator:
                     "metric_layout": list(SIGNAL_METRIC_LAYOUT),
                     "l_max": int(signal_diagnostics["l_max"]),
                     "adstock_burn_in": int(signal_diagnostics["adstock_burn_in"]),
-                    "adstock_kernel_semantics": "normalized-causal-reset-aware-weibull-pdf",
-                    "adstock_kernel_version": 1,
+                    "adstock_kernel_semantics": "normalized-causal-weibull-pdf",
+                    "adstock_kernel_version": 2,
                 }
             )
             actual_signal = dict(signal_diagnostics)

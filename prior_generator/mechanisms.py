@@ -18,6 +18,16 @@ remaining shape parameters are scale-free. Each wrapper has signature
 ``f(x, mean_x, **shape_params) -> tensor``, is monotone increasing in ``x``,
 and stays O(1) when ``x`` is on its own mean scale.
 
+Every family is normalized to a **unit asymptote** (or, for the unbounded
+``root``, to ``f(mean_x) = 1``), so the channel's single amplitude is the
+structural coefficient ``beta`` in :mod:`prior_generator.symbolic_graph`.
+This mirrors pymc-marketing's own convention -- its wrappers add a ``beta``
+scale exactly to those families whose transformer is bounded, and omit it for
+``michaelis_menten`` / ``tanh`` whose transformer already exposes an asymptote.
+Carrying both would make ``beta`` and the family asymptote a pure product: the
+contribution identifies only ``beta * asymptote``, leaving each factor free to
+slide along a ridge.
+
 Family parameterizations (prior ranges in `SATURATION_PRIOR_RANGES`):
 
 ==================  =========================================================
@@ -25,10 +35,10 @@ Family parameterizations (prior ranges in `SATURATION_PRIOR_RANGES`):
                     f(κ) = 0.5 exactly for any slope; asymptote 1.
 ``logistic``        ``logistic_saturation(x / mean_x, lam)``; half-point at
                     x = ln(3)/lam · mean_x; asymptote 1.
-``michaelis_menten``  ``michaelis_menten(x, alpha, κ)`` with
-                    κ = kappa_mult·mean_x. f(κ) = alpha/2; asymptote alpha.
-``tanh``            ``tanh_saturation(x / mean_x, b, c)`` =
-                    b·tanh(x/(mean_x·b·c)); asymptote b; initial slope
+``michaelis_menten``  ``michaelis_menten(x, 1, κ)`` with
+                    κ = kappa_mult·mean_x. f(κ) = 0.5; asymptote 1.
+``tanh``            ``tanh_saturation(x / mean_x, 1, c)`` =
+                    tanh(x/(mean_x·c)); asymptote 1; initial slope
                     1/(c·mean_x).
 ``root``            ``root_saturation(x / mean_x, alpha)`` = (x/mean_x)^alpha;
                     f(mean_x) = 1; concave for alpha < 1, no asymptote.
@@ -99,8 +109,8 @@ def root_saturation(x: TensorVariable, alpha: TensorVariable) -> TensorVariable:
 SATURATION_PRIOR_RANGES: dict[str, dict[str, tuple[float, float]]] = {
     "hill": {"slope": (1.0, 3.0), "kappa_mult": (0.7, 1.5)},
     "logistic": {"lam": (0.5, 3.0)},
-    "michaelis_menten": {"alpha": (1.0, 2.0), "kappa_mult": (0.7, 1.5)},
-    "tanh": {"b": (0.6, 1.2), "c": (0.3, 1.5)},
+    "michaelis_menten": {"kappa_mult": (0.7, 1.5)},
+    "tanh": {"c": (0.3, 1.5)},
     "root": {"alpha": (0.3, 0.9)},
 }
 
@@ -117,16 +127,25 @@ def logistic_kappa_relative(x, mean_x, *, lam) -> TensorVariable:
     return logistic_saturation(x / safe_mean, lam)
 
 
-def michaelis_menten_kappa_relative(x, mean_x, *, alpha, kappa_mult) -> TensorVariable:
-    """`michaelis_menten` with λ = kappa_mult · mean_x; f(λ) = alpha / 2."""
+def michaelis_menten_kappa_relative(x, mean_x, *, kappa_mult) -> TensorVariable:
+    """`michaelis_menten` with λ = kappa_mult · mean_x; f(λ) = 0.5, asymptote 1.
+
+    The library asymptote is pinned to 1 rather than exposed as a parameter:
+    the structural ``beta`` gate is this channel's only amplitude.
+    """
     safe_mean = pt.maximum(mean_x, 1e-8)
-    return michaelis_menten(x, alpha, kappa_mult * safe_mean)
+    return michaelis_menten(x, 1.0, kappa_mult * safe_mean)
 
 
-def tanh_kappa_relative(x, mean_x, *, b, c) -> TensorVariable:
-    """`tanh_saturation` on x / mean_x: b·tanh(x / (mean_x·b·c)); asymptote b."""
+def tanh_kappa_relative(x, mean_x, *, c) -> TensorVariable:
+    """`tanh_saturation` on x / mean_x: tanh(x / (mean_x·c)); asymptote 1.
+
+    The library asymptote ``b`` is pinned to 1 for the same reason as
+    ``michaelis_menten``: ``(b, c) -> (λb, c/λ)`` scales the response by ``λ``
+    without changing its shape, so a free ``b`` only duplicates ``beta``.
+    """
     safe_mean = pt.maximum(mean_x, 1e-8)
-    return tanh_saturation(x / safe_mean, b, c)
+    return tanh_saturation(x / safe_mean, 1.0, c)
 
 
 def root_kappa_relative(x, mean_x, *, alpha) -> TensorVariable:

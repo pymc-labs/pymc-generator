@@ -71,7 +71,7 @@ schedule arrays when shocks are disabled. `S` is the configured
 | `channel_shock_level_multiplier` | `(N, S)` | `float32` | sampled relative held-level multiplier |
 | `channel_shock_level` | `(N, S)` | `float32` | realized held level |
 
-Together these schedule fields are observable intervention/reset metadata: they
+Together these schedule fields are observable intervention metadata: they
 reconstruct each reported held-spend window without storing a natural path or a
 full burn-in mask. The realized level equals the multiplier times the selected
 `channel_level`. For an enabled schedule, events occupy globally
