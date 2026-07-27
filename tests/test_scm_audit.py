@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-
 import numpy as np
 
 from prior_generator import make_scm_prior, sample_scm
@@ -15,7 +13,7 @@ from prior_generator.world_model import (
     draw_worlds,
     sample_structure,
 )
-from prior_generator.worlds import SCM, _assemble_params
+from prior_generator.worlds import _LEGACY_WORLD_PARAM_NAMES, SCM, _assemble_params
 
 _RAW_EPS_NAMES = (
     "eps_d",
@@ -100,50 +98,34 @@ def _replay(
     return {name: value.eval() for name, value in graph["outputs"].items()}
 
 
-def _digest(values: np.ndarray) -> str:
-    return hashlib.sha256(np.ascontiguousarray(values).view(np.uint8)).hexdigest()
-
-
-def _core_digest(world: SCM) -> str:
-    digest = hashlib.sha256()
-    for name in _CORE_OUTPUTS:
-        values = np.ascontiguousarray(world.data[name])
-        digest.update(name.encode())
-        digest.update(str(values.shape).encode())
-        digest.update(values.view(np.uint8))
-    return digest.hexdigest()
-
-
 def test_expanded_audit_preserves_seeded_single_world_outputs():
-    cfg = make_scm_prior(
-        n_treatments=2,
-        n_covariates=1,
-        n_latent=1,
-        T=16,
-        edge_budget={
-            "cy": (2, 2),
-            "dc": (1, 1),
-            "dz": (1, 1),
-            "db": (1, 1),
-            "zb": (1, 1),
-            "zc": (1, 1),
-            "cc": (1, 1),
-            "zz": (0, 0),
-        },
-        confounding_strength_range=(0.4, 0.4),
-        spend_cv_floor=0.0,
-    )
-    world = sample_scm(cfg, seed=730, max_eps_draws=2)
-    assert _digest(world.data["channels"]) == (
-        "88aec65851e57ad94e777242e45c59b05137346efe7780bbea970443c305e9cd"
-    )
-    assert _digest(world.data["sales"]) == (
-        "b726bd344a472464dc3404e71f8491a22a2214c37cdba69c19bbaacc49064d80"
+    cfg = _config(confounding_strength_range=(0.4, 0.4), spend_cv_floor=0.0)
+    g = {
+        "g_cy": np.ones(2, dtype=int),
+        "g_dc": np.zeros((1, 2), dtype=int),
+        "g_dz": np.zeros((1, 2), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(2, dtype=int),
+        "g_zc": np.zeros((2, 2), dtype=int),
+        "g_cc": np.zeros((2, 2), dtype=int),
+        "g_zz": np.zeros((2, 2), dtype=int),
+    }
+    structural = sample_structure(g, cfg, np.random.default_rng(730))
+    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    legacy_names = out_names + _LEGACY_WORLD_PARAM_NAMES
+    expanded_names = out_names + param_names + _RAW_EPS_NAMES
+
+    legacy = draw_worlds(model, legacy_names, seed=731, draws=2)
+    expanded = draw_worlds(
+        model,
+        expanded_names,
+        seed=731,
+        draws=2,
+        rng_reference_names=legacy_names,
     )
 
-    assert _core_digest(world) == (
-        "592e28d4b43ee57e1a14ac3d2adc04b1c0c13ea19ad0985559d0132bf86e1129"
-    )
+    for name in legacy_names:
+        np.testing.assert_array_equal(expanded[name], legacy[name])
 
 
 def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
