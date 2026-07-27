@@ -17,6 +17,13 @@ While the project is on 0.x, minor versions may contain breaking changes.
   copies of the accepted full-horizon innovations. `SCM.params` now contains
   every continuous mechanism and random-walk parameter plus realized shock
   state, making exact graph replay possible without changing the corpus schema.
+- **Executable PyMC-Marketing recovery audit**: the simple-model notebook now
+  builds a dated `C1`–`C3`, `Z1`–`Z2`, `Y` dataset, fits the installed
+  PyMC-Marketing MMM with four chains and 500 posterior draws, and compares
+  posterior channel/control contributions with the known SCM effects. The audit
+  reports convergence, interval coverage, curve correlation, and RMSE instead
+  of assuming that a graph-identifiable world is recoverable under default
+  finite-sample model settings.
 
 - **Baseline, confounding, and intervention metadata**: `rw_baseline_std_sigma`
   now defaults to `None`, dynamically following `rw_std_sigma` for the `RW_B`
