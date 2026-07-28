@@ -106,7 +106,9 @@ While the project is on 0.x, minor versions may contain breaking changes.
   than a sampled latent representation and without latent-walk dimensions. The
   oracle also registers shape parameters only for response families used by the
   world's channels. On the simple fully identified worlds, this changed maximum
-  r-hat from 2.2-2.7 to 1.000 and minimum bulk ESS from 5 to 480-1500.
+  r-hat from 2.2-2.7 to at most 1.01 (unrounded `az.rhat`; `az.summary`'s
+  2-significant-figure display shows 1.0) and minimum bulk ESS from 5 to
+  480-1500.
   Callers that need posterior `demand` / `baseline` deterministics must request
   `latent="sampled"`; default `sales_mu` is now the latent-marginal posterior
   mean.
