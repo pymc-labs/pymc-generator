@@ -83,6 +83,7 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         n_covariates=1,
         n_latent=1,
         T=24,
+        rw_smoothness_max_weeks=1,
         confounding_strength_range=(rho, rho),
         channel_hf_sigma_range=(0.0, 0.0),
         channel_pulse_prob_range=(0.0, 0.0),
@@ -113,6 +114,7 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         mean=drawn["param_rw_c_mean"][0],
         std=drawn["param_rw_c_std"][0],
         smoothness=float(structural["smoothness_c"][0]),
+        rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
         positive_only=True,
         eps=pt.as_tensor_variable(effective_eps),
     ).eval()

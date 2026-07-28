@@ -124,13 +124,14 @@ def _walk_column(eps_col, rw_group: dict, i: int, T: int) -> TensorVariable:
         TensorVariable,
         symbolic_random_walk(
             T,
-            # mean / std may be symbolic (RV) params; smoothness must stay a
-            # concrete float — it sets the moving-average kernel width, a
-            # structural property of the graph.
+            # mean / std may be symbolic (RV) params; smoothness and its
+            # absolute-week cap must stay concrete — they set the
+            # moving-average kernel width, a structural graph property.
             mean=rw_group["mean"][i],
             std=rw_group["std"][i],
             smoothness=float(rw_group["smoothness"][i]),
             positive_only=bool(rw_group["positive_only"]),
+            rw_smoothness_max_weeks=int(rw_group["rw_smoothness_max_weeks"]),
             eps=eps_col,
         ),
     )

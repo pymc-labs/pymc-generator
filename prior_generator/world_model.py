@@ -281,9 +281,18 @@ def _validate_oracle_channel_shocks(
 
 
 def _rw_prior_group(
-    name, n, positive, mean_range, smoothness, *, std_sigma=None, std_range=None, relative=False
+    name,
+    n,
+    positive,
+    mean_range,
+    smoothness,
+    *,
+    rw_smoothness_max_weeks: int,
+    std_sigma=None,
+    std_range=None,
+    relative=False,
 ):
-    """One node group's random-walk priors (mean + std RVs, concrete smoothness).
+    """One node group's walk priors and concrete smoothing timescale.
 
     Must be called inside a ``pm.Model`` context. This is THE single
     definition of the walk priors — the generative draw and the posterior
@@ -301,7 +310,13 @@ def _rw_prior_group(
         std = _uniform(f"{name}_std", std_range[0], std_range[1], n)
         if relative:  # scale-free: amplitude relative to the walk's level
             std = std * pt.softplus(mean)
-    return {"mean": mean, "std": std, "smoothness": smoothness, "positive_only": positive}
+    return {
+        "mean": mean,
+        "std": std,
+        "smoothness": smoothness,
+        "rw_smoothness_max_weeks": rw_smoothness_max_weeks,
+        "positive_only": positive,
+    }
 
 
 def _walk_priors(
@@ -321,6 +336,7 @@ def _walk_priors(
     preserved.
     """
     out: dict[str, dict] = {}
+    rw_smoothness_max_weeks = cfg.rw_smoothness_max_weeks
     if "d" in include:
         # A latent factor carries no scale or level of its own: both belong to
         # its loadings. Leaving rw_d_mean / rw_d_std free made
@@ -342,6 +358,7 @@ def _walk_priors(
             False,
             (0.0, 0.0),
             structural["smoothness_d"],
+            rw_smoothness_max_weeks=rw_smoothness_max_weeks,
             std_range=(1.0, 1.0),
         )
     if "z" in include:
@@ -352,6 +369,7 @@ def _walk_priors(
             cfg.rw_mean_range,
             structural["smoothness_z"],
             std_sigma=cfg.rw_std_sigma,
+            rw_smoothness_max_weeks=rw_smoothness_max_weeks,
         )
     if "c" in include:
         out["rw_c"] = _rw_prior_group(
@@ -360,6 +378,7 @@ def _walk_priors(
             True,
             cfg.rw_positive_mean_range,
             structural["smoothness_c"],
+            rw_smoothness_max_weeks=rw_smoothness_max_weeks,
             std_range=cfg.rw_channel_std_range,
             relative=True,
         )
@@ -370,6 +389,7 @@ def _walk_priors(
             False,
             cfg.rw_baseline_mean_range,
             structural["smoothness_b"],
+            rw_smoothness_max_weeks=rw_smoothness_max_weeks,
             std_sigma=cfg.rw_baseline_std_sigma_effective,
         )
     if "y" in include:
@@ -379,6 +399,7 @@ def _walk_priors(
             False,
             (0.0, 0.0),
             structural["smoothness_y"],
+            rw_smoothness_max_weeks=rw_smoothness_max_weeks,
             std_sigma=cfg.rw_sales_std_sigma,
         )
     return out

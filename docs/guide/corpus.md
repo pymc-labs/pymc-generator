@@ -77,7 +77,8 @@ Because each path is divided by a fixed constant rather than by its own
 realized standard deviation, that scale is realized only in expectation. It is
 therefore neither the realized standard deviation of an individual path nor a
 standard deviation measured only over the reported window. `smoothness`
-likewise maps to a moving-average kernel width in `T_full` weeks. For
+likewise maps to an absolute moving-average kernel width in weeks, governed by
+`rw_smoothness_max_weeks` (26 by default) and clamped to `T_full`. For
 `positive_only` channel walks, `param_rw_c_std` is the pre-softplus amplitude,
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.

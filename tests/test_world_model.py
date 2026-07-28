@@ -15,6 +15,7 @@ import pytest
 
 import prior_generator.world_model as world_model
 from prior_generator import make_scm_prior
+from prior_generator.random_walk import _kernel_width, symbolic_random_walk
 from prior_generator.sampler import _slice_g_active, sample_g_additive
 from prior_generator.world_model import (
     _rw_prior_group,
@@ -122,6 +123,63 @@ def test_single_draw_has_leading_axis(built):
     assert d["contributions"].shape == (1, 48, 4)
 
 
+def test_kernel_width_is_horizon_invariant_except_for_the_short_series_clamp():
+    max_weeks = 26
+    widths = [_kernel_width(0.5, T, rw_smoothness_max_weeks=max_weeks) for T in (52, 104, 156)]
+
+    assert widths == [13, 13, 13]
+    assert _kernel_width(0.75, 104, rw_smoothness_max_weeks=max_weeks) > widths[0]
+    assert _kernel_width(0.5, 104, rw_smoothness_max_weeks=10) < widths[0]
+    assert _kernel_width(1.0, 12, rw_smoothness_max_weeks=max_weeks) == 12
+
+
+@pytest.mark.slow
+def test_absolute_width_reduces_horizon_dependence_of_walk_texture():
+    """The absolute-week kernel makes a walk's texture markedly less horizon-dependent.
+
+    Asserted as a PAIRED comparison against the former horizon-proportional rule
+    rather than as an absolute threshold. Centring subtracts a ``T``-dependent
+    mean and ``_centred_walk_scale`` divides by a ``T``-dependent constant, and a
+    centred Brownian path's lag-1 autocorrelation rises with window length
+    regardless of the kernel, so perfect invariance is not achievable and an
+    absolute bound is a seed lottery: over 25 seeds the single-seed spread under
+    the fixed rule ranges 0.0008-0.0179, so 9 of them breach a 0.005 bound.
+    Averaged over seeds the improvement is stable — measured mean spread over 30
+    seeds, fixed vs proportional: 0.0154 vs 0.0333 (smoothness 0.25), 0.0070 vs
+    0.0176 (0.50), 0.0047 vs 0.0102 (0.75), i.e. 2.2-2.5x every time.
+
+    Passing ``rw_smoothness_max_weeks=round(T / 4)`` per horizon reproduces the
+    old ``round(smoothness * T / 4)`` width exactly, which is what makes this a
+    like-for-like paired contrast on identical innovations.
+    """
+    horizons = (52, 104, 156)
+
+    def mean_spread(cap_for_horizon):
+        spreads = []
+        for seed in range(1000, 1012):
+            innovations = np.random.default_rng(seed).normal(size=max(horizons))
+            autocorrelations = []
+            for T in horizons:
+                walk = symbolic_random_walk(
+                    T,
+                    mean=0.0,
+                    std=1.0,
+                    smoothness=0.5,
+                    positive_only=False,
+                    rw_smoothness_max_weeks=cap_for_horizon(T),
+                    eps=pt.as_tensor_variable(innovations[:T]),
+                ).eval()
+                autocorrelations.append(float(np.corrcoef(walk[:-1], walk[1:])[0, 1]))
+            spreads.append(max(autocorrelations) - min(autocorrelations))
+        return float(np.mean(spreads))
+
+    absolute_weeks = mean_spread(lambda T: 26)
+    horizon_proportional = mean_spread(lambda T: max(1, round(T / 4)))
+
+    assert absolute_weeks < horizon_proportional
+    assert horizon_proportional / absolute_weeks > 1.7
+
+
 def test_walk_scale_rejects_ambiguous_range_and_sigma():
     with pytest.raises(ValueError, match="mutually exclusive"):
         _rw_prior_group(
@@ -130,6 +188,7 @@ def test_walk_scale_rejects_ambiguous_range_and_sigma():
             False,
             (0.0, 0.0),
             0.5,
+            rw_smoothness_max_weeks=26,
             std_sigma=1.0,
             std_range=(1.0, 1.0),
         )

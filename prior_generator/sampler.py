@@ -84,6 +84,29 @@ PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
     "hill_shape": (0.2, 1.6),
 }
 
+#: Bound the diagnostic search so extreme ``query_frac`` values cannot make
+#: configuration validation unbounded.
+MAX_QUERY_HORIZON_SEARCH_STEPS = 1_000_000
+
+
+def _n_query(T: int, query_frac: float) -> int:
+    """Return query weeks from the canonical rounded query-fraction rule."""
+    return int(round(query_frac * T))
+
+
+def _minimum_valid_query_horizon(T: int, query_frac: float, l_max: int) -> int | None:
+    """Return the first valid candidate horizon at or above ``T``, if bounded."""
+    warmup_boundary = l_max - 1
+    for candidate in range(T, T + MAX_QUERY_HORIZON_SEARCH_STEPS + 1):
+        n_query = _n_query(candidate, query_frac)
+        if (
+            0 < n_query < candidate
+            and n_query <= candidate - 2
+            and min(candidate - n_query, candidate // 2) >= warmup_boundary
+        ):
+            return candidate
+    return None
+
 
 @dataclass
 class SCMPrior:
@@ -164,6 +187,12 @@ class SCMPrior:
     rw_sales_std_sigma: float = 0.25  # HalfNormal for sales-noise walk std
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
+    # 26 weeks (half a year) reproduces the CURRENT T=104 reference exactly at
+    # smoothness=1.0 (round(1.0 * 104 / 4) == 26), preserving its drift
+    # character while making every other horizon consistent. This is a config
+    # knob, not a constant, so drift timescale stays tunable independently of T —
+    # that flexibility is the point.
+    rw_smoothness_max_weeks: int = 26
     # Optional shared innovation between the baseline and every channel. When
     # enabled, rho is resolved per world and mixes their already-standardized
     # innovations without changing either marginal innovation variance.
@@ -268,7 +297,7 @@ class SCMPrior:
 
     @property
     def n_query(self) -> int:
-        return int(round(self.query_frac * self.T))
+        return _n_query(self.T, self.query_frac)
 
     def prior_cond_spec(self) -> dict[str, dict[str, tuple[float, float]]]:
         """Effective ``{quantity: {"support": (lo, hi), "width_range": (w_lo, w_hi)}}``.
@@ -342,6 +371,7 @@ class SCMPrior:
         _finite_real("spend_cv_floor", self.spend_cv_floor, nonnegative=True)
         _finite_real("rw_smoothness_alpha", self.rw_smoothness_alpha, positive=True)
         _finite_real("rw_smoothness_beta", self.rw_smoothness_beta, positive=True)
+        _integer("rw_smoothness_max_weeks", self.rw_smoothness_max_weeks, minimum=1)
         if not 0 < self.n_query < self.T:
             raise ValueError(
                 f"query_frac={self.query_frac} gives {self.n_query} query weeks "
@@ -602,6 +632,12 @@ class SCMPrior:
             # Check both split types even at degenerate probabilities: validation-split repair can
             # force either type, and every scored target must have persisted response history.
             if min(short_query_start, long_query_start) < warmup_boundary:
+                suggested_T = _minimum_valid_query_horizon(self.T, self.query_frac, self.l_max)
+                horizon_remedy = (
+                    f"raise T to at least {suggested_T}, "
+                    if suggested_T is not None
+                    else "raise T, "
+                )
                 raise ValueError(
                     "adstock burn-in query overlap: "
                     f"T={self.T}, l_max={self.l_max}, n_query={self.n_query}; "
@@ -611,7 +647,10 @@ class SCMPrior:
                     "response that depends on unpersisted pre-window spend. Both the "
                     "short-horizon (T - n_query) and long-horizon (T // 2) query windows must "
                     "start at or after that boundary, otherwise tasks are scored on targets that "
-                    "are not a function of the persisted inputs."
+                    "are not a function of the persisted inputs. To reach this world anyway, "
+                    "either set adstock_burn_in=0 (the convolution then zero-pads, which is "
+                    f"reproducible from persisted spend at every week), {horizon_remedy}or lower "
+                    "query_frac / l_max."
                 )
         for name in ("channel_hf_sigma_range", "channel_pulse_amp_range"):
             lo, hi = getattr(self, name)
@@ -1693,15 +1732,27 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             support_mask[idx_flip] = new_support
             split_type[idx_flip] = new_split
 
+    # Derived from the FLOAT32 array that is actually persisted, not from the
+    # float64 draw. `sales_norm = sales_raw / sales_scale` is persisted too, so a
+    # consumer must be able to reproduce both from the corpus alone; computing
+    # the scale at draw precision made that impossible whenever float32 rounding
+    # dominated the standard deviation. That is reachable: a short support window
+    # over a very smooth walk gives a near-constant slice, where the writer and a
+    # float32 recomputation disagreed by 2.5e-5 relative — past the validator's
+    # 1e-5 tolerance.
+    sales_stored = sales_raw.astype(np.float32)
     sales_scale = np.array(
-        [float(np.std(sales_raw[i][support_mask[i] == 1])) for i in range(n_tasks)],
+        [
+            float(np.std(sales_stored[i][support_mask[i] == 1].astype(np.float64)))
+            for i in range(n_tasks)
+        ],
         dtype=np.float64,
     )
     bad_scale = ~(np.isfinite(sales_scale) & (sales_scale > 0.0))
     if bad_scale.any():
-        full_std = np.std(sales_raw[bad_scale], axis=1)
+        full_std = np.std(sales_stored[bad_scale].astype(np.float64), axis=1)
         sales_scale[bad_scale] = np.where(np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0)
-    sales_norm = sales_raw / sales_scale[:, None]
+    sales_norm = sales_stored.astype(np.float64) / sales_scale[:, None]
 
     effective_legacy_edge_rates = {**EDGE_BASE_RATES, **(cfg.edge_rate_overrides or {})}
 

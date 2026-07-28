@@ -6,8 +6,9 @@ The walk is always autocorrelated — a smoothed Brownian motion — and the
 ``smoothness`` parameter controls its texture:
 
 * ``smoothness -> 0``: raw Brownian motion — jagged, hectic, but cumulative.
-* ``smoothness -> 1``: wide moving-average of the Brownian path — a soft,
-  slow sinusoidal-like drift.
+* ``smoothness -> 1``: an absolute-week moving average no wider than
+  ``rw_smoothness_max_weeks`` (26 weeks by default), capped at the simulated
+  horizon, and producing a soft drift.
 
 The symbolic expression lives inside the causal graph so intervention-based
 decomposition evaluates the same graph twice. PyTensor is imported lazily so
@@ -23,15 +24,27 @@ import numpy as np
 __all__ = ["symbolic_random_walk"]
 
 
-def _kernel_width(smoothness: float, T: int) -> int:
-    """Moving-average kernel width for a given smoothness (static int).
+def _kernel_width(smoothness: float, T: int, rw_smoothness_max_weeks: int) -> int:
+    """Return the moving-average width for one simulated horizon.
 
-    Low smoothness -> width 1 (no smoothing, raw Brownian). High smoothness
-    -> width ~T/4 (very smooth drift). Always at least 1.
+    The unclamped width is ``max(1, round(smoothness *
+    rw_smoothness_max_weeks))`` weeks. ``rw_smoothness_max_weeks`` is an
+    absolute timescale, so changing ``T`` changes only the short-series clamp.
     """
     if not 0.0 <= smoothness <= 1.0:
         raise ValueError(f"smoothness must be in [0, 1], got {smoothness}")
-    return max(1, int(round(smoothness * T / 4.0)))
+    if (
+        isinstance(rw_smoothness_max_weeks, (bool, np.bool_))
+        or not isinstance(rw_smoothness_max_weeks, (int, np.integer))
+        or rw_smoothness_max_weeks < 1
+    ):
+        raise ValueError(
+            f"rw_smoothness_max_weeks must be an integer >= 1, got {rw_smoothness_max_weeks!r}"
+        )
+    if isinstance(T, (bool, np.bool_)) or not isinstance(T, (int, np.integer)) or T < 1:
+        raise ValueError(f"T must be an integer >= 1, got {T!r}")
+    width = max(1, int(round(smoothness * rw_smoothness_max_weeks)))
+    return min(width, int(T))
 
 
 @lru_cache(maxsize=64)
@@ -60,7 +73,8 @@ def _centred_walk_scale(T: int, width: int) -> float:
     than by its own realized standard deviation, that scale is realized only in
     expectation. It is therefore neither the realized standard deviation of an
     individual path nor a standard deviation measured only over the reported
-    window. ``smoothness`` maps to a kernel width in ``T_full`` weeks. For
+    window. ``smoothness`` maps to an absolute kernel width in weeks, governed by
+    ``rw_smoothness_max_weeks`` and capped at ``T_full``. For
     positive-only walks, ``std`` is the pre-softplus amplitude, so ``rw_c`` is
     excluded from the signed-walk table below rather than reported with a
     misleadingly wide range.
@@ -108,6 +122,8 @@ def symbolic_random_walk(
     std,
     smoothness: float,
     positive_only: bool,
+    *,
+    rw_smoothness_max_weeks: int,
     eps=None,
 ):
     """Create a PyTensor symbolic random walk (plan doc 4.0c).
@@ -127,6 +143,9 @@ def symbolic_random_walk(
         property of the graph.
     positive_only : bool
         If True, apply softplus at the end.
+    rw_smoothness_max_weeks : int
+        Maximum absolute smoothing width in weeks; required so every caller
+        uses the configured timescale rather than a horizon-derived default.
     eps : pt.TensorVariable | None
         White-noise input of shape (T,). If None, a fresh ``pt.vector``
         named ``"eps"`` is created.
@@ -140,7 +159,7 @@ def symbolic_random_walk(
     if eps is None:
         eps = pt.vector("eps")
     raw = pt.cumsum(eps)
-    w = _kernel_width(smoothness, T)
+    w = _kernel_width(smoothness, T, rw_smoothness_max_weeks=rw_smoothness_max_weeks)
     if w > 1:
         left, right = w // 2, w - 1 - w // 2
         padded = pt.concatenate([pt.tile(raw[0], left), raw, pt.tile(raw[-1], right)])

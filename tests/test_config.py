@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import prior_generator as pg
+import prior_generator.sampler as sampler
 from prior_generator.sampler import (
     ADSTOCK_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
@@ -207,6 +208,18 @@ def test_lmax_must_be_a_positive_integer(l_max):
         SCMPrior(l_max=l_max).validate()
 
 
+@pytest.mark.parametrize("value", (0, -1, 1.5, True, np.nan, np.inf, "26"))
+def test_rw_smoothness_max_weeks_must_be_a_positive_integer(value):
+    with pytest.raises(ValueError, match="rw_smoothness_max_weeks"):
+        SCMPrior(rw_smoothness_max_weeks=value).validate()
+
+
+def test_rw_smoothness_max_weeks_default_is_valid():
+    cfg = SCMPrior()
+    assert cfg.rw_smoothness_max_weeks == 26
+    cfg.validate()
+
+
 @pytest.mark.parametrize("name", ("rw_std_sigma", "rw_sales_std_sigma"))
 @pytest.mark.parametrize("value", (np.nan, np.inf, 0.0, -1.0))
 def test_random_walk_sigmas_must_be_finite_and_positive(name, value):
@@ -296,6 +309,45 @@ def test_burn_in_rejects_short_horizon_overlap_even_when_long_split_is_certain()
             query_frac=0.7,
             p_long_horizon=1.0,
         ).validate()
+
+
+@pytest.mark.parametrize(
+    ("T", "query_frac"),
+    (
+        (8, 0.25),
+        (20, 0.7),
+        (104, 0.95),
+    ),
+)
+def test_burn_in_overlap_suggestion_is_an_accepted_horizon(T, query_frac):
+    kwargs = {
+        "T": T,
+        "l_max": 8,
+        "adstock_burn_in": 8,
+        "query_frac": query_frac,
+    }
+    with pytest.raises(ValueError, match="query overlap") as error:
+        SCMPrior(**kwargs).validate()
+
+    message = str(error.value)
+    prefix = "raise T to at least "
+    assert "adstock_burn_in=0" in message
+    assert "lower query_frac / l_max" in message
+    assert prefix in message
+    suggested_horizon = int(message.split(prefix, 1)[1].split(",", 1)[0])
+    SCMPrior(**{**kwargs, "T": suggested_horizon}).validate()
+
+
+def test_burn_in_overlap_omits_numeric_horizon_when_search_is_capped(monkeypatch):
+    monkeypatch.setattr(sampler, "MAX_QUERY_HORIZON_SEARCH_STEPS", 1)
+
+    with pytest.raises(ValueError, match="query overlap") as error:
+        SCMPrior(T=104, l_max=8, adstock_burn_in=8, query_frac=0.95).validate()
+
+    message = str(error.value)
+    assert "raise T to at least" not in message
+    assert "adstock_burn_in=0" in message
+    assert "raise T, or lower query_frac / l_max" in message
 
 
 def test_burn_in_query_window_guard_is_exempt_when_disabled():

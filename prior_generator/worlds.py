@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import numpy as np
 
-from .random_walk import _centred_walk_scale
+from .random_walk import _centred_walk_scale, _kernel_width
 from .sampler import (
     ADSTOCK_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
@@ -381,6 +381,7 @@ def _rw_parameters(params: dict, group: str, index: int) -> dict[str, float | bo
         "mean": float(np.asarray(values["mean"])[index]),
         "std": float(np.asarray(values["std"])[index]),
         "smoothness": float(np.asarray(values["smoothness"])[index]),
+        "rw_smoothness_max_weeks": int(values["rw_smoothness_max_weeks"]),
         "positive_only": bool(values["positive_only"]),
     }
 
@@ -509,7 +510,11 @@ def _build_equations(world: SCM) -> dict[str, str]:
 
     def rw_scale(label: str, group: str, index: int) -> str:
         smoothness = float(np.asarray(params[group]["smoothness"])[index])
-        width = max(1, int(round(smoothness * T_full / 4.0)))
+        width = _kernel_width(
+            smoothness,
+            T_full,
+            rw_smoothness_max_weeks=int(params[group]["rw_smoothness_max_weeks"]),
+        )
         scale = _centred_walk_scale(T_full, width)
         return f"{label}: centred_walk_scale(T_full={T_full}, width={width})={scale:.17g}"
 
@@ -529,7 +534,8 @@ def _build_equations(world: SCM) -> dict[str, str]:
         ),
         "RW": (
             f"T_full = T + burn_in = {T_full}. For each innovation column, q = edge_padded_MA("
-            "cumsum(eps), width=max(1, round(smoothness * T_full / 4))); "
+            "cumsum(eps), width=kernel_width(smoothness, rw_smoothness_max_weeks), "
+            "capped at T_full); "
             "centred_walk_scale(T_full, width) = sqrt(tr(A A^T) / T_full), where "
             "A = centre . movavg(width) . cumsum is fixed; "
             "RW_full = mean + std * (q - mean(q)) / centred_walk_scale(T_full, width); "
@@ -820,6 +826,7 @@ def _assemble_params(
             "mean": params.pop(f"{group}_mean"),
             "std": params.pop(f"{group}_std"),
             "smoothness": np.array(structural[f"smoothness_{suffix}"], copy=True),
+            "rw_smoothness_max_weeks": cfg.rw_smoothness_max_weeks,
             "positive_only": positive_only,
         }
     if cfg.n_channel_shocks:

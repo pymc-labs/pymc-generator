@@ -23,25 +23,32 @@ from prior_generator.signal_diagnostics import (
 )
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
+#: Byte-level contract for every serialized corpus array. When a hash moves,
+#: record WHY here — a silent regeneration is how a real regression hides.
+#:
+#: Last moved by the absolute-week walk-smoothing rule (`smoothness` now maps to
+#: `rw_smoothness_max_weeks` weeks instead of `T / 4`, so a world has the same
+#: drift timescale at every horizon). That changed the walk transform only: all
+#: 17 walk-driven series and their derived normalizers/metrics moved, while the
+#: 26 structural and parameter arrays — `g`, the active masks, `cell_id`, the
+#: split masks, `channel_level`, `saturation_scale`, `adstock_*`, `weibull_*`,
+#: `confounding_strength` and the shock schedule — are byte-identical, which is
+#: the evidence that the RNG stream did not shift.
 EXPECTED_CORPUS_HASHES = {
-    "spend_raw": "c2bbfc474bd5a7b8c9a70eb518e5a082b6f699d8c9806554de87fdc877df5279",
-    # Moved when the persisted normalizers dropped their raw-unit `+ 1e-8`
-    # denominator epsilon for exact-zero-guarded division: a 1.17e-7 relative
-    # shift, i.e. the last float32 bit of 38 of 96 cells. Every other array in
-    # this contract is unchanged.
-    "spend_norm": "3ae8d9289fd25095d3cf26db1a575e42480587ecce8d97d67ab97dcba9a78bba",
-    "spend_share": "674ba766b14c141d578b1e1825a0937d077a23344c3b2dfa455f3d4c608acc8a",
-    "controls": "3626a20d0a1e6f15b84cd589b22fe110ddfac34853e92f4369889bf55eccbaf4",
-    "sales_raw": "e1c86549bc89889185d421a537e98bba0635e671e686c0bd5d3c830312077bcf",
-    "sales_norm": "d02208d64adc6ff3c0039941b6e0fce93a65781855c096eb2dd55419d1e47fb2",
+    "spend_raw": "07b0a0ca4a33edba8361ead35ccfee67c7f7ea94e3c0f19cf8dfca5b9f4cab3f",
+    "spend_norm": "777d7f347d937faf3328824b94c03ba843bb5bcf0a93bad77aed54efed6ffcc6",
+    "spend_share": "22935a90fa7493e52a97d622bab44b427848c4c3c20ad6f2f8c08e95476f3293",
+    "controls": "26b40a318d8f25ecc2dfdd44b87f3e958856583b18b0897487c2ea489ba45beb",
+    "sales_raw": "bd3586d0fe1d12b5b268ff278f1b798d64a8abbddbb1c691399a9a7fd5ddd61e",
+    "sales_norm": "5f4f633131d0c2ae0f0d042bcd9b7cb9138993e32901948e889dc186987ad559",
     "support_mask": "95ee8b55a20094102512582a4d0021d303214a842b292998ea7a97b7dcd7b0c3",
     "is_future": "bd541332240f592301f7e720c94c416fea54a2ebd26ee22cf46c4dca06c4bdb0",
     "g": "e74d8d2a53ee7a978fe94b066510147be374f197504cff24e02e24cb00478e5c",
-    "contributions_raw": "d04b8e617949c1e112c31cf114c2c523dc333aac9dd079d3e7606d2cf647393a",
-    "baseline_raw": "70c9efa8f8638132aecc04ac5b5884d259581d3e85382140a324a78bb036bb05",
-    "demand": "6e35699b0076b745ca7211ccb0ec0031f77e8c0733692cd62af46756408cba71",
-    "spend_means": "54ed564fbe95f8940e354d81d2897fe33878b96ca9bab869206905e4bdaaf270",
-    "sales_scale": "a676e6e3b3a867ccc2da124fc035d82051d5e3548efb23aab281e65aa9699924",
+    "contributions_raw": "9c152e6d830ee3eca442bbfff36f449ae3ae7d89a038d3c68db7523ef76b6158",
+    "baseline_raw": "6667c83a56f770acd55fa8a18145a2551a1dc1c527d117ef787e4cc601b35bcb",
+    "demand": "71d0042171f620e04c641530e0942b5284aa81380848d52d4f51688b8bf24081",
+    "spend_means": "acdb33166ada9f38aba32f367e21d0c466957b24d6c66c15e29da43006452e62",
+    "sales_scale": "df13898598141e3a870cefdd7d249259f10baebec02e630431493bea396db87e",
     "is_val": "3ba2b8d7203a2ac328478a2be7cb0e3ea6e28af5e648841fbf1a41fbbb2e09f7",
     "cell_id": "85bf0249350a8edb436598ba927c2298bca0e058665eb864b071e65830562096",
     "active_c_mask": "a9affb5f52630150ac24b5fb37a2b9e88bc54312f549319752cced7601ebeac1",
@@ -50,12 +57,12 @@ EXPECTED_CORPUS_HASHES = {
     "K_active": "a9073e6b59ee724764dc6cafa783aee1aae5fda1329f86b3b634578b0c8687f1",
     "M_active": "9aed02a9be4f658a038cf3eb48d2effffb9d8e44125a6afe60bdb69cee9cf1b8",
     "J_active": "a9bb0c6117f6fc1cb4a0e889122a322c8c515ce1b82ed2564d127109bb066713",
-    "indirect_effects": "8b6bd08524473069fc4dcf6c7840c0e219424e0b6c84a6f0ec09e5124213d346",
+    "indirect_effects": "49dd273f9e1c296af56d164c92f5c705a4bec5e3769e19d8086c4244feb70c00",
     "channel_active": "e6a619d2852bed3ed0f8890b700bec0062e3f6f7352eec5a769792bd8c191671",
-    "control_contribution": "3fc589c3a0210236442dce0e0da1b5821f451763a2715a281aacc9cf79458904",
-    "confounder_contribution": "9aa4453b1646906ac2bccdeebb732632c3f4ab800246e3c93c8ff19f9e3d4ddb",
-    "baseline_intrinsic": "7d35cdd3938daa5077de631364109a3f2df7440d6a2f1e46512a94a2a7c3cd7d",
-    "indirect_effects_by_source": "db4eff94a8b16ce084c0c9080e1978e2e07335968a1392aabd4e82986209b254",
+    "control_contribution": "484d6a68513d1535c1231d787b729637643ea01890ee8b0fa77fc10b178e8798",
+    "confounder_contribution": "553912b2fe1c11bdf3f5cf865271d6237c75d42ea1c329293aade1f2844a2902",
+    "baseline_intrinsic": "c2028bbed201505ea391858623775fd60d1747c728210abd6359271da3daf81f",
+    "indirect_effects_by_source": "73a54d6091dc42536e260f1f6e936ddcdf7951230e19206177fb905645f7fa59",
     "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
     "channel_shock_mask": "a2c17b7c3b20dff7ef9b8ef7316a3ef323f705522c3fef1744df2a33a3af832b",
     "channel_shock_channel": "7f956e232d961d634c20094542cf11ae23525f62749f31010e76d0cbcacc7e82",
@@ -69,7 +76,7 @@ EXPECTED_CORPUS_HASHES = {
     "adstock_alpha": "ec14426e030159bdd87ce9eb96c954ce3f226149923e6a2b77c8739964131bf8",
     "weibull_lam": "e9d430f3f8679b6fe2569cb5a09825214231d0050db69fc91704c60d4faf30d7",
     "weibull_k": "0a48c8e646f1b4f9dc70f0e0e03be9b59503b19db4c71a2a5d44f869efcf8c44",
-    "signal_metrics": "65967ac869a5da05d4eb29f7cb2195bb38d859bd6e5062d77840db33e76d82b3",
+    "signal_metrics": "d35e6ab904612922bc64f53b821e0c0a6c56349cfbea09c1cfb9b91b6c0f763d",
     "signal_metric_valid": "f1ecbab717272a25f5802cb87be6fd3b1bdd88cede7e75a141f74ebacf212b16",
 }
 

@@ -233,7 +233,8 @@ the base rates and budgets.
 - **Edge coefficients** — `pm.Uniform` over the per-edge-type coefficient ranges
   (`w_dc`, `v_zc`, `α_cc`, `β`, …).
 - **Random walks** — `pm.Uniform`/`pm.HalfNormal` means and stds, `pm.Normal`
-  innovations; the walk's smoothness sets a moving-average kernel width.
+  innovations; smoothness maps through `rw_smoothness_max_weeks` to an
+  absolute-week moving-average kernel.
 - **Mechanism shapes** — adstock decay / Weibull shape and the saturation shape
   priors (`SATURATION_PRIOR_RANGES`).
 - **Channel texture** — weekly-jitter `pm.Normal` and campaign-pulse
@@ -245,7 +246,8 @@ Because each path is divided by a fixed constant rather than by its own
 realized standard deviation, that scale is realized only in expectation. It is
 therefore neither the realized standard deviation of an individual path nor a
 standard deviation measured only over the reported window. `smoothness`
-likewise maps to a moving-average kernel width in `T_full` weeks. For
+likewise maps to an absolute moving-average kernel width in weeks, governed by
+`rw_smoothness_max_weeks` (26 by default) and clamped to `T_full`. For
 positive-only channel walks, `param_rw_c_std` is the pre-softplus amplitude,
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.
