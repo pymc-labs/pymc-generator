@@ -189,6 +189,18 @@ While the project is on 0.x, minor versions may contain breaking changes.
   Weibull-adstock channel assigns `weibull_lam` and `weibull_k` to Metropolis
   rather than NUTS, and a test pins that sampler selection.
 
+- **Persisted ratios are unit-invariant** (breaking): `spend_norm`,
+  `spend_share` and the `spend_cv` / `media_share` diagnostic quantiles divided
+  by a denominator carrying a raw-unit `+ 1e-8` (or `+ 1e-12`) epsilon, so a
+  pure change of monetary unit changed persisted features — rescaling an
+  otherwise identical corpus moved `spend_cv_quantiles.q50` from 0.586 to 0.149
+  while the scale-free `spend_cv` signal metric stayed at 0.586, i.e. one
+  diagnostics block reported two contradicting CVs. All four now use
+  exact-zero-guarded division, so padded and degenerate slots stay exactly zero
+  and the ratios are true ratios. `spend_norm` values move by 1.17e-7 relative
+  (the last float32 bit of 38 of 96 cells in the frozen contract); every other
+  persisted array is byte-identical.
+
 - **Signal-summary/gate contract version 2 → 3** (breaking):
   `SIGNAL_METRIC_LAYOUT` and `METRIC_KEYS` remain the same nine entries in the
   same order. `SIGNAL_METRIC_VERSION` changes because summaries add the
