@@ -43,6 +43,14 @@ storage is float32/uint8/int32):
 | `active_c_mask` / `active_m_mask` / `active_j_mask` | (N, K/M/J) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block, and `short_horizon_n_query` split metadata |
 
+`demand` is a latent factor pinned to mean 0 / scale 1, putting its `D→B`,
+`D→C`, and `D→Z` magnitude in the loadings. The graph admits an exact sign
+flip (`eps_d`, `w_dc`, `u_dz`, and `delta_db` all negated), but the supported
+prior's strictly positive `db_coeff_range`, `dc_coeff_range`, and
+`dz_coeff_range` exclude the reflected parameters, so demand's sign is
+identified unless a user widens one of those ranges to admit negatives; then
+only `|D|` and the loading magnitudes are recoverable.
+
 `support_mask` is always a contiguous support prefix followed by a nonempty
 query suffix. `is_future=0` uses `diagnostics["short_horizon_n_query"]` query
 weeks; `is_future=1` uses the second half of the series. `sales_scale` is the
@@ -63,21 +71,31 @@ every reported response reproducible from persisted spend.
 
 ### Random-walk parameter labels
 
-Persisted `param_rw_*_std` labels describe the walk's **expected** standard
-deviation over the full simulated horizon
-`T_full = T + adstock_burn_in`. They are neither the realized standard
-deviation of one path nor a standard deviation measured only over the reported
-window. `smoothness` likewise maps to a moving-average kernel width in
-`T_full` weeks. For `positive_only` channel walks, `param_rw_c_std` is the
-pre-softplus amplitude, so it is not directly comparable to the standard
-deviation of the emitted spend series.
+Persisted `param_rw_*_std` labels declare the walk's **expected standard
+deviation** over the full simulated horizon `T_full = T + adstock_burn_in`.
+Because each path is divided by a fixed constant rather than by its own
+realized standard deviation, that scale is realized only in expectation. It is
+therefore neither the realized standard deviation of an individual path nor a
+standard deviation measured only over the reported window. `smoothness`
+likewise maps to a moving-average kernel width in `T_full` weeks. For
+`positive_only` channel walks, `param_rw_c_std` is the pre-softplus amplitude,
+so it is excluded from the signed-walk table below rather than reported with a
+misleadingly wide range.
 
-Over eight worlds at `T=52` and `adstock_burn_in=8`, the reported-window
-standard-deviation / declared-`std` ranges were 0.903–1.072 for `rw_d`,
-0.893–1.062 for `rw_b`, 0.887–1.061 for `rw_y`, and 0.463–1.074 for `rw_c`.
-The `rw_c` low end is partly the pre-softplus artifact. Consequently, these
-labels have a small irreducible recovery floor when inferred from only the
-reported window.
+Across 40 signed walks from eight worlds at `T=52` and
+`adstock_burn_in=8`, the reported-window sd / declared `std` was:
+
+| signed group | reported-window sd / declared `std` | median |
+| --- | --- | --- |
+| `rw_d` | [0.396, 0.927] | 0.690 |
+| `rw_z` | [0.252, 1.985] | 0.868 |
+| `rw_b` | [0.264, 1.809] | 0.814 |
+| `rw_y` | [0.294, 1.335] | 0.757 |
+| **all signed (n=40)** | **[0.25, 1.99]** | **0.80** |
+
+This is roughly an 8× spread. `param_rw_*_std` is therefore a weak label for
+anything measured on the reported window; consumers should not score it as if
+it were the realized reported-window standard deviation.
 
 
 ### Channel, adstock, and intervention audit metadata

@@ -136,12 +136,16 @@ While the project is on 0.x, minor versions may contain breaking changes.
   and `rw_d_std` are no longer drawn. A latent factor carries no scale of its
   own — `(sigma_d, w_dc, u_dz, delta_db) -> (lam*sigma_d, w/lam, u/lam,
   delta/lam)` left every observable identical, and `delta_db * mu_d` was
-  absorbed by `rw_b_mean`, so none of the loadings were recoverable. The whole
-  `D -> *` magnitude now lives in the loadings, which is what the data
-  identifies. Latent influence is consequently less dispersed across worlds
-  (the `HalfNormal` factor is gone); widen `db_coeff_range` / `dc_coeff_range`
-  / `dz_coeff_range` to restore spread — those knobs are now meaningful rather
-  than confounded.
+  absorbed by `rw_b_mean`, so none of the loading magnitudes were recoverable.
+  The whole `D -> *` magnitude now lives in the loadings. The graph admits an
+  exact sign flip when `eps_d`, `w_dc`, `u_dz`, and `delta_db` are all negated,
+  but the supported prior's strictly positive `db_coeff_range`,
+  `dc_coeff_range`, and `dz_coeff_range` exclude the reflected parameters, so
+  demand's sign is identified. If a user widens any of those ranges to admit
+  negatives, only `|D|` and the loading magnitudes are recoverable. Latent
+  influence is consequently less dispersed across worlds (the `HalfNormal`
+  factor is gone); widen `db_coeff_range` / `dc_coeff_range` / `dz_coeff_range`
+  to restore spread — those knobs are now meaningful rather than confounded.
 - **The saturation anchor is a function of parameters alone** (breaking):
   `saturation_scale` was the mean of the realized adstocked series over the
   reported window. Two costs: the "prior" was a statistic of the noise it
@@ -178,6 +182,12 @@ While the project is on 0.x, minor versions may contain breaking changes.
   overlap world contribution error 1.3% -> 0.4%, r-hat 2.85 -> 2.13;
   no-overlap contribution error 20.2% -> 10.3%.
 
+- **Published `T_full` walk-scale semantics**: the corpus guide now documents
+  `param_rw_*_std` as an expected full-horizon scale under fixed normalization,
+  rather than a realized per-path scale.
+- **Oracle Weibull sampler downgrade is documented and tested**: a
+  Weibull-adstock channel assigns `weibull_lam` and `weibull_k` to Metropolis
+  rather than NUTS, and a test pins that sampler selection.
 
 - **Signal-summary/gate contract version 2 → 3** (breaking):
   `SIGNAL_METRIC_LAYOUT` and `METRIC_KEYS` remain the same nine entries in the
@@ -188,12 +198,17 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - **`build_oracle_model` requires `saturation_scale`** (breaking): the
   observed-channel mean fallback was removed so every oracle uses the same
   parameter-only response anchor as generation.
-- **Burn-in configurations now require one reproducible week** (breaking):
-  `SCMPrior.validate()` requires `T >= l_max` when `adstock_burn_in > 0`.
-  `response_warmup_weeks` and the oracle likelihood tail are kernel-aware:
-  they use `l_max - 1` only with burn-in and an eligible direct nonidentity
-  adstock kernel; otherwise they use the full reported window. Summary calls
-  without `adstock_family` conservatively report `l_max - 1` with burn-in.
+- **Query windows cannot overlap non-reproducible burn-in responses**
+  (breaking): `SCMPrior.validate()` now rejects a burn-in configuration whose
+  query window overlaps the response prefix that depends on unpersisted spend.
+  It requires `min(T - n_query, T // 2) >= l_max - 1`, covering both the
+  configured short-horizon query split and the `is_future=1` half-series split.
+  This replaces — rather than supplements — the prior `T >= l_max` check and
+  is strictly stronger. `response_warmup_weeks` and the oracle likelihood tail
+  remain kernel-aware: they use `l_max - 1` only with burn-in and an eligible
+  direct nonidentity adstock kernel; otherwise they use the full reported
+  window. Summary calls without `adstock_family` conservatively report
+  `l_max - 1` with burn-in.
 - **Oracle likelihood uses only a kernel-required reproducible tail**
   (breaking): with burn-in and an eligible direct nonidentity adstock kernel,
   it observes `sales[l_max - 1:]`; identity-only direct paths retain the full
@@ -233,9 +248,15 @@ While the project is on 0.x, minor versions may contain breaking changes.
   requires `diagnostics["edge_types"]` to match the canonical layout.
 - **Signal reports distinguish unavailable metrics**: `describe_scm` renders
   `n/a` rather than a numeric value when a signal metric is invalid.
-- **Weibull degeneracy is consistent across symbolic and numpy paths**:
-  non-finite or zero min-max spans/totals now produce a zero kernel instead of
-  symbolic NaNs.
+- **Weibull degeneracy guard is backend-stable**: the analytic
+  `raw_weights.max() > 1e-300` floor replaces a compile-mode-dependent check on
+  library output and is mirrored in `_adstock_weights`; degenerate weights
+  produce a zero kernel rather than symbolic NaNs.
+- **Walk-scale and oracle-noise documentation corrected**: published
+  reported-window sd / declared-`std` ranges now identify the declared
+  `T_full` expected scale rather than full-window realized sd, and the oracle's
+  sales-noise heteroscedasticity is correctly described as largest at the
+  window edges and smallest mid-window.
 - **Oracle rejects empty likelihoods**: `build_oracle_model` raises when its
   active-kernel warmup would consume every reported observation.
 - **Output and replay audits fail safely**: named graph-output collisions now

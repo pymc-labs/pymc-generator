@@ -710,28 +710,34 @@ def test_response_warmup_matches_persisted_response_boundary():
         assert relative_error[warmup:].max() < 1e-4
 
 
-def test_identity_adstock_corpus_has_no_response_warmup_and_self_validates():
-    """An all-linear short-horizon corpus has no hidden response history."""
-    # Identity adstock has no response state, so this test isolates its diagnostics
-    # instead of exercising the burn-in query-window contract.
-    cfg = make_scm_prior(
-        n_treatments=1,
-        n_covariates=1,
-        n_latent=1,
-        n_cells=2,
-        draws_per_cell=1,
-        T=5,
-        l_max=5,
-        adstock_burn_in=0,
-        nonlinearity="linear",
-        edge_budget=_direct_only_edge_budget(),
-        seed=74,
-    )
-    corpus = DataGenerator(cfg).generate(validate=True)
+def test_adstock_corpus_response_warmup_contrasts_and_self_validates():
+    """With burn-in, diagnostics distinguish identity from geometric response state."""
+    warmups = {}
+    for name, family, family_probs in (
+        ("identity", 0, {"none": 1.0, "geometric": 0.0, "weibull": 0.0}),
+        ("geometric", 1, {"none": 0.0, "geometric": 1.0, "weibull": 0.0}),
+    ):
+        cfg = make_scm_prior(
+            n_treatments=1,
+            n_covariates=1,
+            n_latent=1,
+            n_cells=2,
+            draws_per_cell=1,
+            T=20,
+            l_max=5,
+            nonlinearity="linear",
+            adstock_family_probs=family_probs,
+            edge_budget=_direct_only_edge_budget(),
+            seed=74,
+        )
+        assert cfg.adstock_burn_in == cfg.l_max
+        corpus = DataGenerator(cfg).generate(validate=True)
 
-    assert np.all(corpus["adstock_family"] == 0)
-    assert corpus["diagnostics"]["signal"]["response_warmup_weeks"] == 0
-    assert DataGenerator.validate_corpus(corpus) == []
+        assert np.all(corpus["adstock_family"] == family)
+        warmups[name] = corpus["diagnostics"]["signal"]["response_warmup_weeks"]
+        assert DataGenerator.validate_corpus(corpus) == []
+
+    assert warmups == {"identity": 0, "geometric": 4}
 
 
 def test_default_gate_rejects_low_amplitude_and_collinear_targets():

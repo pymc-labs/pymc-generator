@@ -54,16 +54,29 @@ def _centred_walk_scale(T: int, width: int) -> float:
     normalized version did not have.
 
     In generation, ``T`` is the full horizon
-    ``T_full = T_reported + adstock_burn_in``. Thus ``std`` is the expected
-    pre-softplus standard deviation over ``T_full``, not over the reported
-    window and not the realized standard deviation of one path. ``smoothness``
-    maps to a kernel width in ``T_full`` weeks. Persisted scale and smoothness
-    labels therefore have a small irreducible mismatch against reported-window
-    measurements: observed reported-window standard deviation / declared
-    ``std`` ranges are 0.903–1.072 (rw_d), 0.893–1.062 (rw_b), 0.887–1.061
-    (rw_y), and 0.463–1.074 (rw_c). For positive-only walks, ``std`` is the
-    pre-softplus amplitude and is not directly comparable to the emitted
-    series' standard deviation.
+    ``T_full = T_reported + adstock_burn_in``. Persisted
+    ``param_rw_*_std`` labels declare the walk's expected standard deviation
+    over ``T_full``. Because each path is divided by a fixed constant rather
+    than by its own realized standard deviation, that scale is realized only in
+    expectation. It is therefore neither the realized standard deviation of an
+    individual path nor a standard deviation measured only over the reported
+    window. ``smoothness`` maps to a kernel width in ``T_full`` weeks. For
+    positive-only walks, ``std`` is the pre-softplus amplitude, so ``rw_c`` is
+    excluded from the signed-walk table below rather than reported with a
+    misleadingly wide range.
+
+    Across 40 signed walks from eight worlds at ``T=52`` and
+    ``adstock_burn_in=8``, reported-window sd / declared ``std`` was:
+
+    * ``rw_d``: [0.396, 0.927], median 0.690
+    * ``rw_z``: [0.252, 1.985], median 0.868
+    * ``rw_b``: [0.264, 1.809], median 0.814
+    * ``rw_y``: [0.294, 1.335], median 0.757
+    * all signed (n=40): [0.25, 1.99], median 0.80
+
+    This is roughly an 8x spread. ``param_rw_*_std`` is therefore a weak label
+    for anything measured on the reported window; consumers should not score it
+    as if it were the realized reported-window standard deviation.
 
     Column ``j`` of ``A`` is the smoothed, centred step function
     ``1[t >= j]``, so the whole operator is built in one ``(T, T)`` pass.

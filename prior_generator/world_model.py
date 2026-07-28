@@ -329,6 +329,13 @@ def _walk_priors(
         # absorbed by rw_b_mean, so neither factor was recoverable. Pinning the
         # factor to mean 0 / scale 1 puts the whole D->* magnitude in the
         # loadings, which is what the data identifies.
+        # The graph also admits a sign flip: negating eps_d together with w_dc,
+        # u_dz, and delta_db flips demand's sign while leaving every other output
+        # unchanged. The supported prior
+        # assigns all three loading families strictly positive ranges, so the
+        # reflection is outside support and demand's sign is identified. If a
+        # user widens db_coeff_range / dc_coeff_range / dz_coeff_range to admit
+        # negatives, only |D| and the loading magnitudes are recoverable.
         out["rw_d"] = _rw_prior_group(
             "rw_d",
             n_latent,
@@ -744,12 +751,13 @@ def build_oracle_model(
     3. **iid sales-noise representation**: the generative sales noise
        ``RW_Y`` (a smoothed walk with expected sd ``rw_y_std``) is represented
        as iid ``Normal(0, rw_y_std)`` with the SAME HalfNormal prior on the
-       scale. Its per-week marginal sd is heteroscedastic across the window:
-       measured 0.76x–1.48x ``rw_y_std``, minimum at the edges and maximum
-       mid-window. The iid representation therefore understates mid-window
-       uncertainty. This concession is removable in principle: because the
-       walk is normalized by a constant it is an ordinary multivariate normal
-       with covariance ``(std / c) ** 2 * A A^T``. The latent demand and
+       scale. For ``T=112`` and smoothness 0.5, its per-week marginal sd is
+       roughly 0.66x–1.44x ``rw_y_std``: maximum at the window edges and
+       minimum mid-window. The iid representation therefore overstates
+       mid-window uncertainty and understates it at the window edges. This
+       concession is removable in principle: because the walk is normalized by
+       a constant, it is an ordinary multivariate normal with covariance
+       ``(std / c) ** 2 * A A^T``. The latent demand and
        baseline walks stay exact (same ``T_full`` simulation, same transform,
        sliced to the reported window).
     4. **Baseline label**: oracle ``baseline`` is ``B`` (including its

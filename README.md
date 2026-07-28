@@ -239,14 +239,33 @@ the base rates and budgets.
 - **Channel texture** — weekly-jitter `pm.Normal` and campaign-pulse
   `pm.Bernoulli`, with magnitudes scaled relative to each channel's own level.
 
-Persisted `param_rw_*_std` labels are the walks' **expected** standard
-deviations over `T_full = T + adstock_burn_in`, not a single path's realized
-or reported-window standard deviation; `smoothness` is a kernel width in
-`T_full` weeks. For positive-only channel walks, `param_rw_c_std` is a
-pre-softplus amplitude and is not directly comparable to emitted-spend
-standard deviation, leaving a small irreducible recovery floor from the
-reported window. See the [corpus guide](docs/guide/corpus.md#random-walk-parameter-labels)
-for measured ranges.
+Persisted `param_rw_*_std` labels declare the walks' **expected standard
+deviation** over the full simulated horizon `T_full = T + adstock_burn_in`.
+Because each path is divided by a fixed constant rather than by its own
+realized standard deviation, that scale is realized only in expectation. It is
+therefore neither the realized standard deviation of an individual path nor a
+standard deviation measured only over the reported window. `smoothness`
+likewise maps to a moving-average kernel width in `T_full` weeks. For
+positive-only channel walks, `param_rw_c_std` is the pre-softplus amplitude,
+so it is excluded from the signed-walk table below rather than reported with a
+misleadingly wide range.
+
+Across 40 signed walks from eight worlds at `T=52` and
+`adstock_burn_in=8`, the reported-window sd / declared `std` was:
+
+| signed group | reported-window sd / declared `std` | median |
+| --- | --- | --- |
+| `rw_d` | [0.396, 0.927] | 0.690 |
+| `rw_z` | [0.252, 1.985] | 0.868 |
+| `rw_b` | [0.264, 1.809] | 0.814 |
+| `rw_y` | [0.294, 1.335] | 0.757 |
+| **all signed (n=40)** | **[0.25, 1.99]** | **0.80** |
+
+This is roughly an 8× spread. `param_rw_*_std` is therefore a weak label for
+anything measured on the reported window; consumers should not score it as if
+it were the realized reported-window standard deviation. See the [corpus
+guide](docs/guide/corpus.md#random-walk-parameter-labels) for the schema
+context.
 
 
 Every graph output is registered as a `pm.Deterministic`, so a single **`pm.draw`**
@@ -333,8 +352,13 @@ and they bound what a model trained on this data can be expected to learn.
   even when signed upstream terms push the pre-activation below zero.
 - **Latent demand is never observed.** `D` is the hidden confounder that drives
   both spend (`dc`) and the baseline (`db`) — the exact mechanism that biases
-  naive attribution. Controls `Z` *are* observed. Getting attribution right in the
-  presence of `D` is the core task.
+  naive attribution. Controls `Z` *are* observed. `D` is pinned to mean 0 /
+  scale 1, putting its `D→B`, `D→C`, and `D→Z` magnitude in the loadings. The
+  graph admits an exact sign flip (`eps_d`, `w_dc`, `u_dz`, and `delta_db` all
+  negated), but the supported prior's strictly positive `db_coeff_range`,
+  `dc_coeff_range`, and `dz_coeff_range` exclude the reflected parameters, so
+  demand's sign is identified unless a user widens one of those ranges to admit
+  negatives; then only `|D|` and the loading magnitudes are recoverable.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
   triangle (`src < dst`), so the graph is always a DAG.
 - **κ-relative saturation.** Each curve's knee is set relative to a pinned,

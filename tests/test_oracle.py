@@ -243,45 +243,54 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
         )
 
 
-def test_identity_adstock_oracle_observes_and_reproduces_the_full_window():
-    """Identity kernels have no unpersisted response state to discard."""
-    # Identity adstock has no response state, so this deliberately short test
-    # disables burn-in instead of exercising the corpus query-window contract.
-    cfg = pg.make_scm_prior(
-        n_treatments=1,
-        n_covariates=1,
-        n_latent=1,
-        T=5,
-        l_max=5,
-        adstock_burn_in=0,
-        nonlinearity="linear",
-        edge_budget={
-            "cy": (1, 1),
-            "dc": 0,
-            "db": 0,
-            "zb": 0,
-            "dz": 0,
-            "zc": 0,
-            "cc": 0,
-            "zz": 0,
-        },
-    )
-    world = pg.sample_scm(cfg, seed=23, max_eps_draws=4)
-    assert np.array_equal(world.params["adstock_family"], np.array([0]))
+def test_oracle_warmup_exempts_identity_adstock():
+    """With burn-in, only non-identity direct adstock loses response history."""
+    shapes = {}
+    for name, family, family_probs in (
+        ("identity", 0, {"none": 1.0, "geometric": 0.0, "weibull": 0.0}),
+        ("geometric", 1, {"none": 0.0, "geometric": 1.0, "weibull": 0.0}),
+    ):
+        cfg = pg.make_scm_prior(
+            n_treatments=1,
+            n_covariates=1,
+            n_latent=1,
+            T=20,
+            l_max=5,
+            nonlinearity="linear",
+            adstock_family_probs=family_probs,
+            edge_budget={
+                "cy": (1, 1),
+                "dc": 0,
+                "db": 0,
+                "zb": 0,
+                "dz": 0,
+                "zc": 0,
+                "cc": 0,
+                "zz": 0,
+            },
+        )
+        assert cfg.adstock_burn_in == cfg.l_max
+        world = pg.sample_scm(cfg, seed=23, max_eps_draws=4)
+        assert np.array_equal(world.params["adstock_family"], np.array([family]))
 
-    oracle = world.oracle_model()
-    truth_values = {**world.params, **world.exogenous}
-    for group in ("rw_b", "rw_y"):
-        truth_values[f"{group}_mean"] = world.params[group]["mean"]
-        truth_values[f"{group}_std"] = world.params[group]["std"]
-    oracle_contributions = _oracle_deterministic_at_truth(oracle, truth_values, "contributions")
-    assert tuple(oracle["sales"].shape.eval()) == (cfg.T,)
-    np.testing.assert_allclose(
-        oracle_contributions,
-        world.data["contributions_observed"],
-        rtol=0.0,
-        atol=1e-15,
-    )
+        oracle = world.oracle_model()
+        shapes[name] = tuple(oracle["sales"].shape.eval())
+        if family == 0:
+            truth_values = {**world.params, **world.exogenous}
+            for group in ("rw_b", "rw_y"):
+                truth_values[f"{group}_mean"] = world.params[group]["mean"]
+                truth_values[f"{group}_std"] = world.params[group]["std"]
+            oracle_contributions = _oracle_deterministic_at_truth(
+                oracle, truth_values, "contributions"
+            )
+            np.testing.assert_allclose(
+                oracle_contributions,
+                world.data["contributions_observed"],
+                rtol=0.0,
+                atol=1e-15,
+            )
+
+    assert shapes == {"identity": (20,), "geometric": (16,)}
 
 
 @pytest.mark.parametrize(
@@ -305,9 +314,11 @@ def test_oracle_logp_and_gradient_capability_by_adstock_family(
 
     assert np.isfinite(oracle.compile_logp()(oracle.initial_point()))
     if has_gradient:
-        oracle.compile_dlogp()
+        gradient = oracle.compile_dlogp()(oracle.initial_point())
+        assert np.isfinite(gradient).all()
+        assert np.max(np.abs(gradient)) > 0.0
     else:
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(NotImplementedError, match=r"Min\{axis=0\}"):
             oracle.compile_dlogp()
 
 
