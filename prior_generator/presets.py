@@ -104,7 +104,10 @@ def make_scm_prior(
         structural-pfn itself.
     **overrides
         Any other :class:`SCMPrior` field (e.g. ``T``, ``n_cells``,
-        ``rw_sales_std_sigma`` for the noise axis, coefficient ranges, or
+        ``rw_baseline_std_range`` / ``rw_sales_std_range`` for the default
+        relative outcome-noise axis, or
+        ``outcome_std_mode="absolute"`` with ``rw_sales_std_sigma`` for the
+        legacy absolute scale axis), coefficient ranges, or
         ``prior_conditioning=True`` to enable the ACE prior-conditioning
         hyperprior — per-cell narrowed prior intervals recorded in the
         corpus ``prior_cond`` key). Explicit overrides win over the values

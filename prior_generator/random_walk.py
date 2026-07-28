@@ -1,9 +1,10 @@
 """Symbolic random-walk noise for the Phase-4 additive causal graph.
 
-Every node in the additive SCM (D, Z, C, B, Y) carries a random-walk noise
-term instead of flat Gaussian noise (plan doc 03, D1a).
-The walk is always autocorrelated — a smoothed Brownian motion — and the
-``smoothness`` parameter controls its texture:
+Every non-outcome node in the additive SCM (D, Z, C, B) carries a random-walk
+noise term rather than flat Gaussian noise (plan doc 03, D1a). The outcome
+node ``Y`` instead carries iid observation noise. A walk is always
+autocorrelated — a smoothed Brownian motion — and its ``smoothness`` parameter
+controls texture:
 
 * ``smoothness -> 0``: raw Brownian motion — jagged, hectic, but cumulative.
 * ``smoothness -> 1``: an absolute-week moving average no wider than
@@ -68,29 +69,30 @@ def _centred_walk_scale(T: int, width: int) -> float:
 
     In generation, ``T`` is the full horizon
     ``T_full = T_reported + adstock_burn_in``. Persisted
-    ``param_rw_*_std`` labels declare the walk's expected standard deviation
-    over ``T_full``. Because each path is divided by a fixed constant rather
-    than by its own realized standard deviation, that scale is realized only in
-    expectation. It is therefore neither the realized standard deviation of an
-    individual path nor a standard deviation measured only over the reported
-    window. ``smoothness`` maps to an absolute kernel width in weeks, governed by
-    ``rw_smoothness_max_weeks`` and capped at ``T_full``. For
-    positive-only walks, ``std`` is the pre-softplus amplitude, so ``rw_c`` is
-    excluded from the signed-walk table below rather than reported with a
-    misleadingly wide range.
+    ``param_rw_*_std`` labels declare each random walk's expected standard
+    deviation over ``T_full``. ``param_rw_y_std`` is different: ``RW_Y`` is iid
+    observation noise, so its label is its exact per-week Normal standard
+    deviation and carries no smoothness or walk operator. Because each random
+    walk path is divided by a fixed constant rather than by its own realized
+    standard deviation, random-walk scale is realized only in expectation. It
+    is therefore neither the realized standard deviation of an individual path
+    nor a standard deviation measured only over the reported window.
+    ``smoothness`` maps to an absolute kernel width in weeks, governed by
+    ``rw_smoothness_max_weeks`` and capped at ``T_full``. For positive-only
+    walks, ``std`` is the pre-softplus amplitude, so ``rw_c`` is excluded from
+    the signed-walk table below rather than reported with a misleadingly wide
+    range.
 
-    Across 40 signed walks from eight worlds at ``T=52`` and
+    Across 32 signed random walks from eight worlds at ``T=52`` and
     ``adstock_burn_in=8``, reported-window sd / declared ``std`` was:
 
     * ``rw_d``: [0.396, 0.927], median 0.690
     * ``rw_z``: [0.252, 1.985], median 0.868
     * ``rw_b``: [0.264, 1.809], median 0.814
-    * ``rw_y``: [0.294, 1.335], median 0.757
-    * all signed (n=40): [0.25, 1.99], median 0.80
 
-    This is roughly an 8x spread. ``param_rw_*_std`` is therefore a weak label
-    for anything measured on the reported window; consumers should not score it
-    as if it were the realized reported-window standard deviation.
+    This is roughly an 8x spread. Random-walk ``param_rw_*_std`` is therefore
+    a weak label for anything measured on the reported window; consumers should
+    not score it as if it were the realized reported-window standard deviation.
 
     Column ``j`` of ``A`` is the smoothed, centred step function
     ``1[t >= j]``, so the whole operator is built in one ``(T, T)`` pass.

@@ -17,7 +17,7 @@ structure draws and the per-round pm.draw seeds.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 
@@ -179,17 +179,21 @@ class SCM:
         """Max |Σ true components − sales| (float64; ~1e-15 in practice)."""
         return float(np.abs(self.reconstruction() - self.data["sales"]).max())
 
-    def oracle_model(self):
+    def oracle_model(self, *, latent: Literal["marginal", "sampled"] = "marginal"):
         """The observed-data posterior ``pm.Model`` for THIS world.
 
         Rebuilds :func:`prior_generator.world_model.build_oracle_model` from
         the world's own structure, config, observables and (when present)
         prior-conditioning intervals, so ``pm.sample(model=world.oracle_model())``
-        yields the structure-known posterior on the world's dataset. Requires
-        an SCM produced by ``sample_scm`` (which records the structural draw
-        in ``extras``). A Weibull-adstock channel downgrades
-        ``weibull_lam`` and ``weibull_k`` from NUTS to Metropolis: pymc-marketing's
-        min-max Weibull normalization has an upstream ``Min`` with no pullback.
+        yields the structure-known posterior on the world's dataset. The
+        default ``latent="marginal"`` analytically integrates the outcome-side
+        Gaussian walks and is the recommended reference posterior.
+        ``latent="sampled"`` reproduces the previous representation and is
+        required for posterior ``demand`` / ``baseline`` series. Requires an
+        SCM produced by ``sample_scm`` (which records the structural draw in
+        ``extras``). A Weibull-adstock channel downgrades ``weibull_lam`` and
+        ``weibull_k`` from NUTS to Metropolis: pymc-marketing's min-max
+        Weibull normalization has an upstream ``Min`` with no pullback.
         Identity and geometric adstock remain NUTS-differentiable. Treat the
         Metropolis parameters' ESS with suspicion and prefer geometric-adstock
         worlds when using this as a reference posterior. See the oracle guide
@@ -225,6 +229,7 @@ class SCM:
             self.extras["structural"],
             data=data,
             prior_cond=self.extras.get("prior_cond"),
+            latent=latent,
         )
 
     def signal(self) -> dict[str, Any]:
@@ -375,15 +380,17 @@ def mechanism_label(params: dict, k: int) -> str:
 
 
 def _rw_parameters(params: dict, group: str, index: int) -> dict[str, float | bool]:
-    """Concrete inputs for one executed random-walk column."""
+    """Concrete inputs for one executed random-walk or iid-noise column."""
     values = params[group]
-    return {
+    out: dict[str, float | bool] = {
         "mean": float(np.asarray(values["mean"])[index]),
         "std": float(np.asarray(values["std"])[index]),
-        "smoothness": float(np.asarray(values["smoothness"])[index]),
-        "rw_smoothness_max_weeks": int(values["rw_smoothness_max_weeks"]),
         "positive_only": bool(values["positive_only"]),
     }
+    if "smoothness" in values:
+        out["smoothness"] = float(np.asarray(values["smoothness"])[index])
+        out["rw_smoothness_max_weeks"] = int(values["rw_smoothness_max_weeks"])
+    return out
 
 
 def _channel_response_parameters(world: SCM, k: int) -> dict[str, Any]:
@@ -484,7 +491,7 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
     values["B"] = {"random_walk": _rw_parameters(params, "rw_b", 0)}
     if b_parents:
         values["B"]["parents"] = b_parents
-    values["Y"] = {"random_walk": _rw_parameters(params, "rw_y", 0)}
+    values["Y"] = {"iid_noise": _rw_parameters(params, "rw_y", 0)}
     if "channel_shock" in params:
         schedule = params["channel_shock"]
         values["channel_shocks"] = {
@@ -523,7 +530,6 @@ def _build_equations(world: SCM) -> dict[str, str]:
         *(rw_scale(f"Z{m + 1}", "rw_z", m) for m in range(M)),
         *(rw_scale(f"C{k + 1}", "rw_c", k) for k in range(K)),
         rw_scale("B", "rw_b", 0),
-        rw_scale("Y", "rw_y", 0),
     ]
     equations: dict[str, str] = {
         "innovations": (
@@ -533,14 +539,15 @@ def _build_equations(world: SCM) -> dict[str, str]:
             "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent."
         ),
         "RW": (
-            f"T_full = T + burn_in = {T_full}. For each innovation column, q = edge_padded_MA("
-            "cumsum(eps), width=kernel_width(smoothness, rw_smoothness_max_weeks), "
-            "capped at T_full); "
+            f"T_full = T + burn_in = {T_full}. For each random-walk innovation column, "
+            "q = edge_padded_MA(cumsum(eps), "
+            "width=kernel_width(smoothness, rw_smoothness_max_weeks), capped at T_full); "
             "centred_walk_scale(T_full, width) = sqrt(tr(A A^T) / T_full), where "
             "A = centre . movavg(width) . cumsum is fixed; "
             "RW_full = mean + std * (q - mean(q)) / centred_walk_scale(T_full, width); "
             f"world constants: {'; '.join(rw_scales)}. "
-            "Apply softplus(RW_full) only when positive_only=True; RW = RW_full[burn_in:]."
+            "Apply softplus(RW_full) only when positive_only=True; RW = RW_full[burn_in:]. "
+            "Y instead uses iid rw_y[0].std * eps_y[burn_in:]."
         ),
     }
     if shocks_enabled:
@@ -643,9 +650,10 @@ def _build_equations(world: SCM) -> dict[str, str]:
         "indirect_effects = sum_k(contributions_observed[:, k] - contributions[:, k])."
     )
     equations["Y"] = (
-        "baseline = (B_full + RW_full(eps_y, rw_y[0]))[burn_in:]; "
-        "baseline_intrinsic = (RW_full(eps_b, rw_b[0]) + RW_full(eps_y, rw_y[0]))"
-        "[burn_in:]; Y (sales) = baseline + sum_k contributions_observed[:, k]."
+        "baseline = B_full[burn_in:] + rw_y[0].std * eps_y[burn_in:]; "
+        "baseline_intrinsic = RW_full(eps_b, rw_b[0])[burn_in:] + "
+        "rw_y[0].std * eps_y[burn_in:]; "
+        "Y (sales) = baseline + sum_k contributions_observed[:, k]."
     )
     return equations
 
@@ -822,13 +830,15 @@ def _assemble_params(
         ("y", False),
     ):
         group = f"rw_{suffix}"
-        params[group] = {
+        group_params: dict[str, Any] = {
             "mean": params.pop(f"{group}_mean"),
             "std": params.pop(f"{group}_std"),
-            "smoothness": np.array(structural[f"smoothness_{suffix}"], copy=True),
-            "rw_smoothness_max_weeks": cfg.rw_smoothness_max_weeks,
             "positive_only": positive_only,
         }
+        if suffix != "y":
+            group_params["smoothness"] = np.array(structural[f"smoothness_{suffix}"], copy=True)
+            group_params["rw_smoothness_max_weeks"] = cfg.rw_smoothness_max_weeks
+        params[group] = group_params
     if cfg.n_channel_shocks:
         params["channel_shock"] = _assemble_channel_shock_schedule(drawn, b, cfg)
     return params

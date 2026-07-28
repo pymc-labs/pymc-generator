@@ -13,11 +13,12 @@ interactions as one symbolic PyTensor graph:
     B   = Σ_j δ_j·D_j + Σ_m ρ_m·Z_m + RW_B                (baseline, signed)
     Y   = B + Σ_k g_cy·β_k·f_k(C_k) + RW_Y                (sales)
 
-Every node carries an independent random-walk noise term (``random_walk``
-module); node means are folded into the walks. The channel own drive
-``E_k`` additionally carries iid weekly execution noise (σ_k) and
-campaign pulses (amplitude a_k, per-week fire probability p_k) — the
-high-frequency exogenous variation that lets spend sweep its response
+Every node except ``Y`` carries an independent random-walk noise term
+(``random_walk`` module); node means are folded into those walks. ``Y`` instead
+has iid observation noise ``RW_Y = rw_y_std * eps_y``. The channel own drive
+``E_k`` additionally carries iid weekly execution noise (σ_k) and campaign
+pulses (amplitude a_k, per-week fire probability p_k) — the high-frequency
+exogenous variation that lets spend sweep its response
 curve (without it, contribution targets degenerate to flat lines; the
 neutral defaults σ_k = 0, p_k = 0 disable both). C→C and Z→Z edges
 are restricted to the strict upper triangle (src index < dst index) which
@@ -503,7 +504,7 @@ def build_symbolic_graph(
     ie_dc = pt.stack(ie_dc_cols, axis=1).sum(axis=1) if g_dc.any() else pt.zeros(T)
     indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)  # (T, 3): cc, zc, dc
 
-    walk_y = _walk_column(eps_y, params["rw_y"], 0, T_full)
+    walk_y = params["rw_y"]["std"][0] * eps_y
     baseline = (B + walk_y)[W]  # sales noise folded into the baseline component
     # "Y independent of everything": baseline minus all parent (D/Z) terms.
     baseline_intrinsic = (walk_b + walk_y)[W]  # (T,)

@@ -20,36 +20,34 @@ from prior_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     check_signal_gate,
     dense_signal_metrics,
+    summarize_signal_metrics,
 )
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 #: Byte-level contract for every serialized corpus array. When a hash moves,
 #: record WHY here — a silent regeneration is how a real regression hides.
 #:
-#: Last moved by the absolute-week walk-smoothing rule (`smoothness` now maps to
-#: `rw_smoothness_max_weeks` weeks instead of `T / 4`, so a world has the same
-#: drift timescale at every horizon). That changed the walk transform only: all
-#: 17 walk-driven series and their derived normalizers/metrics moved, while the
-#: 26 structural and parameter arrays — `g`, the active masks, `cell_id`, the
-#: split masks, `channel_level`, `saturation_scale`, `adstock_*`, `weibull_*`,
-#: `confounding_strength` and the shock schedule — are byte-identical, which is
-#: the evidence that the RNG stream did not shift.
+#: Last moved by outcome-side noise: ``RW_Y`` is now iid and default outcome
+#: amplitudes are relative to the parameter-only media anchor. Removing
+#: ``smoothness_y`` and replacing the two outcome scale RVs changes all
+#: later seeded draws, so this breaking corpus-semantics change intentionally
+#: moves every generated-world array downstream of the fixed graph.
 EXPECTED_CORPUS_HASHES = {
-    "spend_raw": "07b0a0ca4a33edba8361ead35ccfee67c7f7ea94e3c0f19cf8dfca5b9f4cab3f",
-    "spend_norm": "777d7f347d937faf3328824b94c03ba843bb5bcf0a93bad77aed54efed6ffcc6",
-    "spend_share": "22935a90fa7493e52a97d622bab44b427848c4c3c20ad6f2f8c08e95476f3293",
-    "controls": "26b40a318d8f25ecc2dfdd44b87f3e958856583b18b0897487c2ea489ba45beb",
-    "sales_raw": "bd3586d0fe1d12b5b268ff278f1b798d64a8abbddbb1c691399a9a7fd5ddd61e",
-    "sales_norm": "5f4f633131d0c2ae0f0d042bcd9b7cb9138993e32901948e889dc186987ad559",
-    "support_mask": "95ee8b55a20094102512582a4d0021d303214a842b292998ea7a97b7dcd7b0c3",
-    "is_future": "bd541332240f592301f7e720c94c416fea54a2ebd26ee22cf46c4dca06c4bdb0",
+    "spend_raw": "c0bab46c1873c91e56d05fb383b1eef66e02002ffa080de0ca814a6b7b6d4adf",
+    "spend_norm": "e0f991be830a85ca0ab20917d1e0bf60848ae167426c98835f07bff7f88cb8ef",
+    "spend_share": "5b58d30f1281b1101132ff820e33f91a3158ee41fd63737941aa731c03ac1254",
+    "controls": "2fc7043959d83b4475c71dfddbe1a297a6b8a4226cc74c9dbc8335bee40f0ad5",
+    "sales_raw": "d31551fcb8b4a444e6ebd44eaea81c90bd0e965b94555880bf544bb56f9fb6f6",
+    "sales_norm": "43bff67e36ae5cc305d2dab3264790c018f311eeef80e5f11e15e2464ff16260",
+    "support_mask": "003f9ad7fd18ab65a0ca13820be76c5f1637b7e15c7d94fa1b5e327f148c7508",
+    "is_future": "7801dc551deac4014f0121c44146e6565844cf603d6ad9e3e61ad1007743afe9",
     "g": "e74d8d2a53ee7a978fe94b066510147be374f197504cff24e02e24cb00478e5c",
-    "contributions_raw": "9c152e6d830ee3eca442bbfff36f449ae3ae7d89a038d3c68db7523ef76b6158",
-    "baseline_raw": "6667c83a56f770acd55fa8a18145a2551a1dc1c527d117ef787e4cc601b35bcb",
-    "demand": "71d0042171f620e04c641530e0942b5284aa81380848d52d4f51688b8bf24081",
-    "spend_means": "acdb33166ada9f38aba32f367e21d0c466957b24d6c66c15e29da43006452e62",
-    "sales_scale": "df13898598141e3a870cefdd7d249259f10baebec02e630431493bea396db87e",
-    "is_val": "3ba2b8d7203a2ac328478a2be7cb0e3ea6e28af5e648841fbf1a41fbbb2e09f7",
+    "contributions_raw": "9d0ae9fff70ee95831fedb5e2c441d2b9fca0a0d9e43beef94753371e344b55f",
+    "baseline_raw": "9b35e472341b7f7355f058529572b8de2ccbdbc8321ee3dfe4fb45c925584030",
+    "demand": "ddd9004bf39dd0e790cf550ea99ebac2454868815bc6591f9ee321326a1f758e",
+    "spend_means": "8f0598524beaec26652a7809811b44a587420f0ea11ca4130ff04461d267dcdc",
+    "sales_scale": "6e611bd5cd659ec8f6959dd5e759c30ef0c3402ec8d414d01b740c3138696108",
+    "is_val": "eb4b02f10d5660691db02cfd97e0fee99ab9f2461e8e802369f07300b5285ad4",
     "cell_id": "85bf0249350a8edb436598ba927c2298bca0e058665eb864b071e65830562096",
     "active_c_mask": "a9affb5f52630150ac24b5fb37a2b9e88bc54312f549319752cced7601ebeac1",
     "active_m_mask": "9f40977b73dea1782a868d23dfccb7b0264d20bb07b3e07ad73de81dc5797e91",
@@ -57,12 +55,12 @@ EXPECTED_CORPUS_HASHES = {
     "K_active": "a9073e6b59ee724764dc6cafa783aee1aae5fda1329f86b3b634578b0c8687f1",
     "M_active": "9aed02a9be4f658a038cf3eb48d2effffb9d8e44125a6afe60bdb69cee9cf1b8",
     "J_active": "a9bb0c6117f6fc1cb4a0e889122a322c8c515ce1b82ed2564d127109bb066713",
-    "indirect_effects": "49dd273f9e1c296af56d164c92f5c705a4bec5e3769e19d8086c4244feb70c00",
+    "indirect_effects": "7f79fb8eb08e2c904dea27c78f8a24d3f181c25cdd0dac0d2e166265a0c968e9",
     "channel_active": "e6a619d2852bed3ed0f8890b700bec0062e3f6f7352eec5a769792bd8c191671",
-    "control_contribution": "484d6a68513d1535c1231d787b729637643ea01890ee8b0fa77fc10b178e8798",
-    "confounder_contribution": "553912b2fe1c11bdf3f5cf865271d6237c75d42ea1c329293aade1f2844a2902",
-    "baseline_intrinsic": "c2028bbed201505ea391858623775fd60d1747c728210abd6359271da3daf81f",
-    "indirect_effects_by_source": "73a54d6091dc42536e260f1f6e936ddcdf7951230e19206177fb905645f7fa59",
+    "control_contribution": "27c49ad126d6a7e67033d5fd17785f66e68a0f0141c5bc5104c9c74ed5b3a55b",
+    "confounder_contribution": "a87dee854c1b45c48847c4d7508b2033ce955fa799f94b702de1f503cd849ca7",
+    "baseline_intrinsic": "36aefc7f3c797f2eabe023525b324de46475b8a0e7e4e1eede7b267720eb1725",
+    "indirect_effects_by_source": "0b8fde4981e3422bfccc1524db3e4e962316a8e7fb778f5c88882bbf84744309",
     "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
     "channel_shock_mask": "a2c17b7c3b20dff7ef9b8ef7316a3ef323f705522c3fef1744df2a33a3af832b",
     "channel_shock_channel": "7f956e232d961d634c20094542cf11ae23525f62749f31010e76d0cbcacc7e82",
@@ -70,13 +68,13 @@ EXPECTED_CORPUS_HASHES = {
     "channel_shock_length": "fc492e4b1613b6e1cf17271739cd12251266644e410cb1c14180e21c6b07c59e",
     "channel_shock_level_multiplier": "ab57f647547011d917a044e853a1d5796e715c0ccacb505d2c51442e4da8c341",
     "channel_shock_level": "1550bbf2bded16bb609b5f52669f0b29e6fdf0d7a0898bfb82c5c51a9db3124a",
-    "channel_level": "22dbdf23eea79026eab5eff302fc06407a8cff7f7cfd391f11012b1cbf72646c",
-    "saturation_scale": "67151595c5d2e7e02020b87cd1fc655dd640e531eb782cc8c46dd015c4b13a99",
-    "adstock_family": "232a4fa82e296516ddeca77e254d8ff5a83d73c3ae89f8a3fe4477a4b6344380",
-    "adstock_alpha": "ec14426e030159bdd87ce9eb96c954ce3f226149923e6a2b77c8739964131bf8",
-    "weibull_lam": "e9d430f3f8679b6fe2569cb5a09825214231d0050db69fc91704c60d4faf30d7",
-    "weibull_k": "0a48c8e646f1b4f9dc70f0e0e03be9b59503b19db4c71a2a5d44f869efcf8c44",
-    "signal_metrics": "d35e6ab904612922bc64f53b821e0c0a6c56349cfbea09c1cfb9b91b6c0f763d",
+    "channel_level": "dc4751c12f53123084e1d827851c8fbedf4d214f0513f4c046852697889e3cb4",
+    "saturation_scale": "70287d636760848f2f81e503695a23449e0c4611601ef4863eba74ec3b4ba155",
+    "adstock_family": "b8b595535043fbd9bee4855aa2adc923c2a7cf6c5d91fd9b538f1779223d66c8",
+    "adstock_alpha": "7f6a515b0ec2e49cff4ef09be52324f3b4209b81888f3b9f0231b71c2ae07ec2",
+    "weibull_lam": "24767f169da9b06c638e12aedbcf929e0cb7e8515fdf032ac8b0604796d4bf08",
+    "weibull_k": "d799a934d9ac7e843eb624fef3ca42e8b48e0cef0dd2987a838de9cd6bb4ce7a",
+    "signal_metrics": "97283a4f1011aca9a6306edae61093907f7481574d375b0d55fbb08164373d8e",
     "signal_metric_valid": "f1ecbab717272a25f5802cb87be6fd3b1bdd88cede7e75a141f74ebacf212b16",
 }
 
@@ -86,8 +84,8 @@ EXPECTED_DEFAULT_FREE_RVS = (
     "rw_c_mean",
     "rw_c_std",
     "rw_b_mean",
-    "rw_b_std",
-    "rw_y_std",
+    "rw_b_std_rel",
+    "rw_y_std_rel",
     "pulse_prob",
     "w_dc",
     "u_dz",
@@ -127,8 +125,8 @@ def _hash_array(key: str, value: np.ndarray) -> str:
     return hasher.hexdigest()
 
 
-def test_additive_corpus_matches_legacy_hashes():
-    """Disabled/default features must preserve every serialized array byte-for-byte."""
+def test_additive_corpus_matches_default_outcome_noise_hashes():
+    """Default relative outcome-noise corpora retain an explicit byte contract."""
     cfg = pg.make_scm_prior(
         n_treatments=2,
         n_covariates=2,
@@ -164,8 +162,8 @@ def test_additive_corpus_matches_legacy_hashes():
     assert hashes == EXPECTED_CORPUS_HASHES
 
 
-def test_default_world_model_free_rvs_match_legacy_order():
-    """The default path must not register or consume extra random variables."""
+def test_default_world_model_free_rvs_match_outcome_noise_contract():
+    """Relative mode registers dimensionless outcome scales before ``beta``."""
     cfg = pg.make_scm_prior(n_treatments=2, n_covariates=2, n_latent=1, T=24)
     rng = np.random.default_rng(23)
     g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=2, J_active=1)
@@ -270,6 +268,7 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         "rw_channel_std_range": (0.25, 0.25),
         "rw_baseline_std_sigma": 0.75,
         "rw_sales_std_sigma": 1e-4,
+        "outcome_std_mode": "absolute",
         "channel_hf_sigma_range": (0.08, 0.08),
         "channel_pulse_prob_range": (0.0, 0.0),
         "channel_pulse_amp_range": (0.0, 0.0),
@@ -337,21 +336,43 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
 
 @pytest.mark.slow
 def test_supported_corpus_signal_gate():
-    """The supported corpus clears the calibrated identifiability signal gate."""
-    corpus = pg.sample_prior_predictive(
-        pg.make_scm_prior(
-            n_treatments=6,
-            n_covariates=4,
-            n_latent=2,
-            T=104,
-            n_cells=4,
-            draws_per_cell=6,
-            seed=314159,
-        )
+    """The supported prior clears the calibrated identifiability signal gate."""
+    cfg = pg.make_scm_prior(
+        n_treatments=6,
+        n_covariates=4,
+        n_latent=2,
+        T=104,
+        n_cells=4,
+        draws_per_cell=6,
+        seed=314159,
     )
-    signal = corpus["diagnostics"]["signal"]
+    seed_pool = (314159, 1, 2, 3, 4, 5, 6, 7)
+    corpora = [pg.sample_prior_predictive(replace(cfg, seed=seed)) for seed in seed_pool]
+    signal = summarize_signal_metrics(
+        np.concatenate([corpus["identifiability"]["signal_metrics"] for corpus in corpora]),
+        np.concatenate([corpus["identifiability"]["signal_metric_valid"] for corpus in corpora]),
+        np.concatenate([corpus["sales_raw"] for corpus in corpora]),
+        np.concatenate(
+            [
+                (corpus["g"][:, cfg.layout.slices["cy"]] == 1) & (corpus["active_c_mask"] == 1)
+                for corpus in corpora
+            ]
+        ),
+        l_max=cfg.l_max,
+        adstock_burn_in=cfg.adstock_burn_in,
+        sales_scale=np.concatenate([corpus["sales_scale"] for corpus in corpora]),
+        adstock_family=np.concatenate([corpus["adstock_family"] for corpus in corpora]),
+        adstock_alpha=np.concatenate([corpus["adstock_alpha"] for corpus in corpora]),
+        weibull_lam=np.concatenate([corpus["weibull_lam"] for corpus in corpora]),
+        weibull_k=np.concatenate([corpus["weibull_k"] for corpus in corpora]),
+    )
     passed, _ = check_signal_gate(signal)
 
+    # Gated values are Bernoulli fractions over direct channels. At the old
+    # 100-channel size, their population means sat about one sigma below the
+    # thresholds, so one draw failed about a quarter of the time (6/8 passed).
+    # Pooling eight independent corpora yields roughly 800 direct channels and
+    # measures the prior's gate compliance rather than one noisy realization.
     assert passed
     assert signal["frac_spearman_lt_03"] <= 0.15
     assert signal["frac_warmup_gt_3"] <= 0.10

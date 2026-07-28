@@ -30,7 +30,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .sampler import SCMPrior, sample_prior_predictive
+from .sampler import (
+    OUTCOME_NOISE_SEMANTICS,
+    OUTCOME_NOISE_VERSION,
+    SCMPrior,
+    sample_prior_predictive,
+)
 from .signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
@@ -708,6 +713,17 @@ class DataGenerator:
                 or signal_diagnostics.get("adstock_kernel_version") != 3
             ):
                 errors.append("diagnostics signal adstock kernel semantics are not supported")
+            if (
+                signal_diagnostics.get("outcome_noise_semantics") != OUTCOME_NOISE_SEMANTICS
+                or signal_diagnostics.get("outcome_noise_version") != OUTCOME_NOISE_VERSION
+            ):
+                errors.append("diagnostics signal outcome noise semantics are not supported")
+            outcome_std_mode = signal_diagnostics.get("outcome_std_mode")
+            if not isinstance(outcome_std_mode, str) or outcome_std_mode not in (
+                "relative",
+                "absolute",
+            ):
+                errors.append("diagnostics signal outcome_std_mode is not supported")
 
         cell_ids = np.unique(corpus["cell_id"])
         if not _is_integer(diagnostics.get("n_tasks")) or diagnostics["n_tasks"] != N:
@@ -1042,6 +1058,9 @@ class DataGenerator:
                     "adstock_burn_in": int(signal_diagnostics["adstock_burn_in"]),
                     "adstock_kernel_semantics": "normalized-causal-minmax-weibull-density",
                     "adstock_kernel_version": 3,
+                    "outcome_noise_semantics": OUTCOME_NOISE_SEMANTICS,
+                    "outcome_noise_version": OUTCOME_NOISE_VERSION,
+                    "outcome_std_mode": signal_diagnostics["outcome_std_mode"],
                 }
             )
             actual_signal = dict(signal_diagnostics)

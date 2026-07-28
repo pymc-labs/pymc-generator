@@ -9,9 +9,11 @@ from pytensor.graph.traversal import ancestors
 import prior_generator.symbolic_graph as symbolic_graph
 from prior_generator import make_scm_prior, sample_scm
 from prior_generator.describe import describe_scm
+from prior_generator.random_walk import _kernel_width
 from prior_generator.symbolic_graph import build_symbolic_graph
 from prior_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
+    _walk_basis,
     build_world_model,
     draw_worlds,
     sample_structure,
@@ -443,6 +445,63 @@ def test_saturation_anchor_has_no_noise_ancestors(monkeypatch):
     assert model["eps_c"] in set(ancestors([model["contributions"]]))
 
 
+def test_relative_outcome_scales_have_no_noise_ancestors():
+    """The absolute outcome scales must depend on parameters, never innovations."""
+    cfg = _config(
+        outcome_std_mode="relative",
+        rw_baseline_std_range=(0.04, 0.08),
+        rw_sales_std_range=(0.01, 0.03),
+    )
+    g = _edgeless_graph()
+    structural = sample_structure(g, cfg, np.random.default_rng(6))
+    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+
+    for scale_name in ("rw_b_std", "rw_y_std"):
+        scale_ancestors = set(ancestors([model[scale_name]])) | {model[scale_name]}
+        for noise in _RAW_EPS_NAMES:
+            assert model[noise] not in scale_ancestors, f"{scale_name}: {noise}"
+
+
+def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
+    """Y has no smoothness metadata and responds pointwise to ``eps_y``."""
+    cfg = _config()
+    world = _fixed_world(_edgeless_graph(), cfg, seed=29)
+
+    assert "smoothness_y" not in world.extras["structural"]
+    assert "smoothness" not in world.params["rw_y"]
+    assert "rw_smoothness_max_weeks" not in world.params["rw_y"]
+    assert set(world.equation_parameters["Y"]) == {"iid_noise"}
+    assert "smoothness" not in world.equation_parameters["Y"]["iid_noise"]
+    assert "RW_full(eps_y" not in world.equations["Y"]
+
+    replacement_eps_y = np.linspace(-1.0, 1.0, world.T + cfg.adstock_burn_in)
+    replay = _replay(
+        world,
+        world.exogenous["eps_c"],
+        eps_y=replacement_eps_y,
+    )
+    std = float(np.asarray(world.params["rw_y"]["std"])[0])
+    expected_change = std * (
+        replacement_eps_y[cfg.adstock_burn_in :] - world.exogenous["eps_y"][cfg.adstock_burn_in :]
+    )
+    np.testing.assert_allclose(
+        replay["baseline_intrinsic"] - world.data["baseline_intrinsic"],
+        expected_change,
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("outcome_std_mode", ("relative", "absolute"))
+def test_outcome_noise_modes_preserve_the_scm_identity(outcome_std_mode):
+    world = sample_scm(
+        _config(outcome_std_mode=outcome_std_mode),
+        seed=37,
+        max_eps_draws=40,
+    )
+    assert world.identity_error() < 1e-9
+
+
 def test_saturation_anchor_equals_the_closed_form_expected_level():
     """Texture-free, upstream-free: the anchor is softplus(softplus(rw_c_mean)).
 
@@ -468,13 +527,20 @@ def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
     map injective. What is pinned is the expectation.
     """
     cfg = _config(adstock_burn_in=0)
-    realized = []
-    # One seed from each three-seed block retains a representative moment
-    # estimate without retaining 24 costly world draws.
-    for seed in (0, 4, 6, 9, 14, 17, 19, 22):
-        demand = np.asarray(sample_scm(cfg, seed=seed).data["demand"], dtype=float)
-        # burn_in=0 means the reported window IS the simulated horizon.
-        np.testing.assert_allclose(demand.mean(axis=0), 0.0, atol=1e-12)
-        realized.append(float(demand.std()))
-    assert 0.85 <= float(np.mean(np.square(realized))) <= 1.20  # E[var] == 1 by construction
-    assert np.ptp(realized) > 0.1  # ... and it is genuinely random, not pinned
+    world = sample_scm(cfg, seed=0)
+    demand = np.asarray(world.data["demand"], dtype=float)
+    np.testing.assert_allclose(demand.mean(axis=0), 0.0, atol=1e-12)
+    np.testing.assert_allclose(world.params["rw_d"]["mean"], 0.0, atol=0.0)
+    np.testing.assert_allclose(world.params["rw_d"]["std"], 1.0, atol=0.0)
+
+    T_full = cfg.T + cfg.adstock_burn_in
+    width = _kernel_width(
+        float(world.params["rw_d"]["smoothness"][0]),
+        T_full,
+        rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
+    )
+    basis = _walk_basis(T_full, width)
+    np.testing.assert_allclose(np.sum(basis**2) / T_full, 1.0, rtol=0.0, atol=1e-14)
+    paths = np.random.default_rng(91).normal(size=(128, T_full)) @ basis.T
+    np.testing.assert_allclose(paths.mean(axis=1), 0.0, atol=1e-12)
+    assert np.ptp(paths.std(axis=1)) > 0.1  # Paths scatter; their scale is not pinned.

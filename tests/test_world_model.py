@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pymc as pm
 import pytensor.tensor as pt
 import pytest
 
@@ -192,6 +193,80 @@ def test_walk_scale_rejects_ambiguous_range_and_sigma():
             std_sigma=1.0,
             std_range=(1.0, 1.0),
         )
+
+
+def test_relative_outcome_scales_follow_the_media_amplitude():
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        T=16,
+        edge_budget={"cy": (2, 2)},
+        outcome_std_mode="relative",
+        rw_baseline_std_range=(0.04, 0.08),
+        rw_sales_std_range=(0.01, 0.03),
+    )
+    g = {
+        "g_cy": np.ones(2, dtype=int),
+        "g_dc": np.zeros((1, 2), dtype=int),
+        "g_dz": np.zeros((1, 1), dtype=int),
+        "g_db": np.zeros(1, dtype=int),
+        "g_zb": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((1, 2), dtype=int),
+        "g_cc": np.zeros((2, 2), dtype=int),
+        "g_zz": np.zeros((1, 1), dtype=int),
+    }
+    structural = sample_structure(g, cfg, np.random.default_rng(13))
+    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+    drawn = draw_worlds(
+        model,
+        ("beta", "rw_b_std_rel", "rw_y_std_rel", "rw_b_std", "rw_y_std"),
+        seed=14,
+    )
+    media_amplitude = np.sqrt(np.sum(drawn["beta"][0] ** 2))
+
+    np.testing.assert_allclose(
+        drawn["rw_b_std"][0],
+        drawn["rw_b_std_rel"][0] * media_amplitude,
+        rtol=0.0,
+        atol=1e-14,
+    )
+    np.testing.assert_allclose(
+        drawn["rw_y_std"][0],
+        drawn["rw_y_std_rel"][0] * media_amplitude,
+        rtol=0.0,
+        atol=1e-14,
+    )
+
+
+def test_absolute_outcome_scales_keep_halfnormal_semantics():
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        T=16,
+        edge_budget={"cy": (2, 2)},
+        outcome_std_mode="absolute",
+        rw_baseline_std_sigma=0.35,
+        rw_sales_std_sigma=0.12,
+    )
+    rng = np.random.default_rng(15)
+    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g_act = _slice_g_active(g, 2, 1, 1)
+    structural = sample_structure(g_act, cfg, rng)
+    model, _out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.T)
+
+    assert "rw_b_std_rel" not in model.named_vars
+    assert "rw_y_std_rel" not in model.named_vars
+    value = np.array([0.2])
+    np.testing.assert_allclose(
+        pm.logp(model["rw_b_std"], value).eval(),
+        pm.logp(pm.HalfNormal.dist(sigma=0.35), value).eval(),
+    )
+    np.testing.assert_allclose(
+        pm.logp(model["rw_y_std"], value).eval(),
+        pm.logp(pm.HalfNormal.dist(sigma=0.12), value).eval(),
+    )
 
 
 def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):

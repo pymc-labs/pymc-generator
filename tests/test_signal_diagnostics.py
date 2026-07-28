@@ -8,6 +8,7 @@ import pytensor.tensor as pt
 import pytest
 
 from prior_generator import DataGenerator, load_corpus, make_scm_prior, mechanisms, save_corpus
+from prior_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
 from prior_generator.signal_diagnostics import (
     DEFAULT_GATE,
     SIGNAL_METRIC_LAYOUT,
@@ -361,6 +362,9 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
     direct = (loaded["g"][:, layout.slices["cy"]] == 1) & (loaded["active_c_mask"] == 1)
     signal_config = loaded["diagnostics"]["signal"]
     assert signal_config["adstock_kernel_semantics"] == "normalized-causal-minmax-weibull-density"
+    assert signal_config["outcome_noise_semantics"] == OUTCOME_NOISE_SEMANTICS
+    assert signal_config["outcome_noise_version"] == OUTCOME_NOISE_VERSION
+    assert signal_config["outcome_std_mode"] == "relative"
     metrics, valid = dense_signal_metrics(
         loaded["spend_raw"],
         loaded["contributions_raw"],
@@ -437,6 +441,9 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
                 "adstock_burn_in": 0,
                 "adstock_kernel_semantics": "normalized-causal-minmax-weibull-density",
                 "adstock_kernel_version": 3,
+                "outcome_noise_semantics": OUTCOME_NOISE_SEMANTICS,
+                "outcome_noise_version": OUTCOME_NOISE_VERSION,
+                "outcome_std_mode": "relative",
             },
         },
     }

@@ -227,6 +227,29 @@ def test_random_walk_sigmas_must_be_finite_and_positive(name, value):
         SCMPrior(**{name: value}).validate()
 
 
+@pytest.mark.parametrize("value", (None, "scaled", 1, ["relative"]))
+def test_outcome_std_mode_must_select_relative_or_absolute(value):
+    with pytest.raises(ValueError, match="outcome_std_mode"):
+        SCMPrior(outcome_std_mode=value).validate()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("rw_baseline_std_range", None),
+        ("rw_baseline_std_range", (-0.01, 0.1)),
+        ("rw_baseline_std_range", (0.1, 0.01)),
+        ("rw_baseline_std_range", (np.nan, 0.1)),
+        ("rw_baseline_std_range", (False, 0.1)),
+        ("rw_sales_std_range", (0.0, np.inf)),
+        ("rw_sales_std_range", (0.1, 0.01)),
+    ),
+)
+def test_relative_outcome_std_ranges_must_be_finite_nonnegative_bounds(name, value):
+    with pytest.raises(ValueError, match=name):
+        SCMPrior(**{name: value}).validate()
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     (

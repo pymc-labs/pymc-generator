@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 import warnings
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 import numpy as np
 
@@ -55,6 +56,12 @@ SATURATION_FAMILY_KEYS: tuple[str, ...] = (
     "tanh",
     "root",
 )
+
+#: Persisted outcome-process contract. Version 1 makes iid ``RW_Y`` and its
+#: relative/absolute scale mode explicit so pre-change corpora cannot validate
+#: as worlds drawn under the new outcome-noise semantics.
+OUTCOME_NOISE_SEMANTICS = "baseline-walk-iid-sales-noise"
+OUTCOME_NOISE_VERSION = 1
 
 
 def _default_adstock_family_probs() -> dict[str, float]:
@@ -178,13 +185,18 @@ class SCMPrior:
     db_coeff_range: tuple[float, float] = (0.15, 0.45)  # D->B loadings
     zb_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->B loadings
     beta_additive_range: tuple[float, float] = (0.5, 2.0)  # channel effects
-    # Random-walk noise priors (plan doc D1a)
+    # Random-walk and outcome-noise priors.
     rw_mean_range: tuple[float, float] = (-1.0, 1.0)  # signed nodes (D, Z)
     rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # channels
     rw_baseline_mean_range: tuple[float, float] = (3.0, 8.0)  # baseline level
-    rw_std_sigma: float = 1.0  # HalfNormal prior for walk std
-    rw_baseline_std_sigma: float | None = None  # None follows rw_std_sigma
-    rw_sales_std_sigma: float = 0.25  # HalfNormal for sales-noise walk std
+    rw_std_sigma: float = 1.0  # HalfNormal prior for D/Z and absolute-mode RW_B std
+    rw_baseline_std_sigma: float | None = None  # absolute-mode RW_B; None follows rw_std_sigma
+    rw_sales_std_sigma: float = 0.25  # absolute-mode iid sales-noise std
+    outcome_std_mode: Literal["relative", "absolute"] = "relative"
+    # Relative-mode outcome amplitudes multiply
+    # sqrt(sum_k((g_cy[k] * beta[k]) ** 2)), never a realized series.
+    rw_baseline_std_range: tuple[float, float] = (0.000, 0.093)
+    rw_sales_std_range: tuple[float, float] = (0.010, 0.028)
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
     # 26 weeks (half a year) reproduces the CURRENT T=104 reference exactly at
@@ -439,6 +451,8 @@ class SCMPrior:
             value = getattr(self, name)
             try:
                 lo, hi = value
+                if isinstance(lo, (bool, np.bool_)) or isinstance(hi, (bool, np.bool_)):
+                    raise TypeError
                 lo, hi = float(lo), float(hi)
             except (TypeError, ValueError):
                 raise ValueError(f"{name} must be a finite (lo, hi) pair, got {value!r}")
@@ -470,6 +484,15 @@ class SCMPrior:
             "rw_baseline_mean_range",
         ):
             _finite_range(name)
+        if not isinstance(self.outcome_std_mode, str) or self.outcome_std_mode not in (
+            "relative",
+            "absolute",
+        ):
+            raise ValueError(
+                f"outcome_std_mode must be 'relative' or 'absolute', got {self.outcome_std_mode!r}"
+            )
+        for name in ("rw_baseline_std_range", "rw_sales_std_range"):
+            _finite_range(name, minimum=0.0)
         _finite_range(
             "cc_coeff_range",
             minimum=0.0,
@@ -1042,6 +1065,9 @@ def _signal_block(
     # has zero weight; a true normalized PDF would not have an exactly zero lag.
     out["adstock_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
     out["adstock_kernel_version"] = 3
+    out["outcome_noise_semantics"] = OUTCOME_NOISE_SEMANTICS
+    out["outcome_noise_version"] = OUTCOME_NOISE_VERSION
+    out["outcome_std_mode"] = cfg.outcome_std_mode
     return out
 
 

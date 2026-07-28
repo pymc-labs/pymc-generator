@@ -67,9 +67,9 @@ While the project is on 0.x, minor versions may contain breaking changes.
   definitions (shared spec helpers, so draw and oracle cannot drift), with the
   world's spend/controls/sales attached — so `pm.sample` yields the
   structure-known posterior on any drawn world. Fixed-scale walks are ordinary
-  multivariate normals, so the oracle keeps latent demand/baseline walks exact
-  and currently represents `RW_Y` as iid Normal with the same HalfNormal scale
-  prior; all concessions are documented in the docstring and the new
+  multivariate normals; `latent="sampled"` keeps latent demand/baseline walks
+  exact and represents `RW_Y` as iid Normal with the same outcome-scale prior;
+  all concessions are documented in the docstring and the new
   [posterior-oracle guide](docs/guide/oracle.md).
 
 - Documentation site (`docs/`, MkDocs Material) at
@@ -80,6 +80,36 @@ While the project is on 0.x, minor versions may contain breaking changes.
   (`.github/workflows/docs.yml`), and build instructions in `CONTRIBUTING.md`.
 
 ### Changed
+- **Outcome-side noise is parameter-scale-aware and non-aliased** (breaking):
+  `RW_Y` is now iid observation noise, while `RW_B` remains the sole latent
+  baseline walk; this removes the exact `RW_B`/`RW_Y` same-width variance ridge
+  (collision probability `0.046` → `0`). Default
+  `outcome_std_mode="relative"` draws dimensionless
+  `rw_baseline_std_range=(0.000, 0.093)` and
+  `rw_sales_std_range=(0.010, 0.028)` scales, then multiplies both by the
+  parameter-only media anchor `sqrt(sum((g_cy * beta)**2))`; the legacy
+  HalfNormal scales remain available with `outcome_std_mode="absolute"`. In the
+  prescribed 150-world calibration, residual/media ratio changed from `3.9` to
+  `p5=0.160`, `p50=0.470`, and `p95=1.482`; `RW_Y` carries a median `0.112`
+  of outcome-noise variance. A separate 120-world fixed-seed audit has median
+  ratio `0.732` and changes `shapes_fitted` median error from `35.7%` to
+  `14.6%` at rank 10 and from `29.2%` to `17.2%` at rank 20. The rank-40
+  `31.0%` result is expected overfitting by an unpenalized 43-column nuisance
+  basis, not a new data-generating defect. The ratio is now centered in the
+  real weekly-MMM band and difficulty is a declared axis rather than an
+  accidental product of unrelated absolute priors. This changes every generated
+  world; corpus diagnostics now carry outcome-noise semantics version `1`, so
+  pre-change corpora no longer validate as new semantics.
+- **Posterior oracle marginalization**: `build_oracle_model` and
+  `SCM.oracle_model()` now integrate the outcome-side Gaussian latents
+  analytically by default, using their exact multivariate-normal density rather
+  than a sampled latent representation and without latent-walk dimensions. The
+  oracle also registers shape parameters only for response families used by the
+  world's channels. On the simple fully identified worlds, this changed maximum
+  r-hat from 2.2-2.7 to 1.000 and minimum bulk ESS from 5 to 480-1500.
+  Callers that need posterior `demand` / `baseline` deterministics must request
+  `latent="sampled"`; default `sales_mu` is now the latent-marginal posterior
+  mean.
 - **Adstock kernel metadata corrected** (breaking): the persisted semantics
   label is now `normalized-causal-minmax-weibull-density` and its version is
   `3`. pymc-marketing min-max rescales the Weibull density before

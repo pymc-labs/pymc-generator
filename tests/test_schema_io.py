@@ -10,6 +10,7 @@ import pytest
 import prior_generator as pg
 import prior_generator.world_model as world_model
 from prior_generator import DataGenerator
+from prior_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
 from prior_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
@@ -31,6 +32,21 @@ class _PicklePayload:
 def corpus():
     cfg = pg.make_scm_prior(
         n_treatments=4, n_covariates=2, n_latent=1, T=40, n_cells=2, draws_per_cell=3, seed=7
+    )
+    return pg.sample_prior_predictive(cfg)
+
+
+@pytest.fixture(scope="module")
+def parentless_baseline_corpus():
+    cfg = pg.make_scm_prior(
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        T=40,
+        n_cells=2,
+        draws_per_cell=1,
+        seed=19,
+        edge_budget={"db": (0, 0), "zb": (0, 0)},
     )
     return pg.sample_prior_predictive(cfg)
 
@@ -716,6 +732,25 @@ def test_validate_corpus_rejects_previous_adstock_kernel_metadata(corpus, field,
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "old_value"),
+    (
+        ("outcome_noise_semantics", "baseline-walk-random-walk-sales-noise"),
+        ("outcome_noise_version", 0),
+    ),
+)
+def test_validate_corpus_rejects_previous_outcome_noise_metadata(corpus, field, old_value):
+    broken = dict(corpus)
+    diagnostics = dict(corpus["diagnostics"])
+    diagnostics["signal"] = dict(diagnostics["signal"])
+    diagnostics["signal"][field] = old_value
+    broken["diagnostics"] = diagnostics
+
+    assert "diagnostics signal outcome noise semantics are not supported" in (
+        DataGenerator.validate_corpus(broken)
+    )
+
+
 def test_datagenerator_generate_n_tasks():
     cfg = pg.make_scm_prior(
         n_treatments=4, n_covariates=2, n_latent=1, T=32, draws_per_cell=5, seed=1
@@ -908,6 +943,9 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         expected_signal["adstock_burn_in"] = cfg.adstock_burn_in
         expected_signal["adstock_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
         expected_signal["adstock_kernel_version"] = 3
+        expected_signal["outcome_noise_semantics"] = OUTCOME_NOISE_SEMANTICS
+        expected_signal["outcome_noise_version"] = OUTCOME_NOISE_VERSION
+        expected_signal["outcome_std_mode"] = cfg.outcome_std_mode
         assert corpus["diagnostics"]["signal"] == expected_signal
 
     for key, value in full.items():
@@ -1158,8 +1196,9 @@ def test_validate_corpus_rejects_balanced_null_channel_contribution(corpus):
     ),
 )
 def test_validate_corpus_rejects_balanced_parentless_baseline_contribution(
-    corpus, edge_type, contribution_key, message
+    parentless_baseline_corpus, edge_type, contribution_key, message
 ):
+    corpus = parentless_baseline_corpus
     layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
     edges = layout.unpack(corpus["g"])[edge_type]
     n, node = np.argwhere(edges == 0)[0]
