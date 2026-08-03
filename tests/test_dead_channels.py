@@ -7,8 +7,8 @@ happen to be fully live teaches only the positive case.
 
 ``edge_budget["cy"]`` cannot express that: it is an absolute arrow count clamped
 to the eligible slots, so a cell drawing few active channels can have every one
-of them live (``cy=(2, 10)`` with ``K_active=2`` => 2 live, 0 dead).
-``min_dead_channels`` caps the live count at ``K_active - min_dead_channels``
+of them live (``cy=(2, 10)`` with ``n_treatments_active=2`` => 2 live, 0 dead).
+``min_dead_channels`` caps the live count at ``n_treatments_active - min_dead_channels``
 instead, which decouples the live-channel range from the active-count range.
 
 Mechanics are exercised through ``sample_g_additive`` (no graph compile) for
@@ -23,7 +23,7 @@ import pytest
 from prior_generator import make_scm_prior, sample_prior_predictive
 from prior_generator.sampler import SCMPrior, _sample_g, sample_g_additive
 
-# The recipe that motivated the knob: wide active range, wide cy range, K=10
+# The recipe that motivated the knob: wide active range, wide cy range,
 # slots. Without a floor, every cell whose cy draw reaches its active count is
 # fully live.
 WIDE_ACTIVE = (2, 10)
@@ -38,7 +38,7 @@ def _cfg(*, min_dead: int, active: tuple[int, int] = WIDE_ACTIVE, **kw) -> SCMPr
         n_treatments_active_range=active,
         edge_budget=kw.pop("edge_budget", WIDE_CY),
         min_dead_channels=min_dead,
-        T=52,
+        n_time_steps=52,
         n_cells=2,
         draws_per_cell=1,
         seed=0,
@@ -53,7 +53,9 @@ def _cells(cfg: SCMPrior, n: int, seed: int = 0) -> list[np.ndarray]:
     out = []
     for _ in range(n):
         k = int(rng.integers(lo, hi + 1))
-        g = sample_g_additive(rng, cfg, cfg.layout, K_active=k, M_active=3, J_active=2)
+        g = sample_g_additive(
+            rng, cfg, cfg.layout, n_treatments_active=k, n_covariates_active=3, n_latent_active=2
+        )
         out.append(g["g_cy"][:k])
         assert not g["g_cy"][k:].any(), "padding slots must never carry a C->Y edge"
     return out
@@ -77,7 +79,7 @@ def test_floor_two_leaves_two_dead_channels():
 
 
 def test_floor_keeps_the_live_range_wide():
-    """The point of the knob: live counts still span 1..K-1 in ONE config.
+    """The point of the knob: live counts still span 1..n_treatments_active-1 in ONE config.
 
     Chunking the corpus by active count (per-chunk ``cy_high <= active_low - 1``)
     buys the same guarantee only across chunks; here a single config does it.
@@ -110,11 +112,13 @@ def test_floor_binds_on_the_bernoulli_path_too():
 
 
 def test_floor_never_starves_the_last_live_channel():
-    """``K_active`` below the floor still yields one live channel, not zero."""
+    """``n_treatments_active`` below the floor still yields one live channel, not zero."""
     cfg = _cfg(min_dead=1, active=(2, 10))
     rng = np.random.default_rng(0)
     for _ in range(20):
-        g = sample_g_additive(rng, cfg, cfg.layout, K_active=1, M_active=3, J_active=2)
+        g = sample_g_additive(
+            rng, cfg, cfg.layout, n_treatments_active=1, n_covariates_active=3, n_latent_active=2
+        )
         assert int(g["g_cy"].sum()) == 1
 
 
@@ -163,7 +167,7 @@ def test_corpus_carries_a_dead_channel_per_task_end_to_end():
         n_treatments_active_range=(2, 6),
         edge_budget={"cy": (1, 6)},
         min_dead_channels=1,
-        T=52,
+        n_time_steps=52,
         n_cells=4,
         draws_per_cell=2,
         seed=0,
@@ -171,11 +175,11 @@ def test_corpus_carries_a_dead_channel_per_task_end_to_end():
     corpus = sample_prior_predictive(cfg)
     cy = corpus["g"][:, cfg.layout.slices["cy"]]
     n_live = cy.sum(axis=1)
-    n_active = corpus["K_active"]
+    n_active = corpus["n_treatments_active"]
     assert np.all(n_live >= 1)
     assert np.all(n_live <= n_active - 1)
     # The dead channels are inside the active range, not padding.
-    assert np.array_equal(cy, cy * corpus["active_c_mask"])
+    assert np.array_equal(cy, cy * corpus["treatment_active_mask"])
     assert corpus["diagnostics"]["min_dead_channels"] == 1
 
 
@@ -188,14 +192,14 @@ def test_dead_channels_have_exactly_zero_contribution():
         n_treatments_active_range=(2, 5),
         edge_budget={"cy": (1, 5)},
         min_dead_channels=1,
-        T=52,
+        n_time_steps=52,
         n_cells=3,
         draws_per_cell=1,
         seed=0,
     )
     corpus = sample_prior_predictive(cfg)
     cy = corpus["g"][:, cfg.layout.slices["cy"]]
-    dead = (cy == 0) & (corpus["active_c_mask"] == 1)
+    dead = (cy == 0) & (corpus["treatment_active_mask"] == 1)
     assert dead.any()
     for task, channel in zip(*np.nonzero(dead)):
         assert np.all(corpus["contributions_raw"][task, :, channel] == 0.0)

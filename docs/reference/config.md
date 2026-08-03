@@ -34,7 +34,7 @@ $$
 This preserves each channel innovation's unit marginal variance while inducing
 shared correlation with the baseline innovation. `None` retains the legacy
 independent path (and reports `rho = 0`); a degenerate range fixes the value.
-The drawn scalar is persisted as `confounding_strength` with shape `(N,)` and
+The drawn scalar is persisted as `confounding_strength` with shape `(n_tasks,)` and
 dtype `float32` (and is available in single-world data/parameters).
 
 ```python
@@ -63,20 +63,22 @@ cfg = make_scm_prior(
 )
 ```
 
-- `n_channel_shocks: int = 0` is the exact number `S` of shocks in **each**
-  world. It must be an integer in `[0, T]` and must fit at maximum length:
-  `S * channel_shock_length_range[1] <= T`.
+- `n_channel_shocks: int = 0` is the exact number `n_shocks` of shocks in
+  **each** world. It must be an integer in `[0, n_time_steps]` and must fit at
+  maximum length:
+  `n_shocks * channel_shock_length_range[1] <= n_time_steps`.
 - `channel_shock_length_range: tuple[int, int] = (2, 2)` has integral bounds
-  `1 <= lo <= hi <= T`. When `S > 0`, `lo` must be at least 2 so every
-  intervention creates a spend-visible held-level plateau. One-week ranges
-  remain valid only while shocks are disabled.
+  `1 <= lo <= hi <= n_time_steps`. When `n_shocks > 0`, `lo` must be at least 2
+  so every intervention creates a spend-visible held-level plateau. One-week
+  ranges remain valid only while shocks are disabled.
 - `channel_shock_level_range: tuple[float, float] = (0.0, 0.0)` has finite
   bounds `0 <= lo <= hi`.
 
 Schedule event `s` is placed in deterministic stratified reported-window slot
-`[floor(s*T/S), floor((s+1)*T/S))`; its feasible start and sampled length stay
-inside that slot. Thus events are globally non-overlapping, including when a
-channel is selected more than once. Channels are sampled uniformly **with
+`[floor(s*n_time_steps/n_shocks), floor((s+1)*n_time_steps/n_shocks))`; its
+feasible start and sampled length stay inside that slot. Thus events are
+globally non-overlapping, including when a channel is selected more than once.
+Channels are sampled uniformly **with
 replacement** from direct (`g_cy`) channels. The held level is sampled ex ante
 as `channel_shock_level_multiplier * softplus(rw_c_mean)` for the selected
 channel. Starts are reported-window indices (not burn-in-offset full-horizon
@@ -99,8 +101,8 @@ spend-only lift test.
 cell must leave without a direct `C→Y` arrow — spend observed, true contribution
 exactly zero. It exists because `edge_budget["cy"]` cannot express it: a budget is
 an absolute arrow count clamped to the eligible slots, so a cell drawing
-`K_active = 2` under `cy=(2, 10)` has both channels live and no negative class at
-all.
+`n_treatments_active = 2` under `cy=(2, 10)` has both channels live and no
+negative class at all.
 
 ```python
 from prior_generator import make_scm_prior
@@ -113,7 +115,7 @@ cfg = make_scm_prior(
 )
 ```
 
-- The per-cell live count becomes `min(cy draw, max(1, K_active −
+- The per-cell live count becomes `min(cy draw, max(1, n_treatments_active −
   min_dead_channels))`; the degenerate `cy ≥ 1` guard always wins, so a cell is
   never left without a direct channel. The example spans 1–9 live channels over
   2–10 active ones.

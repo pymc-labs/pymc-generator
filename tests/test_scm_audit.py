@@ -54,7 +54,7 @@ def _config(**overrides):
         "n_treatments": 2,
         "n_covariates": 2,
         "n_latent": 1,
-        "T": 16,
+        "n_time_steps": 16,
         "adstock_burn_in": 4,
         "l_max": 4,
         "edge_budget": {
@@ -75,7 +75,7 @@ def _config(**overrides):
 def _fixed_world(g: dict, cfg, *, seed: int = 23) -> SCM:
     rng = np.random.default_rng(seed)
     structural = sample_structure(g, cfg, rng)
-    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = draw_worlds(model, out_names + param_names + _RAW_EPS_NAMES, seed=seed + 1)
     return SCM(
         data={name: drawn[name][0] for name in out_names},
@@ -98,10 +98,10 @@ def _replay(
     graph = build_symbolic_graph(
         world.g,
         world.params,
-        world.T,
-        world.K,
-        world.M,
-        world.J,
+        world.n_time_steps,
+        world.n_treatments,
+        world.n_covariates,
+        world.n_latent,
         burn_in=world.cfg.adstock_burn_in,
         eps=eps,
     )
@@ -123,7 +123,9 @@ def test_channel_shock_schedule_rejects_overlapping_windows():
         "channel_shock_start": np.array([[0, 1]], dtype="int64"),
         "channel_shock_length": np.array([[2, 2]], dtype="int64"),
         "channel_shock_level": np.array([[1.0, 1.0]]),
-        "channel_shock_mask_full": np.zeros((1, cfg.T + cfg.adstock_burn_in, 2), dtype="int8"),
+        "channel_shock_mask_full": np.zeros(
+            (1, cfg.n_time_steps + cfg.adstock_burn_in, 2), dtype="int8"
+        ),
     }
 
     with pytest.raises(AssertionError, match="must not overlap"):
@@ -143,7 +145,7 @@ def test_expanded_audit_preserves_seeded_single_world_outputs():
         "g_zz": np.zeros((2, 2), dtype=int),
     }
     structural = sample_structure(g, cfg, np.random.default_rng(730))
-    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     legacy_names = out_names + _LEGACY_WORLD_PARAM_NAMES
     expanded_names = out_names + param_names + _RAW_EPS_NAMES
 
@@ -173,7 +175,7 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
         "g_zz": np.zeros((2, 2), dtype=int),
     }
     structural = sample_structure(g, cfg, np.random.default_rng(5))
-    model, _out_names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, _out_names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     expected = {
         "beta",
         "w_dc",
@@ -212,19 +214,19 @@ def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
         channel_shock_level_range=(0.5, 0.5),
     )
     world = sample_scm(cfg, seed=43, max_eps_draws=40)
-    T_full = cfg.T + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
     exogenous = world.exogenous
     assert {name: value.shape for name, value in exogenous.items()} == {
-        "eps_d": (T_full, world.J),
-        "eps_z": (T_full, world.M),
-        "eps_c": (T_full, world.K),
-        "eps_b": (T_full,),
-        "eps_y": (T_full,),
-        "eps_c_hf": (T_full, world.K),
-        "eps_c_pulse": (T_full, world.K),
+        "eps_d": (n_time_steps_full, world.n_latent),
+        "eps_z": (n_time_steps_full, world.n_covariates),
+        "eps_c": (n_time_steps_full, world.n_treatments),
+        "eps_b": (n_time_steps_full,),
+        "eps_y": (n_time_steps_full,),
+        "eps_c_hf": (n_time_steps_full, world.n_treatments),
+        "eps_c_pulse": (n_time_steps_full, world.n_treatments),
     }
     schedule = world.params["channel_shock"]
-    assert schedule["mask_full"].shape == (T_full, world.K)
+    assert schedule["mask_full"].shape == (n_time_steps_full, world.n_treatments)
     assert np.array_equal(
         schedule["start_full"], world.data["channel_shock_start"] + cfg.adstock_burn_in
     )
@@ -377,13 +379,13 @@ def test_random_walk_equation_uses_fixed_scale_divisor():
 
     assert "std(q)" not in equation
     assert "1e-8" not in equation
-    assert "centred_walk_scale(T_full, width)" in equation
-    assert "sqrt(tr(A A^T) / T_full)" in equation
+    assert "centred_walk_scale(n_time_steps_full, width)" in equation
+    assert "sqrt(tr(A A^T) / n_time_steps_full)" in equation
     assert "world constants:" in equation
 
 
 def test_description_marks_unestimable_signal_metrics_not_applicable():
-    cfg = _config(T=4, l_max=8, adstock_burn_in=0)
+    cfg = _config(n_time_steps=4, l_max=8, adstock_burn_in=0)
     world = _fixed_world(_edgeless_graph(), cfg)
 
     assert not world.signal()["spearman_valid"].any()
@@ -427,7 +429,7 @@ def test_saturation_anchor_has_no_noise_ancestors(monkeypatch):
         return original_saturate_col(ad_col, mean_ad, params, k)
 
     monkeypatch.setattr(symbolic_graph, "_saturate_col", record_saturation_anchor)
-    model, out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
 
     assert {"channels_unshocked", "sales_unshocked"} <= set(out_names)
     assert saturation_anchors
@@ -454,7 +456,7 @@ def test_relative_outcome_scales_have_no_noise_ancestors():
     )
     g = _edgeless_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(6))
-    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
 
     for scale_name in ("rw_b_std", "rw_y_std"):
         scale_ancestors = set(ancestors([model[scale_name]])) | {model[scale_name]}
@@ -474,7 +476,7 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     assert "smoothness" not in world.equation_parameters["Y"]["iid_noise"]
     assert "RW_full(eps_y" not in world.equations["Y"]
 
-    replacement_eps_y = np.linspace(-1.0, 1.0, world.T + cfg.adstock_burn_in)
+    replacement_eps_y = np.linspace(-1.0, 1.0, world.n_time_steps + cfg.adstock_burn_in)
     replay = _replay(
         world,
         world.exogenous["eps_c"],
@@ -533,14 +535,14 @@ def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
     np.testing.assert_allclose(world.params["rw_d"]["mean"], 0.0, atol=0.0)
     np.testing.assert_allclose(world.params["rw_d"]["std"], 1.0, atol=0.0)
 
-    T_full = cfg.T + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
     width = _kernel_width(
         float(world.params["rw_d"]["smoothness"][0]),
-        T_full,
+        n_time_steps_full,
         rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
     )
-    basis = _walk_basis(T_full, width)
-    np.testing.assert_allclose(np.sum(basis**2) / T_full, 1.0, rtol=0.0, atol=1e-14)
-    paths = np.random.default_rng(91).normal(size=(128, T_full)) @ basis.T
+    basis = _walk_basis(n_time_steps_full, width)
+    np.testing.assert_allclose(np.sum(basis**2) / n_time_steps_full, 1.0, rtol=0.0, atol=1e-14)
+    paths = np.random.default_rng(91).normal(size=(128, n_time_steps_full)) @ basis.T
     np.testing.assert_allclose(paths.mean(axis=1), 0.0, atol=1e-12)
     assert np.ptp(paths.std(axis=1)) > 0.1  # Paths scatter; their scale is not pinned.

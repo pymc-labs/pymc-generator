@@ -35,14 +35,15 @@ from .signal_diagnostics import (
     summarize_signal_metrics,
 )
 from .slots import (
+    CORPUS_SCHEMA_VERSION,
     EDGE_BASE_RATES,
     EDGE_TYPES_EXTENDED,
-    J_DEMO,
-    K_DEMO,
-    M_DEMO,
+    N_COVARIATES_DEMO,
+    N_LATENT_DEMO,
+    N_TIME_STEPS_DEMO,
+    N_TREATMENTS_DEMO,
     PRIOR_COND_LAYOUT,
     PRIOR_COND_QUANTITIES,
-    T_DEMO,
     SlotLayout,
 )
 
@@ -96,15 +97,15 @@ PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
 MAX_QUERY_HORIZON_SEARCH_STEPS = 1_000_000
 
 
-def _n_query(T: int, query_frac: float) -> int:
+def _n_query(n_time_steps: int, query_frac: float) -> int:
     """Return query weeks from the canonical rounded query-fraction rule."""
-    return int(round(query_frac * T))
+    return int(round(query_frac * n_time_steps))
 
 
-def _minimum_valid_query_horizon(T: int, query_frac: float, l_max: int) -> int | None:
-    """Return the first valid candidate horizon at or above ``T``, if bounded."""
+def _minimum_valid_query_horizon(n_time_steps: int, query_frac: float, l_max: int) -> int | None:
+    """Return the first valid candidate horizon at or above ``n_time_steps``, if bounded."""
     warmup_boundary = l_max - 1
-    for candidate in range(T, T + MAX_QUERY_HORIZON_SEARCH_STEPS + 1):
+    for candidate in range(n_time_steps, n_time_steps + MAX_QUERY_HORIZON_SEARCH_STEPS + 1):
         n_query = _n_query(candidate, query_frac)
         if (
             0 < n_query < candidate
@@ -120,8 +121,10 @@ class SCMPrior:
     """Corpus generation knobs + prior-range constants for the additive SCM.
 
     Supports variable-size DAGs via padding to max sizes. Each cell draws
-    random active counts (K_active, M_active, J_active) from configured
-    ranges. Inactive nodes are zero-padded and masked via active_channel_mask.
+    random active counts (n_treatments_active, n_covariates_active,
+    n_latent_active) from configured ranges. Inactive nodes are zero-padded and
+    masked via treatment_active_mask / covariate_active_mask /
+    latent_active_mask.
 
     Key fields:
         n_treatments / n_covariates / n_latent: padded graph sizes (media
@@ -134,10 +137,10 @@ class SCMPrior:
     layout and enables the supported "diverse" channel texture.
     """
 
-    T: int = T_DEMO
-    n_treatments: int = K_DEMO  # media channels (the interventions / treatments)
-    n_covariates: int = M_DEMO  # observed controls
-    n_latent: int = J_DEMO  # hidden confounders (latent demand factors)
+    n_time_steps: int = N_TIME_STEPS_DEMO
+    n_treatments: int = N_TREATMENTS_DEMO  # media channels (the interventions / treatments)
+    n_covariates: int = N_COVARIATES_DEMO  # observed controls
+    n_latent: int = N_LATENT_DEMO  # hidden confounders (latent demand factors)
     n_cells: int = 50
     draws_per_cell: int = 20
     val_cell_frac: float = 0.2
@@ -199,11 +202,11 @@ class SCMPrior:
     rw_sales_std_range: tuple[float, float] = (0.010, 0.028)
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
-    # 26 weeks (half a year) reproduces the CURRENT T=104 reference exactly at
-    # smoothness=1.0 (round(1.0 * 104 / 4) == 26), preserving its drift
-    # character while making every other horizon consistent. This is a config
-    # knob, not a constant, so drift timescale stays tunable independently of T —
-    # that flexibility is the point.
+    # 26 weeks (half a year) reproduces the CURRENT n_time_steps=104 reference
+    # exactly at smoothness=1.0 (round(1.0 * 104 / 4) == 26), preserving its
+    # drift character while making every other horizon consistent. This is a
+    # config knob, not a constant, so drift timescale stays tunable
+    # independently of n_time_steps — that flexibility is the point.
     rw_smoothness_max_weeks: int = 26
     # Optional shared innovation between the baseline and every channel. When
     # enabled, rho is resolved per world and mixes their already-standardized
@@ -257,8 +260,8 @@ class SCMPrior:
     edge_rate_overrides: dict[str, float] | None = None
 
     # Per-edge-type arrow budget ("pot"). Maps edge type ->
-    # "up to N" cap (int) or (lo, hi) inclusive range; the per-task count is
-    # drawn uniformly (int N => {0..N}; use (N, N) for exactly N) and capped at
+    # "up to n" cap (int) or (lo, hi) inclusive range; the per-task count is
+    # drawn uniformly (int n => {0..n}; use (n, n) for exactly n) and capped at
     # the number of eligible pairs. When a type is present, its arrows are
     # scattered uniformly over eligible node pairs instead of drawn per-pair
     # Bernoulli; each type's pot is independent. Types absent from the dict keep
@@ -278,10 +281,10 @@ class SCMPrior:
     # This is not expressible through ``edge_budget["cy"]``: a cy budget is an
     # absolute arrow count clamped to the eligible slots, so a cell that draws
     # few active channels can have every one of them live — cy=(2, 10) with
-    # K_active=2 gives 2 live, 0 dead. Measured on a (2, 10)-active /
+    # n_treatments_active=2 gives 2 live, 0 dead. Measured on a (2, 10)-active /
     # (2, 10)-cy recipe: 18 of 40 cells carried no dead channel at all, i.e. no
     # negative class to learn from. The floor caps the live count at
-    # ``K_active - min_dead_channels`` (never below 1 — the degenerate C->Y
+    # ``n_treatments_active - min_dead_channels`` (never below 1 — the degenerate C->Y
     # guard wins) while still scattering the live channels over ALL active
     # slots, so slot index carries no information about the label. One config
     # with ``n_treatments_active_range=(2, 10)`` and ``min_dead_channels=1``
@@ -296,9 +299,9 @@ class SCMPrior:
     @property
     def layout(self) -> SlotLayout:
         return SlotLayout(
-            K=self.n_treatments,
-            M=self.n_covariates,
-            J=self.n_latent,
+            n_treatments=self.n_treatments,
+            n_covariates=self.n_covariates,
+            n_latent=self.n_latent,
             edge_types=EDGE_TYPES_EXTENDED,
         )
 
@@ -332,7 +335,7 @@ class SCMPrior:
 
     @property
     def n_query(self) -> int:
-        return _n_query(self.T, self.query_frac)
+        return _n_query(self.n_time_steps, self.query_frac)
 
     def prior_cond_spec(self) -> dict[str, dict[str, tuple[float, float]]]:
         """Effective ``{quantity: {"support": (lo, hi), "width_range": (w_lo, w_hi)}}``.
@@ -395,7 +398,7 @@ class SCMPrior:
             ("n_latent", 1),
             ("n_cells", 2),
             ("draws_per_cell", 1),
-            ("T", 4),
+            ("n_time_steps", 4),
             ("seed", 0),
             ("min_dead_channels", 0),
         ):
@@ -408,15 +411,16 @@ class SCMPrior:
         _finite_real("rw_smoothness_alpha", self.rw_smoothness_alpha, positive=True)
         _finite_real("rw_smoothness_beta", self.rw_smoothness_beta, positive=True)
         _integer("rw_smoothness_max_weeks", self.rw_smoothness_max_weeks, minimum=1)
-        if not 0 < self.n_query < self.T:
+        if not 0 < self.n_query < self.n_time_steps:
             raise ValueError(
                 f"query_frac={self.query_frac} gives {self.n_query} query weeks "
-                f"for T={self.T}; need 0 < n_query < T"
+                f"for n_time_steps={self.n_time_steps}; need 0 < n_query < n_time_steps"
             )
-        if self.n_query > self.T - 2:
+        if self.n_query > self.n_time_steps - 2:
             raise ValueError(
                 f"query_frac={self.query_frac} gives {self.n_query} query weeks "
-                f"for T={self.T}, leaving only {self.T - self.n_query} support weeks. "
+                f"for n_time_steps={self.n_time_steps}, leaving only "
+                f"{self.n_time_steps - self.n_query} support weeks. "
                 f"Need at least 2 support weeks for meaningful statistics."
             )
         if isinstance(self.l_max, bool) or not isinstance(self.l_max, (int, np.integer)):
@@ -674,25 +678,29 @@ class SCMPrior:
             )
         if self.adstock_burn_in > 0:
             warmup_boundary = self.l_max - 1
-            short_query_start = self.T - self.n_query
-            long_query_start = self.T // 2
+            short_query_start = self.n_time_steps - self.n_query
+            long_query_start = self.n_time_steps // 2
             # Check both split types even at degenerate probabilities: validation-split repair can
             # force either type, and every scored target must have persisted response history.
             if min(short_query_start, long_query_start) < warmup_boundary:
-                suggested_T = _minimum_valid_query_horizon(self.T, self.query_frac, self.l_max)
+                suggested_n_time_steps = _minimum_valid_query_horizon(
+                    self.n_time_steps, self.query_frac, self.l_max
+                )
                 horizon_remedy = (
-                    f"raise T to at least {suggested_T}, "
-                    if suggested_T is not None
-                    else "raise T, "
+                    f"raise n_time_steps to at least {suggested_n_time_steps}, "
+                    if suggested_n_time_steps is not None
+                    else "raise n_time_steps, "
                 )
                 raise ValueError(
                     "adstock burn-in query overlap: "
-                    f"T={self.T}, l_max={self.l_max}, n_query={self.n_query}; "
-                    f"short-horizon query start T - n_query={short_query_start}, "
-                    f"long-horizon query start T // 2={long_query_start}. With burn-in, "
-                    f"the first l_max - 1 = {warmup_boundary} reported weeks carry a media "
-                    "response that depends on unpersisted pre-window spend. Both the "
-                    "short-horizon (T - n_query) and long-horizon (T // 2) query windows must "
+                    f"n_time_steps={self.n_time_steps}, l_max={self.l_max}, "
+                    f"n_query={self.n_query}; "
+                    f"short-horizon query start n_time_steps - n_query={short_query_start}, "
+                    f"long-horizon query start n_time_steps // 2={long_query_start}. With "
+                    f"burn-in, the first l_max - 1 = {warmup_boundary} reported weeks carry a "
+                    "media response that depends on unpersisted pre-window spend. Both the "
+                    "short-horizon (n_time_steps - n_query) and long-horizon "
+                    "(n_time_steps // 2) query windows must "
                     "start at or after that boundary, otherwise tasks are scored on targets that "
                     "are not a function of the persisted inputs. To reach this world anyway, "
                     "either set adstock_burn_in=0 (the convolution then zero-pads, which is "
@@ -733,11 +741,11 @@ class SCMPrior:
             or isinstance(shock_len_hi, bool)
             or not isinstance(shock_len_lo, (int, np.integer))
             or not isinstance(shock_len_hi, (int, np.integer))
-            or not 1 <= shock_len_lo <= shock_len_hi <= self.T
+            or not 1 <= shock_len_lo <= shock_len_hi <= self.n_time_steps
         ):
             raise ValueError(
                 "channel_shock_length_range must have integer bounds satisfying "
-                f"1 <= lo <= hi <= T, got {self.channel_shock_length_range!r}"
+                f"1 <= lo <= hi <= n_time_steps, got {self.channel_shock_length_range!r}"
             )
         try:
             shock_level_lo, shock_level_hi = self.channel_shock_level_range
@@ -753,19 +761,20 @@ class SCMPrior:
                 "channel_shock_level_range must satisfy finite 0 <= lo <= hi, "
                 f"got {self.channel_shock_level_range!r}"
             )
-        if self.n_channel_shocks > self.T:
+        if self.n_channel_shocks > self.n_time_steps:
             raise ValueError(
-                f"n_channel_shocks must be <= T ({self.T}), got {self.n_channel_shocks}"
+                f"n_channel_shocks must be <= n_time_steps ({self.n_time_steps}), "
+                f"got {self.n_channel_shocks}"
             )
         if self.n_channel_shocks and shock_len_lo < 2:
             raise ValueError(
                 "enabled channel shocks must last at least 2 weeks so the held level "
                 "is observable in spend"
             )
-        if self.n_channel_shocks and self.n_channel_shocks * shock_len_hi > self.T:
+        if self.n_channel_shocks and self.n_channel_shocks * shock_len_hi > self.n_time_steps:
             raise ValueError(
-                "n_channel_shocks * max channel_shock_length must be <= T, got "
-                f"{self.n_channel_shocks} * {shock_len_hi} > {self.T}"
+                "n_channel_shocks * max channel_shock_length must be <= n_time_steps, got "
+                f"{self.n_channel_shocks} * {shock_len_hi} > {self.n_time_steps}"
             )
         # Validate variable-size DAG ranges. The upper bound may exceed the
         # padded size and is intentionally clamped, but both declared bounds
@@ -812,9 +821,9 @@ class SCMPrior:
 def _resolve_budget(rng: np.random.Generator, spec: int | tuple[int, int], n_eligible: int) -> int:
     """Resolve an edge-budget spec to a concrete arrow count, clamped to eligible pairs.
 
-    An ``int`` N is an "up to N" cap: the per-task count is drawn uniformly in
-    ``{0, ..., N}`` (never more than N). A ``(lo, hi)`` tuple draws uniformly in
-    the inclusive range ``{lo, ..., hi}`` — use ``(N, N)`` for exactly N. Both
+    An ``int`` n is an "up to n" cap: the per-task count is drawn uniformly in
+    ``{0, ..., n}`` (never more than n). A ``(lo, hi)`` tuple draws uniformly in
+    the inclusive range ``{lo, ..., hi}`` — use ``(n, n)`` for exactly n. Both
     forms are capped at ``n_eligible`` (the number of eligible source->dest
     pairs for the edge type).
     """
@@ -857,32 +866,34 @@ def _scatter_triu(rng: np.random.Generator, n_act: int, count: int, out_full: np
 def _sample_g(
     rng: np.random.Generator,
     layout: SlotLayout,
-    K_active: int | None = None,
-    M_active: int | None = None,
-    J_active: int | None = None,
+    n_treatments_active: int | None = None,
+    n_covariates_active: int | None = None,
+    n_latent_active: int | None = None,
     rates: dict[str, float] | None = None,
     budget: dict[str, int | tuple[int, int]] | None = None,
     min_dead: int = 0,
 ) -> dict[str, np.ndarray]:
     """Draw one DAG cell from the slot base rates (0/1 numpy arrays).
 
-    For variable-size DAGs, pass K_active, M_active, J_active to restrict
-    edges to active nodes only. Inactive nodes get zero-padded g-vectors
-    and active masks.
+    For variable-size DAGs, pass n_treatments_active, n_covariates_active,
+    n_latent_active to restrict edges to active nodes only. Inactive nodes get
+    zero-padded g-vectors and active masks.
 
     Parameters
     ----------
     rng : numpy random generator
     layout : SlotLayout with max sizes
-    K_active, M_active, J_active : optional int
-        Number of active nodes. If None, uses layout.K/M/J (all active).
+    n_treatments_active, n_covariates_active, n_latent_active : optional int
+        Number of active nodes. If None, uses
+        ``layout.n_treatments`` / ``layout.n_covariates`` / ``layout.n_latent``
+        (all active).
     rates : optional dict
         Per-edge-type base-rate overrides for the legacy types
         ("cy", "dc", "db", "zb"); missing keys fall back to
         ``EDGE_BASE_RATES``. None (default) is byte-identical to the
         module constants (prior-shift eval support).
     budget : optional dict
-        Per-edge-type arrow budget ("pot") for the legacy types: an "up to N"
+        Per-edge-type arrow budget ("pot") for the legacy types: an "up to n"
         cap. When a type is present, its (uniformly drawn) count of arrows is
         scattered uniformly over eligible node pairs instead of drawn per-pair
         Bernoulli (see ``_resolve_budget`` / ``_scatter``). Types absent from
@@ -891,8 +902,8 @@ def _sample_g(
     min_dead : int
         Minimum number of active channels left with no direct C->Y edge (see
         ``SCMPrior.min_dead_channels``). Caps the live count at
-        ``max(1, K_active - min_dead)``; 0 (default) is inert and consumes no
-        extra RNG.
+        ``max(1, n_treatments_active - min_dead)``; 0 (default) is inert and
+        consumes no extra RNG.
 
     Returns
     -------
@@ -900,88 +911,90 @@ def _sample_g(
     """
     _rates = {**EDGE_BASE_RATES, **(rates or {})}
     _budget = budget or {}
-    K_max = layout.K
-    M_max = layout.M
-    J_max = layout.J
+    n_treatments_max = layout.n_treatments
+    n_covariates_max = layout.n_covariates
+    n_latent_max = layout.n_latent
 
     # Default: all nodes active (backward compat)
-    if K_active is None:
-        K_active = K_max
-    if M_active is None:
-        M_active = M_max
-    if J_active is None:
-        J_active = J_max
+    if n_treatments_active is None:
+        n_treatments_active = n_treatments_max
+    if n_covariates_active is None:
+        n_covariates_active = n_covariates_max
+    if n_latent_active is None:
+        n_latent_active = n_latent_max
 
     # Clamp to valid range (ensure non-negative)
-    K_active = max(0, min(K_active, K_max))
-    M_active = max(0, min(M_active, M_max))
-    J_active = max(0, min(J_active, J_max))
+    n_treatments_active = max(0, min(n_treatments_active, n_treatments_max))
+    n_covariates_active = max(0, min(n_covariates_active, n_covariates_max))
+    n_latent_active = max(0, min(n_latent_active, n_latent_max))
 
     # Generate edges only for active nodes; pad rest with zeros
-    g_cy = np.zeros(K_max)
-    if K_active > 0:
+    g_cy = np.zeros(n_treatments_max)
+    if n_treatments_active > 0:
         # Cap the live count so the cell keeps `min_dead` active channels with
         # no direct C->Y edge (the negative class). Live channels are still
         # scattered over ALL active slots — reserving the tail slots instead
         # would make slot index predict the label.
-        n_live_max = max(1, K_active - max(0, min_dead))
+        n_live_max = max(1, n_treatments_active - max(0, min_dead))
         if _budget.get("cy") is not None:
             n = _resolve_budget(rng, _budget["cy"], n_live_max)
-            g_cy[:K_active] = _scatter(rng, n, K_active)
+            g_cy[:n_treatments_active] = _scatter(rng, n, n_treatments_active)
         else:
-            g_cy[:K_active] = rng.binomial(1, _rates["cy"], size=K_active)
-            live = np.flatnonzero(g_cy[:K_active])
+            g_cy[:n_treatments_active] = rng.binomial(1, _rates["cy"], size=n_treatments_active)
+            live = np.flatnonzero(g_cy[:n_treatments_active])
             if live.size > n_live_max:  # unreachable when min_dead == 0
                 g_cy[rng.choice(live, size=live.size - n_live_max, replace=False)] = 0.0
         # Degenerate guard: ensure at least one C->Y edge in active range
-        if not g_cy[:K_active].any():
-            g_cy[rng.integers(0, K_active)] = 1.0
+        if not g_cy[:n_treatments_active].any():
+            g_cy[rng.integers(0, n_treatments_active)] = 1.0
 
-    g_dc = np.zeros((J_max, K_max))
-    if J_active > 0 and K_active > 0:
+    g_dc = np.zeros((n_latent_max, n_treatments_max))
+    if n_latent_active > 0 and n_treatments_active > 0:
         if _budget.get("dc") is not None:
-            n = _resolve_budget(rng, _budget["dc"], J_active * K_active)
-            g_dc[:J_active, :K_active] = _scatter(rng, n, J_active * K_active).reshape(
-                J_active, K_active
+            n = _resolve_budget(rng, _budget["dc"], n_latent_active * n_treatments_active)
+            g_dc[:n_latent_active, :n_treatments_active] = _scatter(
+                rng, n, n_latent_active * n_treatments_active
+            ).reshape(n_latent_active, n_treatments_active)
+        else:
+            g_dc[:n_latent_active, :n_treatments_active] = rng.binomial(
+                1, _rates["dc"], size=(n_latent_active, n_treatments_active)
             )
-        else:
-            g_dc[:J_active, :K_active] = rng.binomial(1, _rates["dc"], size=(J_active, K_active))
 
-    g_db = np.zeros(J_max)
-    if J_active > 0:
+    g_db = np.zeros(n_latent_max)
+    if n_latent_active > 0:
         if _budget.get("db") is not None:
-            n = _resolve_budget(rng, _budget["db"], J_active)
-            g_db[:J_active] = _scatter(rng, n, J_active)
+            n = _resolve_budget(rng, _budget["db"], n_latent_active)
+            g_db[:n_latent_active] = _scatter(rng, n, n_latent_active)
         else:
-            g_db[:J_active] = rng.binomial(1, _rates["db"], size=J_active)
+            g_db[:n_latent_active] = rng.binomial(1, _rates["db"], size=n_latent_active)
 
-    g_zb = np.zeros(M_max)
-    if M_active > 0:
+    g_zb = np.zeros(n_covariates_max)
+    if n_covariates_active > 0:
         if _budget.get("zb") is not None:
-            n = _resolve_budget(rng, _budget["zb"], M_active)
-            g_zb[:M_active] = _scatter(rng, n, M_active)
+            n = _resolve_budget(rng, _budget["zb"], n_covariates_active)
+            g_zb[:n_covariates_active] = _scatter(rng, n, n_covariates_active)
         else:
-            g_zb[:M_active] = rng.binomial(1, _rates["zb"], size=M_active)
+            g_zb[:n_covariates_active] = rng.binomial(1, _rates["zb"], size=n_covariates_active)
 
     # Active-node masks (1 = node exists, 0 = padding)
-    active_c = np.zeros(K_max)
-    active_c[:K_active] = 1.0
-    active_m = np.zeros(M_max)
-    active_m[:M_active] = 1.0
-    active_j = np.zeros(J_max)
-    active_j[:J_active] = 1.0
+    active_treatment = np.zeros(n_treatments_max)
+    active_treatment[:n_treatments_active] = 1.0
+    active_covariate = np.zeros(n_covariates_max)
+    active_covariate[:n_covariates_active] = 1.0
+    active_latent = np.zeros(n_latent_max)
+    active_latent[:n_latent_active] = 1.0
 
     return {
         "g_cy": g_cy,
         "g_dc": g_dc,
         "g_db": g_db,
         "g_zb": g_zb,
-        "active_c": active_c,
-        "active_m": active_m,
-        "active_j": active_j,
-        "K_active": K_active,
-        "M_active": M_active,
-        "J_active": J_active,
+        "active_treatment": active_treatment,
+        "active_covariate": active_covariate,
+        "active_latent": active_latent,
+        "n_treatments_active": n_treatments_active,
+        "n_covariates_active": n_covariates_active,
+        "n_latent_active": n_latent_active,
     }
 
 
@@ -989,9 +1002,9 @@ def sample_g_additive(
     rng: np.random.Generator,
     cfg: SCMPrior,
     layout: SlotLayout,
-    K_active: int | None = None,
-    M_active: int | None = None,
-    J_active: int | None = None,
+    n_treatments_active: int | None = None,
+    n_covariates_active: int | None = None,
+    n_latent_active: int | None = None,
 ) -> dict[str, np.ndarray]:
     """Draw one extended DAG cell for the additive SCM (Phase 4).
 
@@ -1020,56 +1033,78 @@ def sample_g_additive(
     base = _sample_g(
         rng,
         layout,
-        K_active=K_active,
-        M_active=M_active,
-        J_active=J_active,
+        n_treatments_active=n_treatments_active,
+        n_covariates_active=n_covariates_active,
+        n_latent_active=n_latent_active,
         rates=cfg.edge_rate_overrides,
         budget=cfg.edge_budget,
         min_dead=cfg.min_dead_channels,
     )
-    K_max, M_max, J_max = layout.K, layout.M, layout.J
-    K_active = base["K_active"]
-    M_active = base["M_active"]
-    J_active = base["J_active"]
+    n_treatments_max, n_covariates_max, n_latent_max = (
+        layout.n_treatments,
+        layout.n_covariates,
+        layout.n_latent,
+    )
+    n_treatments_active = base["n_treatments_active"]
+    n_covariates_active = base["n_covariates_active"]
+    n_latent_active = base["n_latent_active"]
     _budget = cfg.edge_budget or {}
 
-    g_dz = np.zeros((J_max, M_max))
-    if J_active > 0 and M_active > 0:
+    g_dz = np.zeros((n_latent_max, n_covariates_max))
+    if n_latent_active > 0 and n_covariates_active > 0:
         if _budget.get("dz") is not None:
-            n = _resolve_budget(rng, _budget["dz"], J_active * M_active)
-            g_dz[:J_active, :M_active] = _scatter(rng, n, J_active * M_active).reshape(J_active, M_active)
+            n = _resolve_budget(rng, _budget["dz"], n_latent_active * n_covariates_active)
+            g_dz[:n_latent_active, :n_covariates_active] = _scatter(
+                rng, n, n_latent_active * n_covariates_active
+            ).reshape(n_latent_active, n_covariates_active)
         else:
-            g_dz[:J_active, :M_active] = rng.binomial(1, cfg.dz_base_rate, size=(J_active, M_active))
+            g_dz[:n_latent_active, :n_covariates_active] = rng.binomial(
+                1, cfg.dz_base_rate, size=(n_latent_active, n_covariates_active)
+            )
 
-    g_zc = np.zeros((M_max, K_max))
-    if M_active > 0 and K_active > 0:
+    g_zc = np.zeros((n_covariates_max, n_treatments_max))
+    if n_covariates_active > 0 and n_treatments_active > 0:
         if _budget.get("zc") is not None:
-            n = _resolve_budget(rng, _budget["zc"], M_active * K_active)
-            g_zc[:M_active, :K_active] = _scatter(rng, n, M_active * K_active).reshape(M_active, K_active)
+            n = _resolve_budget(rng, _budget["zc"], n_covariates_active * n_treatments_active)
+            g_zc[:n_covariates_active, :n_treatments_active] = _scatter(
+                rng, n, n_covariates_active * n_treatments_active
+            ).reshape(n_covariates_active, n_treatments_active)
         else:
-            g_zc[:M_active, :K_active] = rng.binomial(1, cfg.zc_base_rate, size=(M_active, K_active))
+            g_zc[:n_covariates_active, :n_treatments_active] = rng.binomial(
+                1, cfg.zc_base_rate, size=(n_covariates_active, n_treatments_active)
+            )
 
-    g_cc = np.zeros((K_max, K_max))
-    if K_active > 1:
+    g_cc = np.zeros((n_treatments_max, n_treatments_max))
+    if n_treatments_active > 1:
         if _budget.get("cc") is not None:
-            n = _resolve_budget(rng, _budget["cc"], K_active * (K_active - 1) // 2)
-            _scatter_triu(rng, K_active, n, g_cc)  # strict upper: src < dst
+            n = _resolve_budget(
+                rng, _budget["cc"], n_treatments_active * (n_treatments_active - 1) // 2
+            )
+            _scatter_triu(rng, n_treatments_active, n, g_cc)  # strict upper: src < dst
         else:
-            draws = rng.binomial(1, cfg.cc_base_rate, size=(K_active, K_active))
-            g_cc[:K_active, :K_active] = np.triu(draws, k=1)  # strict upper: src < dst
+            draws = rng.binomial(
+                1, cfg.cc_base_rate, size=(n_treatments_active, n_treatments_active)
+            )
+            g_cc[:n_treatments_active, :n_treatments_active] = np.triu(
+                draws, k=1
+            )  # strict upper: src < dst
 
-    g_zz = np.zeros((M_max, M_max))
-    if M_active > 1:
+    g_zz = np.zeros((n_covariates_max, n_covariates_max))
+    if n_covariates_active > 1:
         if _budget.get("zz") is not None:
-            n = _resolve_budget(rng, _budget["zz"], M_active * (M_active - 1) // 2)
-            _scatter_triu(rng, M_active, n, g_zz)
+            n = _resolve_budget(
+                rng, _budget["zz"], n_covariates_active * (n_covariates_active - 1) // 2
+            )
+            _scatter_triu(rng, n_covariates_active, n, g_zz)
         else:
-            draws = rng.binomial(1, cfg.zz_base_rate, size=(M_active, M_active))
-            g_zz[:M_active, :M_active] = np.triu(draws, k=1)
+            draws = rng.binomial(
+                1, cfg.zz_base_rate, size=(n_covariates_active, n_covariates_active)
+            )
+            g_zz[:n_covariates_active, :n_covariates_active] = np.triu(draws, k=1)
 
     # Channel-activation rule (D1b): direct C->Y OR outgoing C->C
     channel_active = ((base["g_cy"] == 1) | (g_cc.sum(axis=1) > 0)).astype("float64")
-    channel_active *= base["active_c"]  # padding nodes are never active
+    channel_active *= base["active_treatment"]  # padding nodes are never active
 
     return {
         **base,
@@ -1086,7 +1121,7 @@ def _signal_block(
     layout: SlotLayout,
     sales_raw: np.ndarray,
     g_tasks: np.ndarray,
-    active_c_mask: np.ndarray,
+    treatment_active_mask: np.ndarray,
     sales_scale: np.ndarray,
     adstock_family: np.ndarray,
     adstock_alpha: np.ndarray,
@@ -1099,7 +1134,7 @@ def _signal_block(
 
     "Direct active channel" = cy edge present AND channel not padding.
     """
-    cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (active_c_mask == 1)
+    cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (treatment_active_mask == 1)
     out = summarize_signal_metrics(
         signal_metrics,
         signal_metric_valid,
@@ -1141,8 +1176,8 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
     elapsed = diagnostics["elapsed_s"]
 
     g_tasks = corpus["g"]
-    active_c_mask = corpus["active_c_mask"]
-    cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (active_c_mask == 1)
+    treatment_active_mask = corpus["treatment_active_mask"]
+    cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (treatment_active_mask == 1)
     signal_metrics, signal_metric_valid = dense_signal_metrics(
         corpus["spend_raw"],
         corpus["contributions_raw"],
@@ -1167,7 +1202,7 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
         layout,
         corpus["sales_raw"],
         g_tasks,
-        active_c_mask,
+        treatment_active_mask,
         corpus["sales_scale"],
         corpus["adstock_family"],
         corpus["adstock_alpha"],
@@ -1255,7 +1290,7 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
 
 
 def _make_support_mask(
-    rng: np.random.Generator, T: int, n_query: int, p_long_horizon: float
+    rng: np.random.Generator, n_time_steps: int, n_query: int, p_long_horizon: float
 ) -> tuple[np.ndarray, int]:
     """Per-task support mask (u8, 1=support) and the split type.
 
@@ -1264,16 +1299,16 @@ def _make_support_mask(
 
     Split types:
         0 = short_horizon: last n_query weeks are query (25% default)
-        1 = long_horizon: last T//2 weeks are query (50%)
+        1 = long_horizon: last n_time_steps//2 weeks are query (50%)
     """
     split_type = int(rng.random() < p_long_horizon)
-    support = np.ones(T, dtype=np.uint8)
+    support = np.ones(n_time_steps, dtype=np.uint8)
     if split_type == 1:
         # Long horizon: predict the second half
-        query_start = T // 2
+        query_start = n_time_steps // 2
     else:
         # Short horizon: predict the last n_query weeks
-        query_start = T - n_query
+        query_start = n_time_steps - n_query
     support[query_start:] = 0
     return support, split_type
 
@@ -1324,7 +1359,7 @@ def _recompute_retained_cell_split(corpus: dict) -> None:
 
 
 def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
-    """Draw a prior-predictive corpus: N SCMs and their data (dict of ndarrays).
+    """Draw a prior-predictive corpus: n_tasks SCMs and their data (dict of ndarrays).
 
     Each world routes through :func:`_generate_corpus_additive` — the additive
     causal SCM with the extended g-vector layout and exact interventional
@@ -1419,7 +1454,7 @@ _CORPUS_PARAM_NAMES = (
 
 
 def _pack_prior_cond(prior_cond: dict[str, tuple[float, float]]) -> np.ndarray:
-    """Pack one cell's ``{quantity: (low, width)}`` draw into a ``(P,)`` row.
+    """Pack a cell's ``{quantity: (low, width)}`` draw into a ``(len(PRIOR_COND_LAYOUT),)`` row.
 
     Columns follow the LOCKED ``PRIOR_COND_LAYOUT`` order — consumers index
     by name via the layout, never by position literals.
@@ -1433,18 +1468,21 @@ def _pack_prior_cond(prior_cond: dict[str, tuple[float, float]]) -> np.ndarray:
 
 
 def _slice_g_active(
-    g: dict[str, np.ndarray], K_act: int, M_act: int, J_act: int
+    g: dict[str, np.ndarray],
+    n_treatments_active: int,
+    n_covariates_active: int,
+    n_latent_active: int,
 ) -> dict[str, np.ndarray]:
     """Restrict padded g-blocks to the active node ranges."""
     return {
-        "g_cy": g["g_cy"][:K_act],
-        "g_dc": g["g_dc"][:J_act, :K_act],
-        "g_dz": g["g_dz"][:J_act, :M_act],
-        "g_db": g["g_db"][:J_act],
-        "g_zb": g["g_zb"][:M_act],
-        "g_zc": g["g_zc"][:M_act, :K_act],
-        "g_cc": g["g_cc"][:K_act, :K_act],
-        "g_zz": g["g_zz"][:M_act, :M_act],
+        "g_cy": g["g_cy"][:n_treatments_active],
+        "g_dc": g["g_dc"][:n_latent_active, :n_treatments_active],
+        "g_dz": g["g_dz"][:n_latent_active, :n_covariates_active],
+        "g_db": g["g_db"][:n_latent_active],
+        "g_zb": g["g_zb"][:n_covariates_active],
+        "g_zc": g["g_zc"][:n_covariates_active, :n_treatments_active],
+        "g_cc": g["g_cc"][:n_treatments_active, :n_treatments_active],
+        "g_zz": g["g_zz"][:n_covariates_active, :n_covariates_active],
     }
 
 
@@ -1475,14 +1513,14 @@ def _additive_task_ok(
     realism_sales = sales if realism_sales is None else realism_sales
     active = np.asarray(g_cy_active) == 1
     if active.any():
-        cv = realism_spend.std(axis=0) / (realism_spend.mean(axis=0) + 1e-12)  # (K,)
+        cv = realism_spend.std(axis=0) / (realism_spend.mean(axis=0) + 1e-12)  # (n_treatments,)
         if cv[active].min() < cv_floor:
             return False
     sales_med = np.median(realism_sales)
     safe_med = sales_med if sales_med > 0 else 1.0
     if realism_sales.max() / safe_med >= sales_spike_ratio:
         return False
-    spend_med = np.median(realism_spend, axis=0)  # (K,)
+    spend_med = np.median(realism_spend, axis=0)  # (n_treatments,)
     safe_spend_med = np.where(spend_med > 0, spend_med, 1.0)
     if (realism_spend.max(axis=0) / safe_spend_med).max() >= spend_spike_ratio:
         return False
@@ -1495,19 +1533,20 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     Same schema as :func:`sample_prior_predictive` (CONTRACTS §1) with the extended
     g-vector layout plus two new keys:
 
-    * ``indirect_effects`` (N, T) float32 — total indirect effect on sales
-      from all upstream influences flowing through channels.
-    * ``channel_active`` (N, K) uint8 — the D1b activation rule
+    * ``indirect_effects`` (n_tasks, n_time_steps) float32 — total indirect
+      effect on sales from all upstream influences flowing through channels.
+    * ``channel_active`` (n_tasks, n_treatments) uint8 — the D1b activation rule
       (C->Y or outgoing C->C).
-    * ``confounding_strength`` (N,) float32 — the effective per-world shared
+    * ``confounding_strength`` (n_tasks,) float32 — the effective per-world shared
       baseline/channel innovation strength (all zeros when disabled).
-    * ``saturation_scale`` (N, K) float32 — the per-channel nonlinear response
-      anchor, a function of the drawn parameters alone (never of the realized
-      series), zero-padded for inactive channels.
-    * ``prior_cond`` (N, P) float32 — present IFF ``cfg.prior_conditioning``:
-      the per-cell narrowed prior intervals as packed ``(low, width)`` pairs
-      in ``PRIOR_COND_LAYOUT`` order, broadcast to worlds;
-      ``diagnostics["prior_cond"]`` echoes layout, supports and width ranges.
+    * ``saturation_scale`` (n_tasks, n_treatments) float32 — the per-channel
+      nonlinear response anchor, a function of the drawn parameters alone
+      (never of the realized series), zero-padded for inactive channels.
+    * ``prior_cond`` (n_tasks, len(PRIOR_COND_LAYOUT)) float32 — present IFF
+      ``cfg.prior_conditioning``: the per-cell narrowed prior intervals as
+      packed ``(low, width)`` pairs in ``PRIOR_COND_LAYOUT`` order, broadcast
+      to worlds; ``diagnostics["prior_cond"]`` echoes layout, supports and
+      width ranges.
 
     Phase-5 per-node decomposition targets (float32, zero-padded to max sizes),
     emitted unconditionally. They are deterministic given the same eps inputs,
@@ -1517,16 +1556,17 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     was previously accepted (not observed in practice — a non-finite variant
     implies a non-finite observed path):
 
-    * ``control_contribution`` (N, T, M) — direct Z->B effect per control
-      (``g_zb[m]·ρ[m]·Z[:, m]``). Name matches the legacy Phase-2 opt-in key so
-      the existing per-control batch plumbing picks it up unchanged.
-    * ``confounder_contribution`` (N, T, J) — direct D->B effect per confounder
-      (``g_db[j]·δ[j]·D[:, j]``).
-    * ``baseline_intrinsic`` (N, T) — ``RW_B + RW_Y`` (baseline minus all parent
-      terms).
-    * ``indirect_effects_by_source`` (N, T, 3) — telescoping 3-way indirect
-      split in the LOCKED order ``(cc, zc, dc)``; the three columns sum exactly
-      to ``indirect_effects``.
+    * ``control_contribution`` (n_tasks, n_time_steps, n_covariates) — direct
+      Z->B effect per control (``g_zb[m]·ρ[m]·Z[:, m]``). Name matches the
+      legacy Phase-2 opt-in key so the existing per-control batch plumbing
+      picks it up unchanged.
+    * ``confounder_contribution`` (n_tasks, n_time_steps, n_latent) — direct
+      D->B effect per confounder (``g_db[j]·δ[j]·D[:, j]``).
+    * ``baseline_intrinsic`` (n_tasks, n_time_steps) — ``RW_B + RW_Y``
+      (baseline minus all parent terms).
+    * ``indirect_effects_by_source`` (n_tasks, n_time_steps, 3) — telescoping
+      3-way indirect split in the LOCKED order ``(cc, zc, dc)``; the three
+      columns sum exactly to ``indirect_effects``.
 
     The full additive invariant holds exactly (float64 pre-storage):
     ``baseline_intrinsic + Σ_j confounder_contribution + Σ_m control_contribution
@@ -1546,8 +1586,12 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     rng = np.random.default_rng(cfg.seed)
     layout = cfg.layout  # extended edge types
     n_query = cfg.n_query
-    K_max, M_max, J_max = layout.K, layout.M, layout.J
-    T = cfg.T
+    n_treatments_max, n_covariates_max, n_latent_max = (
+        layout.n_treatments,
+        layout.n_covariates,
+        layout.n_latent,
+    )
+    n_time_steps = cfg.n_time_steps
 
     tasks: list[dict] = []
     cell_gs: list[dict[str, np.ndarray]] = []
@@ -1559,20 +1603,26 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         tr = cfg.n_treatments_active_range_effective
         cv = cfg.n_covariates_active_range_effective
         lt = cfg.n_latent_active_range_effective
-        K_active = int(rng.integers(tr[0], tr[1] + 1))
-        M_active = int(rng.integers(cv[0], cv[1] + 1))
-        J_active = int(rng.integers(lt[0], lt[1] + 1))
+        n_treatments_active = int(rng.integers(tr[0], tr[1] + 1))
+        n_covariates_active = int(rng.integers(cv[0], cv[1] + 1))
+        n_latent_active = int(rng.integers(lt[0], lt[1] + 1))
         g = sample_g_additive(
-            rng, cfg, layout, K_active=K_active, M_active=M_active, J_active=J_active
+            rng,
+            cfg,
+            layout,
+            n_treatments_active=n_treatments_active,
+            n_covariates_active=n_covariates_active,
+            n_latent_active=n_latent_active,
         )
         cell_gs.append(g)
-        g_act = _slice_g_active(g, K_active, M_active, J_active)
+        g_act = _slice_g_active(g, n_treatments_active, n_covariates_active, n_latent_active)
 
         # One pm.Model per cell (fixed structure: DAG + families + smoothness);
         # the continuous params and noise are the model's RVs, drawn in batches
         # and filtered by the realism gate. Building/compiling the graph
-        # dominates at large (K, M), so a model per cell (not per draw) is key;
-        # FAST_COMPILE (the draw_worlds default) keeps the one-off compile cheap.
+        # dominates at large (n_treatments, n_covariates), so a model per cell
+        # (not per draw) is key; FAST_COMPILE (the draw_worlds default) keeps
+        # the one-off compile cheap.
         structural = sample_structure(g_act, cfg, rng)
         # Prior-conditioning interval draw (per cell — one model build). Returns
         # None and consumes NO RNG when cfg.prior_conditioning is False, so the
@@ -1581,7 +1631,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         if prior_cond is not None:
             cell_prior_rows.append(_pack_prior_cond(prior_cond))
         model, out_names, _param_names = build_world_model(
-            g_act, cfg, structural, T, prior_cond=prior_cond
+            g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
         )
         accepted: list[dict] = []
         last_draw_error: str | None = None
@@ -1635,40 +1685,42 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     n_rejected += 1
                     continue
 
-                support, split_type = _make_support_mask(rng, T, n_query, cfg.p_long_horizon)
+                support, split_type = _make_support_mask(
+                    rng, n_time_steps, n_query, cfg.p_long_horizon
+                )
                 sales_scale = float(np.std(drawn["sales"][support == 1]))
                 if not (np.isfinite(sales_scale) and sales_scale > 0.0):
                     n_rejected += 1
                     continue
 
                 # Zero-pad active-size outputs to max sizes
-                spend_pad = np.zeros((T, K_max))
-                spend_pad[:, :K_active] = drawn["channels"]
-                controls_pad = np.zeros((T, M_max))
-                controls_pad[:, :M_active] = drawn["controls"]
-                demand_pad = np.zeros((T, J_max))
-                demand_pad[:, :J_active] = drawn["demand"]
-                contrib_pad = np.zeros((T, K_max))
-                contrib_pad[:, :K_active] = drawn["contributions"]
-                shock_mask_pad = np.zeros((T, K_max), dtype=np.uint8)
-                shock_mask_pad[:, :K_active] = drawn["channel_shock_mask"]
-                channel_level_pad = np.zeros(K_max)
-                channel_level_pad[:K_active] = drawn["param_channel_level"]
-                saturation_scale_pad = np.zeros(K_max)
-                saturation_scale_pad[:K_active] = drawn["saturation_scale"]
-                adstock_family_pad = np.zeros(K_max, dtype=np.uint8)
-                adstock_family_pad[:K_active] = structural["adstock_family"]
-                adstock_alpha_pad = np.zeros(K_max)
-                adstock_alpha_pad[:K_active] = drawn["param_adstock_alpha"]
-                weibull_lam_pad = np.zeros(K_max)
-                weibull_lam_pad[:K_active] = drawn["param_weibull_lam"]
-                weibull_k_pad = np.zeros(K_max)
-                weibull_k_pad[:K_active] = drawn["param_weibull_k"]
+                spend_pad = np.zeros((n_time_steps, n_treatments_max))
+                spend_pad[:, :n_treatments_active] = drawn["channels"]
+                controls_pad = np.zeros((n_time_steps, n_covariates_max))
+                controls_pad[:, :n_covariates_active] = drawn["controls"]
+                demand_pad = np.zeros((n_time_steps, n_latent_max))
+                demand_pad[:, :n_latent_active] = drawn["demand"]
+                contrib_pad = np.zeros((n_time_steps, n_treatments_max))
+                contrib_pad[:, :n_treatments_active] = drawn["contributions"]
+                shock_mask_pad = np.zeros((n_time_steps, n_treatments_max), dtype=np.uint8)
+                shock_mask_pad[:, :n_treatments_active] = drawn["channel_shock_mask"]
+                channel_level_pad = np.zeros(n_treatments_max)
+                channel_level_pad[:n_treatments_active] = drawn["param_channel_level"]
+                saturation_scale_pad = np.zeros(n_treatments_max)
+                saturation_scale_pad[:n_treatments_active] = drawn["saturation_scale"]
+                adstock_family_pad = np.zeros(n_treatments_max, dtype=np.uint8)
+                adstock_family_pad[:n_treatments_active] = structural["adstock_family"]
+                adstock_alpha_pad = np.zeros(n_treatments_max)
+                adstock_alpha_pad[:n_treatments_active] = drawn["param_adstock_alpha"]
+                weibull_lam_pad = np.zeros(n_treatments_max)
+                weibull_lam_pad[:n_treatments_active] = drawn["param_weibull_lam"]
+                weibull_k_pad = np.zeros(n_treatments_max)
+                weibull_k_pad[:n_treatments_active] = drawn["param_weibull_k"]
                 # Phase 5 decomposition targets (zero-padded to max sizes)
-                control_contrib_pad = np.zeros((T, M_max))
-                control_contrib_pad[:, :M_active] = drawn["control_contribution"]
-                confounder_contrib_pad = np.zeros((T, J_max))
-                confounder_contrib_pad[:, :J_active] = drawn["confounder_contribution"]
+                control_contrib_pad = np.zeros((n_time_steps, n_covariates_max))
+                control_contrib_pad[:, :n_covariates_active] = drawn["control_contribution"]
+                confounder_contrib_pad = np.zeros((n_time_steps, n_latent_max))
+                confounder_contrib_pad[:, :n_latent_active] = drawn["confounder_contribution"]
 
                 accepted.append(
                     {
@@ -1712,19 +1764,22 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
 
     # -- assemble arrays (float64 math, float32 storage) --------------------
     n_tasks = len(tasks)
-    spend_raw = np.stack([tk["spend"] for tk in tasks])  # (N,T,K)
-    controls = np.stack([tk["controls"] for tk in tasks])  # (N,T,M)
-    sales_raw = np.stack([tk["sales"] for tk in tasks])  # (N,T)
+    spend_raw = np.stack([tk["spend"] for tk in tasks])  # (n_tasks, n_time_steps, n_treatments)
+    controls = np.stack([tk["controls"] for tk in tasks])  # (n_tasks, n_time_steps, n_covariates)
+    sales_raw = np.stack([tk["sales"] for tk in tasks])  # (n_tasks, n_time_steps)
     contributions_raw = np.stack([tk["contribution"] for tk in tasks])
-    baseline_raw = np.stack([tk["baseline"] for tk in tasks])  # (N,T)
-    demand = np.stack([tk["demand"] for tk in tasks])  # (N,T,J)
-    indirect_effects = np.stack([tk["indirect_effects"] for tk in tasks])  # (N,T)
-    baseline_intrinsic = np.stack([tk["baseline_intrinsic"] for tk in tasks])  # (N,T)
-    control_contribution = np.stack([tk["control_contribution"] for tk in tasks])  # (N,T,M)
-    confounder_contribution = np.stack([tk["confounder_contribution"] for tk in tasks])  # (N,T,J)
+    baseline_raw = np.stack([tk["baseline"] for tk in tasks])  # (n_tasks, n_time_steps)
+    demand = np.stack([tk["demand"] for tk in tasks])  # (n_tasks, n_time_steps, n_latent)
+    indirect_effects = np.stack([tk["indirect_effects"] for tk in tasks])  # (n_tasks, n_time_steps)
+    # (n_tasks, n_time_steps)
+    baseline_intrinsic = np.stack([tk["baseline_intrinsic"] for tk in tasks])
+    # (n_tasks, n_time_steps, n_covariates)
+    control_contribution = np.stack([tk["control_contribution"] for tk in tasks])
+    # (n_tasks, n_time_steps, n_latent)
+    confounder_contribution = np.stack([tk["confounder_contribution"] for tk in tasks])
     indirect_effects_by_source = np.stack(
         [tk["indirect_effects_by_source"] for tk in tasks]
-    )  # (N,T,3)
+    )  # (n_tasks, n_time_steps, 3)
     support_mask = np.stack([tk["support"] for tk in tasks]).astype(np.uint8)
     split_type = np.array([tk["split_type"] for tk in tasks], dtype=np.uint8)
     cell_id = np.array([tk["cell"] for tk in tasks], dtype=np.int32)
@@ -1746,26 +1801,31 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     weibull_lam = np.stack([tk["weibull_lam"] for tk in tasks])
     weibull_k = np.stack([tk["weibull_k"] for tk in tasks])
 
-    active_c_mask = np.stack([cell_gs[c]["active_c"] for c in cell_id])
-    active_m_mask = np.stack([cell_gs[c]["active_m"] for c in cell_id])
-    active_j_mask = np.stack([cell_gs[c]["active_j"] for c in cell_id])
+    treatment_active_mask = np.stack([cell_gs[c]["active_treatment"] for c in cell_id])
+    covariate_active_mask = np.stack([cell_gs[c]["active_covariate"] for c in cell_id])
+    latent_active_mask = np.stack([cell_gs[c]["active_latent"] for c in cell_id])
     channel_active = np.stack([cell_gs[c]["channel_active"] for c in cell_id])
-    K_active_arr = np.array([cell_gs[c]["K_active"] for c in cell_id], dtype=np.int32)
-    M_active_arr = np.array([cell_gs[c]["M_active"] for c in cell_id], dtype=np.int32)
-    J_active_arr = np.array([cell_gs[c]["J_active"] for c in cell_id], dtype=np.int32)
-    # Per-world prior-conditioning rows, broadcast from the cell draw (N, P).
+    n_treatments_active_arr = np.array(
+        [cell_gs[c]["n_treatments_active"] for c in cell_id], dtype=np.int32
+    )
+    n_covariates_active_arr = np.array(
+        [cell_gs[c]["n_covariates_active"] for c in cell_id], dtype=np.int32
+    )
+    n_latent_active_arr = np.array([cell_gs[c]["n_latent_active"] for c in cell_id], dtype=np.int32)
+    # Per-world prior-conditioning rows, broadcast from the cell draw
+    # (n_tasks, len(PRIOR_COND_LAYOUT)).
     prior_cond_arr = (
         np.stack([cell_prior_rows[c] for c in cell_id]) if cfg.prior_conditioning else None
     )
 
-    spend_means = spend_raw.mean(axis=1)  # (N,K)
+    spend_means = spend_raw.mean(axis=1)  # (n_tasks, n_treatments)
     spend_norm = np.divide(
         spend_raw,
         spend_means[:, None, :],
         out=np.zeros_like(spend_raw),
         where=spend_means[:, None, :] != 0.0,
     )
-    active_spend_sum = (spend_raw * active_c_mask[:, None, :]).sum(axis=-1, keepdims=True)
+    active_spend_sum = (spend_raw * treatment_active_mask[:, None, :]).sum(axis=-1, keepdims=True)
     spend_share = (
         np.divide(
             spend_raw,
@@ -1773,7 +1833,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             out=np.zeros_like(spend_raw),
             where=active_spend_sum != 0.0,
         )
-        * active_c_mask[:, None, :]
+        * treatment_active_mask[:, None, :]
     )
 
     g_cells = np.stack(
@@ -1790,8 +1850,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             )
             for g in cell_gs
         ]
-    )  # (n_cells, S)
-    g_tasks = g_cells[cell_id].astype(np.uint8)  # (N, S)
+    )  # (n_cells, n_slots)
+    g_tasks = g_cells[cell_id].astype(np.uint8)  # (n_tasks, n_slots)
 
     # -- cell-level validation split (same logic as the legacy path) --------
     n_val_cells = max(1, int(round(cfg.val_cell_frac * cfg.n_cells)))
@@ -1805,12 +1865,12 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     if val_mask.sum() >= 2:
         if val_split_types.sum() == 0:
             idx_flip = np.flatnonzero(val_mask)[0]
-            new_support, new_split = _make_support_mask(rng, T, n_query, 1.0)
+            new_support, new_split = _make_support_mask(rng, n_time_steps, n_query, 1.0)
             support_mask[idx_flip] = new_support
             split_type[idx_flip] = new_split
         elif val_split_types.sum() == val_mask.sum():
             idx_flip = np.flatnonzero(val_mask)[0]
-            new_support, new_split = _make_support_mask(rng, T, n_query, 0.0)
+            new_support, new_split = _make_support_mask(rng, n_time_steps, n_query, 0.0)
             support_mask[idx_flip] = new_support
             split_type[idx_flip] = new_split
 
@@ -1866,6 +1926,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             else None
         ),
         "min_dead_channels": int(cfg.min_dead_channels),
+        "schema_version": CORPUS_SCHEMA_VERSION,
     }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
@@ -1895,12 +1956,12 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "sales_scale": sales_scale.astype(np.float32),
         "is_val": is_val,
         "cell_id": cell_id,
-        "active_c_mask": active_c_mask.astype(np.uint8),
-        "active_m_mask": active_m_mask.astype(np.uint8),
-        "active_j_mask": active_j_mask.astype(np.uint8),
-        "K_active": K_active_arr,
-        "M_active": M_active_arr,
-        "J_active": J_active_arr,
+        "treatment_active_mask": treatment_active_mask.astype(np.uint8),
+        "covariate_active_mask": covariate_active_mask.astype(np.uint8),
+        "latent_active_mask": latent_active_mask.astype(np.uint8),
+        "n_treatments_active": n_treatments_active_arr,
+        "n_covariates_active": n_covariates_active_arr,
+        "n_latent_active": n_latent_active_arr,
         # Phase 4 additions
         "indirect_effects": indirect_effects.astype(np.float32),
         "channel_active": channel_active.astype(np.uint8),

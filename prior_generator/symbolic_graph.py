@@ -93,7 +93,7 @@ def _arr(x, shape):
     return np.asarray(x, dtype="float64").reshape(shape)
 
 
-def _dot_terms(cols: list, g_mask, coeff, T: int) -> TensorVariable:
+def _dot_terms(cols: list, g_mask, coeff, n_time_steps: int) -> TensorVariable:
     """``Σ_i coeff[i]·cols[i]`` over structurally-present parents (``g_mask[i] != 0``).
 
     ``g_mask`` is the CONCRETE 0/1 edge indicator (graph structure); ``coeff``
@@ -103,28 +103,29 @@ def _dot_terms(cols: list, g_mask, coeff, T: int) -> TensorVariable:
     ``g_mask ∈ {0, 1}``, filtering on it and multiplying by ``coeff`` equals the
     old ``Σ (g·coeff)·cols`` exactly.
 
-    A single ``Dot((T, n), (n,))`` is used rather than a python ``sum()`` of
-    scaled columns: the latter builds nested Adds the canonicalizer flattens
-    into one wide Add, and past ~32 inputs the py-backend crashes building the
-    ufunc. Dot is one BLAS op the rewriter never flattens (and is faster).
+    A single ``Dot((n_time_steps, n), (n,))`` over the ``n`` wired parents is used
+    rather than a python ``sum()`` of scaled columns: the latter builds nested
+    Adds the canonicalizer flattens into one wide Add, and past ~32 inputs the
+    py-backend crashes building the ufunc. Dot is one BLAS op the rewriter never
+    flattens (and is faster).
     """
     g_mask = np.asarray(g_mask, dtype="float64").ravel()
     nz = [i for i in range(len(cols)) if g_mask[i] != 0.0]
     if not nz:
-        return pt.zeros(T)
+        return pt.zeros(n_time_steps)
     if len(nz) == 1:
         return cast(TensorVariable, coeff[nz[0]] * cols[nz[0]])
-    mat = pt.stack([cols[i] for i in nz], axis=1)  # (T, n)
+    mat = pt.stack([cols[i] for i in nz], axis=1)  # (n_time_steps, n)
     w = pt.stack([coeff[i] for i in nz])  # (n,) — numpy scalars or symbolic
     return cast(TensorVariable, pt.dot(mat, w))
 
 
-def _walk_column(eps_col, rw_group: dict, i: int, T: int) -> TensorVariable:
+def _walk_column(eps_col, rw_group: dict, i: int, n_time_steps: int) -> TensorVariable:
     """Symbolic random walk for node i of a group, from its eps column."""
     return cast(
         TensorVariable,
         symbolic_random_walk(
-            T,
+            n_time_steps,
             # mean / std may be symbolic (RV) params; smoothness and its
             # absolute-week cap must stay concrete — they set the
             # moving-average kernel width, a structural graph property.
@@ -139,7 +140,7 @@ def _walk_column(eps_col, rw_group: dict, i: int, T: int) -> TensorVariable:
 
 
 def _adstock_col(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
-    """Adstock transform of a single (T,) channel column for channel k."""
+    """Adstock transform of a single (n_time_steps,) channel column for channel k."""
     l_max = params["l_max"]
     ad_fam = int(params["adstock_family"][k])  # family is concrete/structural
     x2d = c_col[:, None]
@@ -174,8 +175,8 @@ def _expected_levels(
     g_zc: np.ndarray,
     g_cc: np.ndarray,
     g_zz: np.ndarray,
-    K: int,
-    M: int,
+    n_treatments: int,
+    n_covariates: int,
     use_pulse: np.ndarray,
 ) -> list[TensorVariable]:
     """Per-channel saturation anchors from parameters alone.
@@ -195,19 +196,19 @@ def _expected_levels(
     response at week ``t`` cannot depend on spend at later weeks.
     """
     z_levels: list[TensorVariable] = []
-    gamma_zz = _arr(params["gamma_zz"], (M, M))
-    for m in range(M):
+    gamma_zz = _arr(params["gamma_zz"], (n_covariates, n_covariates))
+    for m in range(n_covariates):
         level = pt.as_tensor_variable(params["rw_z"]["mean"][m])
         upstream = _dot_terms([lvl[None] for lvl in z_levels[:m]], g_zz[:m, m], gamma_zz[:m, m], 1)
         z_levels.append(level + upstream.reshape(()))
 
     rw_c_mean = params["rw_c"]["mean"]
-    pulse_amp = _arr(params.get("pulse_amp", np.zeros(K)), (K,))
-    pulse_prob = _arr(params.get("pulse_prob", np.zeros(K)), (K,))
-    v_zc = _arr(params["v_zc"], (M, K))
-    alpha_cc = _arr(params["alpha_cc"], (K, K))
+    pulse_amp = _arr(params.get("pulse_amp", np.zeros(n_treatments)), (n_treatments,))
+    pulse_prob = _arr(params.get("pulse_prob", np.zeros(n_treatments)), (n_treatments,))
+    v_zc = _arr(params["v_zc"], (n_covariates, n_treatments))
+    alpha_cc = _arr(params["alpha_cc"], (n_treatments, n_treatments))
     c_levels: list[TensorVariable] = []
-    for k in range(K):
+    for k in range(n_treatments):
         own = pt.softplus(rw_c_mean[k])
         if use_pulse[k]:
             own = own + pulse_amp[k] * pulse_prob[k]
@@ -254,10 +255,10 @@ def _saturate_col(
 def build_symbolic_graph(
     g: dict[str, np.ndarray],
     params: dict[str, Any],
-    T: int,
-    K: int,
-    M: int,
-    J: int,
+    n_time_steps: int,
+    n_treatments: int,
+    n_covariates: int,
+    n_latent: int,
     *,
     burn_in: int = 0,
     eps: dict[str, Any],
@@ -267,19 +268,24 @@ def build_symbolic_graph(
     Parameters
     ----------
     g : dict
-        Edge indicators: ``g_cy`` (K,), ``g_dc`` (J,K), ``g_dz`` (J,M),
-        ``g_db`` (J,), ``g_zb`` (M,), ``g_zc`` (M,K), ``g_cc`` (K,K,
-        strictly upper-triangular), ``g_zz`` (M,M, strictly upper-triangular).
+        Edge indicators: ``g_cy`` (n_treatments,),
+        ``g_dc`` (n_latent, n_treatments), ``g_dz`` (n_latent, n_covariates),
+        ``g_db`` (n_latent,), ``g_zb`` (n_covariates,),
+        ``g_zc`` (n_covariates, n_treatments),
+        ``g_cc`` (n_treatments, n_treatments, strictly upper-triangular),
+        ``g_zz`` (n_covariates, n_covariates, strictly upper-triangular).
     params : dict
         SCM parameters — the continuous ones may be symbolic (PyMC RV)
         tensors or concrete numpy; families/smoothness are concrete. Assembled
         by :func:`prior_generator.world_model.build_world_model`.
     eps : dict
-        The caller's noise RVs, each with leading dim ``T_full = T + burn_in``:
-        ``eps_d`` (T_full,J), ``eps_z`` (T_full,M), ``eps_c`` (T_full,K),
-        ``eps_b`` (T_full,), ``eps_y`` (T_full,), and the channel-texture noise
+        The caller's noise RVs, each with leading dim
+        ``n_time_steps_full = n_time_steps + burn_in``:
+        ``eps_d`` (n_time_steps_full, n_latent), ``eps_z`` (n_time_steps_full, n_covariates),
+        ``eps_c`` (n_time_steps_full, n_treatments), ``eps_b`` (n_time_steps_full,),
+        ``eps_y`` (n_time_steps_full,), and the channel-texture noise
         ``eps_c_hf`` (weekly jitter) / ``eps_c_pulse`` (a 0/1 Bernoulli fire).
-    T, K, M, J : int
+    n_time_steps, n_treatments, n_covariates, n_latent : int
         Time steps and node counts.
     burn_in : int
         Extra leading weeks simulated then dropped from every output. The
@@ -294,14 +300,20 @@ def build_symbolic_graph(
     Returns
     -------
     dict with a single key ``outputs`` — the symbolic node outputs (sliced to
-    the reported T-window):
-        ``demand`` (T,J), ``controls`` (T,M), ``channels`` (T,K),
-        ``channels_base`` (T,K), ``saturation_scale`` (K,), ``baseline`` (T,),
-        ``baseline_intrinsic`` (T,),
-        ``control_contribution`` (T,M), ``confounder_contribution`` (T,J),
-        ``contributions`` (T,K, direct), ``contributions_observed`` (T,K),
-        ``indirect_effects`` (T,), ``indirect_effects_by_source`` (T,3),
-        ``sales`` (T,).
+    the reported ``n_time_steps`` window):
+        ``demand`` (n_time_steps, n_latent),
+        ``controls`` (n_time_steps, n_covariates),
+        ``channels`` (n_time_steps, n_treatments),
+        ``channels_base`` (n_time_steps, n_treatments),
+        ``saturation_scale`` (n_treatments,), ``baseline`` (n_time_steps,),
+        ``baseline_intrinsic`` (n_time_steps,),
+        ``control_contribution`` (n_time_steps, n_covariates),
+        ``confounder_contribution`` (n_time_steps, n_latent),
+        ``contributions`` (n_time_steps, n_treatments) — direct,
+        ``contributions_observed`` (n_time_steps, n_treatments),
+        ``indirect_effects`` (n_time_steps,),
+        ``indirect_effects_by_source`` (n_time_steps, 3),
+        ``sales`` (n_time_steps,).
 
     Notes
     -----
@@ -312,8 +324,8 @@ def build_symbolic_graph(
     ``baseline_intrinsic + Σ_j confounder_contribution + Σ_m control_contribution
     == baseline``.
 
-    ``indirect_effects_by_source`` (T, 3) is the telescoping 3-way indirect
-    split in the LOCKED order ``(cc, zc, dc)`` — channel->channel,
+    ``indirect_effects_by_source`` (n_time_steps, 3) is the telescoping 3-way
+    indirect split in the LOCKED order ``(cc, zc, dc)`` — channel->channel,
     control->channel, hidden-confounder->channel — defined by sequential
     graph-surgery interventions (see the inline derivation). The three columns
     sum exactly to ``indirect_effects``.
@@ -324,13 +336,13 @@ def build_symbolic_graph(
         raise ValueError(f"burn_in must be >= 0, got {burn_in}")
 
     g_cy = np.asarray(g["g_cy"], dtype="float64")
-    g_dc = np.asarray(g["g_dc"], dtype="float64").reshape(J, K)
-    g_dz = np.asarray(g["g_dz"], dtype="float64").reshape(J, M)
-    g_db = np.asarray(g["g_db"], dtype="float64").reshape(J)
-    g_zb = np.asarray(g["g_zb"], dtype="float64").reshape(M)
-    g_zc = np.asarray(g["g_zc"], dtype="float64").reshape(M, K)
-    g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(K, K)
-    g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(M, M)
+    g_dc = np.asarray(g["g_dc"], dtype="float64").reshape(n_latent, n_treatments)
+    g_dz = np.asarray(g["g_dz"], dtype="float64").reshape(n_latent, n_covariates)
+    g_db = np.asarray(g["g_db"], dtype="float64").reshape(n_latent)
+    g_zb = np.asarray(g["g_zb"], dtype="float64").reshape(n_covariates)
+    g_zc = np.asarray(g["g_zc"], dtype="float64").reshape(n_covariates, n_treatments)
+    g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(n_treatments, n_treatments)
+    g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(n_covariates, n_covariates)
 
     # Channel texture. Magnitudes (hf_sigma, pulse_amp) may be symbolic (RV)
     # params; the per-channel ENABLE flags are concrete structure, normally
@@ -339,23 +351,32 @@ def build_symbolic_graph(
     # magnitude has no concrete truth value). The pulse enters as a 0/1 FIRE
     # indicator ``eps_c_pulse`` ~ Bernoulli(pulse_prob), so no threshold lives
     # in the graph.
-    hf_sigma = _arr(params.get("hf_sigma", np.zeros(K)), (K,))
-    pulse_amp = _arr(params.get("pulse_amp", np.zeros(K)), (K,))
+    hf_sigma = _arr(params.get("hf_sigma", np.zeros(n_treatments)), (n_treatments,))
+    pulse_amp = _arr(params.get("pulse_amp", np.zeros(n_treatments)), (n_treatments,))
     use_hf = params.get("use_hf")
     if use_hf is None:
-        use_hf = np.asarray(params.get("hf_sigma", np.zeros(K)), dtype="float64").reshape(K) > 0.0
-    use_hf = np.asarray(use_hf).reshape(K)
+        use_hf = (
+            np.asarray(params.get("hf_sigma", np.zeros(n_treatments)), dtype="float64").reshape(
+                n_treatments
+            )
+            > 0.0
+        )
+    use_hf = np.asarray(use_hf).reshape(n_treatments)
     use_pulse = params.get("use_pulse")
     if use_pulse is None:
-        _pa = np.asarray(params.get("pulse_amp", np.zeros(K)), dtype="float64").reshape(K)
-        _pp = np.asarray(params.get("pulse_prob", np.zeros(K)), dtype="float64").reshape(K)
+        _pa = np.asarray(params.get("pulse_amp", np.zeros(n_treatments)), dtype="float64").reshape(
+            n_treatments
+        )
+        _pp = np.asarray(params.get("pulse_prob", np.zeros(n_treatments)), dtype="float64").reshape(
+            n_treatments
+        )
         use_pulse = (_pa != 0.0) & (_pp > 0.0)
-    use_pulse = np.asarray(use_pulse).reshape(K)
+    use_pulse = np.asarray(use_pulse).reshape(n_treatments)
 
-    # Nodes are simulated over T_full = burn_in + T weeks; every output is
-    # sliced to the last T (the reported window).
-    T_full = T + burn_in
-    W = slice(burn_in, None)
+    # Nodes are simulated over n_time_steps_full = burn_in + n_time_steps weeks; every
+    # output is sliced to the last n_time_steps (the reported window).
+    n_time_steps_full = n_time_steps + burn_in
+    window = slice(burn_in, None)
 
     # Noise inputs are the caller's RVs — pm.Normal walks + weekly jitter and a
     # pm.Bernoulli 0/1 pulse — so the whole graph is drawn with no free inputs.
@@ -365,27 +386,29 @@ def build_symbolic_graph(
     eps_b, eps_y = eps["eps_b"], eps["eps_y"]
     eps_c_hf, eps_c_pulse = eps["eps_c_hf"], eps["eps_c_pulse"]
 
-    # -- confounders D (T_full, J): pure random walks -------------------------
-    d_cols = [_walk_column(eps_d[:, j], params["rw_d"], j, T_full) for j in range(J)]
-    D = pt.stack(d_cols, axis=1) if J > 0 else pt.zeros((T_full, 0))
+    # -- confounders D (n_time_steps_full, n_latent): pure random walks -------------------------
+    d_cols = [
+        _walk_column(eps_d[:, j], params["rw_d"], j, n_time_steps_full) for j in range(n_latent)
+    ]
+    D = pt.stack(d_cols, axis=1) if n_latent > 0 else pt.zeros((n_time_steps_full, 0))
 
-    # -- controls Z (T_full, M): D->Z + upstream Z->Z + own walk --------------
-    u_dz = _arr(params["u_dz"], (J, M))
-    gamma_zz = _arr(params["gamma_zz"], (M, M))
+    # -- controls Z (n_time_steps_full, n_covariates): D->Z + upstream Z->Z + own walk ---
+    u_dz = _arr(params["u_dz"], (n_latent, n_covariates))
+    gamma_zz = _arr(params["gamma_zz"], (n_covariates, n_covariates))
     z_cols: list[TensorVariable] = []
-    for m in range(M):
-        walk = _walk_column(eps_z[:, m], params["rw_z"], m, T_full)
-        term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], T_full)
-        term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], T_full)
+    for m in range(n_covariates):
+        walk = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
+        term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], n_time_steps_full)
+        term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], n_time_steps_full)
         z_cols.append(term_d + term_z + walk)
-    Z = pt.stack(z_cols, axis=1) if M > 0 else pt.zeros((T_full, 0))
+    Z = pt.stack(z_cols, axis=1) if n_covariates > 0 else pt.zeros((n_time_steps_full, 0))
 
-    # -- channels C (T_full, K): D->C + Z->C + upstream C->C + own drive -----
+    # -- channels C (n_time_steps_full, n_treatments): D->C + Z->C + upstream C->C + own drive -----
     # C_base: same walks, all incoming interaction terms zeroed (the
     # "no upstream" intervention used for the exact decomposition).
-    w_dc = _arr(params["w_dc"], (J, K))
-    v_zc = _arr(params["v_zc"], (M, K))
-    alpha_cc = _arr(params["alpha_cc"], (K, K))
+    w_dc = _arr(params["w_dc"], (n_latent, n_treatments))
+    v_zc = _arr(params["v_zc"], (n_covariates, n_treatments))
+    alpha_cc = _arr(params["alpha_cc"], (n_treatments, n_treatments))
     c_cols: list[TensorVariable] = []
     c_unshocked_cols: list[TensorVariable] = []
     c_base_cols: list[TensorVariable] = []
@@ -397,8 +420,8 @@ def build_symbolic_graph(
     # channels, so dropping it is the "zero that interaction" intervention).
     c_no_cc_cols: list[TensorVariable] = []
     c_no_cc_zc_cols: list[TensorVariable] = []
-    for k in range(K):
-        walk = _walk_column(eps_c[:, k], params["rw_c"], k, T_full)
+    for k in range(n_treatments):
+        walk = _walk_column(eps_c[:, k], params["rw_c"], k, n_time_steps_full)
         # Own exogenous drive = slow walk + iid weekly execution noise +
         # campaign pulses (plan doc 05 fix: without the high-frequency terms
         # the channel never sweeps its response curve and the contribution
@@ -409,13 +432,15 @@ def build_symbolic_graph(
             own = own + hf_sigma[k] * eps_c_hf[:, k]
         if use_pulse[k]:
             own = own + pulse_amp[k] * eps_c_pulse[:, k]
-        term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], T_full)
-        term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], T_full)
+        term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], n_time_steps_full)
+        term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], n_time_steps_full)
         # The natural recursion is retained solely for the realism reference.
         # The observed recursion instead sees already-clamped upstream parents,
         # which is the SCM meaning of a channel intervention.
-        term_c_unshocked = _dot_terms(c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], T_full)
-        term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], T_full)
+        term_c_unshocked = _dot_terms(
+            c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full
+        )
+        term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full)
         # softplus guard: spend-like channels must stay non-negative even
         # when signed upstream contributions push the pre-activation down
         c_unshocked_cols.append(pt.softplus(term_d + term_z + term_c_unshocked + own))
@@ -426,28 +451,32 @@ def build_symbolic_graph(
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
 
-    # -- baseline B (T_full,): D->B + Z->B + own walk --------------------------
-    delta_db = _arr(params["delta_db"], (J,))
-    rho_zb = _arr(params["rho_zb"], (M,))
-    walk_b = _walk_column(eps_b, params["rw_b"], 0, T_full)
-    term_bd = _dot_terms(d_cols, g_db, delta_db, T_full)
-    term_bz = _dot_terms(z_cols, g_zb, rho_zb, T_full)
+    # -- baseline B (n_time_steps_full,): D->B + Z->B + own walk --------------------------
+    delta_db = _arr(params["delta_db"], (n_latent,))
+    rho_zb = _arr(params["rho_zb"], (n_covariates,))
+    walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)
+    term_bd = _dot_terms(d_cols, g_db, delta_db, n_time_steps_full)
+    term_bz = _dot_terms(z_cols, g_zb, rho_zb, n_time_steps_full)
     B = term_bd + term_bz + walk_b
 
     # -- per-node direct baseline terms (exact split of term_bd / term_bz) ----
     # column m of control_contribution   = g_zb[m]·ρ[m]·Z[:,m]  (sums to term_bz)
     # column j of confounder_contribution = g_db[j]·δ[j]·D[:,j] (sums to term_bd)
-    control_contrib_cols = [(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(M)]
+    control_contrib_cols = [(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(n_covariates)]
     control_contribution = (
-        pt.stack(control_contrib_cols, axis=1) if M > 0 else pt.zeros((T_full, 0))
-    )  # (T_full, M)
-    confounder_contrib_cols = [(g_db[j] * delta_db[j]) * d_cols[j] for j in range(J)]
+        pt.stack(control_contrib_cols, axis=1)
+        if n_covariates > 0
+        else pt.zeros((n_time_steps_full, 0))
+    )  # (n_time_steps_full, n_covariates)
+    confounder_contrib_cols = [(g_db[j] * delta_db[j]) * d_cols[j] for j in range(n_latent)]
     confounder_contribution = (
-        pt.stack(confounder_contrib_cols, axis=1) if J > 0 else pt.zeros((T_full, 0))
-    )  # (T_full, J)
+        pt.stack(confounder_contrib_cols, axis=1)
+        if n_latent > 0
+        else pt.zeros((n_time_steps_full, 0))
+    )  # (n_time_steps_full, n_latent)
 
     # -- direct nonlinear responses + exact decomposition --------------------
-    beta = _arr(params["beta"], (K,))
+    beta = _arr(params["beta"], (n_treatments,))
     contrib_obs_cols, contrib_base_cols, sat_scale_cols = [], [], []
     # Telescoping 3-way indirect split (LOCKED order cc -> zc -> dc). Because the
     # direct response f_k is nonlinear, naive one-at-a-time interventions do not
@@ -459,8 +488,10 @@ def build_symbolic_graph(
     # These telescope exactly to indirect_effects because Y(zero all three) is
     # baseline + the direct (base-channel) contributions.
     ie_cc_cols, ie_zc_cols, ie_dc_cols = [], [], []
-    channel_levels = _expected_levels(params, g_zc, g_cc, g_zz, K, M, use_pulse)
-    for k in range(K):
+    channel_levels = _expected_levels(
+        params, g_zc, g_cc, g_zz, n_treatments, n_covariates, use_pulse
+    )
+    for k in range(n_treatments):
         # Adstock over the full simulated horizon, then slice to the reported
         # window: with burn_in >= l_max the window's convolution sees real
         # pre-window history instead of the zero padding (warmup artifact).
@@ -470,7 +501,7 @@ def build_symbolic_graph(
         # The κ scale is the channel's PARAMETER-ONLY expected level, never a
         # statistic of the drawn series: that keeps theta independent of the
         # noise and keeps the response at week t free of spend at t' > t.
-        ad_obs = _adstock_col(c_cols[k], params, k)[W]
+        ad_obs = _adstock_col(c_cols[k], params, k)[window]
         scale_k = pt.maximum(channel_levels[k], 1e-8).copy(name=f"sat_scale_{k}")
         sat_scale_cols.append(scale_k)
 
@@ -481,48 +512,49 @@ def build_symbolic_graph(
             return _saturate_col(ad_col, _scale, params, _k)
 
         f_obs = _f(ad_obs)
-        f_base = _f(_adstock_col(c_base_cols[k], params, k)[W])
-        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k)[W])
-        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k)[W])
+        f_base = _f(_adstock_col(c_base_cols[k], params, k)[window])
+        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k)[window])
+        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k)[window])
         gate = g_cy[k] * beta[k]  # g concrete, beta possibly symbolic
         contrib_obs_cols.append(gate * f_obs)
         contrib_base_cols.append(gate * f_base)
         ie_cc_cols.append(gate * (f_obs - f_no_cc))
         ie_zc_cols.append(gate * (f_no_cc - f_no_cc_zc))
         ie_dc_cols.append(gate * (f_no_cc_zc - f_base))
-    contributions_observed = pt.stack(contrib_obs_cols, axis=1)  # (T, K)
-    contributions = pt.stack(contrib_base_cols, axis=1)  # (T, K) direct
-    indirect_effects = (contributions_observed - contributions).sum(axis=1)  # (T,)
+    contributions_observed = pt.stack(contrib_obs_cols, axis=1)  # (n_time_steps, n_treatments)
+    contributions = pt.stack(contrib_base_cols, axis=1)  # (n_time_steps, n_treatments) direct
+    indirect_effects = (contributions_observed - contributions).sum(axis=1)  # (n_time_steps,)
 
-    # K == 0 is unsupported (the contributions stack above already requires
-    # K >= 1), so the ie stacks need no separate guard.
+    # n_treatments == 0 is unsupported (the contributions stack above already
+    # requires n_treatments >= 1), so the ie stacks need no separate guard.
     # Graph surgery against an absent edge family is exactly zero. Returning a
     # literal zero avoids machine-epsilon subtraction residue in persisted truth
-    # labels, especially for the structurally edge-free K=1 C->C block.
-    ie_cc = pt.stack(ie_cc_cols, axis=1).sum(axis=1) if g_cc.any() else pt.zeros(T)
-    ie_zc = pt.stack(ie_zc_cols, axis=1).sum(axis=1) if g_zc.any() else pt.zeros(T)
-    ie_dc = pt.stack(ie_dc_cols, axis=1).sum(axis=1) if g_dc.any() else pt.zeros(T)
-    indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)  # (T, 3): cc, zc, dc
+    # labels, especially for the structurally edge-free n_treatments=1 C->C block.
+    ie_cc = pt.stack(ie_cc_cols, axis=1).sum(axis=1) if g_cc.any() else pt.zeros(n_time_steps)
+    ie_zc = pt.stack(ie_zc_cols, axis=1).sum(axis=1) if g_zc.any() else pt.zeros(n_time_steps)
+    ie_dc = pt.stack(ie_dc_cols, axis=1).sum(axis=1) if g_dc.any() else pt.zeros(n_time_steps)
+    # (n_time_steps, 3), columns in the locked order cc, zc, dc
+    indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)
 
     walk_y = params["rw_y"]["std"][0] * eps_y
-    baseline = (B + walk_y)[W]  # sales noise folded into the baseline component
+    baseline = (B + walk_y)[window]  # sales noise folded into the baseline component
     # "Y independent of everything": baseline minus all parent (D/Z) terms.
-    baseline_intrinsic = (walk_b + walk_y)[W]  # (T,)
+    baseline_intrinsic = (walk_b + walk_y)[window]  # (n_time_steps,)
     sales = baseline + contributions_observed.sum(axis=1)
     # identity: sales == baseline + contributions.sum(1) + indirect_effects
     #        == baseline_intrinsic + Σ confounder_contribution + Σ control_contribution
     #           + contributions.sum(1) + indirect_effects_by_source.sum(1)
 
     outputs = {
-        "demand": D[W],
-        "controls": Z[W],
-        "channels": C[W],
-        "channels_base": C_base[W],
+        "demand": D[window],
+        "controls": Z[window],
+        "channels": C[window],
+        "channels_base": C_base[window],
         "saturation_scale": pt.stack(sat_scale_cols),
         "baseline": baseline,
         "baseline_intrinsic": baseline_intrinsic,
-        "control_contribution": control_contribution[W],
-        "confounder_contribution": confounder_contribution[W],
+        "control_contribution": control_contribution[window],
+        "confounder_contribution": confounder_contribution[window],
         "contributions": contributions,
         "contributions_observed": contributions_observed,
         "indirect_effects": indirect_effects,
@@ -536,12 +568,12 @@ def build_symbolic_graph(
         # response array unchanged; only these audit-only outputs and
         # realism-filter acceptance can move.
         unshocked_contribs = []
-        for k in range(K):
-            ad_unshocked = _adstock_col(c_unshocked_cols[k], params, k)[W]
+        for k in range(n_treatments):
+            ad_unshocked = _adstock_col(c_unshocked_cols[k], params, k)[window]
             scale_k = sat_scale_cols[k]
             unshocked_contribs.append(
                 g_cy[k] * beta[k] * _saturate_col(ad_unshocked, scale_k, params, k)
             )
-        outputs["channels_unshocked"] = pt.stack(c_unshocked_cols, axis=1)[W]
+        outputs["channels_unshocked"] = pt.stack(c_unshocked_cols, axis=1)[window]
         outputs["sales_unshocked"] = baseline + pt.stack(unshocked_contribs, axis=1).sum(axis=1)
     return {"outputs": outputs}

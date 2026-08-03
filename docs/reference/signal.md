@@ -10,10 +10,11 @@ checkable at generation time.
 
 With `include_identifiability_labels=True` (the default),
 `corpus["identifiability"]["signal_metrics"]` is a dense `float32` array of
-shape `(N, K, 9)` and `signal_metric_valid` in the same block is a same-shaped
-binary `uint8` array. This nested block keeps truth-derived metadata outside the
-top-level model-feature arrays; setting the option to `False` omits the block
-without changing any observable array. The locked, append-only layout in
+shape `(n_tasks, n_treatments, 9)` and `signal_metric_valid` in the same block
+is a same-shaped binary `uint8` array. This nested block keeps truth-derived
+metadata outside the top-level model-feature arrays; setting the option to
+`False` omits the block without changing any observable array. The locked,
+append-only layout in
 `diagnostics["signal"]["metric_layout"]` is:
 
 1. `spend_cv`

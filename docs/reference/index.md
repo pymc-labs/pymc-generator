@@ -13,7 +13,7 @@ it.
 | [`sample_scm`](sampling.md#prior_generator.worlds.sample_scm) / [`SCM`](sampling.md#prior_generator.worlds.SCM) | [Sampling one world](sampling.md) | Draw one accepted world with its full ground truth. |
 | [`build_world_model`](world-model.md#prior_generator.world_model.build_world_model) / [`draw_worlds`](world-model.md#prior_generator.world_model.draw_worlds) | [World model](world-model.md) | The world as a drawable `pm.Model`. |
 | [`build_oracle_model`](world-model.md#prior_generator.world_model.build_oracle_model) | [World model](world-model.md) | Observed-data variant: the NUTS posterior oracle. |
-| [`sample_prior_predictive`](corpus.md) / [`DataGenerator`](corpus.md) | [Corpus generation](corpus.md) | Generate an N-world corpus (dict of arrays). |
+| [`sample_prior_predictive`](corpus.md) / [`DataGenerator`](corpus.md) | [Corpus generation](corpus.md) | Generate an `n_tasks`-world corpus (dict of arrays). |
 | [`save_corpus`](corpus.md) / [`load_corpus`](corpus.md) | [Corpus generation](corpus.md) | Compressed `.npz` persistence. |
 | [`describe_scm`](describe.md) | [Descriptions](describe.md) | Plain-text description of a world. |
 | [`write_scm_bundle`](bundles.md) / [`write_scenario_bundles`](bundles.md) | [Audit bundles](bundles.md) | Write auditable folders. |

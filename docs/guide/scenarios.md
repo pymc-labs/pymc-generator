@@ -19,13 +19,15 @@ import prior_generator as pg
 
 sc = pg.SCENARIOS[3]                               # channel_halo
 print("name       :", sc.name)
-print("sizes      :", f"K={sc.n_treatments}, M={sc.n_covariates}, J={sc.n_latent}")
+print("sizes      :", f"n_treatments={sc.n_treatments}, "
+                      f"n_covariates={sc.n_covariates}, n_latent={sc.n_latent}")
 print("connect_all:", sc.connect_all)
 print("edge budget:", sc.edge_budget)
 
-scm = pg.sample_scm(sc.prior(T=104, seed=0), seed=0,
+scm = pg.sample_scm(sc.prior(n_time_steps=104, seed=0), seed=0,
                     connect_all=sc.connect_all, name=sc.name, purpose=sc.purpose)
-print("→ drew:", f"K={scm.K}, M={scm.M}, J={scm.J}")
+print("→ drew:", f"n_treatments={scm.n_treatments}, "
+                 f"n_covariates={scm.n_covariates}, n_latent={scm.n_latent}")
 ```
 
 ## The gallery

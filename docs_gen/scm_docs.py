@@ -58,14 +58,14 @@ plt.rcParams.update(
 
 
 @functools.cache
-def world(scenario: int = 1, seed: int = 0, T: int = 104) -> pg.SCM:
+def world(scenario: int = 1, seed: int = 0, n_time_steps: int = 104) -> pg.SCM:
     """Sample (and cache) one accepted world for a named scenario.
 
-    Deterministic in ``(scenario, seed, T)``; memoized for the whole build.
+    Deterministic in ``(scenario, seed, n_time_steps)``; memoized for the whole build.
     """
     sc = pg.SCENARIOS[scenario]
     return pg.sample_scm(
-        sc.prior(T=T, seed=seed),
+        sc.prior(n_time_steps=n_time_steps, seed=seed),
         seed=seed,
         connect_all=sc.connect_all,
         name=sc.name,
@@ -129,7 +129,7 @@ def viz_html(plot_fn, w: pg.SCM, *, title: str | None = None, caption: str | Non
 
 
 def weeks(w: pg.SCM):
-    """Convenience: ``0..T-1`` week index for a world."""
+    """Convenience: ``0..n_time_steps-1`` week index for a world."""
     import numpy as np
 
-    return np.arange(w.T)
+    return np.arange(w.n_time_steps)

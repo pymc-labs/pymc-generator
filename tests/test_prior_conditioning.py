@@ -28,7 +28,7 @@ def _cfg(**overrides):
         n_treatments=4,
         n_covariates=2,
         n_latent=1,
-        T=40,
+        n_time_steps=40,
         n_cells=2,
         draws_per_cell=3,
         seed=7,
@@ -42,7 +42,7 @@ def conditioned_corpus():
 
 
 def _cols(corpus):
-    """{layout name: (N,) column} of the packed prior_cond array."""
+    """{layout name: (n_tasks,) column} of the packed prior_cond array."""
     return {name: corpus["prior_cond"][:, i] for i, name in enumerate(PRIOR_COND_LAYOUT)}
 
 
@@ -167,12 +167,14 @@ def test_containment_single_cell():
     """Drawn conditioned params lie in the recorded interval (all channels)."""
     cfg = _cfg(prior_conditioning=True)
     rng = np.random.default_rng(3)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=4, M_active=2, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=4, n_covariates_active=2, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 4, 2, 1)
     structural = sample_structure(g_act, cfg, rng)
     prior_cond = sample_prior_cond(cfg, rng)
     model, _out_names, _param_names = build_world_model(
-        g_act, cfg, structural, cfg.T, prior_cond=prior_cond
+        g_act, cfg, structural, cfg.n_time_steps, prior_cond=prior_cond
     )
     drawn = draw_worlds(model, ("adstock_alpha", "hill_slope"), seed=5, draws=8)
     for q, var in (("adstock_alpha", "adstock_alpha"), ("hill_shape", "hill_slope")):

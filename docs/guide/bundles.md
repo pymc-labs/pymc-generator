@@ -9,7 +9,7 @@ who wants to *read* it rather than load it.
 ```python
 import prior_generator as pg
 
-scm = pg.sample_scm(pg.SCENARIOS[1].prior(T=104, seed=0), seed=0,
+scm = pg.sample_scm(pg.SCENARIOS[1].prior(n_time_steps=104, seed=0), seed=0,
                     name="confounded_spend")
 pg.write_scm_bundle(scm, "my_world/")
 ```
@@ -90,7 +90,7 @@ paths = pg.write_scenario_bundles("inspection-datasets", seed=20260712)
 ```
 
 Scenario `idx` is sampled with `seed + idx`, so the whole set is fully
-deterministic given `(scenarios, T, seed)`.
+deterministic given `(scenarios, n_time_steps, seed)`.
 
 !!! info "Text/CSV-only bundles"
     Pass `plots=False` to skip the PNG rendering (and the matplotlib import) when

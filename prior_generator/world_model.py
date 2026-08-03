@@ -53,17 +53,17 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     continuous parameters are NOT drawn here — they are PyMC distributions
     inside :func:`build_world_model`.
     """
-    K = len(g_active["g_cy"])
-    M = len(g_active["g_zb"])
-    J = len(g_active["g_db"])
+    n_treatments = len(g_active["g_cy"])
+    n_covariates = len(g_active["g_zb"])
+    n_latent = len(g_active["g_db"])
     ad_fam = rng.choice(
         len(ADSTOCK_FAMILY_KEYS),
-        size=K,
+        size=n_treatments,
         p=np.asarray([cfg.adstock_family_probs[key] for key in ADSTOCK_FAMILY_KEYS]),
     )
     sat_fam = rng.choice(
         len(SATURATION_FAMILY_KEYS),
-        size=K,
+        size=n_treatments,
         p=np.asarray([cfg.saturation_family_probs[key] for key in SATURATION_FAMILY_KEYS]),
     )
 
@@ -75,12 +75,12 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     return {
         "adstock_family": ad_fam.astype(int),
         "sat_family": sat_fam.astype(int),
-        "smoothness_d": _smooth(J),
-        "smoothness_z": _smooth(M),
-        "smoothness_c": _smooth(K),
+        "smoothness_d": _smooth(n_latent),
+        "smoothness_z": _smooth(n_covariates),
+        "smoothness_c": _smooth(n_treatments),
         "smoothness_b": _smooth(1),
-        "use_hf": np.full(K, hf_on),
-        "use_pulse": np.full(K, pulse_on),
+        "use_hf": np.full(n_treatments, hf_on),
+        "use_pulse": np.full(n_treatments, pulse_on),
     }
 
 
@@ -128,7 +128,7 @@ def _uniform(name: str, lo: float, hi: float, shape):
 
 
 def _channel_shock_schedule(
-    cfg: SCMPrior, g_cy: np.ndarray, T: int, burn_in: int, c_level
+    cfg: SCMPrior, g_cy: np.ndarray, n_time_steps: int, burn_in: int, c_level
 ) -> dict[str, Any]:
     """Build the symbolic intervention schedule for configured channel shocks.
 
@@ -136,9 +136,9 @@ def _channel_shock_schedule(
     same direct channel is selected repeatedly. The full-horizon mask and
     level matrix are internal inputs to the channel equations.
     """
-    S = int(cfg.n_channel_shocks)
-    K = len(g_cy)
-    if S == 0:
+    n_shocks = int(cfg.n_channel_shocks)
+    n_treatments = len(g_cy)
+    if n_shocks == 0:
         return {}
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1).astype("int64")
@@ -147,23 +147,25 @@ def _channel_shock_schedule(
     len_lo, len_hi = cfg.channel_shock_length_range
     level_lo, level_hi = cfg.channel_shock_level_range
     if len_lo == len_hi:
-        lengths = pt.as_tensor_variable(np.full(S, len_lo, dtype="int64"))
+        lengths = pt.as_tensor_variable(np.full(n_shocks, len_lo, dtype="int64"))
     else:
-        lengths = pm.DiscreteUniform("channel_shock_length", len_lo, len_hi, shape=S)
+        lengths = pm.DiscreteUniform("channel_shock_length", len_lo, len_hi, shape=n_shocks)
     if len(direct) == 1:
-        ranks = pt.zeros((S,), dtype="int64")
+        ranks = pt.zeros((n_shocks,), dtype="int64")
     else:
-        ranks = pm.DiscreteUniform("channel_shock_channel_rank", 0, len(direct) - 1, shape=S)
+        ranks = pm.DiscreteUniform("channel_shock_channel_rank", 0, len(direct) - 1, shape=n_shocks)
     channels = pt.cast(pt.as_tensor_variable(direct)[ranks], "int64")
     if level_lo == level_hi:
-        multipliers = pt.as_tensor_variable(np.full(S, level_lo, dtype="float64"))
+        multipliers = pt.as_tensor_variable(np.full(n_shocks, level_lo, dtype="float64"))
     else:
-        multipliers = pm.Uniform("channel_shock_level_multiplier", level_lo, level_hi, shape=S)
+        multipliers = pm.Uniform(
+            "channel_shock_level_multiplier", level_lo, level_hi, shape=n_shocks
+        )
 
     starts = []
-    for s in range(S):
-        slot_lo = s * T // S
-        slot_hi = (s + 1) * T // S
+    for s in range(n_shocks):
+        slot_lo = s * n_time_steps // n_shocks
+        slot_hi = (s + 1) * n_time_steps // n_shocks
         # A fixed length that fills the slot has exactly one feasible start.
         if len_lo == len_hi and slot_hi - slot_lo == len_lo:
             starts.append(pt.as_tensor_variable(np.asarray(slot_lo, dtype="int64")))
@@ -179,12 +181,12 @@ def _channel_shock_schedule(
         active = (time >= (starts_t + offset)[None, :]) & (
             time < (starts_t + lengths + offset)[None, :]
         )
-        selected = pt.eq(pt.arange(K)[:, None], channels[None, :]).T
+        selected = pt.eq(pt.arange(n_treatments)[:, None], channels[None, :]).T
         return active[:, :, None] & selected[None, :, :]
 
-    event_mask = _event_mask(T, 0)
+    event_mask = _event_mask(n_time_steps, 0)
     mask = pt.cast(pt.any(event_mask, axis=1), "int8")
-    event_mask_full = _event_mask(T + burn_in, burn_in)
+    event_mask_full = _event_mask(n_time_steps + burn_in, burn_in)
     mask_full = pt.cast(pt.any(event_mask_full, axis=1), "int8")
     level_full = pt.sum(
         pt.cast(event_mask_full, "float64") * levels[None, :, None],
@@ -203,7 +205,7 @@ def _channel_shock_schedule(
 
 
 def _validate_oracle_channel_shocks(
-    cfg: SCMPrior, g_cy: np.ndarray, data: dict[str, np.ndarray], T: int
+    cfg: SCMPrior, g_cy: np.ndarray, data: dict[str, np.ndarray], n_time_steps: int
 ) -> None:
     """Validate a world's reported-window held-level schedule for the oracle.
 
@@ -213,17 +215,18 @@ def _validate_oracle_channel_shocks(
     data. This still checks the complete reported schedule and its held levels
     against that observed spend so corrupt metadata fails loudly.
     """
-    S = int(cfg.n_channel_shocks)
-    if S == 0:
+    n_shocks = int(cfg.n_channel_shocks)
+    if n_shocks == 0:
         return
 
     def _event_int(name: str) -> np.ndarray:
         if name not in data:
             raise ValueError(f"enabled channel shocks require data[{name!r}] metadata")
         value = np.asarray(data[name])
-        if value.shape != (S,) or not np.issubdtype(value.dtype, np.integer):
+        if value.shape != (n_shocks,) or not np.issubdtype(value.dtype, np.integer):
             raise ValueError(
-                f"data[{name!r}] must be an integer array with shape {(S,)}, got {value.shape}"
+                f"data[{name!r}] must be an integer array with shape "
+                f"{(n_shocks,)}, got {value.shape}"
             )
         return value.astype("int64", copy=False)
 
@@ -235,17 +238,17 @@ def _validate_oracle_channel_shocks(
             "enabled channel shocks require data['channel_shock_level_multiplier'] metadata"
         )
     multiplier = np.asarray(data["channel_shock_level_multiplier"], dtype="float64")
-    if multiplier.shape != (S,) or not np.isfinite(multiplier).all():
+    if multiplier.shape != (n_shocks,) or not np.isfinite(multiplier).all():
         raise ValueError(
             "data['channel_shock_level_multiplier'] must be a finite array "
-            f"with shape {(S,)}, got {multiplier.shape}"
+            f"with shape {(n_shocks,)}, got {multiplier.shape}"
         )
     if "channel_shock_level" not in data:
         raise ValueError("enabled channel shocks require data['channel_shock_level'] metadata")
     level = np.asarray(data["channel_shock_level"], dtype="float64")
-    if level.shape != (S,) or not np.isfinite(level).all():
+    if level.shape != (n_shocks,) or not np.isfinite(level).all():
         raise ValueError(
-            f"data['channel_shock_level'] must be a finite array with shape {(S,)}, "
+            f"data['channel_shock_level'] must be a finite array with shape {(n_shocks,)}, "
             f"got {level.shape}"
         )
     if "channel_level" not in data:
@@ -270,12 +273,13 @@ def _validate_oracle_channel_shocks(
         raise ValueError("channel shock metadata level multiplier is outside the configured range")
     if not np.allclose(level, multiplier * channel_level[channel], rtol=1e-6, atol=1e-7):
         raise ValueError("channel shock level does not match multiplier * channel_level")
-    for s in range(S):
-        slot_lo = s * T // S
-        slot_hi = (s + 1) * T // S
+    for s in range(n_shocks):
+        slot_lo = s * n_time_steps // n_shocks
+        slot_hi = (s + 1) * n_time_steps // n_shocks
         if not slot_lo <= start[s] <= slot_hi - length[s]:
             raise ValueError(
-                f"channel shock metadata start {start[s]} is infeasible for slot {s} and length {length[s]}"
+                f"channel shock metadata start {start[s]} is infeasible for "
+                f"slot {s} and length {length[s]}"
             )
         observed = np.asarray(data["channels"])[start[s] : start[s] + length[s], channel[s]]
         if not np.allclose(observed, level[s], rtol=1e-6, atol=1e-7):
@@ -505,7 +509,7 @@ def _live_mechanism_param_names(structural: dict) -> tuple[str, ...]:
 
 
 @lru_cache(maxsize=64)
-def _walk_basis(T: int, width: int) -> np.ndarray:
+def _walk_basis(n_time_steps: int, width: int) -> np.ndarray:
     """Return the fixed ``B = A / c`` operator of one signed random walk.
 
     :func:`symbolic_random_walk` applies cumulative sum, edge-padded moving
@@ -513,10 +517,10 @@ def _walk_basis(T: int, width: int) -> np.ndarray:
     :func:`_centred_walk_scale` normalization. Its zero-mean walk is therefore
     exactly ``std * B @ eps`` for the plain float64 matrix returned here.
     """
-    steps = np.tril(np.ones((T, T)))
+    steps = np.tril(np.ones((n_time_steps, n_time_steps)))
     columns = _smooth_columns_numpy(steps, width)
     columns = columns - columns.mean(axis=0, keepdims=True)
-    return np.asarray(columns / _centred_walk_scale(T, width))
+    return np.asarray(columns / _centred_walk_scale(n_time_steps, width))
 
 
 def _uniform_prior_specs(
@@ -608,7 +612,7 @@ def build_world_model(
     g_active: dict,
     cfg: SCMPrior,
     structural: dict,
-    T: int,
+    n_time_steps: int,
     prior_cond: dict[str, tuple[float, float]] | None = None,
 ) -> tuple[pm.Model, tuple[str, ...], tuple[str, ...]]:
     """Build the ``pm.Model`` for one world structure.
@@ -626,8 +630,8 @@ def build_world_model(
     structural : dict
         Output of :func:`sample_structure` (concrete families / smoothness /
         texture-enable flags).
-    T : int
-        Reported weeks (the graph simulates ``T + cfg.adstock_burn_in``).
+    n_time_steps : int
+        Reported weeks (the graph simulates ``n_time_steps + cfg.adstock_burn_in``).
     prior_cond : dict, optional
         Output of :func:`sample_prior_cond` — per-cell narrowed prior
         intervals ``{quantity: (low, width)}``. When given, the conditioned
@@ -642,19 +646,21 @@ def build_world_model(
         The model (with all graph outputs registered as ``pm.Deterministic``)
         and the output names, in graph order.
     """
-    K = len(g_active["g_cy"])
-    M = len(g_active["g_zb"])
-    J = len(g_active["g_db"])
+    n_treatments = len(g_active["g_cy"])
+    n_covariates = len(g_active["g_zb"])
+    n_latent = len(g_active["g_db"])
     burn_in = cfg.adstock_burn_in
-    T_full = T + burn_in
-    specs = _uniform_prior_specs(cfg, K, M, J, prior_cond)
+    n_time_steps_full = n_time_steps + burn_in
+    specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
 
     with pm.Model() as model:
-        rw = _walk_priors(cfg, structural, K, M, J)
+        rw = _walk_priors(cfg, structural, n_treatments, n_covariates, n_latent)
         rw_c = rw["rw_c"]
 
         c_level = pt.softplus(rw_c["mean"])  # per-channel level anchor for texture
-        shock_outputs = _channel_shock_schedule(cfg, g_active["g_cy"], T, burn_in, c_level)
+        shock_outputs = _channel_shock_schedule(
+            cfg, g_active["g_cy"], n_time_steps, burn_in, c_level
+        )
         pulse_prob = _uniform(*specs["pulse_prob"])
 
         params: dict[str, Any] = {
@@ -693,14 +699,16 @@ def build_world_model(
             }
 
         eps = {
-            "eps_d": pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, J)),
-            "eps_z": pm.Normal("eps_z", 0.0, 1.0, shape=(T_full, M)),
-            "eps_c": pm.Normal("eps_c", 0.0, 1.0, shape=(T_full, K)),
-            "eps_b": pm.Normal("eps_b", 0.0, 1.0, shape=(T_full,)),
-            "eps_y": pm.Normal("eps_y", 0.0, 1.0, shape=(T_full,)),
-            "eps_c_hf": pm.Normal("eps_c_hf", 0.0, 1.0, shape=(T_full, K)),
+            "eps_d": pm.Normal("eps_d", 0.0, 1.0, shape=(n_time_steps_full, n_latent)),
+            "eps_z": pm.Normal("eps_z", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
+            "eps_c": pm.Normal("eps_c", 0.0, 1.0, shape=(n_time_steps_full, n_treatments)),
+            "eps_b": pm.Normal("eps_b", 0.0, 1.0, shape=(n_time_steps_full,)),
+            "eps_y": pm.Normal("eps_y", 0.0, 1.0, shape=(n_time_steps_full,)),
+            "eps_c_hf": pm.Normal("eps_c_hf", 0.0, 1.0, shape=(n_time_steps_full, n_treatments)),
             "eps_c_pulse": pm.Bernoulli(
-                "eps_c_pulse", p=pt.broadcast_to(pulse_prob, (T_full, K)), shape=(T_full, K)
+                "eps_c_pulse",
+                p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
+                shape=(n_time_steps_full, n_treatments),
             ).astype("float64"),
         }
 
@@ -724,7 +732,16 @@ def build_world_model(
                     + confounding_strength * eps["eps_b"][:, None]
                 )
 
-        graph = build_symbolic_graph(g_active, params, T, K, M, J, burn_in=burn_in, eps=eps)
+        graph = build_symbolic_graph(
+            g_active,
+            params,
+            n_time_steps,
+            n_treatments,
+            n_covariates,
+            n_latent,
+            burn_in=burn_in,
+            eps=eps,
+        )
         graph["outputs"]["confounding_strength"] = confounding_strength
         if cfg.n_channel_shocks:
             graph["outputs"].update(
@@ -745,8 +762,10 @@ def build_world_model(
             # Keep disabled schedules out of the structural graph and RV stream.
             graph["outputs"].update(
                 {
-                    "channel_shock_mask": pt.zeros((T, K), dtype="int8"),
-                    "channel_shock_mask_full": pt.zeros((T_full, K), dtype="int8"),
+                    "channel_shock_mask": pt.zeros((n_time_steps, n_treatments), dtype="int8"),
+                    "channel_shock_mask_full": pt.zeros(
+                        (n_time_steps_full, n_treatments), dtype="int8"
+                    ),
                     "channel_shock_channel": pt.zeros((0,), dtype="int64"),
                     "channel_shock_start": pt.zeros((0,), dtype="int64"),
                     "channel_shock_length": pt.zeros((0,), dtype="int64"),
@@ -828,9 +847,10 @@ def build_oracle_model(
         mechanism families and walk smoothness). ``sample_scm`` records it in
         ``SCM.extras["structural"]``.
     data : dict
-        The world's observables — ``"channels"`` (T, K), ``"controls"``
-        (T, M) and ``"sales"`` (T,) — e.g. straight from ``SCM.data``. The
-        required ``"saturation_scale"`` (K,) pins the exact generation-time
+        The world's observables — ``"channels"`` (n_time_steps, n_treatments),
+        ``"controls"`` (n_time_steps, n_covariates) and ``"sales"``
+        (n_time_steps,) — e.g. straight from ``SCM.data``. The required
+        ``"saturation_scale"`` (n_treatments,) pins the exact generation-time
         nonlinear response anchor. When channel shocks are enabled, it must
         also carry the world's known design metadata:
         ``channel_shock_channel``, ``channel_shock_start``,
@@ -855,11 +875,11 @@ def build_oracle_model(
         In marginal mode, free RVs are the outcome-side priors (``beta``,
         live mechanism shapes, ``delta_db``, ``rho_zb``, and walk parameters)
         without latent walk innovations. Deterministics ``contributions``
-        (T, K) and ``sales_mu`` (T,) remain; ``sales_mu`` is
-        ``E[sales | theta]`` and excludes latent walk realizations. Sampled
-        mode additionally has ``eps_d`` / ``eps_b`` and deterministic
-        ``demand`` (T, J) / ``baseline`` (T,), with the pre-existing
-        ``sales_mu`` meaning.
+        (n_time_steps, n_treatments) and ``sales_mu`` (n_time_steps,) remain;
+        ``sales_mu`` is ``E[sales | theta]`` and excludes latent walk
+        realizations. Sampled mode additionally has ``eps_d`` / ``eps_b`` and
+        deterministic ``demand`` (n_time_steps, n_latent) / ``baseline``
+        (n_time_steps,), with the pre-existing ``sales_mu`` meaning.
 
     Notes
     -----
@@ -928,10 +948,10 @@ def build_oracle_model(
        a reference posterior.
 
     **Marginal-mode cost.** Each gradient evaluation factors an
-    ``n × n`` covariance, ``n = T - warmup``, so it has an ``O(n**3)``
-    Cholesky cost. That is cheap at weekly horizons and expensive for very
-    long ``T``; use ``latent="sampled"`` when posterior ``demand`` or
-    ``baseline`` paths are needed.
+    ``n × n`` covariance, ``n = n_time_steps - warmup``, so it has an
+    ``O(n**3)`` Cholesky cost. That is cheap at weekly horizons and expensive
+    for very long ``n_time_steps``; use ``latent="sampled"`` when posterior
+    ``demand`` or ``baseline`` paths are needed.
     """
     if latent not in ("marginal", "sampled"):
         raise ValueError(f"latent must be 'marginal' or 'sampled', got {latent!r}")
@@ -943,14 +963,19 @@ def build_oracle_model(
     controls = np.asarray(data["controls"], dtype="float64")
     sales = np.asarray(data["sales"], dtype="float64")
     if sales.ndim != 1:
-        raise ValueError(f"data sales must have shape (T,), got {sales.shape}")
-    T = int(sales.shape[0])
-    if T < 1:
+        raise ValueError(f"data sales must have shape (n_time_steps,), got {sales.shape}")
+    n_time_steps = int(sales.shape[0])
+    if n_time_steps < 1:
         raise ValueError("data sales must contain at least one observation")
-    if channels.shape != (T, n_treatments) or controls.shape != (T, n_covariates):
+    if channels.shape != (n_time_steps, n_treatments) or controls.shape != (
+        n_time_steps,
+        n_covariates,
+    ):
         raise ValueError(
-            f"data shapes must be channels (T, n_treatments)={T, n_treatments}, "
-            f"controls (T, n_covariates)={T, n_covariates}, sales (T,)={(T,)}; "
+            f"data shapes must be channels (n_time_steps, n_treatments)="
+            f"{n_time_steps, n_treatments}, "
+            f"controls (n_time_steps, n_covariates)={n_time_steps, n_covariates}, "
+            f"sales (n_time_steps,)={(n_time_steps,)}; "
             f"got channels {channels.shape}, controls {controls.shape}"
         )
     if not all(np.isfinite(value).all() for value in (channels, controls, sales)):
@@ -971,28 +996,28 @@ def build_oracle_model(
     warmup = cfg.l_max - 1 if burn_in > 0 and np.any((g_cy != 0.0) & (adstock_family != 0)) else 0
     # K2 makes this unreachable after SCMPrior.validate(); retain it for callers
     # that invoke build_oracle_model directly with an unvalidated config.
-    if warmup >= T:
+    if warmup >= n_time_steps:
         raise ValueError(
             "oracle likelihood has no reproducible observations: "
-            f"T={T} must exceed warmup={warmup} "
+            f"n_time_steps={n_time_steps} must exceed warmup={warmup} "
             f"(l_max={cfg.l_max}, adstock_burn_in={burn_in})"
         )
-    T_full = T + burn_in
-    W = slice(burn_in, None)
-    rows = np.arange(burn_in + warmup, T_full)
+    n_time_steps_full = n_time_steps + burn_in
+    window = slice(burn_in, None)
+    rows = np.arange(burn_in + warmup, n_time_steps_full)
     g_db = np.asarray(g_active["g_db"], dtype="float64")
     g_zb = np.asarray(g_active["g_zb"], dtype="float64")
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
-    _validate_oracle_channel_shocks(cfg, g_cy, data, T)
+    _validate_oracle_channel_shocks(cfg, g_cy, data, n_time_steps)
     mech_names = _live_mechanism_param_names(structural)
 
     def _walk_gram(smoothness: float) -> np.ndarray:
         width = _kernel_width(
             float(smoothness),
-            T_full,
+            n_time_steps_full,
             rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
         )
-        basis = _walk_basis(T_full, width)[rows]
+        basis = _walk_basis(n_time_steps_full, width)[rows]
         return np.asarray(basis @ basis.T)
 
     with pm.Model() as model:
@@ -1028,7 +1053,7 @@ def build_oracle_model(
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
             contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
-        term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (T,)
+        term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (n_time_steps,)
 
         if latent == "marginal":
             sales_mu = pm.Deterministic(
@@ -1059,16 +1084,18 @@ def build_oracle_model(
             )
         else:
             # Latent demand + baseline walks: the SAME transform generation
-            # uses, simulated over T_full and sliced to the reported window.
-            eps_d = pm.Normal("eps_d", 0.0, 1.0, shape=(T_full, n_latent))
-            eps_b = pm.Normal("eps_b", 0.0, 1.0, shape=(T_full,))
-            d_cols = [_walk_column(eps_d[:, j], rw["rw_d"], j, T_full) for j in range(n_latent)]
-            D_full = pt.stack(d_cols, axis=1)  # (T_full, n_latent)
-            walk_b = _walk_column(eps_b, rw["rw_b"], 0, T_full)
-            pm.Deterministic("demand", D_full[W])
+            # uses, simulated over n_time_steps_full and sliced to the reported window.
+            eps_d = pm.Normal("eps_d", 0.0, 1.0, shape=(n_time_steps_full, n_latent))
+            eps_b = pm.Normal("eps_b", 0.0, 1.0, shape=(n_time_steps_full,))
+            d_cols = [
+                _walk_column(eps_d[:, j], rw["rw_d"], j, n_time_steps_full) for j in range(n_latent)
+            ]
+            D_full = pt.stack(d_cols, axis=1)  # (n_time_steps_full, n_latent)
+            walk_b = _walk_column(eps_b, rw["rw_b"], 0, n_time_steps_full)
+            pm.Deterministic("demand", D_full[window])
 
-            term_bd = pt.dot(D_full[W], g_db * delta_db)  # (T,)
-            baseline = pm.Deterministic("baseline", term_bd + term_bz + walk_b[W])
+            term_bd = pt.dot(D_full[window], g_db * delta_db)  # (n_time_steps,)
+            baseline = pm.Deterministic("baseline", term_bd + term_bz + walk_b[window])
             sales_mu = pm.Deterministic("sales_mu", baseline + contributions.sum(axis=1))
             pm.Normal(
                 "sales",

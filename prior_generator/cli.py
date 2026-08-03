@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
 
     written = write_scenario_bundles(
         args.out,
-        T=args.t,
+        n_time_steps=args.t,
         seed=args.seed,
         require_path_to_y=args.require_path_to_y,
         plots=not args.no_plots,

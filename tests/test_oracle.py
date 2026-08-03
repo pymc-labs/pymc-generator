@@ -86,7 +86,7 @@ def _shared_oracle_rv_names(oracle: pm.Model, *, latent: str) -> tuple[str, ...]
 
 
 def _small_cfg(**overrides):
-    base = {"n_treatments": 2, "n_covariates": 1, "n_latent": 1, "T": 28, "seed": 5}
+    base = {"n_treatments": 2, "n_covariates": 1, "n_latent": 1, "n_time_steps": 28, "seed": 5}
     return pg.make_scm_prior(**{**base, **overrides})
 
 
@@ -132,10 +132,12 @@ def _oracle_deterministic_at_truth(
 def world_and_oracle():
     cfg = _small_cfg()
     rng = np.random.default_rng(2)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
-    gen_model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.T)
+    gen_model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
     drawn = pg.draw_worlds(gen_model, out_names + SHARED_RV_NAMES, seed=17, draws=1)
     world = {name: drawn[name][0] for name in drawn}
     data = {
@@ -179,18 +181,22 @@ def test_baseline_walk_override_is_shared_by_generation_and_oracle():
         rw_baseline_std_sigma=0.35,
     )
     rng = np.random.default_rng(2)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
-    gen_model, _out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.T)
+    gen_model, _out_names, _param_names = build_world_model(
+        g_act, cfg, structural, cfg.n_time_steps
+    )
     oracle = build_oracle_model(
         g_act,
         cfg,
         structural,
         {
-            "channels": np.zeros((cfg.T, 2)),
-            "controls": np.zeros((cfg.T, 1)),
-            "sales": np.zeros(cfg.T),
+            "channels": np.zeros((cfg.n_time_steps, 2)),
+            "controls": np.zeros((cfg.n_time_steps, 1)),
+            "sales": np.zeros(cfg.n_time_steps),
             "saturation_scale": np.ones(2),
         },
     )
@@ -210,15 +216,15 @@ def test_relative_outcome_scale_is_shared_by_generation_and_oracle():
     )
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(16))
-    generative, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+    generative, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     oracle = build_oracle_model(
         g,
         cfg,
         structural,
         {
-            "channels": np.zeros((cfg.T, 2)),
-            "controls": np.zeros((cfg.T, 1)),
-            "sales": np.zeros(cfg.T),
+            "channels": np.zeros((cfg.n_time_steps, 2)),
+            "controls": np.zeros((cfg.n_time_steps, 1)),
+            "sales": np.zeros(cfg.n_time_steps),
             "saturation_scale": np.ones(2),
         },
     )
@@ -241,20 +247,20 @@ def test_oracle_logp_finite_at_truth(world_and_oracle):
 
 def test_oracle_deterministics_shapes(world_and_oracle):
     _gen_model, marginal, sampled, world = world_and_oracle
-    T, K = world["channels"].shape
-    J = world["demand"].shape[1]
+    n_time_steps, n_treatments = world["channels"].shape
+    n_latent = world["demand"].shape[1]
 
     marginal_names = {d.name for d in marginal.deterministics}
     assert {"contributions", "sales_mu"} <= marginal_names
     assert not {"baseline", "demand"} & marginal_names
-    assert tuple(marginal["contributions"].shape.eval()) == (T, K)
-    assert tuple(marginal["sales_mu"].shape.eval()) == (T,)
+    assert tuple(marginal["contributions"].shape.eval()) == (n_time_steps, n_treatments)
+    assert tuple(marginal["sales_mu"].shape.eval()) == (n_time_steps,)
 
     sampled_names = {d.name for d in sampled.deterministics}
     assert {"contributions", "baseline", "sales_mu", "demand"} <= sampled_names
     assert {"eps_d", "eps_b"} <= {rv.name for rv in sampled.free_RVs}
-    assert tuple(sampled["contributions"].shape.eval()) == (T, K)
-    assert tuple(sampled["demand"].shape.eval()) == (T, J)
+    assert tuple(sampled["contributions"].shape.eval()) == (n_time_steps, n_treatments)
+    assert tuple(sampled["demand"].shape.eval()) == (n_time_steps, n_latent)
 
 
 @pytest.mark.parametrize(
@@ -264,15 +270,15 @@ def test_oracle_deterministics_shapes(world_and_oracle):
 )
 def test_walk_basis_reproduces_symbolic_random_walk(smoothness: float, expected_width: int):
     """The NumPy operator is exact for every representative smoothing width."""
-    T = 40
+    n_time_steps = 40
     std = 0.73
-    eps = np.random.default_rng(11).normal(size=T)
-    width = _kernel_width(smoothness, T, rw_smoothness_max_weeks=26)
+    eps = np.random.default_rng(11).normal(size=n_time_steps)
+    width = _kernel_width(smoothness, n_time_steps, rw_smoothness_max_weeks=26)
     assert width == expected_width
 
     expected = np.asarray(
         symbolic_random_walk(
-            T,
+            n_time_steps,
             mean=0.0,
             std=std,
             smoothness=smoothness,
@@ -281,7 +287,7 @@ def test_walk_basis_reproduces_symbolic_random_walk(smoothness: float, expected_
             eps=eps,
         ).eval()
     )
-    actual = std * _walk_basis(T, width) @ eps
+    actual = std * _walk_basis(n_time_steps, width) @ eps
     np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
 
 
@@ -289,7 +295,7 @@ def test_marginal_sales_logp_matches_numpy_mvn():
     """The marginal sales factor is the independently assembled exact MvNormal."""
     cfg = _small_cfg(
         n_treatments=1,
-        T=12,
+        n_time_steps=12,
         l_max=2,
         adstock_burn_in=2,
         nonlinearity="linear",
@@ -304,8 +310,8 @@ def test_marginal_sales_logp_matches_numpy_mvn():
     structural["smoothness_d"][:] = 0.0
     structural["smoothness_b"][:] = 0.5
 
-    T_full = cfg.T + cfg.adstock_burn_in
-    rows = np.arange(cfg.adstock_burn_in, T_full)
+    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
+    rows = np.arange(cfg.adstock_burn_in, n_time_steps_full)
     values = {
         "beta": np.array([1.2]),
         "delta_db": np.array([0.3]),
@@ -314,11 +320,11 @@ def test_marginal_sales_logp_matches_numpy_mvn():
         "rw_b_std": np.array([0.4]),
         "rw_y_std": np.array([0.1]),
     }
-    channels = np.linspace(0.5, 3.0, cfg.T)[:, None]
-    controls = np.linspace(-0.4, 0.6, cfg.T)[:, None]
+    channels = np.linspace(0.5, 3.0, cfg.n_time_steps)[:, None]
+    controls = np.linspace(-0.4, 0.6, cfg.n_time_steps)[:, None]
     mean_for_sales = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zb"][0]
     mean_for_sales = mean_for_sales + values["beta"][0] * channels[:, 0] / 2.0
-    residual = 0.15 * np.sin(np.arange(cfg.T))
+    residual = 0.15 * np.sin(np.arange(cfg.n_time_steps))
     sales = mean_for_sales + residual - residual.mean()
     oracle = build_oracle_model(
         g,
@@ -336,13 +342,13 @@ def test_marginal_sales_logp_matches_numpy_mvn():
     def gram(smoothness: float) -> np.ndarray:
         width = _kernel_width(
             smoothness,
-            T_full,
+            n_time_steps_full,
             rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
         )
-        steps = np.tril(np.ones((T_full, T_full)))
+        steps = np.tril(np.ones((n_time_steps_full, n_time_steps_full)))
         columns = _smooth_columns_numpy(steps, width)
         columns = columns - columns.mean(axis=0, keepdims=True)
-        basis = columns / _centred_walk_scale(T_full, width)
+        basis = columns / _centred_walk_scale(n_time_steps_full, width)
         restricted = basis[rows]
         return restricted @ restricted.T
 
@@ -365,12 +371,12 @@ def test_marginal_sales_logp_matches_numpy_mvn():
 
 def test_oracle_registers_only_live_mechanism_shape_params():
     """Mechanism priors follow the concrete family union, not all families."""
-    cfg = _small_cfg(n_treatments=2, T=12, adstock_burn_in=0)
+    cfg = _small_cfg(n_treatments=2, n_time_steps=12, adstock_burn_in=0)
     g = _direct_only_graph(2)
     data = {
-        "channels": np.zeros((cfg.T, 2)),
-        "controls": np.zeros((cfg.T, 1)),
-        "sales": np.zeros(cfg.T),
+        "channels": np.zeros((cfg.n_time_steps, 2)),
+        "controls": np.zeros((cfg.n_time_steps, 1)),
+        "sales": np.zeros(cfg.n_time_steps),
         "saturation_scale": np.ones(2),
     }
 
@@ -418,7 +424,7 @@ def test_oracle_registers_only_live_mechanism_shape_params():
 def test_oracle_likelihood_starts_at_first_reproducible_response_week():
     """The likelihood begins after, but not before, unpersisted adstock history."""
     cfg = _small_cfg(
-        T=8,
+        n_time_steps=8,
         l_max=4,
         adstock_burn_in=4,
         nonlinearity="linear",
@@ -432,7 +438,7 @@ def test_oracle_likelihood_starts_at_first_reproducible_response_week():
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(20))
     assert np.all(structural["adstock_family"] == 1)
-    generative, output_names, _ = build_world_model(g, cfg, structural, cfg.T)
+    generative, output_names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = {
         name: value[0]
         for name, value in pg.draw_worlds(
@@ -450,10 +456,10 @@ def test_oracle_likelihood_starts_at_first_reproducible_response_week():
     warmup = cfg.l_max - 1
     oracle_contributions = _oracle_deterministic_at_truth(oracle, drawn, "contributions")
     truth = drawn["contributions_observed"]
-    assert tuple(oracle["sales"].shape.eval()) == (cfg.T - warmup,)
-    assert tuple(oracle["contributions"].shape.eval()) == (cfg.T, 2)
-    assert tuple(oracle["baseline"].shape.eval()) == (cfg.T,)
-    assert tuple(oracle["sales_mu"].shape.eval()) == (cfg.T,)
+    assert tuple(oracle["sales"].shape.eval()) == (cfg.n_time_steps - warmup,)
+    assert tuple(oracle["contributions"].shape.eval()) == (cfg.n_time_steps, 2)
+    assert tuple(oracle["baseline"].shape.eval()) == (cfg.n_time_steps,)
+    assert tuple(oracle["sales_mu"].shape.eval()) == (cfg.n_time_steps,)
     np.testing.assert_allclose(oracle_contributions[warmup], truth[warmup], rtol=0.0, atol=1e-15)
     before_warmup_error = np.abs(oracle_contributions[warmup - 1] - truth[warmup - 1]).max()
     assert before_warmup_error > 1e-3
@@ -466,7 +472,7 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=4,
+        n_time_steps=4,
         l_max=5,
         adstock_burn_in=5,
         adstock_family_probs={
@@ -485,9 +491,9 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
             cfg,
             structural,
             {
-                "channels": np.zeros((cfg.T, 2)),
-                "controls": np.zeros((cfg.T, 1)),
-                "sales": np.zeros(cfg.T),
+                "channels": np.zeros((cfg.n_time_steps, 2)),
+                "controls": np.zeros((cfg.n_time_steps, 1)),
+                "sales": np.zeros(cfg.n_time_steps),
                 "saturation_scale": np.ones(2),
             },
         )
@@ -504,7 +510,7 @@ def test_oracle_warmup_exempts_identity_adstock():
             n_treatments=1,
             n_covariates=1,
             n_latent=1,
-            T=20,
+            n_time_steps=20,
             l_max=5,
             nonlinearity="linear",
             adstock_family_probs=family_probs,
@@ -554,12 +560,12 @@ def test_oracle_logp_and_gradient_capability_by_adstock_family(
     adstock_family: int, has_gradient: bool
 ):
     """Only pymc-marketing's Weibull normalization prevents an oracle gradient."""
-    cfg = _small_cfg(n_treatments=1, T=12, adstock_burn_in=0)
+    cfg = _small_cfg(n_treatments=1, n_time_steps=12, adstock_burn_in=0)
     g = _direct_only_graph(1)
     structural = sample_structure(g, cfg, np.random.default_rng(12))
     structural["adstock_family"][:] = adstock_family
     structural["sat_family"][:] = 0
-    model, output_names, parameter_names = build_world_model(g, cfg, structural, cfg.T)
+    model, output_names, parameter_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = pg.draw_worlds(model, output_names + parameter_names, seed=19, draws=1)
     data = {name: drawn[name][0] for name in ("channels", "controls", "sales", "saturation_scale")}
     oracle = build_oracle_model(g, cfg, structural, data)
@@ -578,7 +584,9 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
     _gen_model, _oracle, _sampled_oracle, world = world_and_oracle
     cfg = _small_cfg()
     rng = np.random.default_rng(2)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
     missing_scale = {
@@ -590,7 +598,7 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
         build_oracle_model(g_act, cfg, structural, missing_scale)
 
     bad = {
-        "channels": world["channels"][:, :1],  # wrong K
+        "channels": world["channels"][:, :1],  # wrong n_treatments
         "controls": world["controls"],
         "sales": world["sales"],
         "saturation_scale": world["saturation_scale"],
@@ -631,7 +639,13 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
 def test_generation_untouched_by_oracle():
     """Building an oracle consumes no RNG and leaves corpora byte-identical."""
     cfg = pg.make_scm_prior(
-        n_treatments=4, n_covariates=2, n_latent=1, T=40, n_cells=2, draws_per_cell=3, seed=7
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=40,
+        n_cells=2,
+        draws_per_cell=3,
+        seed=7,
     )
     before = pg.sample_prior_predictive(cfg)
     world = pg.sample_scm(cfg, seed=11)
@@ -649,13 +663,13 @@ def test_scm_oracle_model_roundtrip():
         adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
     )
     world = pg.sample_scm(cfg, seed=3)
-    assert world.data["saturation_scale"].shape == (world.K,)
+    assert world.data["saturation_scale"].shape == (world.n_treatments,)
     assert (world.data["saturation_scale"] > 0.0).all()
     oracle = world.oracle_model()
     # the conditioned prior narrows adstock_alpha to the recorded interval
     lo, width = world.extras["prior_cond"]["adstock_alpha"]
-    outside = np.full(world.K, lo - 0.05)
-    inside = np.full(world.K, lo + width / 2)
+    outside = np.full(world.n_treatments, lo - 0.05)
+    inside = np.full(world.n_treatments, lo + width / 2)
     assert not np.isfinite(pm.logp(oracle["adstock_alpha"], outside).eval()).all()
     assert np.isfinite(pm.logp(oracle["adstock_alpha"], inside).eval()).all()
 
@@ -666,7 +680,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=12,
+        n_time_steps=12,
         adstock_burn_in=0,
         n_channel_shocks=n_shocks,
         channel_shock_length_range=(2, 2),
@@ -686,7 +700,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
     structural = sample_structure(g, cfg, np.random.default_rng(4))
     structural["adstock_family"][:] = 1
     structural["sat_family"][:] = 0
-    model, names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = {
         name: value[0]
         for name, value in pg.draw_worlds(model, names + param_names, seed=13).items()

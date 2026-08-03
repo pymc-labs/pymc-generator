@@ -83,7 +83,7 @@ from scm_docs import world
 import numpy as np
 
 scm = world(1, 0)
-by_src = scm.data["indirect_effects_by_source"]        # (T, 3) — cc, zc, dc
+by_src = scm.data["indirect_effects_by_source"]        # (n_time_steps, 3) — cc, zc, dc
 total = scm.data["indirect_effects"]
 
 for i, src in enumerate(("cc", "zc", "dc")):

@@ -4,7 +4,7 @@ Thin κ-relative wrappers over ``pymc_marketing.mmm.transformers``: the
 adstock and saturation math is provided by pymc-marketing (``geometric_adstock``
 / ``weibull_adstock`` and the standard saturation curves), not hand-rolled here.
 pymc-marketing 1.0's transformers are xtensor/named-dim based, so each wrapper
-bridges a plain ``(T,)`` time column through ``as_xtensor(dims=("time",))``,
+bridges a plain ``(n_time_steps,)`` time column through ``as_xtensor(dims=("time",))``,
 applies the library function along the time dim, and returns the underlying
 tensor via ``.values``. Parameters may be concrete floats or symbolic
 (pytensor / PyMC RV) scalars — both compose into the graph.
@@ -58,7 +58,7 @@ from pytensor.xtensor import as_xtensor
 
 
 def _as_time(x: TensorVariable) -> TensorVariable:
-    """Wrap a ``(T,)`` time column as an xtensor with a named ``time`` dim."""
+    """Wrap a ``(n_time_steps,)`` time column as an xtensor with a named ``time`` dim."""
     return as_xtensor(pt.as_tensor_variable(x), dims=("time",))
 
 
@@ -173,7 +173,7 @@ SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
 
 
 def apply_geometric_adstock(x, alpha, l_max: int) -> TensorVariable:
-    """Normalized geometric adstock of a ``(T, 1)`` column over the time axis.
+    """Normalized geometric adstock of a ``(n_time_steps, 1)`` column over the time axis.
 
     Delegates to ``pymc_marketing.mmm.transformers.geometric_adstock`` (ConvMode
     ``After``, ``normalize=True``). ``alpha`` may be a float or a symbolic scalar.

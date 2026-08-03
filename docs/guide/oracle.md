@@ -25,7 +25,7 @@ decomposition truth:
 ```python exec="1" source="material-block" result="text"
 import prior_generator as pg
 
-cfg = pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, T=28)
+cfg = pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=28)
 world = pg.sample_scm(cfg, seed=8)
 
 oracle = world.oracle_model()      # pm.Model — same priors, data attached
@@ -42,9 +42,10 @@ import numpy as np
 with oracle:
     idata = pm.sample(draws=500, tune=500, chains=2)
 
-post = idata.posterior["contributions"]              # (chain, draw, T, K)
+post = idata.posterior["contributions"]        # (chain, draw, n_time_steps, n_treatments)
 bands = post.quantile([0.05, 0.5, 0.95], dim=("chain", "draw"))
-truth = world.data["contributions_observed"]         # (T, K) — the observed-path truth
+# the observed-path truth, shape (n_time_steps, n_treatments)
+truth = world.data["contributions_observed"]
 
 covered = (bands.sel(quantile=0.05) <= truth) & (truth <= bands.sel(quantile=0.95))
 print("90% band coverage:", float(covered.mean()))

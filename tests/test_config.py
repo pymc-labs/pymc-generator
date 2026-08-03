@@ -176,8 +176,10 @@ def test_sample_structure_ignores_family_probability_mapping_order(
 
 
 def test_factory_overrides_win():
-    cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=200, spend_cv_floor=0.2)
-    assert cfg.T == 200
+    cfg = pg.make_scm_prior(
+        n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=200, spend_cv_floor=0.2
+    )
+    assert cfg.n_time_steps == 200
     assert cfg.spend_cv_floor == 0.2
 
 
@@ -298,7 +300,7 @@ def test_burn_in_rejects_reproduced_query_overlap():
             n_treatments=1,
             n_covariates=1,
             n_latent=1,
-            T=8,
+            n_time_steps=8,
             l_max=8,
             adstock_burn_in=8,
             query_frac=0.25,
@@ -306,27 +308,27 @@ def test_burn_in_rejects_reproduced_query_overlap():
 
     message = str(error.value)
     for detail in (
-        "T=8",
+        "n_time_steps=8",
         "l_max=8",
         "n_query=2",
-        "short-horizon query start T - n_query=6",
-        "long-horizon query start T // 2=4",
+        "short-horizon query start n_time_steps - n_query=6",
+        "long-horizon query start n_time_steps // 2=4",
         "not a function of the persisted inputs",
     ):
         assert detail in message
 
 
 def test_burn_in_query_window_boundary_is_exact():
-    SCMPrior(T=14, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
+    SCMPrior(n_time_steps=14, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
 
     with pytest.raises(ValueError, match="query overlap"):
-        SCMPrior(T=13, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
+        SCMPrior(n_time_steps=13, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
 
 
 def test_burn_in_rejects_short_horizon_overlap_even_when_long_split_is_certain():
     with pytest.raises(ValueError, match="query overlap"):
         SCMPrior(
-            T=20,
+            n_time_steps=20,
             l_max=8,
             adstock_burn_in=8,
             query_frac=0.7,
@@ -335,16 +337,16 @@ def test_burn_in_rejects_short_horizon_overlap_even_when_long_split_is_certain()
 
 
 @pytest.mark.parametrize(
-    ("T", "query_frac"),
+    ("n_time_steps", "query_frac"),
     (
         (8, 0.25),
         (20, 0.7),
         (104, 0.95),
     ),
 )
-def test_burn_in_overlap_suggestion_is_an_accepted_horizon(T, query_frac):
+def test_burn_in_overlap_suggestion_is_an_accepted_horizon(n_time_steps, query_frac):
     kwargs = {
-        "T": T,
+        "n_time_steps": n_time_steps,
         "l_max": 8,
         "adstock_burn_in": 8,
         "query_frac": query_frac,
@@ -353,32 +355,32 @@ def test_burn_in_overlap_suggestion_is_an_accepted_horizon(T, query_frac):
         SCMPrior(**kwargs).validate()
 
     message = str(error.value)
-    prefix = "raise T to at least "
+    prefix = "raise n_time_steps to at least "
     assert "adstock_burn_in=0" in message
     assert "lower query_frac / l_max" in message
     assert prefix in message
     suggested_horizon = int(message.split(prefix, 1)[1].split(",", 1)[0])
-    SCMPrior(**{**kwargs, "T": suggested_horizon}).validate()
+    SCMPrior(**{**kwargs, "n_time_steps": suggested_horizon}).validate()
 
 
 def test_burn_in_overlap_omits_numeric_horizon_when_search_is_capped(monkeypatch):
     monkeypatch.setattr(sampler, "MAX_QUERY_HORIZON_SEARCH_STEPS", 1)
 
     with pytest.raises(ValueError, match="query overlap") as error:
-        SCMPrior(T=104, l_max=8, adstock_burn_in=8, query_frac=0.95).validate()
+        SCMPrior(n_time_steps=104, l_max=8, adstock_burn_in=8, query_frac=0.95).validate()
 
     message = str(error.value)
-    assert "raise T to at least" not in message
+    assert "raise n_time_steps to at least" not in message
     assert "adstock_burn_in=0" in message
-    assert "raise T, or lower query_frac / l_max" in message
+    assert "raise n_time_steps, or lower query_frac / l_max" in message
 
 
 def test_burn_in_query_window_guard_is_exempt_when_disabled():
-    SCMPrior(T=4, l_max=8, adstock_burn_in=0).validate()
+    SCMPrior(n_time_steps=4, l_max=8, adstock_burn_in=0).validate()
 
 
 def test_burn_in_query_window_guard_is_exempt_for_a_single_lag_kernel():
-    SCMPrior(T=4, l_max=1, adstock_burn_in=1, query_frac=0.5).validate()
+    SCMPrior(n_time_steps=4, l_max=1, adstock_burn_in=1, query_frac=0.5).validate()
 
 
 @pytest.mark.parametrize("value", (True, "bad", [1.0], np.nan, np.inf, 0.0))
@@ -495,7 +497,15 @@ def test_family_probabilities_must_sum_to_one(name):
 
 @pytest.mark.parametrize(
     "name",
-    ("n_treatments", "n_covariates", "n_latent", "n_cells", "draws_per_cell", "T", "seed"),
+    (
+        "n_treatments",
+        "n_covariates",
+        "n_latent",
+        "n_cells",
+        "draws_per_cell",
+        "n_time_steps",
+        "seed",
+    ),
 )
 @pytest.mark.parametrize("value", (True, np.nan, np.inf, 1.5))
 def test_integer_configuration_fields_reject_nonintegers(name, value):
@@ -511,7 +521,7 @@ def test_integer_configuration_fields_reject_nonintegers(name, value):
         ("n_latent", 0),
         ("n_cells", 1),
         ("draws_per_cell", 0),
-        ("T", 3),
+        ("n_time_steps", 3),
         ("seed", -1),
     ),
 )
@@ -540,7 +550,7 @@ def test_active_count_ranges_require_ordered_integer_pairs(name, value):
 
 def test_diverse_texture_does_not_warn():
     cfg = pg.make_scm_prior(
-        n_treatments=4, n_covariates=2, n_latent=1, T=32, n_cells=2, draws_per_cell=1
+        n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=32, n_cells=2, draws_per_cell=1
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error", FutureWarning)
@@ -551,7 +561,7 @@ def test_flat_texture_warns():
     # A hand-built config with the texture disabled (hf & pulse ranges zero) is
     # the deprecated smooth-walk-only prior and must warn.
     cfg = SCMPrior(
-        T=32,
+        n_time_steps=32,
         n_treatments=4,
         n_covariates=2,
         n_latent=1,

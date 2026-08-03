@@ -175,8 +175,8 @@ deliberate, and they bound what a model trained on this data can learn.
   `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted expected
   Z→C / C→C parent terms)`. Latent `D→C` drops out because demand is mean-zero.
   The same pinned scale is used for every decomposition variant.
-- **Adstock burn-in.** Worlds simulate `T + adstock_burn_in` weeks and report
-  the last `T`, so the reported window sees real history.
+- **Adstock burn-in.** Worlds simulate `n_time_steps + adstock_burn_in` weeks and
+  report the last `n_time_steps`, so the reported window sees real history.
 
 !!! tip "Next"
     See [The exact decomposition](decomposition.md) for how sales splits into its

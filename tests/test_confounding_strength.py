@@ -26,14 +26,16 @@ def _built(strength_range: tuple[float, float] | None):
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=24,
+        n_time_steps=24,
         edge_budget={"cy": (2, 2), "dc": (2, 2), "db": (1, 1), "zc": (2, 2)},
         confounding_strength_range=strength_range,
     )
     rng = np.random.default_rng(42)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=2, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=2, n_latent_active=1
+    )
     g_active = _slice_g_active(g, 2, 2, 1)
-    return build_world_model(g_active, cfg, sample_structure(g_active, cfg, rng), cfg.T)
+    return build_world_model(g_active, cfg, sample_structure(g_active, cfg, rng), cfg.n_time_steps)
 
 
 def test_degenerate_confounding_strength_is_constant_without_free_rv():
@@ -82,7 +84,7 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=24,
+        n_time_steps=24,
         rw_smoothness_max_weeks=1,
         confounding_strength_range=(rho, rho),
         channel_hf_sigma_range=(0.0, 0.0),
@@ -100,7 +102,7 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         "g_zz": np.zeros((1, 1), dtype=int),
     }
     structural = sample_structure(g, cfg, np.random.default_rng(18))
-    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, out_names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = {
         name: values[0]
         for name, values in draw_worlds(
@@ -108,9 +110,9 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         ).items()
     }
     effective_eps = np.sqrt(1.0 - rho**2) * drawn["eps_c"][:, 0] + rho * drawn["eps_b"]
-    T_full = cfg.T + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
     walk = symbolic_random_walk(
-        T_full,
+        n_time_steps_full,
         mean=drawn["param_rw_c_mean"][0],
         std=drawn["param_rw_c_std"][0],
         smoothness=float(structural["smoothness_c"][0]),
@@ -127,7 +129,7 @@ def test_confounding_strength_is_persisted_in_corpus():
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=24,
+        n_time_steps=24,
         n_cells=2,
         draws_per_cell=1,
         seed=3,
@@ -144,7 +146,7 @@ def test_confounding_strength_is_exposed_by_single_world_data_and_params():
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=24,
+        n_time_steps=24,
         seed=4,
         confounding_strength_range=(0.25, 0.25),
     )

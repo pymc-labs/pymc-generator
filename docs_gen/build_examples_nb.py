@@ -90,19 +90,21 @@ cells = [
         "    n_treatments=1,       # media channels (the interventions)\n"
         "    n_covariates=1,       # observed controls\n"
         "    n_latent=1,           # hidden demand factors\n"
-        "    T=104,                # weeks\n"
+        "    n_time_steps=104,     # weeks\n"
         "    edge_budget=MINIMAL_EDGES,\n"
         "    n_cells=2, draws_per_cell=1, seed=20260728,\n"
         ")\n"
         "\n"
         "world = pg.sample_scm(minimal, seed=1, name='minimal')\n"
-        "print(f'T={world.T}  channels={world.K}  controls={world.M}  latent={world.J}')\n"
+        "print(f'n_time_steps={world.n_time_steps}  n_treatments={world.n_treatments}  '\n"
+        "      f'n_covariates={world.n_covariates}  n_latent={world.n_latent}')\n"
         "print('edges present:', {k: int(np.asarray(v).sum()) for k, v in world.g.items()})"
     ),
     md(
-        "`sample_scm` returns one accepted world. `T` is the reported horizon; the\n"
-        "graph is simulated over `T + adstock_burn_in` weeks and sliced, so the first\n"
-        "reported week already has real carryover history behind it."
+        "`sample_scm` returns one accepted world. `n_time_steps` is the reported\n"
+        "horizon; the graph is simulated over `n_time_steps + adstock_burn_in` weeks\n"
+        "and sliced, so the first reported week already has real carryover history\n"
+        "behind it."
     ),
     code(
         "def show(plot_fn, world, title):\n"
@@ -283,7 +285,7 @@ cells = [
     code(
         "def one_channel(label, **overrides):\n"
         "    cfg = pg.make_scm_prior(\n"
-        "        n_treatments=1, n_covariates=1, n_latent=1, T=104,\n"
+        "        n_treatments=1, n_covariates=1, n_latent=1, n_time_steps=104,\n"
         "        edge_budget=MINIMAL_EDGES, n_cells=2, draws_per_cell=1, seed=20260728,\n"
         "        **pin('geometric', 'michaelis_menten'), **overrides,\n"
         "    )\n"
@@ -296,7 +298,7 @@ cells = [
         "\n"
         "fig, axes = plt.subplots(2, 2, figsize=(11, 5), sharex=True)\n"
         "for col, (w, label) in enumerate(((smooth, 'smooth'), (textured, 'default texture'))):\n"
-        "    weeks = np.arange(w.T)\n"
+        "    weeks = np.arange(w.n_time_steps)\n"
         "    spend = w.data['channels'][:, 0]\n"
         "    axes[0, col].plot(weeks, spend, lw=1.2, color='C0')\n"
         "    axes[0, col].set_title(f'{label}: spend  (CV {spend.std() / spend.mean():.2f})')\n"
@@ -343,9 +345,10 @@ cells = [
         "    media = np.asarray(w.data['contributions_observed']).sum(1)[start:]\n"
         "    return float(np.std(residual) / np.std(media))\n"
         "\n"
-        "# Measure the whole prior at once: a corpus is far cheaper than N sample_scm calls.\n"
+        "# Measure the whole prior at once: a corpus is far cheaper than one\n"
+        "# sample_scm call per world.\n"
         "ratio_cfg = pg.make_scm_prior(\n"
-        "    n_treatments=1, n_covariates=1, n_latent=1, T=104,\n"
+        "    n_treatments=1, n_covariates=1, n_latent=1, n_time_steps=104,\n"
         "    edge_budget=MINIMAL_EDGES, n_cells=12, draws_per_cell=3, seed=20260728,\n"
         "    **pin('geometric', 'michaelis_menten'),\n"
         ")\n"
@@ -370,7 +373,7 @@ cells = [
         "\n"
         "fig, axes = plt.subplots(1, 2, figsize=(11, 3.2), sharey=False)\n"
         "for ax, w in zip(axes, (quiet, loud)):\n"
-        "    weeks = np.arange(w.T)\n"
+        "    weeks = np.arange(w.n_time_steps)\n"
         "    ax.plot(weeks, w.data['sales'], lw=1.2, color='0.25', label='sales')\n"
         "    ax.plot(weeks, w.data['baseline'], lw=1.2, color='C3', label='baseline')\n"
         "    ax.set(xlabel='week', title=f'{w.name}: residual/media = {outcome_ratio(w):.2f}')\n"
@@ -396,7 +399,7 @@ cells = [
     ),
     code(
         "interacting = pg.make_scm_prior(\n"
-        "    n_treatments=3, n_covariates=2, n_latent=1, T=104,\n"
+        "    n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=104,\n"
         "    n_treatments_active_range=(3, 3), n_covariates_active_range=(2, 2),\n"
         "    n_latent_active_range=(1, 1),\n"
         "    edge_budget={'cy': (3, 3), 'zb': (2, 2), 'zc': (2, 2), 'cc': (1, 1),\n"
@@ -439,7 +442,7 @@ cells = [
     ),
     code(
         "confounded_cfg = pg.make_scm_prior(\n"
-        "    n_treatments=3, n_covariates=2, n_latent=1, T=104,\n"
+        "    n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=104,\n"
         "    n_treatments_active_range=(3, 3), n_covariates_active_range=(2, 2),\n"
         "    n_latent_active_range=(1, 1),\n"
         "    edge_budget={'cy': (3, 3), 'zb': (2, 2), 'dc': (3, 3), 'db': (1, 1),\n"
@@ -466,13 +469,13 @@ cells = [
         "      round(float(np.corrcoef(demand, baseline)[0, 1]), 3))\n"
         "print('corr(D, D-driven part of spend)  :',\n"
         "      np.round([np.corrcoef(demand, (spend - base)[:, k])[0, 1]\n"
-        "                for k in range(confounded.K)], 3))\n"
+        "                for k in range(confounded.n_treatments)], 3))\n"
         "print('share of each channel sd from D  :',\n"
         "      np.round((spend - base).std(0) / spend.std(0), 3))\n"
         "print()\n"
         "print('corr(D, REALISED spend)          :',\n"
         "      np.round([np.corrcoef(demand, spend[:, k])[0, 1]\n"
-        "                for k in range(confounded.K)], 3))"
+        "                for k in range(confounded.n_treatments)], 3))"
     ),
     md(
         "Read those last two blocks together — the lesson is why you cannot detect\n"
@@ -503,7 +506,7 @@ cells = [
     ),
     code(
         "rho_cfg = pg.make_scm_prior(\n"
-        "    n_treatments=2, n_covariates=1, n_latent=1, T=104,\n"
+        "    n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=104,\n"
         "    n_treatments_active_range=(2, 2), n_covariates_active_range=(1, 1),\n"
         "    n_latent_active_range=(1, 1),\n"
         "    edge_budget={'cy': (2, 2), 'zb': (1, 1), 'db': (0, 0), 'dc': (0, 0),\n"
@@ -524,14 +527,14 @@ cells = [
         "\n"
         "`sample_prior_predictive` draws many worlds at once and returns flat numpy\n"
         "arrays — a corpus. Inactive slots are zero-padded and masked, so a consumer\n"
-        "sees one fixed layout whether a task has 2 live channels or 8.\n"
+        "sees one fixed layout whether a task's `n_treatments_active` is 2 or 8.\n"
         "\n"
         "Widening the `*_active_range` arguments and dropping the `edge_budget` pins\n"
         "gives graph-size and structure variety across tasks."
     ),
     code(
         "corpus_cfg = pg.make_scm_prior(\n"
-        "    n_treatments=5, n_covariates=3, n_latent=2, T=104,\n"
+        "    n_treatments=5, n_covariates=3, n_latent=2, n_time_steps=104,\n"
         "    n_treatments_active_range=(2, 5),      # graph size varies per task\n"
         "    n_covariates_active_range=(1, 3),\n"
         "    n_latent_active_range=(1, 2),\n"
@@ -544,7 +547,7 @@ cells = [
         "      '| elapsed:', f\"{corpus['diagnostics']['elapsed_s']:.1f}s\")\n"
         "print('\\nkey                          shape')\n"
         "for key in ('spend_raw', 'controls', 'sales_raw', 'contributions_raw',\n"
-        "            'active_c_mask', 'g'):\n"
+        "            'treatment_active_mask', 'g'):\n"
         "    print(f'{key:28s} {np.asarray(corpus[key]).shape}')"
     ),
     code(
@@ -552,10 +555,10 @@ cells = [
         "print('validation errors:', errors or 'none')\n"
         "assert errors == []\n"
         "\n"
-        "print('\\nactive counts per task (K / M / J):')\n"
-        "for i in range(len(corpus['K_active'])):\n"
-        "    print(f\"  task {i:2d}  {corpus['K_active'][i]} / \"\n"
-        "          f\"{corpus['M_active'][i]} / {corpus['J_active'][i]}\")"
+        "print('\\nactive counts per task (treatments / covariates / latent):')\n"
+        "for i in range(len(corpus['n_treatments_active'])):\n"
+        "    print(f\"  task {i:2d}  {corpus['n_treatments_active'][i]} / \"\n"
+        "          f\"{corpus['n_covariates_active'][i]} / {corpus['n_latent_active'][i]}\")"
     ),
     md(
         "Every corpus carries a self-describing contract in\n"
@@ -583,7 +586,7 @@ cells = [
         "from prior_generator.signal_diagnostics import check_signal_gate\n"
         "\n"
         "gate_cfg = pg.make_scm_prior(\n"
-        "    n_treatments=6, n_covariates=3, n_latent=2, T=52,   # shorter, wider\n"
+        "    n_treatments=6, n_covariates=3, n_latent=2, n_time_steps=52,   # shorter, wider\n"
         "    n_treatments_active_range=(3, 6), n_covariates_active_range=(1, 3),\n"
         "    n_latent_active_range=(1, 2),\n"
         "    n_cells=10, draws_per_cell=5, seed=20260728,\n"

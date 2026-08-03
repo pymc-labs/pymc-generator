@@ -10,12 +10,16 @@ The additive SCM uses the extended 8-block edge layout
 
 Canonical g-vector ordering (LOCKED):
 
-    [ g_cy (K) | g_dc (J*K) | g_dz (J*M) | g_db (J) | g_zb (M)
-    | g_zc (M*K) | g_cc (K*K - K) | g_zz (M*M - M) ]
+    [ g_cy (n_treatments) | g_dc (n_latent * n_treatments)
+    | g_dz (n_latent * n_covariates) | g_db (n_latent) | g_zb (n_covariates)
+    | g_zc (n_covariates * n_treatments)
+    | g_cc (n_treatments**2 - n_treatments)
+    | g_zz (n_covariates**2 - n_covariates) ]
 
-The cc and zz blocks EXCLUDE self-edges: the full (K, K) / (M, M) matrices
-carry a structurally-zero diagonal which is dropped on `pack` (row-major over
-ordered pairs (i, k) with i != k) and restored on `unpack`.
+The cc and zz blocks EXCLUDE self-edges: the full (n_treatments, n_treatments)
+/ (n_covariates, n_covariates) matrices carry a structurally-zero diagonal
+which is dropped on `pack` (row-major over ordered pairs (i, k) with i != k)
+and restored on `unpack`.
 """
 
 from __future__ import annotations
@@ -28,10 +32,10 @@ import numpy as np
 # --------------------------------------------------------------------------
 # Demo sizes — M0 milestone scale (KANBAN P1.1: fixed sizes, no padding)
 # --------------------------------------------------------------------------
-K_DEMO = 4  # media channels
-M_DEMO = 2  # observed controls
-J_DEMO = 1  # latent demand factors
-T_DEMO = 104  # weeks per task (design doc §6.1: T = 104–156)
+N_TREATMENTS_DEMO = 4  # treatments (media channels)
+N_COVARIATES_DEMO = 2  # covariates (observed controls)
+N_LATENT_DEMO = 1  # latent factors (latent demand)
+N_TIME_STEPS_DEMO = 104  # time steps (weeks) per task (design doc §6.1: 104–156)
 
 # --------------------------------------------------------------------------
 # Edge-slot Bernoulli base rates (KANBAN P0.5 / design doc §5)
@@ -61,7 +65,27 @@ EDGE_BASE_RATES: dict[str, float] = {
 
 # Edge types whose block is packed from a full square matrix with the
 # (structurally zero) diagonal dropped: type -> which size attr is the side.
-_SQUARE_TYPES: dict[str, str] = {"cc": "K", "zz": "M"}
+_SQUARE_TYPES: dict[str, str] = {"cc": "n_treatments", "zz": "n_covariates"}
+
+# --------------------------------------------------------------------------
+# Persisted corpus schema version
+# --------------------------------------------------------------------------
+# 1: symbolic dimension keys (``K_active``, ``M_active``, ``J_active``,
+#    ``active_c_mask``, ``active_m_mask``, ``active_j_mask``).
+# 2: canonical descriptive names (see LEGACY_CORPUS_KEYS_V1). Written into
+#    ``diagnostics["schema_version"]``; ``load_corpus`` migrates v1 shards on
+#    read, ``save_corpus`` refuses to write v1 names.
+CORPUS_SCHEMA_VERSION: int = 2
+
+#: v1 corpus key -> v2 canonical key, applied by ``load_corpus``.
+LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
+    "K_active": "n_treatments_active",
+    "M_active": "n_covariates_active",
+    "J_active": "n_latent_active",
+    "active_c_mask": "treatment_active_mask",
+    "active_m_mask": "covariate_active_mask",
+    "active_j_mask": "latent_active_mask",
+}
 
 # --------------------------------------------------------------------------
 # Prior-conditioning (ACE) layout — design-freeze constants (to-do 01)
@@ -73,7 +97,8 @@ _SQUARE_TYPES: dict[str, str] = {"cc": "K", "zz": "M"}
 # literals.
 PRIOR_COND_QUANTITIES: tuple[str, ...] = ("adstock_alpha", "hill_shape")
 
-#: Column names of the corpus ``prior_cond`` key, shape (N, P) — the packed
+#: Column names of the corpus ``prior_cond`` key, shape
+#: (n_tasks, len(PRIOR_COND_LAYOUT)) — the packed
 #: ``(low, width)`` pairs per conditioned quantity, canonical order (LOCKED,
 #: append-only).
 PRIOR_COND_LAYOUT: tuple[str, ...] = (
@@ -86,14 +111,14 @@ PRIOR_COND_LAYOUT: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class SlotLayout:
-    """Canonical slot bookkeeping for one (K, M, J) configuration.
+    """Canonical slot bookkeeping for one treatment/covariate/latent configuration.
 
     `edge_types` is the locked canonical extended block order.
     """
 
-    K: int = K_DEMO
-    M: int = M_DEMO
-    J: int = J_DEMO
+    n_treatments: int = N_TREATMENTS_DEMO
+    n_covariates: int = N_COVARIATES_DEMO
+    n_latent: int = N_LATENT_DEMO
     edge_types: tuple[str, ...] = EDGE_TYPES_EXTENDED
 
     def __post_init__(self) -> None:
@@ -105,14 +130,14 @@ class SlotLayout:
     @cached_property
     def block_sizes(self) -> dict[str, int]:
         all_sizes = {
-            "cy": self.K,
-            "dc": self.J * self.K,
-            "dz": self.J * self.M,
-            "db": self.J,
-            "zb": self.M,
-            "zc": self.M * self.K,
-            "cc": self.K * (self.K - 1),
-            "zz": self.M * (self.M - 1),
+            "cy": self.n_treatments,
+            "dc": self.n_latent * self.n_treatments,
+            "dz": self.n_latent * self.n_covariates,
+            "db": self.n_latent,
+            "zb": self.n_covariates,
+            "zc": self.n_covariates * self.n_treatments,
+            "cc": self.n_treatments * (self.n_treatments - 1),
+            "zz": self.n_covariates * (self.n_covariates - 1),
         }
         return {et: all_sizes[et] for et in self.edge_types}
 
@@ -134,14 +159,14 @@ class SlotLayout:
     def _block_shapes(self) -> dict[str, tuple[int, ...]]:
         """Trailing (unbatched) shape of each block as passed to `pack`."""
         return {
-            "cy": (self.K,),
-            "dc": (self.J, self.K),
-            "dz": (self.J, self.M),
-            "db": (self.J,),
-            "zb": (self.M,),
-            "zc": (self.M, self.K),
-            "cc": (self.K, self.K),
-            "zz": (self.M, self.M),
+            "cy": (self.n_treatments,),
+            "dc": (self.n_latent, self.n_treatments),
+            "dz": (self.n_latent, self.n_covariates),
+            "db": (self.n_latent,),
+            "zb": (self.n_covariates,),
+            "zc": (self.n_covariates, self.n_treatments),
+            "cc": (self.n_treatments, self.n_treatments),
+            "zz": (self.n_covariates, self.n_covariates),
         }
 
     # -- helpers ------------------------------------------------------------
@@ -163,11 +188,13 @@ class SlotLayout:
     ) -> np.ndarray:
         """Pack per-type arrays into the canonical flat g-vector.
 
-        g_dc is (J, K) and is raveled row-major (j, k) — the locked order.
-        Extended blocks: g_dz is (J, M), g_zc is (M, K), g_cc is the FULL
-        (K, K) matrix with an all-zero diagonal (raises ValueError otherwise)
-        packed by dropping the diagonal row-major over (i, k) with i != k;
-        g_zz is (M, M), same treatment.
+        g_dc is (n_latent, n_treatments) and is raveled row-major (j, k) — the
+        locked order. Extended blocks: g_dz is (n_latent, n_covariates), g_zc
+        is (n_covariates, n_treatments), g_cc is the FULL
+        (n_treatments, n_treatments) matrix with an all-zero diagonal (raises
+        ValueError otherwise) packed by dropping the diagonal row-major over
+        (i, k) with i != k; g_zz is (n_covariates, n_covariates), handled the
+        same way.
         Works on a single task or a leading batch axis.
         """
         provided = {

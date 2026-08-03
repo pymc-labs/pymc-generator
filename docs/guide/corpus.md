@@ -1,8 +1,8 @@
 # Generating a corpus
 
-A **corpus** stacks many worlds into a dict of numpy arrays over `N` tasks and
-`T` weeks — the tensor format amortized-inference / PFN pipelines consume, with
-the decomposition targets baked in. Generate it functionally with
+A **corpus** stacks many worlds into a dict of numpy arrays over `n_tasks` tasks
+and `n_time_steps` weeks — the tensor format amortized-inference / PFN pipelines
+consume, with the decomposition targets baked in. Generate it functionally with
 [`sample_prior_predictive`](../reference/corpus.md#prior_generator.sampler.sample_prior_predictive)
 or through the [`DataGenerator`](../reference/corpus.md#prior_generator.data_generator.DataGenerator)
 facade.
@@ -16,31 +16,32 @@ cfg = pg.make_scm_prior(n_treatments=5, n_covariates=3, n_latent=2,
                         edge_budget={"cy": (4, 4), "dc": (2, 2), "zc": (1, 2)},
                         n_cells=2, draws_per_cell=2, seed=42)
 corpus = pg.sample_prior_predictive(cfg)
-print("N tasks:", corpus["spend_raw"].shape[0])
+print("n_tasks:", corpus["spend_raw"].shape[0])
 ```
 
 Corpus mode scales up in **cells**: each cell fixes one structure and draws
-`draws_per_cell` worlds from it, so `N = n_cells × draws_per_cell`. The
+`draws_per_cell` worlds from it, so `n_tasks = n_cells × draws_per_cell`. The
 train/validation split is made at the *cell* level, so no structure leaks across
 the split.
 
 ## The schema
 
-The most important keys (padded max sizes `K / M / J`; internal math is float64,
-storage is float32/uint8/int32):
+The most important keys (padded max sizes
+`n_treatments / n_covariates / n_latent`; internal math is float64, storage is
+float32/uint8/int32):
 
 | Key | Shape | What |
 | --- | --- | --- |
-| `spend_raw` | (N, T, K) | media spend (observed input) |
-| `controls` | (N, T, M) | observed controls |
-| `sales_raw` | (N, T) | sales (observed target) |
-| `contributions_raw` | (N, T, K) | per-channel **direct** contributions (truth) |
-| `indirect_effects` | (N, T) | total interaction-routed effect (truth) |
-| `indirect_effects_by_source` | (N, T, 3) | telescoping split, order `(cc, zc, dc)` |
-| `baseline_raw` | (N, T) | full baseline |
-| `demand` | (N, T, J) | latent demand series (truth) |
-| `g` | (N, S) | the packed DAG (all 8 edge blocks) |
-| `active_c_mask` / `active_m_mask` / `active_j_mask` | (N, K/M/J) | which slots are live |
+| `spend_raw` | (n_tasks, n_time_steps, n_treatments) | media spend (observed input) |
+| `controls` | (n_tasks, n_time_steps, n_covariates) | observed controls |
+| `sales_raw` | (n_tasks, n_time_steps) | sales (observed target) |
+| `contributions_raw` | (n_tasks, n_time_steps, n_treatments) | per-channel **direct** contributions (truth) |
+| `indirect_effects` | (n_tasks, n_time_steps) | total interaction-routed effect (truth) |
+| `indirect_effects_by_source` | (n_tasks, n_time_steps, 3) | telescoping split, order `(cc, zc, dc)` |
+| `baseline_raw` | (n_tasks, n_time_steps) | full baseline |
+| `demand` | (n_tasks, n_time_steps, n_latent) | latent demand series (truth) |
+| `g` | (n_tasks, n_slots) | the packed DAG (all 8 edge blocks) |
+| `treatment_active_mask` / `covariate_active_mask` / `latent_active_mask` | (n_tasks, n_treatments / n_covariates / n_latent) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block, and `short_horizon_n_query` split metadata |
 
 `demand` is a latent factor pinned to mean 0 / scale 1, putting its `D→B`,
@@ -72,18 +73,18 @@ every reported response reproducible from persisted spend.
 ### Random-walk parameter labels
 
 Persisted `param_rw_*_std` labels declare the walk's **expected standard
-deviation** over the full simulated horizon `T_full = T + adstock_burn_in`.
+deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.
 Because each path is divided by a fixed constant rather than by its own
 realized standard deviation, that scale is realized only in expectation. It is
 therefore neither the realized standard deviation of an individual path nor a
 standard deviation measured only over the reported window. `smoothness`
 likewise maps to an absolute moving-average kernel width in weeks, governed by
-`rw_smoothness_max_weeks` (26 by default) and clamped to `T_full`. For
+`rw_smoothness_max_weeks` (26 by default) and clamped to that full horizon. For
 `positive_only` channel walks, `param_rw_c_std` is the pre-softplus amplitude,
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.
 
-Across 40 signed walks from eight worlds at `T=52` and
+Across 40 signed walks from eight worlds at `n_time_steps=52` and
 `adstock_burn_in=8`, the reported-window sd / declared `std` was:
 
 | signed group | reported-window sd / declared `std` | median |
@@ -101,25 +102,26 @@ it were the realized reported-window standard deviation.
 
 ### Channel, adstock, and intervention audit metadata
 
-The following arrays are persisted for every corpus, including empty `(N, 0)`
-schedule arrays when shocks are disabled. `S` is the configured
-`n_channel_shocks`, so every world has exactly `S` event records.
+The following arrays are persisted for every corpus, including empty
+`(n_tasks, 0)` schedule arrays when shocks are disabled. `n_shocks` is the
+configured `n_channel_shocks`, so every world has exactly `n_shocks` event
+records.
 
 | Key | Shape | dtype | Meaning |
 | --- | --- | --- | --- |
-| `confounding_strength` | `(N,)` | `float32` | drawn per-world rho (`0` when disabled) |
-| `channel_level` | `(N, K)` | `float32` | `softplus(rw_c_mean)` reference level |
-| `saturation_scale` | `(N, K)` | `float32` | response anchor: expected channel level from parameters alone (zero-padded for inactive channels) |
-| `adstock_family` | `(N, K)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
-| `adstock_alpha` | `(N, K)` | `float32` | geometric decay parameter |
-| `weibull_lam` | `(N, K)` | `float32` | Weibull scale parameter |
-| `weibull_k` | `(N, K)` | `float32` | Weibull shape parameter |
-| `channel_shock_mask` | `(N, T, K)` | `uint8` | binary reported-window held-spend mask |
-| `channel_shock_channel` | `(N, S)` | `int32` | selected direct-channel index per event |
-| `channel_shock_start` | `(N, S)` | `int32` | reported-window event start |
-| `channel_shock_length` | `(N, S)` | `int32` | held duration in weeks |
-| `channel_shock_level_multiplier` | `(N, S)` | `float32` | sampled relative held-level multiplier |
-| `channel_shock_level` | `(N, S)` | `float32` | realized held level |
+| `confounding_strength` | `(n_tasks,)` | `float32` | drawn per-world rho (`0` when disabled) |
+| `channel_level` | `(n_tasks, n_treatments)` | `float32` | `softplus(rw_c_mean)` reference level |
+| `saturation_scale` | `(n_tasks, n_treatments)` | `float32` | response anchor: expected channel level from parameters alone (zero-padded for inactive channels) |
+| `adstock_family` | `(n_tasks, n_treatments)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
+| `adstock_alpha` | `(n_tasks, n_treatments)` | `float32` | geometric decay parameter |
+| `weibull_lam` | `(n_tasks, n_treatments)` | `float32` | Weibull scale parameter |
+| `weibull_k` | `(n_tasks, n_treatments)` | `float32` | Weibull shape parameter |
+| `channel_shock_mask` | `(n_tasks, n_time_steps, n_treatments)` | `uint8` | binary reported-window held-spend mask |
+| `channel_shock_channel` | `(n_tasks, n_shocks)` | `int32` | selected direct-channel index per event |
+| `channel_shock_start` | `(n_tasks, n_shocks)` | `int32` | reported-window event start |
+| `channel_shock_length` | `(n_tasks, n_shocks)` | `int32` | held duration in weeks |
+| `channel_shock_level_multiplier` | `(n_tasks, n_shocks)` | `float32` | sampled relative held-level multiplier |
+| `channel_shock_level` | `(n_tasks, n_shocks)` | `float32` | realized held level |
 
 Together these schedule fields are observable intervention metadata: they
 reconstruct each reported held-spend window without storing a natural path or a
@@ -135,7 +137,7 @@ from scm_docs import corpus
 c = corpus()
 
 for key in ["spend_raw", "controls", "sales_raw", "contributions_raw",
-            "indirect_effects_by_source", "demand", "g", "active_c_mask"]:
+            "indirect_effects_by_source", "demand", "g", "treatment_active_mask"]:
     print(f"{key:<28} {str(c[key].shape):<14} {c[key].dtype}")
 ```
 
@@ -182,9 +184,10 @@ contributions barely move. Every corpus embeds a signal summary; `check_signal_g
 turns it into PASS/FAIL rows.
 
 The optional `identifiability` metadata block contains
-`signal_metrics: float32 (N, K, 9)` and
-`signal_metric_valid: uint8 (N, K, 9)`. Their exact versioned layout and
-validity rules are in the [signal diagnostics reference](../reference/signal.md).
+`signal_metrics: float32 (n_tasks, n_treatments, 9)` and
+`signal_metric_valid: uint8 (n_tasks, n_treatments, 9)`. Their exact versioned
+layout and validity rules are in the
+[signal diagnostics reference](../reference/signal.md).
 They are calculated from the final retained float32 arrays (after truncation),
 so a consumer can recompute them after loading the `.npz`. They are labels, not
 model inputs. Set `include_identifiability_labels=False` to omit both arrays;
@@ -250,6 +253,26 @@ The [`DataGenerator`](../reference/corpus.md#prior_generator.data_generator.Data
 facade adds batching (`generate_batches`) and generate-and-save
 (`generate_and_save`) on top of the same machinery.
 
+### Schema version and the v1 migration
+
+Every corpus records its persisted-schema version in
+`corpus["diagnostics"]["schema_version"]`, which is `2` for anything generated
+today. Version 1 shards used the old symbolic dimension keys; `load_corpus`
+renames them on read and stamps the version, so a `.npz` written before the
+rename stays loadable with no conversion step. `save_corpus` raises a
+`ValueError` if it is handed a corpus that still carries v1 keys, so new shards
+can only contain the canonical names. The rename map is
+`prior_generator.slots.LEGACY_CORPUS_KEYS_V1`:
+
+| v1 key | v2 key |
+| --- | --- |
+| `K_active` | `n_treatments_active` |
+| `M_active` | `n_covariates_active` |
+| `J_active` | `n_latent_active` |
+| `active_c_mask` | `treatment_active_mask` |
+| `active_m_mask` | `covariate_active_mask` |
+| `active_j_mask` | `latent_active_mask` |
+
 ## Dialing complexity
 
 The SCM *structure* is fixed; `make_scm_prior` dials *complexity* within it along
@@ -294,7 +317,7 @@ observed, true contribution exactly zero — the negative class for "which chann
 move sales". A `cy` budget cannot guarantee one, because it is an absolute arrow
 count clamped to the eligible slots: a task drawing 2 active channels under
 `cy=(2, 10)` has both of them live. `min_dead_channels` caps the live count at
-`K_active − min_dead_channels` instead (never below `1`):
+`n_treatments_active − min_dead_channels` instead (never below `1`):
 
 ```python
 cfg = pg.make_scm_prior(
@@ -341,7 +364,7 @@ import numpy as np
 import prior_generator as pg
 from prior_generator.slots import PRIOR_COND_LAYOUT
 
-cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=40,
+cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=40,
                         n_cells=2, draws_per_cell=2, seed=7,
                         prior_conditioning=True)
 c = pg.sample_prior_predictive(cfg)
@@ -351,7 +374,7 @@ print("first world:", np.round(c["prior_cond"][0], 3))
 print("echo:", c["diagnostics"]["prior_cond"]["supports"])
 ```
 
-- `prior_cond` `(N, P)` holds packed `(low, width)` pairs in the **locked,
+- `prior_cond` `(n_tasks, P)` holds packed `(low, width)` pairs in the **locked,
   append-only** `PRIOR_COND_LAYOUT` order — index columns by name, never by
   position literals.
 - The key is present **iff** `prior_conditioning=True`; an unconditioned corpus

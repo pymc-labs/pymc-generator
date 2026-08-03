@@ -20,7 +20,7 @@ def corpus():
         n_treatments=4,
         n_covariates=2,
         n_latent=1,
-        T=48,
+        n_time_steps=48,
         n_cells=2,
         draws_per_cell=4,
         seed=11,
@@ -121,13 +121,13 @@ def test_inactive_channels_zero_padded():
         n_treatments_active_range=(3, 3),
         n_covariates_active_range=(2, 2),
         n_latent_active_range=(1, 1),
-        T=40,
+        n_time_steps=40,
         n_cells=2,
         draws_per_cell=2,
         seed=5,
     )
     corpus = pg.sample_prior_predictive(cfg)
-    acm = corpus["active_c_mask"]
+    acm = corpus["treatment_active_mask"]
     # padded (inactive) channel slots are exactly zero in spend and contribution
     pad = acm == 0
     assert (corpus["spend_raw"][pad[:, None, :].repeat(corpus["spend_raw"].shape[1], 1)] == 0).all()
@@ -140,7 +140,7 @@ def test_determinism_same_seed():
         "n_treatments": 4,
         "n_covariates": 2,
         "n_latent": 1,
-        "T": 40,
+        "n_time_steps": 40,
         "n_cells": 2,
         "draws_per_cell": 3,
         "seed": 99,
@@ -153,10 +153,10 @@ def test_determinism_same_seed():
 
 def test_different_seed_differs():
     a = pg.sample_prior_predictive(
-        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=40, seed=1)
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=40, seed=1)
     )
     b = pg.sample_prior_predictive(
-        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, T=40, seed=2)
+        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=40, seed=2)
     )
     assert not np.array_equal(a["sales_raw"], b["sales_raw"])
 
@@ -165,7 +165,7 @@ def test_direct_only_scenario_has_negligible_indirect():
     """direct_only isolates C->Y with no channel-input interactions -> indirect ~ 0."""
     sc = SCENARIOS[0]
     assert sc.name == "direct_only"
-    world = pg.sample_scm(sc.prior(T=52, seed=0), seed=0, connect_all=True, name=sc.name)
+    world = pg.sample_scm(sc.prior(n_time_steps=52, seed=0), seed=0, connect_all=True, name=sc.name)
     assert np.abs(world.data["indirect_effects"]).max() < 1e-6
 
 
@@ -173,12 +173,17 @@ def test_diverse_texture_targets_not_flat():
     """The supported (diverse) texture must give contribution targets real variation."""
     world = pg.sample_scm(
         pg.make_scm_prior(
-            n_treatments=4, n_covariates=2, n_latent=1, T=104, seed=3, edge_budget={"cy": (4, 4)}
+            n_treatments=4,
+            n_covariates=2,
+            n_latent=1,
+            n_time_steps=104,
+            seed=3,
+            edge_budget={"cy": (4, 4)},
         ),
         seed=3,
         connect_all=True,
     )
-    contrib = world.data["contributions"]  # (T, K)
+    contrib = world.data["contributions"]  # (n_time_steps, n_treatments)
     # at least one direct channel varies week to week (std / |mean| not ~0)
     cv = contrib.std(0) / (np.abs(contrib.mean(0)) + 1e-9)
     assert cv.max() > 0.05

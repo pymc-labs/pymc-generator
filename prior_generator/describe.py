@@ -42,9 +42,9 @@ def _saturation_description(params: dict, k: int, family: str) -> str:
 
 
 def _channel_lines(g: dict, params: dict) -> list[str]:
-    K = len(g["g_cy"])
+    n_treatments = len(g["g_cy"])
     lines = []
-    for k in range(K):
+    for k in range(n_treatments):
         sat = SATURATION_NAMES[int(params["sat_family"][k])]
         ad = ADSTOCK_NAMES[int(params["adstock_family"][k])]
         bits = [
@@ -91,7 +91,10 @@ def describe_scm(world: SCM) -> str:
     f.write(f"Dataset: {world.name} (additive SCM, texture=diverse)\n")
     f.write("=" * 70 + "\n\n")
     f.write(f"Purpose:\n  {world.purpose}\n\n")
-    f.write(f"Sizes: T={cfg.T}, K={world.K}, M={world.M}, J={world.J}, ")
+    f.write(
+        f"Sizes: n_time_steps={cfg.n_time_steps}, n_treatments={world.n_treatments}, "
+        f"n_covariates={world.n_covariates}, n_latent={world.n_latent}, "
+    )
     f.write(f"l_max={cfg.l_max}, adstock_burn_in={cfg.adstock_burn_in}\n")
     f.write(f"Edge budget: {cfg.edge_budget}\n\n")
     counts: dict[str, int] = {}
@@ -167,16 +170,16 @@ def world_to_dot(world: SCM) -> str:
     """Graphviz DOT source for the world's DAG (text only — the ``graphviz``
     library/binary is never invoked; renderable with any external tool)."""
     g, params = world.g, world.params
-    K = len(g["g_cy"])
-    M = len(g["g_zb"])
-    J = len(g["g_db"])
+    n_treatments = len(g["g_cy"])
+    n_covariates = len(g["g_zb"])
+    n_latent = len(g["g_db"])
     f = io.StringIO()
     f.write("digraph CDAG {\n  rankdir=LR;\n  node [shape=ellipse];\n")
-    for k in range(K):
+    for k in range(n_treatments):
         f.write(f'  C{k + 1} [label="C{k + 1}\\n({mechanism_label(params, k)})"];\n')
-    for m in range(M):
+    for m in range(n_covariates):
         f.write(f'  Z{m + 1} [label="Z{m + 1}\\n(control)"];\n')
-    for j in range(J):
+    for j in range(n_latent):
         f.write(f'  D{j + 1} [label="D{j + 1}\\n(demand)"];\n')
     f.write('  B [label="B\\n(baseline)"];\n  Y [label="Y\\n(sales)"];\n')
     for et, src, dst, coef in edges_with_coeffs(g, params):

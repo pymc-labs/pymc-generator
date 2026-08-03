@@ -60,8 +60,13 @@ def write_scm_bundle(
         The bundle directory.
     """
     d = world.data
-    K, M, J, T = world.K, world.M, world.J, world.T
-    weeks = np.arange(T)
+    n_treatments, n_covariates, n_latent, n_time_steps = (
+        world.n_treatments,
+        world.n_covariates,
+        world.n_latent,
+        world.n_time_steps,
+    )
+    weeks = np.arange(n_time_steps)
     title = world.name if title is None else title
 
     out = Path(out_dir)
@@ -70,28 +75,38 @@ def write_scm_bundle(
     recon = world.reconstruction()
 
     model_cols = {"week": weeks}
-    model_cols.update({f"spend_C{k + 1}": d["channels"][:, k] for k in range(K)})
-    model_cols.update({f"control_Z{m + 1}": d["controls"][:, m] for m in range(M)})
+    model_cols.update({f"spend_C{k + 1}": d["channels"][:, k] for k in range(n_treatments)})
+    model_cols.update({f"control_Z{m + 1}": d["controls"][:, m] for m in range(n_covariates)})
     model_cols["sales_Y"] = d["sales"]
     pd.DataFrame(model_cols).to_csv(out / "dataset.csv", index=False)
 
     truth_cols = {"week": weeks, "baseline_intrinsic": d["baseline_intrinsic"]}
     truth_cols.update(
-        {f"confounder_contribution_D{j + 1}": d["confounder_contribution"][:, j] for j in range(J)}
+        {
+            f"confounder_contribution_D{j + 1}": d["confounder_contribution"][:, j]
+            for j in range(n_latent)
+        }
     )
     truth_cols.update(
-        {f"control_contribution_Z{m + 1}": d["control_contribution"][:, m] for m in range(M)}
+        {
+            f"control_contribution_Z{m + 1}": d["control_contribution"][:, m]
+            for m in range(n_covariates)
+        }
     )
-    truth_cols.update({f"contribution_C{k + 1}": d["contributions"][:, k] for k in range(K)})
+    truth_cols.update(
+        {f"contribution_C{k + 1}": d["contributions"][:, k] for k in range(n_treatments)}
+    )
     for i, src in enumerate(("cc", "zc", "dc")):
         truth_cols[f"indirect_{src}"] = d["indirect_effects_by_source"][:, i]
     truth_cols["sales_reconstructed"] = recon
-    truth_cols.update({f"demand_D{j + 1}": d["demand"][:, j] for j in range(J)})
-    truth_cols.update({f"channel_base_C{k + 1}": d["channels_base"][:, k] for k in range(K)})
+    truth_cols.update({f"demand_D{j + 1}": d["demand"][:, j] for j in range(n_latent)})
+    truth_cols.update(
+        {f"channel_base_C{k + 1}": d["channels_base"][:, k] for k in range(n_treatments)}
+    )
     pd.DataFrame(truth_cols).to_csv(out / "true_components.csv", index=False)
 
     legacy = {"week": weeks}
-    legacy.update({f"contribution_C{k + 1}": d["contributions"][:, k] for k in range(K)})
+    legacy.update({f"contribution_C{k + 1}": d["contributions"][:, k] for k in range(n_treatments)})
     legacy["baseline_B"] = d["baseline"]
     pd.DataFrame(legacy).to_csv(out / "true_contribution.csv", index=False)
 
@@ -113,7 +128,7 @@ def write_scenario_bundles(
     out_root: str | Path,
     *,
     scenarios: Sequence[Scenario] = SCENARIOS,
-    T: int = 104,
+    n_time_steps: int = 104,
     seed: int = 20260712,
     require_path_to_y: bool = False,
     plots: bool = True,
@@ -122,7 +137,7 @@ def write_scenario_bundles(
     """Write one bundle per scenario (numbered folders) plus a root README.
 
     Scenario ``idx`` is sampled with ``seed + idx`` — fully deterministic
-    given ``(scenarios, T, seed)``.
+    given ``(scenarios, n_time_steps, seed)``.
 
     Parameters
     ----------
@@ -130,7 +145,7 @@ def write_scenario_bundles(
         Root output directory.
     scenarios : sequence of Scenario
         Defaults to the five audit scenarios (:data:`SCENARIOS`).
-    T : int
+    n_time_steps : int
         Weeks per world.
     seed : int
         Base seed; scenario ``idx`` uses ``seed + idx``.
@@ -151,7 +166,7 @@ def write_scenario_bundles(
     out_root.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for idx, sc in enumerate(scenarios):
-        cfg = sc.prior(T=T, seed=seed + idx)
+        cfg = sc.prior(n_time_steps=n_time_steps, seed=seed + idx)
         world = sample_scm(
             cfg,
             seed=seed + idx,

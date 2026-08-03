@@ -32,14 +32,14 @@ def built():
         n_treatments=4,
         n_covariates=2,
         n_latent=1,
-        T=48,
+        n_time_steps=48,
         edge_budget={"cy": (4, 4), "cc": (1, 2), "zc": (1, 2), "dc": (1, 2)},
     )
     rng = np.random.default_rng(0)
     g = sample_g_additive(rng, cfg, cfg.layout)
     g_act = _slice_g_active(g, 4, 2, 1)
     structural = sample_structure(g_act, cfg, rng)
-    model, out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.T)
+    model, out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
     return model, out_names
 
 
@@ -110,7 +110,9 @@ def test_batched_draws_have_leading_axis(built):
 
 def test_diverse_texture_gives_nonflat_targets(built):
     model, out_names = built
-    contrib = draw_worlds(model, out_names, seed=3, draws=1)["contributions"][0]  # (T, K)
+    contrib = draw_worlds(model, out_names, seed=3, draws=1)["contributions"][
+        0
+    ]  # (n_time_steps, n_treatments)
     cv = contrib.std(0) / (np.abs(contrib.mean(0)) + 1e-9)
     assert cv.max() > 0.05
 
@@ -126,7 +128,10 @@ def test_single_draw_has_leading_axis(built):
 
 def test_kernel_width_is_horizon_invariant_except_for_the_short_series_clamp():
     max_weeks = 26
-    widths = [_kernel_width(0.5, T, rw_smoothness_max_weeks=max_weeks) for T in (52, 104, 156)]
+    widths = [
+        _kernel_width(0.5, n_time_steps, rw_smoothness_max_weeks=max_weeks)
+        for n_time_steps in (52, 104, 156)
+    ]
 
     assert widths == [13, 13, 13]
     assert _kernel_width(0.75, 104, rw_smoothness_max_weeks=max_weeks) > widths[0]
@@ -139,8 +144,9 @@ def test_absolute_width_reduces_horizon_dependence_of_walk_texture():
     """The absolute-week kernel makes a walk's texture markedly less horizon-dependent.
 
     Asserted as a PAIRED comparison against the former horizon-proportional rule
-    rather than as an absolute threshold. Centring subtracts a ``T``-dependent
-    mean and ``_centred_walk_scale`` divides by a ``T``-dependent constant, and a
+    rather than as an absolute threshold. Centring subtracts an ``n_time_steps``-dependent
+    mean and ``_centred_walk_scale`` divides by an ``n_time_steps``-dependent constant,
+    and a
     centred Brownian path's lag-1 autocorrelation rises with window length
     regardless of the kernel, so perfect invariance is not achievable and an
     absolute bound is a seed lottery: over 25 seeds the single-seed spread under
@@ -149,8 +155,9 @@ def test_absolute_width_reduces_horizon_dependence_of_walk_texture():
     seeds, fixed vs proportional: 0.0154 vs 0.0333 (smoothness 0.25), 0.0070 vs
     0.0176 (0.50), 0.0047 vs 0.0102 (0.75), i.e. 2.2-2.5x every time.
 
-    Passing ``rw_smoothness_max_weeks=round(T / 4)`` per horizon reproduces the
-    old ``round(smoothness * T / 4)`` width exactly, which is what makes this a
+    Passing ``rw_smoothness_max_weeks=round(n_time_steps / 4)`` per horizon reproduces
+    the old ``round(smoothness * n_time_steps / 4)`` width exactly, which is what makes
+    this a
     like-for-like paired contrast on identical innovations.
     """
     horizons = (52, 104, 156)
@@ -160,22 +167,22 @@ def test_absolute_width_reduces_horizon_dependence_of_walk_texture():
         for seed in range(1000, 1012):
             innovations = np.random.default_rng(seed).normal(size=max(horizons))
             autocorrelations = []
-            for T in horizons:
+            for n_time_steps in horizons:
                 walk = symbolic_random_walk(
-                    T,
+                    n_time_steps,
                     mean=0.0,
                     std=1.0,
                     smoothness=0.5,
                     positive_only=False,
-                    rw_smoothness_max_weeks=cap_for_horizon(T),
-                    eps=pt.as_tensor_variable(innovations[:T]),
+                    rw_smoothness_max_weeks=cap_for_horizon(n_time_steps),
+                    eps=pt.as_tensor_variable(innovations[:n_time_steps]),
                 ).eval()
                 autocorrelations.append(float(np.corrcoef(walk[:-1], walk[1:])[0, 1]))
             spreads.append(max(autocorrelations) - min(autocorrelations))
         return float(np.mean(spreads))
 
-    absolute_weeks = mean_spread(lambda T: 26)
-    horizon_proportional = mean_spread(lambda T: max(1, round(T / 4)))
+    absolute_weeks = mean_spread(lambda n_time_steps: 26)
+    horizon_proportional = mean_spread(lambda n_time_steps: max(1, round(n_time_steps / 4)))
 
     assert absolute_weeks < horizon_proportional
     assert horizon_proportional / absolute_weeks > 1.7
@@ -200,7 +207,7 @@ def test_relative_outcome_scales_follow_the_media_amplitude():
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=16,
+        n_time_steps=16,
         edge_budget={"cy": (2, 2)},
         outcome_std_mode="relative",
         rw_baseline_std_range=(0.04, 0.08),
@@ -217,7 +224,7 @@ def test_relative_outcome_scales_follow_the_media_amplitude():
         "g_zz": np.zeros((1, 1), dtype=int),
     }
     structural = sample_structure(g, cfg, np.random.default_rng(13))
-    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.T)
+    model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = draw_worlds(
         model,
         ("beta", "rw_b_std_rel", "rw_y_std_rel", "rw_b_std", "rw_y_std"),
@@ -244,17 +251,19 @@ def test_absolute_outcome_scales_keep_halfnormal_semantics():
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=16,
+        n_time_steps=16,
         edge_budget={"cy": (2, 2)},
         outcome_std_mode="absolute",
         rw_baseline_std_sigma=0.35,
         rw_sales_std_sigma=0.12,
     )
     rng = np.random.default_rng(15)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
-    model, _out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.T)
+    model, _out_names, _param_names = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
 
     assert "rw_b_std_rel" not in model.named_vars
     assert "rw_y_std_rel" not in model.named_vars
@@ -274,12 +283,14 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=12,
+        n_time_steps=12,
         adstock_burn_in=0,
         edge_budget={"cy": (2, 2)},
     )
     rng = np.random.default_rng(31)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
 
@@ -291,7 +302,7 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
         graph_with_colliding_beta,
     )
     with pytest.raises(ValueError, match="collides with a different model variable"):
-        build_world_model(g_act, cfg, structural, cfg.T)
+        build_world_model(g_act, cfg, structural, cfg.n_time_steps)
 
 
 def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch):
@@ -299,7 +310,7 @@ def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=12,
+        n_time_steps=12,
         adstock_burn_in=0,
         edge_budget={"cy": (2, 2)},
         confounding_strength_range=(0.2, 0.4),
@@ -308,7 +319,9 @@ def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch
         channel_shock_level_range=(0.5, 1.0),
     )
     rng = np.random.default_rng(31)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=1, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
 
@@ -321,7 +334,7 @@ def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch
         return graph
 
     monkeypatch.setattr(world_model, "build_symbolic_graph", capture_graph)
-    model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.T)
+    model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
 
     names = (
         "confounding_strength",

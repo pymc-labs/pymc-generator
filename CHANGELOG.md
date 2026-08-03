@@ -97,6 +97,40 @@ While the project is on 0.x, minor versions may contain breaking changes.
   (`.github/workflows/docs.yml`), and build instructions in `CONTRIBUTING.md`.
 
 ### Changed
+- **Descriptive dimension names everywhere** (breaking, plan doc 04): the
+  symbolic dimension vocabulary is gone from identifiers, public signatures,
+  persisted corpus keys, diagnostics, docstrings, docs, and the example
+  notebooks. `N → n_tasks`, `T → n_time_steps`, `K → n_treatments`,
+  `M → n_covariates`, `J → n_latent`, `K_max/M_max/J_max →
+  n_treatments_max/n_covariates_max/n_latent_max`, the shock count `S →
+  n_shocks`, the reported-window slice `W → window`, `T_full →
+  n_time_steps_full`, and `T_DEMO/K_DEMO/M_DEMO/J_DEMO →
+  N_TIME_STEPS_DEMO/N_TREATMENTS_DEMO/N_COVARIATES_DEMO/N_LATENT_DEMO`.
+  Renamed public surface: `SCMPrior.T → SCMPrior.n_time_steps`,
+  `SlotLayout.K/.M/.J → .n_treatments/.n_covariates/.n_latent`,
+  `SCM.T/.K/.M/.J → .n_time_steps/.n_treatments/.n_covariates/.n_latent`,
+  `Scenario.prior(T=...) → Scenario.prior(n_time_steps=...)`, and the
+  `build_world_model` / `build_oracle_model` / `write_scenario_bundles`
+  horizon parameter. Shape documentation now reads
+  `(n_tasks, n_time_steps, n_treatments)` instead of `(N, T, K)`.
+  Deliberately unchanged: the edge-type axis (`cy, dc, dz, db, zb, zc, cc, zz`,
+  `g_cy`…`g_zz`, the packed `g` key, `edge_budget` keys), node and equation
+  symbols (`C_k`, `Z_m`, `D_j`, `B`, `Y`, `RW_*`), loop indices, and `l_max`.
+  Generation is byte-identical: the corpus hash contract in
+  `tests/test_identifiability.py` reproduces every pre-rename digest for the 35
+  untouched keys, and the 6 renamed keys reproduce theirs when hashed under
+  their old names (that test seeds the digest with the key name).
+- **Persisted corpus schema is versioned at 2** (breaking): the corpus keys
+  `K_active`, `M_active`, `J_active`, `active_c_mask`, `active_m_mask`, and
+  `active_j_mask` are now `n_treatments_active`, `n_covariates_active`,
+  `n_latent_active`, `treatment_active_mask`, `covariate_active_mask`, and
+  `latent_active_mask`. New corpora carry
+  `diagnostics["schema_version"] == CORPUS_SCHEMA_VERSION` (`2`);
+  `load_corpus` migrates a v1 `.npz` on read via
+  `slots.LEGACY_CORPUS_KEYS_V1` (raising if a shard mixes both vocabularies)
+  and stamps the version, so previously saved shards stay loadable;
+  `save_corpus` refuses to write v1 keys, so a new shard can only carry
+  canonical names.
 - **Outcome-side noise is parameter-scale-aware and non-aliased** (breaking):
   `RW_Y` is now iid observation noise, while `RW_B` remains the sole latent
   baseline walk; this removes the exact `RW_B`/`RW_Y` same-width variance ridge

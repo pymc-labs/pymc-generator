@@ -17,7 +17,12 @@ from prior_generator.signal_diagnostics import (
     dense_signal_metrics,
     summarize_signal_metrics,
 )
-from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
+from prior_generator.slots import (
+    CORPUS_SCHEMA_VERSION,
+    EDGE_TYPES_EXTENDED,
+    LEGACY_CORPUS_KEYS_V1,
+    SlotLayout,
+)
 
 
 class _PicklePayload:
@@ -31,7 +36,13 @@ class _PicklePayload:
 @pytest.fixture(scope="module")
 def corpus():
     cfg = pg.make_scm_prior(
-        n_treatments=4, n_covariates=2, n_latent=1, T=40, n_cells=2, draws_per_cell=3, seed=7
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=40,
+        n_cells=2,
+        draws_per_cell=3,
+        seed=7,
     )
     return pg.sample_prior_predictive(cfg)
 
@@ -42,7 +53,7 @@ def parentless_baseline_corpus():
         n_treatments=4,
         n_covariates=2,
         n_latent=1,
-        T=40,
+        n_time_steps=40,
         n_cells=2,
         draws_per_cell=1,
         seed=19,
@@ -60,7 +71,7 @@ def padded_corpus():
         n_treatments_active_range=(2, 2),
         n_covariates_active_range=(1, 1),
         n_latent_active_range=(1, 1),
-        T=16,
+        n_time_steps=16,
         n_cells=2,
         draws_per_cell=1,
         seed=107,
@@ -69,53 +80,53 @@ def padded_corpus():
 
 
 def test_required_keys_and_shapes(corpus):
-    N, T, K = corpus["spend_raw"].shape
-    M = corpus["controls"].shape[2]
-    J = corpus["demand"].shape[2]
+    n_tasks, n_time_steps, n_treatments = corpus["spend_raw"].shape
+    n_covariates = corpus["controls"].shape[2]
+    n_latent = corpus["demand"].shape[2]
     expected = {
-        "spend_raw": (N, T, K),
-        "spend_norm": (N, T, K),
-        "spend_share": (N, T, K),
-        "controls": (N, T, M),
-        "sales_raw": (N, T),
-        "sales_norm": (N, T),
-        "support_mask": (N, T),
-        "contributions_raw": (N, T, K),
-        "baseline_raw": (N, T),
-        "indirect_effects": (N, T),
-        "indirect_effects_by_source": (N, T, 3),
-        "control_contribution": (N, T, M),
-        "confounder_contribution": (N, T, J),
-        "baseline_intrinsic": (N, T),
-        "channel_active": (N, K),
-        "active_c_mask": (N, K),
-        "active_m_mask": (N, M),
-        "active_j_mask": (N, J),
-        "K_active": (N,),
-        "M_active": (N,),
-        "J_active": (N,),
-        "confounding_strength": (N,),
-        "saturation_scale": (N, K),
+        "spend_raw": (n_tasks, n_time_steps, n_treatments),
+        "spend_norm": (n_tasks, n_time_steps, n_treatments),
+        "spend_share": (n_tasks, n_time_steps, n_treatments),
+        "controls": (n_tasks, n_time_steps, n_covariates),
+        "sales_raw": (n_tasks, n_time_steps),
+        "sales_norm": (n_tasks, n_time_steps),
+        "support_mask": (n_tasks, n_time_steps),
+        "contributions_raw": (n_tasks, n_time_steps, n_treatments),
+        "baseline_raw": (n_tasks, n_time_steps),
+        "indirect_effects": (n_tasks, n_time_steps),
+        "indirect_effects_by_source": (n_tasks, n_time_steps, 3),
+        "control_contribution": (n_tasks, n_time_steps, n_covariates),
+        "confounder_contribution": (n_tasks, n_time_steps, n_latent),
+        "baseline_intrinsic": (n_tasks, n_time_steps),
+        "channel_active": (n_tasks, n_treatments),
+        "treatment_active_mask": (n_tasks, n_treatments),
+        "covariate_active_mask": (n_tasks, n_covariates),
+        "latent_active_mask": (n_tasks, n_latent),
+        "n_treatments_active": (n_tasks,),
+        "n_covariates_active": (n_tasks,),
+        "n_latent_active": (n_tasks,),
+        "confounding_strength": (n_tasks,),
+        "saturation_scale": (n_tasks, n_treatments),
     }
     for key, shape in expected.items():
         assert corpus[key].shape == shape, f"{key}: {corpus[key].shape} != {shape}"
 
 
 def test_shock_and_mechanism_metadata_schema(corpus):
-    N, T, K = corpus["spend_raw"].shape
+    n_tasks, n_time_steps, n_treatments = corpus["spend_raw"].shape
     expected = {
-        "channel_shock_mask": ((N, T, K), np.uint8),
-        "channel_shock_channel": ((N, 0), np.int32),
-        "channel_shock_start": ((N, 0), np.int32),
-        "channel_shock_length": ((N, 0), np.int32),
-        "channel_shock_level_multiplier": ((N, 0), np.float32),
-        "channel_shock_level": ((N, 0), np.float32),
-        "channel_level": ((N, K), np.float32),
-        "saturation_scale": ((N, K), np.float32),
-        "adstock_family": ((N, K), np.uint8),
-        "adstock_alpha": ((N, K), np.float32),
-        "weibull_lam": ((N, K), np.float32),
-        "weibull_k": ((N, K), np.float32),
+        "channel_shock_mask": ((n_tasks, n_time_steps, n_treatments), np.uint8),
+        "channel_shock_channel": ((n_tasks, 0), np.int32),
+        "channel_shock_start": ((n_tasks, 0), np.int32),
+        "channel_shock_length": ((n_tasks, 0), np.int32),
+        "channel_shock_level_multiplier": ((n_tasks, 0), np.float32),
+        "channel_shock_level": ((n_tasks, 0), np.float32),
+        "channel_level": ((n_tasks, n_treatments), np.float32),
+        "saturation_scale": ((n_tasks, n_treatments), np.float32),
+        "adstock_family": ((n_tasks, n_treatments), np.uint8),
+        "adstock_alpha": ((n_tasks, n_treatments), np.float32),
+        "weibull_lam": ((n_tasks, n_treatments), np.float32),
+        "weibull_k": ((n_tasks, n_treatments), np.float32),
     }
     for key, (shape, dtype) in expected.items():
         assert corpus[key].shape == shape
@@ -124,10 +135,15 @@ def test_shock_and_mechanism_metadata_schema(corpus):
 
 
 def test_g_layout_is_extended_8_block(corpus):
-    N, T, K = corpus["spend_raw"].shape
-    M, J = corpus["controls"].shape[2], corpus["demand"].shape[2]
-    layout = SlotLayout(K=K, M=M, J=J, edge_types=EDGE_TYPES_EXTENDED)
-    assert corpus["g"].shape == (N, layout.n_slots)
+    n_tasks, n_time_steps, n_treatments = corpus["spend_raw"].shape
+    n_covariates, n_latent = corpus["controls"].shape[2], corpus["demand"].shape[2]
+    layout = SlotLayout(
+        n_treatments=n_treatments,
+        n_covariates=n_covariates,
+        n_latent=n_latent,
+        edge_types=EDGE_TYPES_EXTENDED,
+    )
+    assert corpus["g"].shape == (n_tasks, layout.n_slots)
     assert set(np.unique(corpus["g"])).issubset({0, 1})
 
 
@@ -137,10 +153,10 @@ def test_validate_corpus_accepts_generated(corpus):
 
 def test_query_windows_do_not_overlap_response_warmup(corpus):
     """Every query suffix begins after the non-reproducible response prefix."""
-    T = corpus["spend_raw"].shape[1]
+    n_time_steps = corpus["spend_raw"].shape[1]
     n_query = int(corpus["diagnostics"]["short_horizon_n_query"])
     warmup = int(corpus["diagnostics"]["signal"]["response_warmup_weeks"])
-    assert min(T - n_query, T // 2) >= warmup
+    assert min(n_time_steps - n_query, n_time_steps // 2) >= warmup
 
 
 def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
@@ -159,7 +175,7 @@ def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
         n_covariates=2,
         n_latent=1,
         n_treatments_active_range=(2, 2),
-        T=16,
+        n_time_steps=16,
         n_cells=2,
         draws_per_cell=1,
         n_channel_shocks=1,
@@ -175,7 +191,7 @@ def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
         )
 
     def spend_shares(spend):
-        active = generated["active_c_mask"].astype(np.float64)[:, None, :]
+        active = generated["treatment_active_mask"].astype(np.float64)[:, None, :]
         active_sum = (spend * active).sum(axis=-1, keepdims=True)
         return (
             np.divide(spend, active_sum, out=np.zeros_like(spend), where=active_sum != 0.0) * active
@@ -208,7 +224,7 @@ def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
         rtol=1e-5,
         atol=1e-6,
     )
-    inactive = generated["active_c_mask"] == 0
+    inactive = generated["treatment_active_mask"] == 0
     for key in ("spend_raw", "spend_norm", "spend_share"):
         assert not generated[key].transpose(0, 2, 1)[inactive].any(), key
     assert DataGenerator.validate_corpus(generated) == []
@@ -223,11 +239,11 @@ def test_validate_corpus_flags_missing_key(corpus):
 @pytest.mark.parametrize(
     "key",
     (
-        "active_m_mask",
-        "active_j_mask",
-        "K_active",
-        "M_active",
-        "J_active",
+        "covariate_active_mask",
+        "latent_active_mask",
+        "n_treatments_active",
+        "n_covariates_active",
+        "n_latent_active",
         "indirect_effects",
         "channel_active",
         "control_contribution",
@@ -279,7 +295,7 @@ def test_validate_corpus_rejects_non_array_extra_fields(corpus):
 
 @pytest.mark.parametrize(
     ("key", "dtype"),
-    (("spend_raw", np.float64), ("g", np.int32), ("K_active", np.int64)),
+    (("spend_raw", np.float64), ("g", np.int32), ("n_treatments_active", np.int64)),
 )
 def test_validate_corpus_rejects_wrong_required_dtypes(corpus, key, dtype):
     broken = dict(corpus)
@@ -312,7 +328,7 @@ def test_validate_corpus_requires_confounding_strength(corpus):
 def test_validate_corpus_rejects_nonpositive_active_saturation_scale(corpus):
     broken = dict(corpus)
     bad = corpus["saturation_scale"].copy()
-    bad[0, np.flatnonzero(corpus["active_c_mask"][0])[0]] = 0.0
+    bad[0, np.flatnonzero(corpus["treatment_active_mask"][0])[0]] = 0.0
     broken["saturation_scale"] = bad
     errors = DataGenerator.validate_corpus(broken)
     assert any("saturation_scale" in error for error in errors)
@@ -324,7 +340,7 @@ def test_single_node_edge_marginals_are_defined_without_empty_mean_warning(recwa
             n_treatments=1,
             n_covariates=1,
             n_latent=1,
-            T=8,
+            n_time_steps=8,
             adstock_burn_in=0,
             n_cells=2,
             draws_per_cell=1,
@@ -343,7 +359,7 @@ def test_edge_base_rates_report_legacy_overrides():
             n_treatments=1,
             n_covariates=1,
             n_latent=1,
-            T=8,
+            n_time_steps=8,
             l_max=1,
             adstock_burn_in=0,
             n_cells=2,
@@ -371,6 +387,64 @@ def test_save_load_roundtrip(tmp_path, corpus):
             assert np.array_equal(loaded[key], val), f"{key} changed across roundtrip"
     assert all(not key.startswith("identifiability__") for key in loaded)
     assert isinstance(loaded["identifiability"], dict)
+
+
+def _write_v1_shard(path, corpus):
+    """Persist ``corpus`` with the pre-v2 symbolic dimension keys and no version."""
+    import json
+
+    payload = {}
+    for key, value in corpus.items():
+        if key == "diagnostics":
+            diagnostics = {k: v for k, v in value.items() if k != "schema_version"}
+            payload[key] = np.array(json.dumps(diagnostics))
+        elif key == "identifiability":
+            for label, array in value.items():
+                payload[f"identifiability__{label}"] = array
+        else:
+            payload[key] = value
+    for old, new in LEGACY_CORPUS_KEYS_V1.items():
+        payload[old] = payload.pop(new)
+    np.savez_compressed(path, **payload)
+
+
+def test_load_corpus_migrates_v1_dimension_keys(tmp_path, corpus):
+    """A shard written before the rename stays loadable, with only its keys changed."""
+    path = tmp_path / "v1.npz"
+    _write_v1_shard(path, corpus)
+    loaded = pg.load_corpus(path)
+
+    assert not set(loaded) & set(LEGACY_CORPUS_KEYS_V1)
+    for new in LEGACY_CORPUS_KEYS_V1.values():
+        assert np.array_equal(loaded[new], corpus[new]), new
+    assert loaded["diagnostics"]["schema_version"] == CORPUS_SCHEMA_VERSION
+    assert DataGenerator.validate_corpus(loaded) == []
+
+
+def test_load_corpus_rejects_a_shard_mixing_both_vocabularies(tmp_path, corpus):
+    path = tmp_path / "mixed.npz"
+    _write_v1_shard(path, corpus)
+    with np.load(path, allow_pickle=False) as data:
+        payload = {key: data[key] for key in data.files}
+    payload["n_treatments_active"] = payload["K_active"]
+    np.savez_compressed(path, **payload)
+    with pytest.raises(ValueError, match="mixes v1 and v2 dimension keys"):
+        pg.load_corpus(path)
+
+
+def test_new_corpora_are_stamped_and_free_of_v1_keys(corpus):
+    assert corpus["diagnostics"]["schema_version"] == CORPUS_SCHEMA_VERSION
+    assert not set(corpus) & set(LEGACY_CORPUS_KEYS_V1)
+
+
+def test_save_corpus_refuses_v1_dimension_keys(tmp_path, corpus):
+    """Invariant: a written shard can only carry canonical names."""
+    regressed = dict(corpus)
+    regressed["K_active"] = regressed.pop("n_treatments_active")
+    path = tmp_path / "regressed.npz"
+    with pytest.raises(ValueError, match="symbolic dimension keys"):
+        pg.save_corpus(regressed, path)
+    assert not path.exists()
 
 
 def test_load_corpus_refuses_pickle_payload_without_execution(tmp_path):
@@ -753,7 +827,7 @@ def test_validate_corpus_rejects_previous_outcome_noise_metadata(corpus, field, 
 
 def test_datagenerator_generate_n_tasks():
     cfg = pg.make_scm_prior(
-        n_treatments=4, n_covariates=2, n_latent=1, T=32, draws_per_cell=5, seed=1
+        n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=32, draws_per_cell=5, seed=1
     )
     gen = DataGenerator(cfg)
     corpus = gen.generate(n_tasks=7, seed=1)
@@ -771,7 +845,7 @@ def test_datagenerator_small_task_counts_keep_cell_level_split(seed, n_tasks):
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=4,
+        n_time_steps=4,
         l_max=1,
         adstock_burn_in=0,
         draws_per_cell=20,
@@ -796,7 +870,7 @@ def test_datagenerator_task_count_above_draws_per_cell_keeps_cell_level_split():
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=4,
+        n_time_steps=4,
         l_max=1,
         adstock_burn_in=0,
         draws_per_cell=2,
@@ -820,7 +894,7 @@ def test_datagenerator_rejects_one_task_cell_split():
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=8,
+        n_time_steps=8,
         l_max=1,
         adstock_burn_in=0,
         draws_per_cell=2,
@@ -848,7 +922,7 @@ def test_datagenerator_batches_preserve_tasks_without_one_world_batch(
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=8,
+        n_time_steps=8,
         l_max=1,
         adstock_burn_in=0,
         draws_per_cell=2,
@@ -870,7 +944,7 @@ def test_datagenerator_rejects_one_world_batch_size():
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=8,
+        n_time_steps=8,
         l_max=1,
         adstock_burn_in=0,
         draws_per_cell=2,
@@ -885,7 +959,7 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=16,
+        n_time_steps=16,
         n_cells=2,
         draws_per_cell=2,
         seed=73,
@@ -906,8 +980,10 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         assert corpus["diagnostics"]["n_tasks"] == n_tasks
         assert corpus["diagnostics"]["n_cells"] == len(np.unique(corpus["cell_id"]))
 
-        layout = SlotLayout(K=2, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
-        direct = (corpus["g"][:, layout.slices["cy"]] == 1) & (corpus["active_c_mask"] == 1)
+        layout = SlotLayout(
+            n_treatments=2, n_covariates=2, n_latent=1, edge_types=EDGE_TYPES_EXTENDED
+        )
+        direct = (corpus["g"][:, layout.slices["cy"]] == 1) & (corpus["treatment_active_mask"] == 1)
         expected_metrics, expected_valid = dense_signal_metrics(
             corpus["spend_raw"],
             corpus["contributions_raw"],
@@ -967,7 +1043,7 @@ def test_datagenerator_generate_and_save_without_identifiability_labels(tmp_path
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=16,
+        n_time_steps=16,
         n_cells=2,
         draws_per_cell=1,
         seed=57,
@@ -1018,9 +1094,9 @@ def test_validate_corpus_rejects_nonzero_node_padding(padded_corpus, key, axis, 
     broken = dict(padded_corpus)
     bad = padded_corpus[key].copy()
     active_key = {
-        "channel": "K_active",
-        "control": "M_active",
-        "demand": "J_active",
+        "channel": "n_treatments_active",
+        "control": "n_covariates_active",
+        "demand": "n_latent_active",
     }[axis]
     index = int(padded_corpus[active_key][0])
     if bad.ndim == 3:
@@ -1034,12 +1110,12 @@ def test_validate_corpus_rejects_nonzero_node_padding(padded_corpus, key, axis, 
 @pytest.mark.parametrize(
     ("key", "expected"),
     (
-        ("K_active", "K_active"),
-        ("M_active", "M_active"),
-        ("J_active", "J_active"),
-        ("active_c_mask", "K_active"),
-        ("active_m_mask", "M_active"),
-        ("active_j_mask", "J_active"),
+        ("n_treatments_active", "n_treatments_active"),
+        ("n_covariates_active", "n_covariates_active"),
+        ("n_latent_active", "n_latent_active"),
+        ("treatment_active_mask", "n_treatments_active"),
+        ("covariate_active_mask", "n_covariates_active"),
+        ("latent_active_mask", "n_latent_active"),
     ),
 )
 def test_validate_corpus_rejects_corrupt_active_counts_and_masks(padded_corpus, key, expected):
@@ -1054,15 +1130,18 @@ def test_validate_corpus_rejects_corrupt_active_counts_and_masks(padded_corpus, 
 
 def test_validate_corpus_rejects_zero_active_count(padded_corpus):
     broken = dict(padded_corpus)
-    broken["K_active"] = padded_corpus["K_active"].copy()
-    broken["K_active"][0] = 0
-    assert "K_active does not match its active prefix mask" in DataGenerator.validate_corpus(broken)
+    broken["n_treatments_active"] = padded_corpus["n_treatments_active"].copy()
+    broken["n_treatments_active"][0] = 0
+    assert (
+        "n_treatments_active does not match its active prefix mask"
+        in DataGenerator.validate_corpus(broken)
+    )
 
 
 @pytest.mark.parametrize("edge_type", EDGE_TYPES_EXTENDED)
 def test_validate_corpus_rejects_graph_edges_incident_to_padding(padded_corpus, edge_type):
     broken = dict(padded_corpus)
-    layout = SlotLayout(K=4, M=3, J=2, edge_types=EDGE_TYPES_EXTENDED)
+    layout = SlotLayout(n_treatments=4, n_covariates=3, n_latent=2, edge_types=EDGE_TYPES_EXTENDED)
     parts = layout.unpack(padded_corpus["g"][:1])
     inactive = {"c": 2, "m": 1, "j": 1}
     indices = {
@@ -1085,7 +1164,7 @@ def test_validate_corpus_rejects_graph_edges_incident_to_padding(padded_corpus, 
 @pytest.mark.parametrize(("edge_type", "index"), (("cc", (1, 0)), ("zz", (1, 0))))
 def test_validate_corpus_rejects_non_dag_square_graph_blocks(corpus, edge_type, index):
     broken = dict(corpus)
-    layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+    layout = SlotLayout(n_treatments=4, n_covariates=2, n_latent=1, edge_types=EDGE_TYPES_EXTENDED)
     parts = layout.unpack(corpus["g"])
     parts[edge_type][(0, *index)] = 1
     broken["g"] = layout.pack(**{f"g_{name}": value for name, value in parts.items()})
@@ -1100,7 +1179,7 @@ def test_validate_corpus_rejects_offsetting_impossible_indirect_sources():
             n_treatments=3,
             n_covariates=2,
             n_latent=1,
-            T=10,
+            n_time_steps=10,
             n_cells=2,
             draws_per_cell=1,
             l_max=2,
@@ -1126,7 +1205,7 @@ def test_single_treatment_corpus_has_exactly_zero_cc_indirect_source():
             n_treatments=1,
             n_covariates=1,
             n_latent=1,
-            T=10,
+            n_time_steps=10,
             n_cells=2,
             draws_per_cell=1,
             l_max=2,
@@ -1176,7 +1255,7 @@ def test_validate_corpus_rejects_incorrect_channel_active(corpus):
 
 
 def test_validate_corpus_rejects_balanced_null_channel_contribution(corpus):
-    layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+    layout = SlotLayout(n_treatments=4, n_covariates=2, n_latent=1, edge_types=EDGE_TYPES_EXTENDED)
     direct = corpus["g"][:, layout.slices["cy"]]
     n, k = np.argwhere(direct == 0)[0]
     broken = dict(corpus)
@@ -1199,7 +1278,7 @@ def test_validate_corpus_rejects_balanced_parentless_baseline_contribution(
     parentless_baseline_corpus, edge_type, contribution_key, message
 ):
     corpus = parentless_baseline_corpus
-    layout = SlotLayout(K=4, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
+    layout = SlotLayout(n_treatments=4, n_covariates=2, n_latent=1, edge_types=EDGE_TYPES_EXTENDED)
     edges = layout.unpack(corpus["g"])[edge_type]
     n, node = np.argwhere(edges == 0)[0]
     broken = dict(corpus)
@@ -1231,7 +1310,7 @@ def test_shock_metadata_is_reconstructable_and_zero_padded():
         n_treatments=4,
         n_covariates=2,
         n_latent=1,
-        T=24,
+        n_time_steps=24,
         n_cells=2,
         draws_per_cell=1,
         n_treatments_active_range=(2, 3),
@@ -1242,13 +1321,13 @@ def test_shock_metadata_is_reconstructable_and_zero_padded():
     )
     generated = pg.sample_prior_predictive(cfg)
     assert DataGenerator.validate_corpus(generated) == []
-    inactive = generated["active_c_mask"] == 0
+    inactive = generated["treatment_active_mask"] == 0
     for key in ("channel_level", "adstock_family", "adstock_alpha", "weibull_lam", "weibull_k"):
         assert not generated[key][inactive].any(), key
 
     broken = dict(generated)
     bad_start = generated["channel_shock_start"].copy()
-    bad_start[0, 0] = cfg.T
+    bad_start[0, 0] = cfg.n_time_steps
     broken["channel_shock_start"] = bad_start
     errors = DataGenerator.validate_corpus(broken)
     assert any("start/length" in error or "mask does not match" in error for error in errors)

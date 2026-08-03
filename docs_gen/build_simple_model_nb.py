@@ -87,7 +87,7 @@ cells = [
         "    }\n"
         "\n"
         "cfg = pg.make_scm_prior(\n"
-        "    n_treatments=3, n_covariates=2, n_latent=1, T=104, l_max=4,\n"
+        "    n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=104, l_max=4,\n"
         "    n_treatments_active_range=(3, 3), n_covariates_active_range=(2, 2),\n"
         "    n_latent_active_range=(1, 1),\n"
         "    edge_budget={'cy': (3, 3), 'zb': (2, 2), 'db': (0, 0), 'dc': (0, 0),\n"
@@ -104,8 +104,9 @@ cells = [
         "    assert not world.g[name].any(), name\n"
         "assert float(world.data['confounding_strength']) == 0.0\n"
         "assert world.identity_error() < 1e-9\n"
-        "print(f'T={world.T}  K={world.K} channels  M={world.M} controls  '\n"
-        "      f'J={world.J} latent (isolated)')"
+        "print(f'n_time_steps={world.n_time_steps}  n_treatments={world.n_treatments} channels'\n"
+        "      f'  n_covariates={world.n_covariates} controls'\n"
+        "      f'  n_latent={world.n_latent} latent (isolated)')"
     ),
     code(
         "def show(plot_fn, w, title):\n"
@@ -121,9 +122,11 @@ cells = [
         "our side of the fence, for scoring only."
     ),
     code(
-        "CHANNELS = [f'C{k + 1}' for k in range(world.K)]\n"
-        "CONTROLS = [f'Z{m + 1}' for m in range(world.M)]\n"
-        "frame = pd.DataFrame({'date': pd.date_range('2025-01-06', periods=world.T, freq='W-MON')})\n"
+        "CHANNELS = [f'C{k + 1}' for k in range(world.n_treatments)]\n"
+        "CONTROLS = [f'Z{m + 1}' for m in range(world.n_covariates)]\n"
+        "frame = pd.DataFrame(\n"
+        "    {'date': pd.date_range('2025-01-06', periods=world.n_time_steps, freq='W-MON')}\n"
+        ")\n"
         "for k, name in enumerate(CHANNELS):\n"
         "    frame[name] = world.data['channels'][:, k]\n"
         "for m, name in enumerate(CONTROLS):\n"
@@ -196,7 +199,7 @@ cells = [
         "        'seconds': round(seconds),\n"
         "    }\n"
         "\n"
-        "print('scored weeks:', world.T - START, 'of', world.T)"
+        "print('scored weeks:', world.n_time_steps - START, 'of', world.n_time_steps)"
     ),
     # ---------------------------------------------------------------- 3
     md(
@@ -342,7 +345,7 @@ cells = [
         "oracle_contrib = (\n"
         "    oracle_idata.posterior['contributions']\n"
         "    .rename({'contributions_dim_0': 'date', 'contributions_dim_1': 'channel'})\n"
-        "    .assign_coords(channel=CHANNELS, date=np.arange(world.T))\n"
+        "    .assign_coords(channel=CHANNELS, date=np.arange(world.n_time_steps))\n"
         ")\n"
         "oracle_scores = score(oracle_contrib, 'channel', 'oracle (marginal)')\n"
         "display(oracle_scores.round(3))\n"
@@ -392,8 +395,8 @@ cells = [
         "    'MMM (constant intercept)': mmm_idata['posterior']['channel_contribution_original_scale'],\n"
         "    'oracle (marginal)': oracle_contrib,\n"
         "}\n"
-        "weeks = np.arange(world.T)[START:]\n"
-        "fig, axes = plt.subplots(world.K, len(quantiles), figsize=(11, 7),\n"
+        "weeks = np.arange(world.n_time_steps)[START:]\n"
+        "fig, axes = plt.subplots(world.n_treatments, len(quantiles), figsize=(11, 7),\n"
         "                         sharex=True, sharey='row')\n"
         "for col, (label, samples) in enumerate(quantiles.items()):\n"
         "    s = samples.isel(date=slice(START, None))\n"

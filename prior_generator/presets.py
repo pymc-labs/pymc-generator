@@ -6,7 +6,7 @@ The additive SCM fixes the *structure* — the 8-block extended edge layout
 structure along orthogonal axes, keeping the schema (tensor shapes) identical
 so one model / eval harness serves every complexity level:
 
-* **graph size**    — active K/M/J ranges (``*_active_range``)
+* **graph size**    — treatment/covariate/latent active-count ranges (``*_active_range``)
 * **interactions**  — per-edge-type arrow budgets (``edge_budget``), the "pot",
   plus the dead-channel floor (``min_dead_channels``)
 * **nonlinearity**  — media response family mix (``nonlinearity``)
@@ -74,7 +74,7 @@ def make_scm_prior(
         observed covariates, and hidden confounders. Pin these to hold the
         schema (and tensor shapes) fixed across complexity levels.
     edge_budget : dict, optional
-        Per-edge-type arrow budget ("pot"), an "up to N" cap: ``{"zc": 5}``
+        Per-edge-type arrow budget ("pot"), an "up to" cap: ``{"zc": 5}``
         places up to 5 control->channel arrows over the eligible pairs (count
         drawn uniformly in ``{0..5}``, however they land); use ``{"zc": (5, 5)}``
         for exactly 5, or ``{"zc": (2, 5)}`` for a custom range. Each type's pot
@@ -86,7 +86,7 @@ def make_scm_prior(
         signal — because the count is clamped to the active channels: a cell
         drawing 2 active channels under ``{"cy": (2, 10)}`` has both of them
         live. Pass ``min_dead_channels=1`` (via ``**overrides``) to cap the live
-        count at ``K_active - 1``; see :class:`SCMPrior.min_dead_channels`.
+        count at ``n_treatments_active - 1``; see :class:`SCMPrior.min_dead_channels`.
     n_treatments_active_range, n_covariates_active_range, n_latent_active_range : tuple, optional
         Per-cell active-count ranges (the graph-size axis). Default to
         ``(size, size)`` (every node always active) so size is fixed unless you
@@ -110,7 +110,7 @@ def make_scm_prior(
         structural-pfn was not migrated; reproducing pre-fix corpora requires
         structural-pfn itself.
     **overrides
-        Any other :class:`SCMPrior` field (e.g. ``T``, ``n_cells``,
+        Any other :class:`SCMPrior` field (e.g. ``n_time_steps``, ``n_cells``,
         ``rw_baseline_std_range`` / ``rw_sales_std_range`` for the default
         relative outcome-noise axis, or
         ``outcome_std_mode="absolute"`` with ``rw_sales_std_sigma`` for the

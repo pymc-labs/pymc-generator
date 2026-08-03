@@ -42,7 +42,14 @@ from .signal_diagnostics import (
     dense_signal_metrics,
     summarize_signal_metrics,
 )
-from .slots import EDGE_TYPES_EXTENDED, PRIOR_COND_LAYOUT, PRIOR_COND_QUANTITIES, SlotLayout
+from .slots import (
+    CORPUS_SCHEMA_VERSION,
+    EDGE_TYPES_EXTENDED,
+    LEGACY_CORPUS_KEYS_V1,
+    PRIOR_COND_LAYOUT,
+    PRIOR_COND_QUANTITIES,
+    SlotLayout,
+)
 
 # ---------------------------------------------------------------------------
 # Data generator
@@ -242,12 +249,12 @@ class DataGenerator:
             "sales_scale",
             "is_val",
             "cell_id",
-            "active_c_mask",
-            "active_m_mask",
-            "active_j_mask",
-            "K_active",
-            "M_active",
-            "J_active",
+            "treatment_active_mask",
+            "covariate_active_mask",
+            "latent_active_mask",
+            "n_treatments_active",
+            "n_covariates_active",
+            "n_latent_active",
             "confounding_strength",
             "indirect_effects",
             "channel_active",
@@ -313,60 +320,65 @@ class DataGenerator:
             return errors
 
         # Get dimensions
-        N = corpus["spend_raw"].shape[0]
-        T = corpus["spend_raw"].shape[1]
-        K = corpus["spend_raw"].shape[2]
-        M = corpus["controls"].shape[2]
-        J = corpus["demand"].shape[2]
-        layout = SlotLayout(K=K, M=M, J=J, edge_types=EDGE_TYPES_EXTENDED)
+        n_tasks = corpus["spend_raw"].shape[0]
+        n_time_steps = corpus["spend_raw"].shape[1]
+        n_treatments = corpus["spend_raw"].shape[2]
+        n_covariates = corpus["controls"].shape[2]
+        n_latent = corpus["demand"].shape[2]
+        layout = SlotLayout(
+            n_treatments=n_treatments,
+            n_covariates=n_covariates,
+            n_latent=n_latent,
+            edge_types=EDGE_TYPES_EXTENDED,
+        )
         n_channel_shocks = corpus["channel_shock_channel"].shape[1]
 
         # Check shapes
         expected_shapes = {
-            "spend_raw": (N, T, K),
-            "spend_norm": (N, T, K),
-            "spend_share": (N, T, K),
-            "controls": (N, T, M),
-            "sales_raw": (N, T),
-            "sales_norm": (N, T),
-            "support_mask": (N, T),
-            "is_future": (N,),
-            "g": (N, layout.n_slots),
-            "contributions_raw": (N, T, K),
-            "baseline_raw": (N, T),
-            "demand": (N, T, J),
-            "spend_means": (N, K),
-            "sales_scale": (N,),
-            "is_val": (N,),
-            "cell_id": (N,),
-            "active_c_mask": (N, K),
-            "active_m_mask": (N, M),
-            "active_j_mask": (N, J),
-            "K_active": (N,),
-            "M_active": (N,),
-            "J_active": (N,),
-            "confounding_strength": (N,),
-            "indirect_effects": (N, T),
-            "channel_active": (N, K),
-            "control_contribution": (N, T, M),
-            "confounder_contribution": (N, T, J),
-            "baseline_intrinsic": (N, T),
-            "indirect_effects_by_source": (N, T, 3),
-            "channel_shock_mask": (N, T, K),
-            "channel_shock_channel": (N, n_channel_shocks),
-            "channel_shock_start": (N, n_channel_shocks),
-            "channel_shock_length": (N, n_channel_shocks),
-            "channel_shock_level_multiplier": (N, n_channel_shocks),
-            "channel_shock_level": (N, n_channel_shocks),
-            "channel_level": (N, K),
-            "saturation_scale": (N, K),
-            "adstock_family": (N, K),
-            "adstock_alpha": (N, K),
-            "weibull_lam": (N, K),
-            "weibull_k": (N, K),
+            "spend_raw": (n_tasks, n_time_steps, n_treatments),
+            "spend_norm": (n_tasks, n_time_steps, n_treatments),
+            "spend_share": (n_tasks, n_time_steps, n_treatments),
+            "controls": (n_tasks, n_time_steps, n_covariates),
+            "sales_raw": (n_tasks, n_time_steps),
+            "sales_norm": (n_tasks, n_time_steps),
+            "support_mask": (n_tasks, n_time_steps),
+            "is_future": (n_tasks,),
+            "g": (n_tasks, layout.n_slots),
+            "contributions_raw": (n_tasks, n_time_steps, n_treatments),
+            "baseline_raw": (n_tasks, n_time_steps),
+            "demand": (n_tasks, n_time_steps, n_latent),
+            "spend_means": (n_tasks, n_treatments),
+            "sales_scale": (n_tasks,),
+            "is_val": (n_tasks,),
+            "cell_id": (n_tasks,),
+            "treatment_active_mask": (n_tasks, n_treatments),
+            "covariate_active_mask": (n_tasks, n_covariates),
+            "latent_active_mask": (n_tasks, n_latent),
+            "n_treatments_active": (n_tasks,),
+            "n_covariates_active": (n_tasks,),
+            "n_latent_active": (n_tasks,),
+            "confounding_strength": (n_tasks,),
+            "indirect_effects": (n_tasks, n_time_steps),
+            "channel_active": (n_tasks, n_treatments),
+            "control_contribution": (n_tasks, n_time_steps, n_covariates),
+            "confounder_contribution": (n_tasks, n_time_steps, n_latent),
+            "baseline_intrinsic": (n_tasks, n_time_steps),
+            "indirect_effects_by_source": (n_tasks, n_time_steps, 3),
+            "channel_shock_mask": (n_tasks, n_time_steps, n_treatments),
+            "channel_shock_channel": (n_tasks, n_channel_shocks),
+            "channel_shock_start": (n_tasks, n_channel_shocks),
+            "channel_shock_length": (n_tasks, n_channel_shocks),
+            "channel_shock_level_multiplier": (n_tasks, n_channel_shocks),
+            "channel_shock_level": (n_tasks, n_channel_shocks),
+            "channel_level": (n_tasks, n_treatments),
+            "saturation_scale": (n_tasks, n_treatments),
+            "adstock_family": (n_tasks, n_treatments),
+            "adstock_alpha": (n_tasks, n_treatments),
+            "weibull_lam": (n_tasks, n_treatments),
+            "weibull_k": (n_tasks, n_treatments),
         }
         if "prior_cond" in corpus:
-            expected_shapes["prior_cond"] = (N, len(PRIOR_COND_LAYOUT))
+            expected_shapes["prior_cond"] = (n_tasks, len(PRIOR_COND_LAYOUT))
             if not isinstance(corpus["prior_cond"], np.ndarray):
                 errors.append("prior_cond must be an ndarray")
 
@@ -392,7 +404,7 @@ class DataGenerator:
             return errors
 
         if has_signal_labels:
-            expected_label_shape = (N, K, len(SIGNAL_METRIC_LAYOUT))
+            expected_label_shape = (n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT))
             for key in signal_label_keys:
                 value = identifiability[key]
                 if not isinstance(value, np.ndarray) or value.shape != expected_label_shape:
@@ -421,12 +433,12 @@ class DataGenerator:
             "is_val": np.uint8,
             "cell_id": np.int32,
             "channel_shock_mask": np.uint8,
-            "active_c_mask": np.uint8,
-            "active_m_mask": np.uint8,
-            "active_j_mask": np.uint8,
-            "K_active": np.int32,
-            "M_active": np.int32,
-            "J_active": np.int32,
+            "treatment_active_mask": np.uint8,
+            "covariate_active_mask": np.uint8,
+            "latent_active_mask": np.uint8,
+            "n_treatments_active": np.int32,
+            "n_covariates_active": np.int32,
+            "n_latent_active": np.int32,
             "indirect_effects": np.float32,
             "channel_active": np.uint8,
             "control_contribution": np.float32,
@@ -498,9 +510,9 @@ class DataGenerator:
         )
         if not np.allclose(corpus["spend_norm"], expected_spend_norm, rtol=1e-5, atol=1e-7):
             errors.append("spend_norm does not match spend_raw / spend_means")
-        active_spend_sum = (spend_raw * corpus["active_c_mask"].astype(np.float64)[:, None, :]).sum(
-            axis=-1, keepdims=True
-        )
+        active_spend_sum = (
+            spend_raw * corpus["treatment_active_mask"].astype(np.float64)[:, None, :]
+        ).sum(axis=-1, keepdims=True)
         expected_spend_share = (
             np.divide(
                 spend_raw,
@@ -508,7 +520,7 @@ class DataGenerator:
                 out=np.zeros_like(spend_raw),
                 where=active_spend_sum != 0.0,
             )
-            * corpus["active_c_mask"].astype(np.float64)[:, None, :]
+            * corpus["treatment_active_mask"].astype(np.float64)[:, None, :]
         )
         if not np.allclose(corpus["spend_share"], expected_spend_share, rtol=1e-5, atol=1e-7):
             errors.append("spend_share does not match active-channel spend shares")
@@ -545,26 +557,28 @@ class DataGenerator:
             if (
                 isinstance(candidate, (int, np.integer))
                 and not isinstance(candidate, (bool, np.bool_))
-                and 0 < candidate < T
+                and 0 < candidate < n_time_steps
             ):
                 short_n_query = int(candidate)
             else:
-                errors.append("diagnostics short_horizon_n_query must be an integer in (0, T)")
+                errors.append(
+                    "diagnostics short_horizon_n_query must be an integer in (0, n_time_steps)"
+                )
         if short_n_query is not None:
             expected_support_count = np.where(
                 corpus["is_future"] == 1,
-                T // 2,
-                T - short_n_query,
+                n_time_steps // 2,
+                n_time_steps - short_n_query,
             )
-            expected_support = (np.arange(T)[None, :] < expected_support_count[:, None]).astype(
-                np.uint8
-            )
+            expected_support = (
+                np.arange(n_time_steps)[None, :] < expected_support_count[:, None]
+            ).astype(np.uint8)
             if not np.array_equal(corpus["support_mask"], expected_support):
                 errors.append("support_mask does not match the recorded temporal split")
 
             sales = corpus["sales_raw"].astype(np.float64)
             expected_sales_scale = np.asarray(
-                [sales[i, expected_support[i] == 1].std() for i in range(N)],
+                [sales[i, expected_support[i] == 1].std() for i in range(n_tasks)],
                 dtype=np.float64,
             )
             bad_scale = ~(np.isfinite(expected_sales_scale) & (expected_sales_scale > 0.0))
@@ -583,7 +597,7 @@ class DataGenerator:
                 (np.abs(is_val.astype(float)) < 1e-9) | (np.abs(is_val.astype(float) - 1) < 1e-9)
             ):
                 errors.append("is_val is not binary")
-            elif not 0 < is_val.sum() < N:
+            elif not 0 < is_val.sum() < n_tasks:
                 errors.append("is_val must contain at least one training and one validation world")
 
         # Check g is binary
@@ -691,9 +705,13 @@ class DataGenerator:
             ):
                 errors.append("diagnostics signal adstock_burn_in must be a nonnegative integer")
             response_warmup_weeks = signal_diagnostics.get("response_warmup_weeks")
-            if not _is_integer(response_warmup_weeks) or not 0 <= response_warmup_weeks < T:
+            if (
+                not _is_integer(response_warmup_weeks)
+                or not 0 <= response_warmup_weeks < n_time_steps
+            ):
                 errors.append(
-                    "diagnostics signal response_warmup_weeks must be a nonnegative integer below T"
+                    "diagnostics signal response_warmup_weeks must be a nonnegative "
+                    "integer below n_time_steps"
                 )
             frac_zero_contemporaneous_weight = signal_diagnostics.get(
                 "frac_zero_contemporaneous_weight"
@@ -726,7 +744,7 @@ class DataGenerator:
                 errors.append("diagnostics signal outcome_std_mode is not supported")
 
         cell_ids = np.unique(corpus["cell_id"])
-        if not _is_integer(diagnostics.get("n_tasks")) or diagnostics["n_tasks"] != N:
+        if not _is_integer(diagnostics.get("n_tasks")) or diagnostics["n_tasks"] != n_tasks:
             errors.append("diagnostics n_tasks does not match the corpus")
         if not _is_integer(diagnostics.get("n_cells")) or diagnostics["n_cells"] != len(cell_ids):
             errors.append("diagnostics n_cells does not match cell_id")
@@ -736,12 +754,12 @@ class DataGenerator:
             errors.append("cell_id must contain contiguous nonnegative ids")
         cell_level_keys = (
             "g",
-            "active_c_mask",
-            "active_m_mask",
-            "active_j_mask",
-            "K_active",
-            "M_active",
-            "J_active",
+            "treatment_active_mask",
+            "covariate_active_mask",
+            "latent_active_mask",
+            "n_treatments_active",
+            "n_covariates_active",
+            "n_latent_active",
             "channel_active",
             "is_val",
         )
@@ -821,28 +839,32 @@ class DataGenerator:
                             errors.append("prior_cond rows differ within a cell")
                             break
 
-        active_c = corpus["active_c_mask"]
-        active_m = corpus["active_m_mask"]
-        active_j = corpus["active_j_mask"]
+        active_treatment = corpus["treatment_active_mask"]
+        active_covariate = corpus["covariate_active_mask"]
+        active_latent = corpus["latent_active_mask"]
         for key, mask in (
-            ("active_c_mask", active_c),
-            ("active_m_mask", active_m),
-            ("active_j_mask", active_j),
+            ("treatment_active_mask", active_treatment),
+            ("covariate_active_mask", active_covariate),
+            ("latent_active_mask", active_latent),
             ("channel_active", corpus["channel_active"]),
         ):
             if not np.isin(mask, (0, 1)).all():
                 errors.append(f"{key} is not binary")
         for key, count, width, mask in (
-            ("K_active", corpus["K_active"], K, active_c),
-            ("M_active", corpus["M_active"], M, active_m),
-            ("J_active", corpus["J_active"], J, active_j),
+            ("n_treatments_active", corpus["n_treatments_active"], n_treatments, active_treatment),
+            ("n_covariates_active", corpus["n_covariates_active"], n_covariates, active_covariate),
+            ("n_latent_active", corpus["n_latent_active"], n_latent, active_latent),
         ):
             if ((count < 1) | (count > width)).any() or not np.array_equal(
                 mask, (np.arange(width)[None, :] < count[:, None]).astype(np.uint8)
             ):
                 errors.append(f"{key} does not match its active prefix mask")
 
-        inactive_c, inactive_m, inactive_j = active_c == 0, active_m == 0, active_j == 0
+        inactive_c, inactive_m, inactive_j = (
+            active_treatment == 0,
+            active_covariate == 0,
+            active_latent == 0,
+        )
 
         def _padded_nonzero(array: np.ndarray, inactive: np.ndarray) -> bool:
             expanded = np.broadcast_to(inactive[:, None, :], array.shape)
@@ -871,19 +893,24 @@ class DataGenerator:
         for key in ("demand", "confounder_contribution"):
             if _padded_nonzero(corpus[key], inactive_j):
                 errors.append(f"{key} has nonzero inactive-demand padding")
-        if (corpus["saturation_scale"][active_c == 1] <= 0.0).any():
+        if (corpus["saturation_scale"][active_treatment == 1] <= 0.0).any():
             errors.append("saturation_scale must be positive for active channels")
 
         graph = layout.unpack(corpus["g"])
         graph_masks = {
-            "cy": active_c.astype(bool),
-            "dc": active_j.astype(bool)[:, :, None] & active_c.astype(bool)[:, None, :],
-            "dz": active_j.astype(bool)[:, :, None] & active_m.astype(bool)[:, None, :],
-            "db": active_j.astype(bool),
-            "zb": active_m.astype(bool),
-            "zc": active_m.astype(bool)[:, :, None] & active_c.astype(bool)[:, None, :],
-            "cc": active_c.astype(bool)[:, :, None] & active_c.astype(bool)[:, None, :],
-            "zz": active_m.astype(bool)[:, :, None] & active_m.astype(bool)[:, None, :],
+            "cy": active_treatment.astype(bool),
+            "dc": active_latent.astype(bool)[:, :, None]
+            & active_treatment.astype(bool)[:, None, :],
+            "dz": active_latent.astype(bool)[:, :, None]
+            & active_covariate.astype(bool)[:, None, :],
+            "db": active_latent.astype(bool),
+            "zb": active_covariate.astype(bool),
+            "zc": active_covariate.astype(bool)[:, :, None]
+            & active_treatment.astype(bool)[:, None, :],
+            "cc": active_treatment.astype(bool)[:, :, None]
+            & active_treatment.astype(bool)[:, None, :],
+            "zz": active_covariate.astype(bool)[:, :, None]
+            & active_covariate.astype(bool)[:, None, :],
         }
         for edge_type, edge_mask in graph_masks.items():
             if (graph[edge_type][~edge_mask] != 0).any():
@@ -893,7 +920,7 @@ class DataGenerator:
                 errors.append(f"g_{edge_type} must be strictly upper triangular")
         direct = graph["cy"] == 1
         expected_channel_active = (
-            (direct | (graph["cc"].sum(axis=2) > 0)) & active_c.astype(bool)
+            (direct | (graph["cc"].sum(axis=2) > 0)) & active_treatment.astype(bool)
         ).astype(np.uint8)
         if not np.array_equal(corpus["channel_active"], expected_channel_active):
             errors.append("channel_active does not match graph reachability rule")
@@ -904,7 +931,7 @@ class DataGenerator:
         if _padded_nonzero(corpus["confounder_contribution"], graph["db"] != 1):
             errors.append("confounder_contribution is nonzero without a D->B edge")
         for source_index, edge_type in enumerate(("cc", "zc", "dc")):
-            source_present = graph[edge_type].reshape(N, -1).any(axis=1)
+            source_present = graph[edge_type].reshape(n_tasks, -1).any(axis=1)
             if (corpus["indirect_effects_by_source"][~source_present, :, source_index] != 0).any():
                 errors.append(
                     f"indirect_effects_by_source {edge_type} column is nonzero without an edge"
@@ -914,7 +941,7 @@ class DataGenerator:
             (signal_metrics[inactive_c] != 0).any() or signal_metric_valid[inactive_c].any()
         ):
             errors.append("signal metrics have nonzero inactive-channel padding")
-        ineligible = ~(direct & (active_c == 1))
+        ineligible = ~(direct & (active_treatment == 1))
         if has_signal_labels and (
             (signal_metrics[ineligible] != 0).any() or signal_metric_valid[ineligible].any()
         ):
@@ -927,27 +954,27 @@ class DataGenerator:
         multipliers = corpus["channel_shock_level_multiplier"]
         channel_level = corpus["channel_level"]
         audit_shapes_ok = (
-            shock_mask.shape == (N, T, K)
-            and corpus["g"].shape == (N, layout.n_slots)
+            shock_mask.shape == (n_tasks, n_time_steps, n_treatments)
+            and corpus["g"].shape == (n_tasks, layout.n_slots)
             and channels.shape
             == starts.shape
             == lengths.shape
             == levels.shape
-            == (N, n_channel_shocks)
+            == (n_tasks, n_channel_shocks)
         )
         if audit_shapes_ok:
-            for n in range(N):
-                rebuilt = np.zeros((T, K), dtype=np.uint8)
-                occupied = np.zeros(T, dtype=bool)
+            for n in range(n_tasks):
+                rebuilt = np.zeros((n_time_steps, n_treatments), dtype=np.uint8)
+                occupied = np.zeros(n_time_steps, dtype=bool)
                 for s_idx in range(n_channel_shocks):
                     channel, start, length = (
                         int(channels[n, s_idx]),
                         int(starts[n, s_idx]),
                         int(lengths[n, s_idx]),
                     )
-                    slot_lo = s_idx * T // max(n_channel_shocks, 1)
-                    slot_hi = (s_idx + 1) * T // max(n_channel_shocks, 1)
-                    if not (0 <= channel < K and direct[n, channel]):
+                    slot_lo = s_idx * n_time_steps // max(n_channel_shocks, 1)
+                    slot_hi = (s_idx + 1) * n_time_steps // max(n_channel_shocks, 1)
+                    if not (0 <= channel < n_treatments and direct[n, channel]):
                         errors.append("channel_shock_channel is not an active direct channel")
                         continue
                     if not (length > 0 and slot_lo <= start and start + length <= slot_hi):
@@ -1015,7 +1042,7 @@ class DataGenerator:
                 errors.append(f"{name} exceeds float32 storage tolerance")
 
         if not errors and version_supported:
-            eligible = direct & (corpus["active_c_mask"] == 1)
+            eligible = direct & (corpus["treatment_active_mask"] == 1)
             expected_metrics, expected_valid = dense_signal_metrics(
                 corpus["spend_raw"],
                 corpus["contributions_raw"],
@@ -1093,6 +1120,12 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
     path = Path(path)
     if path.suffix != ".npz":
         raise ValueError(f"corpus path must use the .npz suffix, got {path}")
+    legacy = sorted(set(corpus) & set(LEGACY_CORPUS_KEYS_V1))
+    if legacy:
+        raise ValueError(
+            f"corpus uses pre-v{CORPUS_SCHEMA_VERSION} symbolic dimension keys {legacy}; "
+            f"rename them to {[LEGACY_CORPUS_KEYS_V1[k] for k in legacy]}"
+        )
     if any(key.startswith("identifiability__") for key in corpus):
         raise ValueError("top-level corpus keys may not use the reserved identifiability__ prefix")
     identifiability = corpus.get("identifiability")
@@ -1194,5 +1227,20 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
         if not isinstance(diagnostics, dict):
             raise ValueError(f"corpus {path} diagnostics JSON must contain an object")
         corpus["diagnostics"] = diagnostics
+
+    # Schema v1 -> v2: the symbolic dimension keys were renamed to the canonical
+    # descriptive vocabulary. A v1 shard carries the old names and no
+    # schema_version, so migrate on read and stamp the version the in-memory
+    # dict now satisfies. Nothing else about a v1 shard changed.
+    outdated = {old: new for old, new in LEGACY_CORPUS_KEYS_V1.items() if old in corpus}
+    if outdated:
+        clashes = sorted(new for new in outdated.values() if new in corpus)
+        if clashes:
+            raise ValueError(f"corpus {path} mixes v1 and v2 dimension keys: {clashes}")
+        for old, new in outdated.items():
+            corpus[new] = corpus.pop(old)
+        diagnostics = corpus.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
 
     return corpus

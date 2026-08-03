@@ -48,16 +48,16 @@ def plot_dag(world: SCM, path: str, title: str | None = None) -> None:
 
     g, params = world.g, world.params
     title = world.name if title is None else title
-    K, M, J = len(g["g_cy"]), len(g["g_zb"]), len(g["g_db"])
+    n_treatments, n_covariates, n_latent = len(g["g_cy"]), len(g["g_zb"]), len(g["g_db"])
 
     def _col(n: int, x: float) -> dict[int, tuple[float, float]]:
         ys = np.linspace(0.9, 0.1, n) if n > 1 else [0.5]
         return {i: (x, float(y)) for i, y in enumerate(ys)}
 
     pos: dict[str, tuple[float, float]] = {}
-    pos.update({f"D{j + 1}": p for j, p in _col(J, 0.05).items()})
-    pos.update({f"Z{m + 1}": p for m, p in _col(M, 0.30).items()})
-    pos.update({f"C{k + 1}": p for k, p in _col(K, 0.58).items()})
+    pos.update({f"D{j + 1}": p for j, p in _col(n_latent, 0.05).items()})
+    pos.update({f"Z{m + 1}": p for m, p in _col(n_covariates, 0.30).items()})
+    pos.update({f"C{k + 1}": p for k, p in _col(n_treatments, 0.58).items()})
     pos["B"] = (0.93, 0.80)
     pos["Y"] = (0.93, 0.28)
 
@@ -141,23 +141,23 @@ def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
 
     d = world.data
     title = world.name if title is None else title
-    T, K = d["channels"].shape
-    M = d["controls"].shape[1]
-    J = d["demand"].shape[1]
-    weeks = np.arange(T)
+    n_time_steps, n_treatments = d["channels"].shape
+    n_covariates = d["controls"].shape[1]
+    n_latent = d["demand"].shape[1]
+    weeks = np.arange(n_time_steps)
     fig, axes = plt.subplots(3, 1, figsize=(11, 7), sharex=True)
 
     ax = axes[0]
-    for k in range(K):
+    for k in range(n_treatments):
         ax.plot(weeks, d["channels"][:, k], color=PALETTE[k], lw=1.3, label=f"C{k + 1}")
     ax.set_title(f"{title} — model inputs", fontsize=11, color=INK, loc="left")
     ax.set_ylabel("spend", fontsize=9, color=MUTED)
-    ax.legend(fontsize=7.5, frameon=False, ncol=min(K, 8), loc="upper left")
+    ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
     ax = axes[1]
-    for m in range(M):
+    for m in range(n_covariates):
         ax.plot(weeks, d["controls"][:, m], color=PALETTE[m], lw=1.3, label=f"Z{m + 1}")
-    for j in range(J):
+    for j in range(n_latent):
         ax.plot(
             weeks,
             d["demand"][:, j],
@@ -167,7 +167,7 @@ def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
             label=f"D{j + 1} (latent)",
         )
     ax.set_ylabel("controls / demand", fontsize=9, color=MUTED)
-    ax.legend(fontsize=7.5, frameon=False, ncol=min(M + J, 8), loc="upper left")
+    ax.legend(fontsize=7.5, frameon=False, ncol=min(n_covariates + n_latent, 8), loc="upper left")
 
     ax = axes[2]
     ax.plot(weeks, d["sales"], color=INK, lw=1.5)
@@ -188,10 +188,10 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     d, g = world.data, world.g
     title = world.name if title is None else title
     ident_err = world.identity_error()
-    T, K = d["contributions"].shape
-    M = d["control_contribution"].shape[1]
-    J = d["confounder_contribution"].shape[1]
-    weeks = np.arange(T)
+    n_time_steps, n_treatments = d["contributions"].shape
+    n_covariates = d["control_contribution"].shape[1]
+    n_latent = d["confounder_contribution"].shape[1]
+    weeks = np.arange(n_time_steps)
     recon = world.reconstruction()
 
     fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
@@ -208,15 +208,15 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     ax.legend(fontsize=8, frameon=False, loc="upper left")
 
     ax = axes[1]
-    for k in range(K):
+    for k in range(n_treatments):
         if g["g_cy"][k]:  # only channels with a direct edge have a nonzero target
             ax.plot(weeks, d["contributions"][:, k], color=PALETTE[k], lw=1.3, label=f"C{k + 1}")
     ax.set_ylabel("direct contributions", fontsize=9, color=MUTED)
-    ax.legend(fontsize=7.5, frameon=False, ncol=min(K, 8), loc="upper left")
+    ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
     ax = axes[2]
     ax.plot(weeks, d["baseline_intrinsic"], color=MUTED, lw=1.4, label="baseline intrinsic")
-    for j in range(J):
+    for j in range(n_latent):
         if g["g_db"][j]:  # absent edges are identically zero — skip the clutter
             ax.plot(
                 weeks,
@@ -226,7 +226,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
                 ls=["-", "--"][j % 2],
                 label=f"D{j + 1}→B",
             )
-    for m in range(M):
+    for m in range(n_covariates):
         if g["g_zb"][m]:
             ax.plot(
                 weeks,
@@ -266,13 +266,13 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
 
     d, g, params = world.data, world.g, world.params
     title = world.name if title is None else title
-    T, K = d["channels"].shape
-    weeks = np.arange(T)
-    ncols = min(3, K)
-    nrows = int(np.ceil(K / ncols))
+    n_time_steps, n_treatments = d["channels"].shape
+    weeks = np.arange(n_time_steps)
+    ncols = min(3, n_treatments)
+    nrows = int(np.ceil(n_treatments / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 2.9 * nrows), sharex=True)
     axes = np.atleast_1d(axes).ravel()
-    for k in range(K):
+    for k in range(n_treatments):
         ax = axes[k]
         spend = d["channels"][:, k]
         ax.plot(weeks, spend / spend.mean(), color=MUTED, lw=1.0, label="spend (indexed)")
@@ -291,7 +291,7 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
         ax.set_title(f"C{k + 1} — {mechanism_label(params, k)} — {tag}", fontsize=9, color=INK)
         ax.legend(fontsize=7, frameon=False, loc="upper left")
         _style_ax(ax)
-    for ax in axes[K:]:
+    for ax in axes[n_treatments:]:
         ax.axis("off")
     fig.suptitle(
         f"{title} — per-channel spend vs true contribution (mean=1)", fontsize=11, color=INK

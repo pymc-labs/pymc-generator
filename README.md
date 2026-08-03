@@ -74,7 +74,7 @@ import prior_generator as pg
 
 # A named audit scenario (isolates one causal pathway), or build your own prior.
 scenario = pg.SCENARIOS[1]                        # "confounded_spend"
-scm = pg.sample_scm(scenario.prior(T=104, seed=0), seed=0,
+scm = pg.sample_scm(scenario.prior(n_time_steps=104, seed=0), seed=0,
                     connect_all=scenario.connect_all,
                     name=scenario.name, purpose=scenario.purpose)
 
@@ -241,18 +241,18 @@ the base rates and budgets.
   `pm.Bernoulli`, with magnitudes scaled relative to each channel's own level.
 
 Persisted `param_rw_*_std` labels declare the walks' **expected standard
-deviation** over the full simulated horizon `T_full = T + adstock_burn_in`.
+deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.
 Because each path is divided by a fixed constant rather than by its own
 realized standard deviation, that scale is realized only in expectation. It is
 therefore neither the realized standard deviation of an individual path nor a
 standard deviation measured only over the reported window. `smoothness`
 likewise maps to an absolute moving-average kernel width in weeks, governed by
-`rw_smoothness_max_weeks` (26 by default) and clamped to `T_full`. For
+`rw_smoothness_max_weeks` (26 by default) and clamped to that full horizon. For
 positive-only channel walks, `param_rw_c_std` is the pre-softplus amplitude,
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.
 
-Across 40 signed walks from eight worlds at `T=52` and
+Across 40 signed walks from eight worlds at `n_time_steps=52` and
 `adstock_burn_in=8`, the reported-window sd / declared `std` was:
 
 | signed group | reported-window sd / declared `std` | median |
@@ -280,8 +280,8 @@ draw is kept.
 `sample_prior_predictive` scales this up in **cells**. Each cell fixes one
 structure and draws `draws_per_cell` worlds from it (so tasks within a cell share
 a DAG but vary in coefficients and noise); `n_cells` cells give
-`N = n_cells × draws_per_cell` tasks. Active sizes are drawn per cell, and the
-train/validation split is made at the **cell** level (`val_cell_frac`) so no
+`n_tasks = n_cells × draws_per_cell` tasks. Active sizes are drawn per cell, and
+the train/validation split is made at the **cell** level (`val_cell_frac`) so no
 structure leaks across the split.
 
 Everything is driven by **one numpy RNG** seeded from `cfg.seed` — it drives the
@@ -371,9 +371,10 @@ and they bound what a model trained on this data can be expected to learn.
   identity is exact without making the response depend on realized or future
   spend.
 - **Adstock burn-in.** The adstock convolution left-pads with zeros, which would
-  make early weeks ramp up artificially. Worlds simulate `T + adstock_burn_in`
-  weeks and report the last `T`, so the reported window sees real history
-  (`adstock_burn_in ≥ l_max`). With positive burn-in,
+  make early weeks ramp up artificially. Worlds simulate
+  `n_time_steps + adstock_burn_in` weeks and report the last `n_time_steps`, so
+  the reported window sees real history (`adstock_burn_in ≥ l_max`). With
+  positive burn-in,
   `diagnostics["signal"]["response_warmup_weeks"]` is `l_max - 1` only when an
   eligible direct channel has a nonidentity adstock kernel; it is `0` for
   identity-only direct paths and without burn-in. Weeks before a nonzero count
@@ -461,10 +462,11 @@ cfg = pg.make_scm_prior(
 )
 ```
 
-- The live count is `min(cy draw, K_active − min_dead_channels)`, never below `1`
-  (the `cy ≥ 1` guard still wins). The config above spans **1–9 live** channels
-  over 2–10 active ones in a *single* recipe and always leaves a dead one, so no
-  corpus needs to be partitioned by active count to keep both classes.
+- The live count is `min(cy draw, n_treatments_active − min_dead_channels)`,
+  never below `1` (the `cy ≥ 1` guard still wins). The config above spans
+  **1–9 live** channels over 2–10 active ones in a *single* recipe and always
+  leaves a dead one, so no corpus needs to be partitioned by active count to
+  keep both classes.
 - Live channels are still scattered over **all** active slots — slot index says
   nothing about the label.
 - `min_dead_channels` must be `< n_treatments_active_range[0]`: otherwise the
@@ -480,61 +482,63 @@ The generator produces three kinds of artifact.
 
 ### 1. A training corpus — `sample_prior_predictive`
 
-A dict of stacked numpy arrays over `N` tasks and `T` weeks, with padded max sizes
-`K / M / J`. Internal math is float64; storage is float32 (floats), `uint8`
-(masks), `int32` (counts). The most important keys:
+A dict of stacked numpy arrays over `n_tasks` tasks and `n_time_steps` weeks, with
+padded max sizes `n_treatments / n_covariates / n_latent`. Internal math is
+float64; storage is float32 (floats), `uint8` (masks), `int32` (counts). The most
+important keys:
 
 | Key | Shape | What |
 | --- | --- | --- |
-| `spend_raw` | (N, T, K) | media spend (observed input) |
-| `controls` | (N, T, M) | observed controls |
-| `sales_raw` | (N, T) | sales (observed target) |
-| `contributions_raw` | (N, T, K) | per-channel **direct** contributions (truth) |
-| `indirect_effects` | (N, T) | total interaction-routed effect (truth) |
-| `indirect_effects_by_source` | (N, T, 3) | telescoping split, order `(cc, zc, dc)` |
-| `baseline_raw` | (N, T) | full baseline |
-| `demand` | (N, T, J) | latent demand series (truth) |
-| `g` | (N, S) | the packed DAG (all 8 edge blocks) |
-| `active_c_mask` / `active_m_mask` / `active_j_mask` | (N, K/M/J) | which slots are live |
+| `spend_raw` | (n_tasks, n_time_steps, n_treatments) | media spend (observed input) |
+| `controls` | (n_tasks, n_time_steps, n_covariates) | observed controls |
+| `sales_raw` | (n_tasks, n_time_steps) | sales (observed target) |
+| `contributions_raw` | (n_tasks, n_time_steps, n_treatments) | per-channel **direct** contributions (truth) |
+| `indirect_effects` | (n_tasks, n_time_steps) | total interaction-routed effect (truth) |
+| `indirect_effects_by_source` | (n_tasks, n_time_steps, 3) | telescoping split, order `(cc, zc, dc)` |
+| `baseline_raw` | (n_tasks, n_time_steps) | full baseline |
+| `demand` | (n_tasks, n_time_steps, n_latent) | latent demand series (truth) |
+| `g` | (n_tasks, n_slots) | the packed DAG (all 8 edge blocks) |
+| `treatment_active_mask` / `covariate_active_mask` / `latent_active_mask` | (n_tasks, n_treatments / n_covariates / n_latent) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block |
 
 <details>
 <summary>Full corpus schema (all keys)</summary>
 
-Every top-level array key is listed below. `N` is worlds, `T` reported weeks,
-`K`/`M`/`J` are padded channel/control/latent slots, `S` is configured channel
-shocks, `S_graph` is the packed DAG width, and `P` is the locked
-prior-conditioning width.
+Every top-level array key is listed below. `n_tasks` is worlds, `n_time_steps`
+reported weeks, `n_treatments`/`n_covariates`/`n_latent` are the padded
+channel/control/latent slots, `n_shocks` is configured channel shocks, `n_slots`
+is the packed DAG width, and `P` is the locked prior-conditioning width.
 
 | Key | Shape | dtype |
 | --- | --- | --- |
-| `spend_raw`, `spend_norm`, `spend_share` | `(N, T, K)` | `float32` |
-| `spend_means`, `channel_level`, `saturation_scale`, `adstock_alpha`, `weibull_lam`, `weibull_k` | `(N, K)` | `float32` |
-| `controls` | `(N, T, M)` | `float32` |
-| `sales_raw`, `sales_norm`, `baseline_raw`, `baseline_intrinsic`, `indirect_effects` | `(N, T)` | `float32` |
-| `sales_scale`, `confounding_strength` | `(N,)` | `float32` |
-| `contributions_raw` | `(N, T, K)` | `float32` |
-| `control_contribution` | `(N, T, M)` | `float32` |
-| `confounder_contribution` | `(N, T, J)` | `float32` |
-| `demand` | `(N, T, J)` | `float32` |
-| `indirect_effects_by_source` | `(N, T, 3)` | `float32` |
-| `g` | `(N, S_graph)` | `uint8` |
-| `support_mask` | `(N, T)` | `uint8` |
-| `is_future`, `is_val` | `(N,)` | `uint8` |
-| `active_c_mask`, `channel_active` | `(N, K)` | `uint8` |
-| `active_m_mask` | `(N, M)` | `uint8` |
-| `active_j_mask` | `(N, J)` | `uint8` |
-| `adstock_family` | `(N, K)` | `uint8` |
-| `channel_shock_mask` | `(N, T, K)` | `uint8` |
-| `K_active`, `M_active`, `J_active`, `cell_id` | `(N,)` | `int32` |
-| `channel_shock_channel`, `channel_shock_start`, `channel_shock_length` | `(N, S)` | `int32` |
-| `channel_shock_level_multiplier`, `channel_shock_level` | `(N, S)` | `float32` |
-| `prior_cond` (iff `prior_conditioning=True`) | `(N, P)` | `float32` |
+| `spend_raw`, `spend_norm`, `spend_share` | `(n_tasks, n_time_steps, n_treatments)` | `float32` |
+| `spend_means`, `channel_level`, `saturation_scale`, `adstock_alpha`, `weibull_lam`, `weibull_k` | `(n_tasks, n_treatments)` | `float32` |
+| `controls` | `(n_tasks, n_time_steps, n_covariates)` | `float32` |
+| `sales_raw`, `sales_norm`, `baseline_raw`, `baseline_intrinsic`, `indirect_effects` | `(n_tasks, n_time_steps)` | `float32` |
+| `sales_scale`, `confounding_strength` | `(n_tasks,)` | `float32` |
+| `contributions_raw` | `(n_tasks, n_time_steps, n_treatments)` | `float32` |
+| `control_contribution` | `(n_tasks, n_time_steps, n_covariates)` | `float32` |
+| `confounder_contribution` | `(n_tasks, n_time_steps, n_latent)` | `float32` |
+| `demand` | `(n_tasks, n_time_steps, n_latent)` | `float32` |
+| `indirect_effects_by_source` | `(n_tasks, n_time_steps, 3)` | `float32` |
+| `g` | `(n_tasks, n_slots)` | `uint8` |
+| `support_mask` | `(n_tasks, n_time_steps)` | `uint8` |
+| `is_future`, `is_val` | `(n_tasks,)` | `uint8` |
+| `treatment_active_mask`, `channel_active` | `(n_tasks, n_treatments)` | `uint8` |
+| `covariate_active_mask` | `(n_tasks, n_covariates)` | `uint8` |
+| `latent_active_mask` | `(n_tasks, n_latent)` | `uint8` |
+| `adstock_family` | `(n_tasks, n_treatments)` | `uint8` |
+| `channel_shock_mask` | `(n_tasks, n_time_steps, n_treatments)` | `uint8` |
+| `n_treatments_active`, `n_covariates_active`, `n_latent_active`, `cell_id` | `(n_tasks,)` | `int32` |
+| `channel_shock_channel`, `channel_shock_start`, `channel_shock_length` | `(n_tasks, n_shocks)` | `int32` |
+| `channel_shock_level_multiplier`, `channel_shock_level` | `(n_tasks, n_shocks)` | `float32` |
+| `prior_cond` (iff `prior_conditioning=True`) | `(n_tasks, P)` | `float32` |
 
 `identifiability` is an optional nested metadata block (present when
-`include_identifiability_labels=True`) with `signal_metrics: float32 (N, K, 9)`
-and `signal_metric_valid: uint8 (N, K, 9)`. `diagnostics` is a JSON-round-tripped
-dict containing corpus-level metadata and the signal summary.
+`include_identifiability_labels=True`) with
+`signal_metrics: float32 (n_tasks, n_treatments, 9)` and
+`signal_metric_valid: uint8 (n_tasks, n_treatments, 9)`. `diagnostics` is a
+JSON-round-tripped dict containing corpus-level metadata and the signal summary.
 
 </details>
 
@@ -567,7 +571,7 @@ decomposition failure can be traced to the mechanism that broke:
 
 ```python
 sc  = pg.SCENARIOS[3]                              # channel_halo
-scm = pg.sample_scm(sc.prior(T=104, seed=0), seed=0,
+scm = pg.sample_scm(sc.prior(n_time_steps=104, seed=0), seed=0,
                     connect_all=sc.connect_all, name=sc.name, purpose=sc.purpose)
 ```
 
@@ -582,7 +586,7 @@ scm = pg.sample_scm(sc.prior(T=104, seed=0), seed=0,
 | `SCM` | One accepted world with truth, parameters, and inspection helpers. |
 | `SIGNAL_METRIC_LAYOUT` / `SIGNAL_METRIC_VERSION` | Locked dense signal-label layout and its version. |
 | `make_scm_prior` | Build a validated additive-SCM `SCMPrior` (pins layout, enables diverse texture). |
-| `sample_prior_predictive` | Generate an N-world corpus (dict of arrays). |
+| `sample_prior_predictive` | Generate an `n_tasks`-world corpus (dict of arrays). |
 | `save_corpus` / `load_corpus` | Compressed `.npz` persistence. |
 | `sample_scm` | Draw one accepted world with its full ground truth. |
 | `build_world_model` | Build the structure-fixed PyMC generative world model. |

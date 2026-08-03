@@ -38,12 +38,13 @@ import prior_generator as pg
 
 scenario = pg.SCENARIOS[1]                       # "confounded_spend"
 scm = pg.sample_scm(
-    scenario.prior(T=104, seed=0), seed=0,
+    scenario.prior(n_time_steps=104, seed=0), seed=0,
     connect_all=scenario.connect_all,
     name=scenario.name, purpose=scenario.purpose,
 )
-print(f"drew world {scm.name!r}: K={scm.K} channels, "
-      f"M={scm.M} controls, J={scm.J} demand factors, T={scm.T} weeks")
+print(f"drew world {scm.name!r}: {scm.n_treatments} channels, "
+      f"{scm.n_covariates} controls, {scm.n_latent} demand factors, "
+      f"{scm.n_time_steps} weeks")
 ```
 
 ## 2 · Read its story

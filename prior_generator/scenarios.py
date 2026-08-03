@@ -43,7 +43,7 @@ class Scenario:
     connect_all: bool
     edge_budget: dict[str, int | tuple[int, int]] = field(default_factory=dict)
 
-    def prior(self, T: int = 104, seed: int = 0) -> SCMPrior:
+    def prior(self, n_time_steps: int = 104, seed: int = 0) -> SCMPrior:
         """Build the scenario's validated ``SCMPrior``.
 
         ``n_cells``/``draws_per_cell`` are placebo values — single-SCM sampling
@@ -55,7 +55,7 @@ class Scenario:
             n_covariates=self.n_covariates,
             n_latent=self.n_latent,
             edge_budget=dict(self.edge_budget),
-            T=T,
+            n_time_steps=n_time_steps,
             n_cells=2,
             draws_per_cell=1,
             seed=seed,

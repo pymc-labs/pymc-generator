@@ -347,7 +347,7 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=16,
+        n_time_steps=16,
         l_max=3,
         adstock_burn_in=3,
         n_cells=2,
@@ -358,8 +358,8 @@ def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
     path = tmp_path / "generated.npz"
     save_corpus(corpus, path)
     loaded = load_corpus(path)
-    layout = SlotLayout(K=2, M=2, J=1, edge_types=EDGE_TYPES_EXTENDED)
-    direct = (loaded["g"][:, layout.slices["cy"]] == 1) & (loaded["active_c_mask"] == 1)
+    layout = SlotLayout(n_treatments=2, n_covariates=2, n_latent=1, edge_types=EDGE_TYPES_EXTENDED)
+    direct = (loaded["g"][:, layout.slices["cy"]] == 1) & (loaded["treatment_active_mask"] == 1)
     signal_config = loaded["diagnostics"]["signal"]
     assert signal_config["adstock_kernel_semantics"] == "normalized-causal-minmax-weibull-density"
     assert signal_config["outcome_noise_semantics"] == OUTCOME_NOISE_SEMANTICS
@@ -401,12 +401,12 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "sales_scale": np.ones(1, dtype=np.float32),
         "is_val": np.zeros(1, dtype=np.uint8),
         "cell_id": np.zeros(1, dtype=np.int32),
-        "active_c_mask": np.ones((1, 1), dtype=np.uint8),
-        "active_m_mask": np.ones((1, 1), dtype=np.uint8),
-        "active_j_mask": np.ones((1, 1), dtype=np.uint8),
-        "K_active": np.ones(1, dtype=np.int32),
-        "M_active": np.ones(1, dtype=np.int32),
-        "J_active": np.ones(1, dtype=np.int32),
+        "treatment_active_mask": np.ones((1, 1), dtype=np.uint8),
+        "covariate_active_mask": np.ones((1, 1), dtype=np.uint8),
+        "latent_active_mask": np.ones((1, 1), dtype=np.uint8),
+        "n_treatments_active": np.ones(1, dtype=np.int32),
+        "n_covariates_active": np.ones(1, dtype=np.int32),
+        "n_latent_active": np.ones(1, dtype=np.int32),
         "confounding_strength": np.zeros(1, dtype=np.float32),
         "indirect_effects": np.zeros((1, 4), dtype=np.float32),
         "channel_active": np.zeros((1, 1), dtype=np.uint8),
@@ -672,7 +672,7 @@ def test_response_warmup_matches_persisted_response_boundary():
         n_latent=1,
         n_cells=2,
         draws_per_cell=1,
-        T=8,
+        n_time_steps=8,
         l_max=4,
         adstock_burn_in=4,
         nonlinearity="linear",
@@ -687,7 +687,7 @@ def test_response_warmup_matches_persisted_response_boundary():
     )
     corpus = DataGenerator(cfg).generate(validate=True)
     warmup = int(corpus["diagnostics"]["signal"]["response_warmup_weeks"])
-    assert 0 < warmup < cfg.T
+    assert 0 < warmup < cfg.n_time_steps
     assert np.all(corpus["adstock_family"][:, 0] == 1)
 
     for task in range(corpus["spend_raw"].shape[0]):
@@ -730,7 +730,7 @@ def test_adstock_corpus_response_warmup_contrasts_and_self_validates():
             n_latent=1,
             n_cells=2,
             draws_per_cell=1,
-            T=20,
+            n_time_steps=20,
             l_max=5,
             nonlinearity="linear",
             adstock_family_probs=family_probs,

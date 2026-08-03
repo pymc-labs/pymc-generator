@@ -196,13 +196,13 @@ def _validated_sales_scale(sales: np.ndarray, sales_scale: np.ndarray | None) ->
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(
-            "sales_scale must be finite and strictly positive with shape (N,)"
+            "sales_scale must be finite and strictly positive with shape (n_tasks,)"
         ) from exc
     invalid_scale = (
         scale.shape != (sales.shape[0],) or not np.isfinite(scale).all() or (scale <= 0.0).any()
     )
     if invalid_scale:
-        raise ValueError("sales_scale must be finite and strictly positive with shape (N,)")
+        raise ValueError("sales_scale must be finite and strictly positive with shape (n_tasks,)")
     return scale
 
 
@@ -227,11 +227,11 @@ def _spearman_abs(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """|Spearman rank correlation| along the last axis, vectorized.
 
     Average ranks for ties (scipy convention) — ordinal ranks would give a
-    constant series ranks ``0..T-1`` and score |rho| ~ 1 against any trending
-    series, hiding exactly the flat targets this module exists to flag. A
-    (near-)constant series has zero rank variance and returns 0.0: no signal
-    is visible from it (scipy returns NaN there; 0.0 is the gate-friendly
-    encoding of the same fact).
+    constant series ranks ``0..n_time_steps-1`` and score |rho| ~ 1 against any
+    trending series, hiding exactly the flat targets this module exists to
+    flag. A (near-)constant series has zero rank variance and returns 0.0: no
+    signal is visible from it (scipy returns NaN there; 0.0 is the
+    gate-friendly encoding of the same fact).
     """
     from scipy.stats import rankdata  # lazy: keep module import numpy-light
 
@@ -340,7 +340,8 @@ def dense_signal_metrics(
     l_max: int = 8,
     adstock_burn_in: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return persisted dense ``(N, K, L)`` metrics and uint8 validity.
+    """Return persisted dense metrics and uint8 validity, both shaped
+    ``(n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT))``.
 
     Inputs are deliberately the final persisted arrays; callers must not pass
     pre-cast draw values. Ineligible/padded cells are exactly zero and invalid.
@@ -355,18 +356,22 @@ def dense_signal_metrics(
     baseline = np.asarray(baseline, dtype=np.float64)
     mask = np.asarray(cy_mask, dtype=bool)
     if spend.ndim != 3:
-        raise ValueError("spend must have shape (N, T, K)")
-    N, T, K = spend.shape
-    if contributions.shape != (N, T, K) or sales.shape != (N, T) or baseline.shape != (N, T):
+        raise ValueError("spend must have shape (n_tasks, n_time_steps, n_treatments)")
+    n_tasks, n_time_steps, n_treatments = spend.shape
+    if (
+        contributions.shape != (n_tasks, n_time_steps, n_treatments)
+        or sales.shape != (n_tasks, n_time_steps)
+        or baseline.shape != (n_tasks, n_time_steps)
+    ):
         raise ValueError("signal source arrays have incompatible shapes")
-    if mask.shape != (N, K):
-        raise ValueError(f"cy_mask shape {mask.shape} != {(N, K)}")
+    if mask.shape != (n_tasks, n_treatments):
+        raise ValueError(f"cy_mask shape {mask.shape} != {(n_tasks, n_treatments)}")
     if not all(np.isfinite(a).all() for a in (spend, contributions, sales, baseline)):
         raise ValueError("signal source arrays must be finite")
     l_max = _validated_integer(l_max, "l_max", 1)
     adstock_burn_in = _validated_integer(adstock_burn_in, "adstock_burn_in", 0)
     scale = _validated_sales_scale(sales, sales_scale)
-    metadata_shape = (N, K)
+    metadata_shape = (n_tasks, n_treatments)
     family_input = (
         np.zeros(metadata_shape, dtype=np.int8) if adstock_family is None else adstock_family
     )
@@ -376,7 +381,7 @@ def dense_signal_metrics(
     fam, alpha, wlam, wk = _validated_adstock_metadata(
         family_input, alpha_input, lam_input, k_input, metadata_shape
     )
-    metrics = np.zeros((N, K, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    metrics = np.zeros((n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
     valid = np.zeros_like(metrics, dtype=np.uint8)
     metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
     for n, k in zip(*np.nonzero(mask)):
@@ -392,25 +397,25 @@ def dense_signal_metrics(
         for name, (value, is_valid) in values.items():
             metrics[n, k, metric_index[name]] = value
             valid[n, k, metric_index[name]] = is_valid
-        if T >= 2:
+        if n_time_steps >= 2:
             metrics[n, k, metric_index["spend_hf"]] = _hf_ratio(x[None])[0]
             metrics[n, k, metric_index["contrib_hf"]] = _hf_ratio(y[None])[0]
             valid[n, k, [metric_index["spend_hf"], metric_index["contrib_hf"]]] = 1
         ad_x = _adstock_numpy(x, fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
         # Visibility intentionally compares once-adstocked observed spend; do
         # not adstock a contribution that already contains the response.
-        if T - l_max >= 3:
+        if n_time_steps - l_max >= 3:
             metrics[n, k, metric_index["spearman"]] = _spearman_abs(
                 ad_x[l_max:][None], y[l_max:][None]
             )[0]
             valid[n, k, metric_index["spearman"]] = 1
-        if adstock_burn_in < l_max and T >= l_max + 3:
+        if adstock_burn_in < l_max and n_time_steps >= l_max + 3:
             warm_range = y[:l_max].max() - y[:l_max].min()
             suffix_std = y[l_max:].std()
             if suffix_std != 0.0:
                 metrics[n, k, metric_index["warmup_ratio"]] = warm_range / suffix_std
                 valid[n, k, metric_index["warmup_ratio"]] = 1
-        if T >= 2:
+        if n_time_steps >= 2:
             # Explained by the full reported window: intercept, baseline, and
             # all *other* active direct contributions.
             others = [j for j in np.flatnonzero(mask[n]) if j != k]
@@ -426,7 +431,7 @@ def dense_signal_metrics(
                 valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
             else:
                 design_rank = 1 + np.linalg.matrix_rank(design)
-                if T > design_rank:
+                if n_time_steps > design_rank:
                     fitted = design @ np.linalg.lstsq(design, centered_y, rcond=None)[0]
                     ss_res = float(np.sum((centered_y - fitted) ** 2))
                     r2 = float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
@@ -459,11 +464,11 @@ def per_channel_signal(
 
     Parameters
     ----------
-    spend : (N, T, K) observed channels (model input).
-    contributions : (N, T, K) true contribution targets.
-    sales : (N, T) sales series.
-    cy_mask : (N, K) bool/0-1 — which channels are direct (C->Y) AND active.
-    sales_scale : (N,) optional — per-task target normalizer; defaults to the
+    spend : (n_tasks, n_time_steps, n_treatments) observed channels (model input).
+    contributions : (n_tasks, n_time_steps, n_treatments) true contribution targets.
+    sales : (n_tasks, n_time_steps) sales series.
+    cy_mask : (n_tasks, n_treatments) bool/0-1 — which channels are direct (C->Y) AND active.
+    sales_scale : (n_tasks,) optional — per-task target normalizer; defaults to the
         full-series sales std.
     l_max : adstock length, defines the warmup window for ``warmup_ratio``.
 
@@ -473,13 +478,13 @@ def per_channel_signal(
     ``task_idx`` locating each pair.
     """
     spend = np.asarray(spend)
-    N, T, K = spend.shape
+    n_tasks, n_time_steps, n_treatments = spend.shape
     mask = np.asarray(cy_mask, dtype=bool)
     dense, valid = dense_signal_metrics(
         spend,
         contributions,
         sales,
-        np.zeros((N, T), dtype=spend.dtype) if baseline is None else baseline,
+        np.zeros((n_tasks, n_time_steps), dtype=spend.dtype) if baseline is None else baseline,
         mask,
         sales_scale=sales_scale,
         l_max=l_max,
@@ -494,7 +499,7 @@ def per_channel_signal(
             index = SIGNAL_METRIC_LAYOUT.index(name)
             dense[..., index] = 0.0
             valid[..., index] = 0
-    task_idx = np.broadcast_to(np.arange(N)[:, None], (N, K))
+    task_idx = np.broadcast_to(np.arange(n_tasks)[:, None], (n_tasks, n_treatments))
     out = {"task_idx": task_idx[mask].astype(np.float64)}
     for i, key in enumerate(SIGNAL_METRIC_LAYOUT):
         # Select dense result rows for the legacy flattened API; this is not a
@@ -538,11 +543,11 @@ def summarize_signal_metrics(
     ----------
     metrics, valid : np.ndarray
         Persisted dense metric values and their binary per-metric validity
-        masks, each shaped ``(N, K, len(SIGNAL_METRIC_LAYOUT))``.
+        masks, each shaped ``(n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT))``.
     sales : np.ndarray
-        Persisted sales array with shape ``(N, T)``.
+        Persisted sales array with shape ``(n_tasks, n_time_steps)``.
     cy_mask : np.ndarray
-        Boolean ``(N, K)`` mask selecting eligible direct-channel pairs.
+        Boolean ``(n_tasks, n_treatments)`` mask selecting eligible direct-channel pairs.
     sales_scale : np.ndarray, optional
         Positive persisted per-task target scales. When omitted, scales are
         computed from ``sales``.
@@ -565,7 +570,7 @@ def summarize_signal_metrics(
     if metrics.shape != expected or valid.shape != expected:
         raise ValueError(f"metrics and validity must have shape {expected}")
     if sales.ndim != 2 or sales.shape[0] != mask.shape[0]:
-        raise ValueError("sales must have shape (N, T)")
+        raise ValueError("sales must have shape (n_tasks, n_time_steps)")
     if not np.isfinite(sales).all():
         raise ValueError("sales must be finite")
     if not np.isfinite(metrics).all() or not np.isin(valid, (0, 1)).all():

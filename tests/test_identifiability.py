@@ -49,12 +49,12 @@ EXPECTED_CORPUS_HASHES = {
     "sales_scale": "6e611bd5cd659ec8f6959dd5e759c30ef0c3402ec8d414d01b740c3138696108",
     "is_val": "eb4b02f10d5660691db02cfd97e0fee99ab9f2461e8e802369f07300b5285ad4",
     "cell_id": "85bf0249350a8edb436598ba927c2298bca0e058665eb864b071e65830562096",
-    "active_c_mask": "a9affb5f52630150ac24b5fb37a2b9e88bc54312f549319752cced7601ebeac1",
-    "active_m_mask": "9f40977b73dea1782a868d23dfccb7b0264d20bb07b3e07ad73de81dc5797e91",
-    "active_j_mask": "06afea6ca346b374357ad90556c91c315cc6d429ada4eb2a1900fc30a9fdaff7",
-    "K_active": "a9073e6b59ee724764dc6cafa783aee1aae5fda1329f86b3b634578b0c8687f1",
-    "M_active": "9aed02a9be4f658a038cf3eb48d2effffb9d8e44125a6afe60bdb69cee9cf1b8",
-    "J_active": "a9bb0c6117f6fc1cb4a0e889122a322c8c515ce1b82ed2564d127109bb066713",
+    "treatment_active_mask": "3a7cd171c96fc8fb27a1dadbd085253acf5fb34ff5976402507504ddadd92889",
+    "covariate_active_mask": "28a1a7f96dc3b37a56bc3bed913b9f7d3433e765ca26ec6adaedaa272b87baa2",
+    "latent_active_mask": "c5d57bca6001a56485f5bb07b383f17e38716d894f10a46c648521ce1d7a677f",
+    "n_treatments_active": "c1198a3bdca08a0ae0112be2f753ffc046cece6c10a96c3b4edd974798b21530",
+    "n_covariates_active": "9ae6b0b1e6912e108c443a1e35a8fd522c1e0455c79b1152d8d44744d080504f",
+    "n_latent_active": "33462003b0a367a219d05faffcae2fa50ef2f8bdac6cb881e694c7c46335f46e",
     "indirect_effects": "7f79fb8eb08e2c904dea27c78f8a24d3f181c25cdd0dac0d2e166265a0c968e9",
     "channel_active": "e6a619d2852bed3ed0f8890b700bec0062e3f6f7352eec5a769792bd8c191671",
     "control_contribution": "27c49ad126d6a7e67033d5fd17785f66e68a0f0141c5bc5104c9c74ed5b3a55b",
@@ -131,7 +131,7 @@ def test_additive_corpus_matches_default_outcome_noise_hashes():
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=24,
+        n_time_steps=24,
         n_cells=2,
         draws_per_cell=1,
         seed=17,
@@ -164,12 +164,14 @@ def test_additive_corpus_matches_default_outcome_noise_hashes():
 
 def test_default_world_model_free_rvs_match_outcome_noise_contract():
     """Relative mode registers dimensionless outcome scales before ``beta``."""
-    cfg = pg.make_scm_prior(n_treatments=2, n_covariates=2, n_latent=1, T=24)
+    cfg = pg.make_scm_prior(n_treatments=2, n_covariates=2, n_latent=1, n_time_steps=24)
     rng = np.random.default_rng(23)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=2, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=2, n_latent_active=1
+    )
     g_active = _slice_g_active(g, 2, 2, 1)
     structural = sample_structure(g_active, cfg, rng)
-    model, _out_names, _param_names = build_world_model(g_active, cfg, structural, cfg.T)
+    model, _out_names, _param_names = build_world_model(g_active, cfg, structural, cfg.n_time_steps)
 
     assert tuple(rv.name for rv in model.free_RVs) == EXPECTED_DEFAULT_FREE_RVS
 
@@ -179,7 +181,7 @@ def test_identifiability_labels_are_optional_metadata_not_features():
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
-        T=16,
+        n_time_steps=16,
         n_cells=2,
         draws_per_cell=1,
         seed=47,
@@ -200,12 +202,14 @@ def test_identifiability_labels_are_optional_metadata_not_features():
 
 
 def test_metadata_first_draw_preserves_legacy_rng_order():
-    cfg = pg.make_scm_prior(n_treatments=2, n_covariates=2, n_latent=1, T=24)
+    cfg = pg.make_scm_prior(n_treatments=2, n_covariates=2, n_latent=1, n_time_steps=24)
     rng = np.random.default_rng(23)
-    g = sample_g_additive(rng, cfg, cfg.layout, K_active=2, M_active=2, J_active=1)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=2, n_latent_active=1
+    )
     g_active = _slice_g_active(g, 2, 2, 1)
     model, _out_names, _param_names = build_world_model(
-        g_active, cfg, sample_structure(g_active, cfg, rng), cfg.T
+        g_active, cfg, sample_structure(g_active, cfg, rng), cfg.n_time_steps
     )
 
     legacy = draw_worlds(model, _ADDITIVE_OUT_NAMES, seed=29, draws=3)
@@ -250,7 +254,7 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         "g_zz": np.zeros((1, 1), dtype=int),
     }
     fixture = {
-        "T": 72,
+        "n_time_steps": 72,
         "n_treatments": 2,
         "n_covariates": 1,
         "n_latent": 1,
@@ -297,7 +301,7 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         structural = sample_structure(g, cfg, np.random.default_rng(model_seed))
         structural["smoothness_c"][:] = 0.0
         structural["smoothness_b"][:] = 0.0
-        model, out_names, _ = build_world_model(g, cfg, structural, cfg.T)
+        model, out_names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
         drawn = draw_worlds(model, out_names, seed=draw_seed, draws=48)
         metrics, valid = dense_signal_metrics(
             drawn["channels"],
@@ -341,7 +345,7 @@ def test_supported_corpus_signal_gate():
         n_treatments=6,
         n_covariates=4,
         n_latent=2,
-        T=104,
+        n_time_steps=104,
         n_cells=4,
         draws_per_cell=6,
         seed=314159,
@@ -354,7 +358,8 @@ def test_supported_corpus_signal_gate():
         np.concatenate([corpus["sales_raw"] for corpus in corpora]),
         np.concatenate(
             [
-                (corpus["g"][:, cfg.layout.slices["cy"]] == 1) & (corpus["active_c_mask"] == 1)
+                (corpus["g"][:, cfg.layout.slices["cy"]] == 1)
+                & (corpus["treatment_active_mask"] == 1)
                 for corpus in corpora
             ]
         ),

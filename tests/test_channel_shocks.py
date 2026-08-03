@@ -15,9 +15,9 @@ from prior_generator.world_model import build_world_model, draw_worlds, sample_s
 
 def _built(
     *,
-    T=12,
-    K=3,
-    S=0,
+    n_time_steps=12,
+    n_treatments=3,
+    n_shocks=0,
     length=None,
     level=(0.0, 0.0),
     burn_in=0,
@@ -26,32 +26,32 @@ def _built(
 ):
     shock_kwargs = {} if length is None else {"channel_shock_length_range": length}
     cfg = make_scm_prior(
-        n_treatments=K,
+        n_treatments=n_treatments,
         n_covariates=1,
         n_latent=1,
-        T=T,
+        n_time_steps=n_time_steps,
         adstock_burn_in=burn_in,
-        n_channel_shocks=S,
+        n_channel_shocks=n_shocks,
         channel_shock_level_range=level,
-        edge_budget={"cy": (K, K)},
+        edge_budget={"cy": (n_treatments, n_treatments)},
         **shock_kwargs,
     )
     if direct is None:
-        direct = np.ones(K, dtype=int)
+        direct = np.ones(n_treatments, dtype=int)
     g = {
         "g_cy": np.asarray(direct, dtype=int),
-        "g_dc": np.zeros((1, K), dtype=int),
+        "g_dc": np.zeros((1, n_treatments), dtype=int),
         "g_dz": np.zeros((1, 1), dtype=int),
         "g_db": np.zeros(1, dtype=int),
         "g_zb": np.zeros(1, dtype=int),
-        "g_zc": np.zeros((1, K), dtype=int),
-        "g_cc": np.zeros((K, K), dtype=int),
+        "g_zc": np.zeros((1, n_treatments), dtype=int),
+        "g_cc": np.zeros((n_treatments, n_treatments), dtype=int),
         "g_zz": np.zeros((1, 1), dtype=int),
     }
     structural = sample_structure(g, cfg, np.random.default_rng(4))
     if adstock_family is not None:
         structural["adstock_family"][:] = adstock_family
-    return (*build_world_model(g, cfg, structural, T), cfg, g)
+    return (*build_world_model(g, cfg, structural, n_time_steps), cfg, g)
 
 
 @pytest.mark.parametrize(
@@ -76,7 +76,7 @@ def test_channel_shock_validation(kwargs):
             n_treatments=3,
             n_covariates=1,
             n_latent=1,
-            T=12,
+            n_time_steps=12,
             adstock_burn_in=0,
             **kwargs,
         )
@@ -86,7 +86,7 @@ def test_disabled_schedule_has_empty_tensors_and_no_shock_rvs():
     model, names, _, cfg, _ = _built()
     assert not any(rv.name.startswith("channel_shock") for rv in model.free_RVs)
     d = draw_worlds(model, names, seed=1)
-    assert d["channel_shock_mask"].shape == (1, cfg.T, 3)
+    assert d["channel_shock_mask"].shape == (1, cfg.n_time_steps, 3)
     assert d["channel_shock_mask"].sum() == 0
     for name in ("channel_shock_channel", "channel_shock_start", "channel_shock_length"):
         assert d[name].shape == (1, 0)
@@ -94,7 +94,7 @@ def test_disabled_schedule_has_empty_tensors_and_no_shock_rvs():
 
 def test_schedule_slots_containment_levels_and_burn_in_offset():
     model, names, param_names, cfg, g = _built(
-        T=14, S=3, length=(2, 3), level=(0.5, 1.5), burn_in=8
+        n_time_steps=14, n_shocks=3, length=(2, 3), level=(0.5, 1.5), burn_in=8
     )
     d = draw_worlds(model, names + param_names, seed=3, draws=8)
     selected_level = np.take_along_axis(
@@ -107,7 +107,7 @@ def test_schedule_slots_containment_levels_and_burn_in_offset():
     for b in range(8):
         starts, lengths = d["channel_shock_start"][b], d["channel_shock_length"][b]
         for s, (start, length) in enumerate(zip(starts, lengths)):
-            lo, hi = s * cfg.T // 3, (s + 1) * cfg.T // 3
+            lo, hi = s * cfg.n_time_steps // 3, (s + 1) * cfg.n_time_steps // 3
             assert lo <= start and start + length <= hi
         assert d["channel_shock_mask"][b].sum() == lengths.sum()
         assert np.array_equal(d["channel_shock_mask_full"][b, 8:], d["channel_shock_mask"][b])
@@ -125,14 +125,16 @@ def test_schedule_slots_containment_levels_and_burn_in_offset():
 
 
 def test_exact_fill_uneven_slots_and_same_seed_reproducibility():
-    model, names, _, _, _ = _built(T=10, S=5, length=(2, 2), level=(1.0, 1.0))
+    model, names, _, _, _ = _built(n_time_steps=10, n_shocks=5, length=(2, 2), level=(1.0, 1.0))
     a, b = draw_worlds(model, names, seed=9, draws=4), draw_worlds(model, names, seed=9, draws=4)
     assert np.array_equal(a["channel_shock_mask"], b["channel_shock_mask"])
     assert (a["channel_shock_mask"].sum(axis=(1, 2)) == 10).all()
 
 
 def test_single_direct_channel_can_be_selected_repeatedly_and_batched_values_vary():
-    model, names, _, _, _ = _built(T=12, S=4, length=(2, 3), level=(0.1, 0.9), direct=[0, 1, 0])
+    model, names, _, _, _ = _built(
+        n_time_steps=12, n_shocks=4, length=(2, 3), level=(0.1, 0.9), direct=[0, 1, 0]
+    )
     d = draw_worlds(model, names, seed=12, draws=12)
     assert (d["channel_shock_channel"] == 1).all()
     assert np.unique(d["channel_shock_length"]).size > 1
@@ -144,14 +146,14 @@ def test_default_enabled_shock_is_visible_as_a_spend_plateau():
         n_treatments=1,
         n_covariates=1,
         n_latent=1,
-        T=12,
+        n_time_steps=12,
         adstock_burn_in=0,
         n_channel_shocks=1,
         channel_shock_level_range=(0.5, 0.5),
         edge_budget={"cy": (1, 1)},
     )
     assert cfg.channel_shock_length_range == (2, 2)
-    model, names, _, _, _ = _built(T=12, K=1, S=1, level=(0.5, 0.5))
+    model, names, _, _, _ = _built(n_time_steps=12, n_treatments=1, n_shocks=1, level=(0.5, 0.5))
     drawn = draw_worlds(model, names, seed=15)
     spend = drawn["channels"][0, :, 0]
     plateau_starts = np.flatnonzero(spend[:-1] == spend[1:])
@@ -162,9 +164,9 @@ def test_default_enabled_shock_is_visible_as_a_spend_plateau():
 def test_shocks_hold_observed_spend_and_natural_spend_resumes(adstock_family):
     """A held window is absolute, decays ordinary carryover, and changes no natural path."""
     model, names, _, cfg, _ = _built(
-        T=16,
-        K=1,
-        S=1,
+        n_time_steps=16,
+        n_treatments=1,
+        n_shocks=1,
         length=(3, 3),
         level=(0.0, 0.0),
         adstock_family=adstock_family,
@@ -187,9 +189,9 @@ def test_shocks_hold_observed_spend_and_natural_spend_resumes(adstock_family):
 
 def test_shocked_world_preserves_every_decomposition_identity():
     model, names, _, _, _ = _built(
-        T=20,
-        K=2,
-        S=2,
+        n_time_steps=20,
+        n_treatments=2,
+        n_shocks=2,
         length=(2, 3),
         level=(0.0, 1.2),
         adstock_family=2,
@@ -232,7 +234,7 @@ def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_out
             n_treatments=2,
             n_covariates=2,
             n_latent=1,
-            T=20,
+            n_time_steps=20,
             n_cells=2,
             draws_per_cell=2,
             seed=71,
@@ -355,14 +357,14 @@ def test_downstream_channel_recursion_sees_the_clamped_parent():
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
-        T=12,
+        n_time_steps=12,
         adstock_burn_in=0,
         n_channel_shocks=1,
         channel_shock_length_range=(2, 2),
         channel_shock_level_range=(0.0, 0.0),
     )
     structural = sample_structure(g, cfg, np.random.default_rng(7))
-    model, names, _ = build_world_model(g, cfg, structural, cfg.T)
+    model, names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
     d = draw_worlds(model, names, seed=22)
     mask = d["channel_shock_mask"][0, :, 0].astype(bool)
     assert (d["channels"][0, mask, 1] < d["channels_unshocked"][0, mask, 1]).all()

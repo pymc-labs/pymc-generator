@@ -1,7 +1,8 @@
 """Per-edge-type arrow budgets ("pots") for the additive SCM.
 
-A budget caps the arrow count for an edge type ("up to N"): the per-task count
-is drawn uniformly in {0..N} (or {lo..hi} for a tuple; (N, N) for exactly N)
+A budget caps the arrow count for an edge type (an "up to" cap): the per-task
+count is drawn uniformly in {0..cap} (or {lo..hi} for a tuple; (cap, cap) for
+exactly cap)
 and scattered uniformly over the eligible node pairs. How they clump (one
 source fanning out vs. one arrow each) is emergent. Each type's pot is
 independent, and the count is capped at the number of eligible pairs.
@@ -30,7 +31,7 @@ def _cfg(edge_budget=None, *, n_treatments=5, n_covariates=5, n_latent=2, **kw) 
 
 
 def _draw(cfg: SCMPrior, seed: int) -> dict[str, np.ndarray]:
-    """One all-active extended DAG cell (K_active=M_active=J_active = max)."""
+    """One extended DAG cell with every treatment, covariate and latent node active."""
     return sample_g_additive(np.random.default_rng(seed), cfg, cfg.layout)
 
 
@@ -125,7 +126,7 @@ def test_generate_corpus_honors_pot_end_to_end():
         n_covariates=2,
         n_latent=1,
         edge_budget={"zc": 3},
-        T=52,
+        n_time_steps=52,
         n_cells=3,
         draws_per_cell=2,
         seed=0,

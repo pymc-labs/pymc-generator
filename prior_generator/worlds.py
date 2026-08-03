@@ -1,6 +1,6 @@
 """Single-world sampling: one accepted task, with its full ground truth.
 
-Where :func:`prior_generator.sample_prior_predictive` produces a padded N-task corpus
+Where :func:`prior_generator.sample_prior_predictive` produces a padded ``n_tasks``-task corpus
 for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
 DAG blocks, the drawn SCM parameters, and named output series and metadata,
@@ -94,9 +94,10 @@ class SCM:
     Attributes
     ----------
     data : dict
-        Active-size graph outputs — e.g. ``channels (T, K)``, ``sales (T,)``,
-        ``contributions (T, K)``, ``saturation_scale (K,)``, and
-        ``indirect_effects_by_source (T, 3)`` in the locked (cc, zc, dc) order.
+        Active-size graph outputs — e.g. ``channels (n_time_steps, n_treatments)``,
+        ``sales (n_time_steps,)``, ``contributions (n_time_steps, n_treatments)``,
+        ``saturation_scale (n_treatments,)``, and
+        ``indirect_effects_by_source (n_time_steps, 3)`` in the locked (cc, zc, dc) order.
     g : dict
         Active-size DAG blocks (``g_cy``, ``g_dc``, ``g_dz``, ``g_db``,
         ``g_zb``, ``g_zc``, ``g_cc``, ``g_zz``).
@@ -126,19 +127,19 @@ class SCM:
     _exogenous: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
 
     @property
-    def T(self) -> int:
+    def n_time_steps(self) -> int:
         return int(self.data["sales"].shape[0])
 
     @property
-    def K(self) -> int:
+    def n_treatments(self) -> int:
         return int(self.data["channels"].shape[1])
 
     @property
-    def M(self) -> int:
+    def n_covariates(self) -> int:
         return int(self.data["controls"].shape[1])
 
     @property
-    def J(self) -> int:
+    def n_latent(self) -> int:
         return int(self.data["demand"].shape[1])
 
     @property
@@ -275,20 +276,20 @@ def path_to_y(g: dict) -> dict[str, bool]:
     g_db = np.asarray(g["g_db"])
     g_dc = np.asarray(g["g_dc"])
     g_dz = np.asarray(g["g_dz"])
-    K, M, J = len(g_cy), len(g_zb), len(g_db)
+    n_treatments, n_covariates, n_latent = len(g_cy), len(g_zb), len(g_db)
 
     c_ok = g_cy == 1
-    for _ in range(K):  # propagate through C->C chains
+    for _ in range(n_treatments):  # propagate through C->C chains
         c_ok = c_ok | ((g_cc @ c_ok) > 0)
     z_ok = (g_zb == 1) | ((g_zc @ c_ok) > 0)
-    for _ in range(M):  # propagate through Z->Z chains
+    for _ in range(n_covariates):  # propagate through Z->Z chains
         z_ok = z_ok | ((g_zz @ z_ok) > 0)
     d_ok = (g_db == 1) | ((g_dc @ c_ok) > 0) | ((g_dz @ z_ok) > 0)
 
     out: dict[str, bool] = {}
-    out.update({f"C{k + 1}": bool(c_ok[k]) for k in range(K)})
-    out.update({f"Z{m + 1}": bool(z_ok[m]) for m in range(M)})
-    out.update({f"D{j + 1}": bool(d_ok[j]) for j in range(J)})
+    out.update({f"C{k + 1}": bool(c_ok[k]) for k in range(n_treatments)})
+    out.update({f"Z{m + 1}": bool(z_ok[m]) for m in range(n_covariates)})
+    out.update({f"D{j + 1}": bool(d_ok[j]) for j in range(n_latent)})
     return out
 
 
@@ -310,18 +311,18 @@ def node_status(g: dict) -> dict[str, str]:
     g_db = np.asarray(g["g_db"])
     g_dc = np.asarray(g["g_dc"])
     g_dz = np.asarray(g["g_dz"])
-    K, M, J = len(g_cy), len(g_zb), len(g_db)
+    n_treatments, n_covariates, n_latent = len(g_cy), len(g_zb), len(g_db)
 
     touched: dict[str, bool] = {}
-    for k in range(K):
+    for k in range(n_treatments):
         touched[f"C{k + 1}"] = bool(
             g_cy[k] or g_cc[k, :].any() or g_cc[:, k].any() or g_dc[:, k].any() or g_zc[:, k].any()
         )
-    for m in range(M):
+    for m in range(n_covariates):
         touched[f"Z{m + 1}"] = bool(
             g_zb[m] or g_zc[m, :].any() or g_zz[m, :].any() or g_zz[:, m].any() or g_dz[:, m].any()
         )
-    for j in range(J):
+    for j in range(n_latent):
         touched[f"D{j + 1}"] = bool(g_db[j] or g_dc[j, :].any() or g_dz[j, :].any())
 
     return {
@@ -333,31 +334,31 @@ def node_status(g: dict) -> dict[str, str]:
 def edges_with_coeffs(g: dict, params: dict) -> list[tuple[str, str, str, float]]:
     """(edge_type, src, dst, coefficient) for every active edge."""
     out: list[tuple[str, str, str, float]] = []
-    J, K = np.asarray(g["g_dc"]).shape
-    M = np.asarray(g["g_zb"]).shape[0]
-    for k in range(K):
+    n_latent, n_treatments = np.asarray(g["g_dc"]).shape
+    n_covariates = np.asarray(g["g_zb"]).shape[0]
+    for k in range(n_treatments):
         if g["g_cy"][k]:
             out.append(("cy", f"C{k + 1}", "Y", float(params["beta"][k])))
-    for j in range(J):
-        for k in range(K):
+    for j in range(n_latent):
+        for k in range(n_treatments):
             if g["g_dc"][j, k]:
                 out.append(("dc", f"D{j + 1}", f"C{k + 1}", float(params["w_dc"][j, k])))
-        for m in range(M):
+        for m in range(n_covariates):
             if g["g_dz"][j, m]:
                 out.append(("dz", f"D{j + 1}", f"Z{m + 1}", float(params["u_dz"][j, m])))
         if g["g_db"][j]:
             out.append(("db", f"D{j + 1}", "B", float(params["delta_db"][j])))
-    for m in range(M):
-        for k in range(K):
+    for m in range(n_covariates):
+        for k in range(n_treatments):
             if g["g_zc"][m, k]:
                 out.append(("zc", f"Z{m + 1}", f"C{k + 1}", float(params["v_zc"][m, k])))
         if g["g_zb"][m]:
             out.append(("zb", f"Z{m + 1}", "B", float(params["rho_zb"][m])))
-        for m2 in range(M):
+        for m2 in range(n_covariates):
             if g["g_zz"][m, m2]:
                 out.append(("zz", f"Z{m + 1}", f"Z{m2 + 1}", float(params["gamma_zz"][m, m2])))
-    for k1 in range(K):
-        for k2 in range(K):
+    for k1 in range(n_treatments):
+        for k2 in range(n_treatments):
             if g["g_cc"][k1, k2]:
                 out.append(("cc", f"C{k1 + 1}", f"C{k2 + 1}", float(params["alpha_cc"][k1, k2])))
     return out
@@ -436,7 +437,7 @@ def _channel_response_parameters(world: SCM, k: int) -> dict[str, Any]:
 def _build_equation_parameters(world: SCM) -> dict[str, Any]:
     """Build the concrete, sparse parameter audit for the executed SCM."""
     g, params = world.g, world.params
-    K, M, J = world.K, world.M, world.J
+    n_treatments, n_covariates, n_latent = world.n_treatments, world.n_covariates, world.n_latent
     values: dict[str, Any] = {
         "innovations": {
             "rho": float(np.asarray(params["confounding_strength"])),
@@ -444,11 +445,11 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
             "eps_c_pulse": "0/1 Bernoulli fire",
         }
     }
-    for j in range(J):
+    for j in range(n_latent):
         values[f"D{j + 1}"] = {"random_walk": _rw_parameters(params, "rw_d", j)}
-    for m in range(M):
+    for m in range(n_covariates):
         parents: dict[str, float] = {}
-        for j in range(J):
+        for j in range(n_latent):
             if g["g_dz"][j, m]:
                 parents[f"D{j + 1}"] = float(np.asarray(params["u_dz"])[j, m])
         for m_parent in range(m):
@@ -457,12 +458,12 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
         values[f"Z{m + 1}"] = {"random_walk": _rw_parameters(params, "rw_z", m)}
         if parents:
             values[f"Z{m + 1}"]["parents"] = parents
-    for k in range(K):
+    for k in range(n_treatments):
         parents = {}
-        for j in range(J):
+        for j in range(n_latent):
             if g["g_dc"][j, k]:
                 parents[f"D{j + 1}"] = float(np.asarray(params["w_dc"])[j, k])
-        for m in range(M):
+        for m in range(n_covariates):
             if g["g_zc"][m, k]:
                 parents[f"Z{m + 1}"] = float(np.asarray(params["v_zc"])[m, k])
         for k_parent in range(k):
@@ -482,10 +483,10 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
         if parents:
             values[f"C{k + 1}"]["parents"] = parents
     b_parents: dict[str, float] = {}
-    for j in range(J):
+    for j in range(n_latent):
         if g["g_db"][j]:
             b_parents[f"D{j + 1}"] = float(np.asarray(params["delta_db"])[j])
-    for m in range(M):
+    for m in range(n_covariates):
         if g["g_zb"][m]:
             b_parents[f"Z{m + 1}"] = float(np.asarray(params["rho_zb"])[m])
     values["B"] = {"random_walk": _rw_parameters(params, "rw_b", 0)}
@@ -511,24 +512,27 @@ def _join_terms(base: str, terms: list[str]) -> str:
 def _build_equations(world: SCM) -> dict[str, str]:
     """Readable vector assignments mirroring ``build_symbolic_graph`` exactly."""
     g, params = world.g, world.params
-    K, M, J = world.K, world.M, world.J
+    n_treatments, n_covariates, n_latent = world.n_treatments, world.n_covariates, world.n_latent
     shocks_enabled = "channel_shock" in params
-    T_full = world.T + world.cfg.adstock_burn_in
+    n_time_steps_full = world.n_time_steps + world.cfg.adstock_burn_in
 
     def rw_scale(label: str, group: str, index: int) -> str:
         smoothness = float(np.asarray(params[group]["smoothness"])[index])
         width = _kernel_width(
             smoothness,
-            T_full,
+            n_time_steps_full,
             rw_smoothness_max_weeks=int(params[group]["rw_smoothness_max_weeks"]),
         )
-        scale = _centred_walk_scale(T_full, width)
-        return f"{label}: centred_walk_scale(T_full={T_full}, width={width})={scale:.17g}"
+        scale = _centred_walk_scale(n_time_steps_full, width)
+        return (
+            f"{label}: centred_walk_scale(n_time_steps_full={n_time_steps_full}, "
+            f"width={width})={scale:.17g}"
+        )
 
     rw_scales = [
-        *(rw_scale(f"D{j + 1}", "rw_d", j) for j in range(J)),
-        *(rw_scale(f"Z{m + 1}", "rw_z", m) for m in range(M)),
-        *(rw_scale(f"C{k + 1}", "rw_c", k) for k in range(K)),
+        *(rw_scale(f"D{j + 1}", "rw_d", j) for j in range(n_latent)),
+        *(rw_scale(f"Z{m + 1}", "rw_z", m) for m in range(n_covariates)),
+        *(rw_scale(f"C{k + 1}", "rw_c", k) for k in range(n_treatments)),
         rw_scale("B", "rw_b", 0),
     ]
     equations: dict[str, str] = {
@@ -539,12 +543,15 @@ def _build_equations(world: SCM) -> dict[str, str]:
             "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent."
         ),
         "RW": (
-            f"T_full = T + burn_in = {T_full}. For each random-walk innovation column, "
+            f"n_time_steps_full = n_time_steps + adstock_burn_in = {n_time_steps_full}. "
+            "For each random-walk innovation column, "
             "q = edge_padded_MA(cumsum(eps), "
-            "width=kernel_width(smoothness, rw_smoothness_max_weeks), capped at T_full); "
-            "centred_walk_scale(T_full, width) = sqrt(tr(A A^T) / T_full), where "
+            "width=kernel_width(smoothness, rw_smoothness_max_weeks), "
+            "capped at n_time_steps_full); "
+            "centred_walk_scale(n_time_steps_full, width) = "
+            "sqrt(tr(A A^T) / n_time_steps_full), where "
             "A = centre . movavg(width) . cumsum is fixed; "
-            "RW_full = mean + std * (q - mean(q)) / centred_walk_scale(T_full, width); "
+            "RW_full = mean + std * (q - mean(q)) / centred_walk_scale(n_time_steps_full, width); "
             f"world constants: {'; '.join(rw_scales)}. "
             "Apply softplus(RW_full) only when positive_only=True; RW = RW_full[burn_in:]. "
             "Y instead uses iid rw_y[0].std * eps_y[burn_in:]."
@@ -559,13 +566,13 @@ def _build_equations(world: SCM) -> dict[str, str]:
             "C_no_cc, and C_no_cc_zc share the same clamp."
         )
 
-    for j in range(J):
+    for j in range(n_latent):
         equations[f"D{j + 1}"] = (
             f"D{j + 1}_full = RW_full(eps_d[:, {j}], rw_d[{j}]); D{j + 1} = D{j + 1}_full[burn_in:]"
         )
-    for m in range(M):
+    for m in range(n_covariates):
         terms: list[str] = []
-        for j in range(J):
+        for j in range(n_latent):
             if g["g_dz"][j, m]:
                 terms.append(f"u_dz[{j}, {m}] * D{j + 1}_full")
         for m_parent in range(m):
@@ -579,9 +586,11 @@ def _build_equations(world: SCM) -> dict[str, str]:
     def clamp(expression: str, k: int) -> str:
         return f"clamp_shock_{k + 1}({expression})" if shocks_enabled else expression
 
-    for k in range(K):
-        d_terms = [f"w_dc[{j}, {k}] * D{j + 1}_full" for j in range(J) if g["g_dc"][j, k]]
-        z_terms = [f"v_zc[{m}, {k}] * Z{m + 1}_full" for m in range(M) if g["g_zc"][m, k]]
+    for k in range(n_treatments):
+        d_terms = [f"w_dc[{j}, {k}] * D{j + 1}_full" for j in range(n_latent) if g["g_dc"][j, k]]
+        z_terms = [
+            f"v_zc[{m}, {k}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zc"][m, k]
+        ]
         c_terms = [
             f"alpha_cc[{k_parent}, {k}] * C{k_parent + 1}_full"
             for k_parent in range(k)
@@ -632,15 +641,15 @@ def _build_equations(world: SCM) -> dict[str, str]:
             f"gate[{k}] = g_cy[{k}] * beta[{k}]"
         )
 
-    b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(J) if g["g_db"][j]] + [
-        f"rho_zb[{m}] * Z{m + 1}_full" for m in range(M) if g["g_zb"][m]
+    b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_db"][j]] + [
+        f"rho_zb[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zb"][m]
     ]
     equations["B"] = (
         f"B_full = {_join_terms('RW_full(eps_b, rw_b[0])', b_terms)}; B = B_full[burn_in:]"
     )
     equations["contributions"] = (
         "contributions[:, k] = gate[k] * f{k}(C_base{k}_full); "
-        "contributions_observed[:, k] = gate[k] * f{k}(C{k}_full), for k=1..K."
+        "contributions_observed[:, k] = gate[k] * f{k}(C{k}_full), for k=1..n_treatments."
     )
     equations["indirect_effects"] = (
         "IE_cc = sum_k gate[k] * (f{k}(C{k}_full) - f{k}(C_no_cc{k}_full)); "
@@ -701,11 +710,23 @@ def sample_scm(
     cfg.validate()
     rng = np.random.default_rng(seed)
     layout = cfg.layout
-    K, M, J, T = cfg.n_treatments, cfg.n_covariates, cfg.n_latent, cfg.T
+    n_treatments, n_covariates, n_latent, n_time_steps = (
+        cfg.n_treatments,
+        cfg.n_covariates,
+        cfg.n_latent,
+        cfg.n_time_steps,
+    )
 
     for _g_round in range(max_graph_rounds):
-        g = sample_g_additive(rng, cfg, layout, K_active=K, M_active=M, J_active=J)
-        g_act = _slice_g_active(g, K, M, J)
+        g = sample_g_additive(
+            rng,
+            cfg,
+            layout,
+            n_treatments_active=n_treatments,
+            n_covariates_active=n_covariates,
+            n_latent_active=n_latent,
+        )
+        g_act = _slice_g_active(g, n_treatments, n_covariates, n_latent)
         status = node_status(g_act)
         if any(s == "dead-end" for s in status.values()):
             continue
@@ -725,7 +746,7 @@ def sample_scm(
     # no RNG consumed — when cfg.prior_conditioning is False).
     prior_cond = sample_prior_cond(cfg, rng)
     model, out_names, param_names = build_world_model(
-        g_act, cfg, structural, T, prior_cond=prior_cond
+        g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
     )
     # structural is recorded so the world's oracle model (SCM.oracle_model)
     # can be rebuilt from the SCM alone.
