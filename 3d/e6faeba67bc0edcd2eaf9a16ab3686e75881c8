@@ -1,0 +1,32 @@
+CHANGELOG.md
+  h_d36ca8649a0e95 13-29
+README.md
+  h_d36ca8649a0e95 415,445-476
+docs/guide/corpus.md
+  h_d36ca8649a0e95 262,290-314
+docs/reference/config.md
+  h_d36ca8649a0e95 96-132
+docs_gen/build_examples_nb.py
+  h_d36ca8649a0e95 109,174,177,231,275,339,501
+docs_gen/build_simple_model_nb.py
+  h_d36ca8649a0e95 81,159,180,187
+prior_generator/data_generator.py
+  h_d36ca8649a0e95 115-117
+prior_generator/presets.py
+  h_d36ca8649a0e95 10-11,84-89
+prior_generator/sampler.py
+  h_d36ca8649a0e95 273-295,400,796-809,865,891-895,923-927,929,933-935,1011-1013,1028,1031-1033,1037,1039-1040,1042,1045,1047-1048,1050,1053,1055-1056,1058-1059,1062,1064-1065,1067-1068,1868
+tests/test_dead_channels.py
+  h_d36ca8649a0e95 1-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3de6faeba67bc0edcd2eaf9a16ab3686e75881c8",
+  "prompts": {},
+  "humans": {
+    "h_d36ca8649a0e95": {
+      "author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
