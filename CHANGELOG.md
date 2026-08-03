@@ -10,6 +10,23 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **Dead-channel floor** (`min_dead_channels`): the minimum number of *active*
+  channels a cell must leave with no direct `C→Y` arrow — spend observed, true
+  contribution exactly zero, i.e. the negative class for any direct-effect
+  signal. `edge_budget["cy"]` could not express it: a budget is an absolute
+  arrow count clamped to the active channels, so a cell drawing 2 active
+  channels under `cy=(2, 10)` has both live (measured: 18 of 40 cells under a
+  `(2, 10)`-active / `(2, 10)`-cy recipe carried no dead channel), which forced
+  corpora to be partitioned by active count to keep both classes. The floor caps
+  the per-cell live count at `max(1, K_active − min_dead_channels)` on both the
+  budget and the Bernoulli path, keeps the degenerate `cy ≥ 1` guard, still
+  scatters live channels over *all* active slots so slot index stays
+  uninformative, rejects a floor the smallest drawable cell could not honour
+  (`min_dead_channels < n_treatments_active_range[0]`), and echoes the resolved
+  value in `diagnostics["min_dead_channels"]`. One config with
+  `n_treatments_active_range=(2, 10)`, `cy=(1, 10)` and `min_dead_channels=1`
+  now spans 1–9 live channels and always carries a dead one. `0` (the default)
+  is inert: identical draws, no extra RNG.
 - **Auditable single-world structural equations**: `SCM.equations` renders the
   executed vector-valued Pearl SCM for every `D`, `Z`, `C`, `B`, and `Y` node;
   `SCM.equation_parameters` exposes the realized active coefficients and

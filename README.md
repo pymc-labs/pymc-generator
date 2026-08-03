@@ -412,7 +412,7 @@ serves every level:
 | Axis | How | Knobs |
 | --- | --- | --- |
 | **Graph size** | how many nodes are live | `n_treatments`, `n_covariates`, `n_latent`, and their `*_active_range`s |
-| **Interactions** | how many arrows of each type | `edge_budget` (per-type "pot") |
+| **Interactions** | how many arrows of each type | `edge_budget` (per-type "pot"), `min_dead_channels` |
 | **Nonlinearity** | media-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` (e.g. `rw_sales_std_sigma`, coefficient ranges) |
 | **Texture** | channels' high-frequency drive | `texture="diverse"` |
@@ -441,6 +441,38 @@ cfg = pg.make_scm_prior(
 - Edge types **omitted** from the dict keep their per-pair Bernoulli base rate —
   budgeting `zc` leaves `zb` untouched.
 - `cy` keeps its `≥ 1` floor (a world always has at least one direct channel).
+
+### The dead-channel floor
+
+A **dead** channel is an *active* channel with no direct `C→Y` arrow: its spend is
+observed and its true contribution is exactly zero. It is the negative class for
+any consumer learning *which* channels move sales — and `edge_budget["cy"]` alone
+cannot guarantee one. A budget is an absolute arrow count clamped to the eligible
+slots, so a task that draws few active channels can have every one of them live:
+with `n_treatments_active_range=(2, 10)` and `cy=(2, 10)`, **18 of 40** cells came
+out fully live (measured). `min_dead_channels` caps the live count instead:
+
+```python
+cfg = pg.make_scm_prior(
+    n_treatments=10, n_covariates=6, n_latent=3,
+    n_treatments_active_range=(2, 10),   # 2–10 active channels per task
+    edge_budget={"cy": (1, 10)},
+    min_dead_channels=1,                 # ≥ 1 active channel never reaches Y
+)
+```
+
+- The live count is `min(cy draw, K_active − min_dead_channels)`, never below `1`
+  (the `cy ≥ 1` guard still wins). The config above spans **1–9 live** channels
+  over 2–10 active ones in a *single* recipe and always leaves a dead one, so no
+  corpus needs to be partitioned by active count to keep both classes.
+- Live channels are still scattered over **all** active slots — slot index says
+  nothing about the label.
+- `min_dead_channels` must be `< n_treatments_active_range[0]`: otherwise the
+  smallest task a config can draw could not honour both the floor and the `cy ≥ 1`
+  guard. `make_scm_prior` rejects it rather than silently dropping the floor.
+- "Dead" means *no direct arrow*. Under a `cc` budget a dead channel can still
+  reach `Y` through another channel (a **feeder**); pin `edge_budget={"cc": 0}` if
+  the floor must also mean "no path to `Y`".
 
 ## Outputs
 

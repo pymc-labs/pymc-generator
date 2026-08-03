@@ -106,7 +106,7 @@ cells = [
     ),
     code(
         "def show(plot_fn, world, title):\n"
-        "    \"\"\"Render one of the viz helpers inline.\"\"\"\n"
+        '    """Render one of the viz helpers inline."""\n'
         "    path = os.path.join(tempfile.mkdtemp(), 'fig.png')\n"
         "    plot_fn(world, path, title)\n"
         "    display(Image(filename=path))\n"
@@ -171,13 +171,10 @@ cells = [
         "world, and `world.equation_parameters` gives the realised numbers behind\n"
         "them — so a world is auditable without reading the source."
     ),
-    code(
-        "for node in ('C1', 'B', 'Y'):\n"
-        "    print(f'{node}:  {world.equations[node]}\\n')"
-    ),
+    code("for node in ('C1', 'B', 'Y'):\n    print(f'{node}:  {world.equations[node]}\\n')"),
     code(
         "def fmt(group, places=3):\n"
-        "    \"\"\"Readable one-line view of a walk / noise parameter group.\"\"\"\n"
+        '    """Readable one-line view of a walk / noise parameter group."""\n'
         "    out = {}\n"
         "    for key, value in group.items():\n"
         "        array = np.asarray(value)\n"
@@ -231,7 +228,7 @@ cells = [
         "print('saturation families:', SATURATION_FAMILY_KEYS)\n"
         "\n"
         "def pin(adstock, saturation):\n"
-        "    \"\"\"Family probability dicts that select exactly one family each.\"\"\"\n"
+        '    """Family probability dicts that select exactly one family each."""\n'
         "    return {\n"
         "        'adstock_family_probs': {**dict.fromkeys(ADSTOCK_FAMILY_KEYS, 0.0), adstock: 1.0},\n"
         "        'saturation_family_probs': {\n"
@@ -275,7 +272,7 @@ cells = [
         "\n"
         "A saturating, carryover-smoothed response can only be *identified* if spend\n"
         "actually moves across the curve. Three knobs drive that, all relative to the\n"
-            "channel's own level so they are scale-free:\n"
+        "channel's own level so they are scale-free:\n"
         "\n"
         "- `rw_channel_std_range` — the slow walk in spend,\n"
         "- `channel_hf_sigma_range` — iid weekly execution noise,\n"
@@ -339,7 +336,7 @@ cells = [
     ),
     code(
         "def outcome_ratio(w):\n"
-        "    \"\"\"sd(unrepresentable outcome terms) / sd(total media contribution).\"\"\"\n"
+        '    """sd(unrepresentable outcome terms) / sd(total media contribution)."""\n'
         "    start = w.cfg.l_max\n"
         "    residual = (np.asarray(w.data['baseline_intrinsic'])\n"
         "                + np.asarray(w.data['confounder_contribution']).sum(1))[start:]\n"
@@ -501,7 +498,7 @@ cells = [
         "innovation into every channel innovation. That makes the model\n"
         "*semi-Markovian* — an unobserved common cause with no node of its own — so\n"
         "back-door adjustment on observables is not licensed either. Every\n"
-        "\"the graph satisfies the adjustment criterion\" claim in these docs assumes\n"
+        '"the graph satisfies the adjustment criterion" claim in these docs assumes\n'
         "`rho = 0`."
     ),
     code(

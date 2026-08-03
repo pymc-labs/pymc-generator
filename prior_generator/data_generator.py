@@ -112,6 +112,9 @@ class DataGenerator:
     ) -> list[dict[str, np.ndarray]]:
         """Generate data in batches of at least two worlds.
 
+        Every corpus carries its own cell-level train/validation split, so a
+        batch cannot be a single world.
+
         Parameters
         ----------
         n_tasks : int
@@ -122,9 +125,6 @@ class DataGenerator:
             Base random seed.
         validate : bool
             Whether to validate each batch.
-
-        Batches are at least two worlds because every corpus carries its own
-        cell-level train/validation split.
 
         Returns
         -------

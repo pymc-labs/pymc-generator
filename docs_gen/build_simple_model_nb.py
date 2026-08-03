@@ -78,7 +78,7 @@ cells = [
     ),
     code(
         "def pin(adstock, saturation):\n"
-        "    \"\"\"Family probability dicts that select exactly one family each.\"\"\"\n"
+        '    """Family probability dicts that select exactly one family each."""\n'
         "    return {\n"
         "        'adstock_family_probs': {**dict.fromkeys(ADSTOCK_FAMILY_KEYS, 0.0), adstock: 1.0},\n"
         "        'saturation_family_probs': {\n"
@@ -156,7 +156,7 @@ cells = [
         "TRUTH = np.asarray(world.data['contributions_observed'])\n"
         "\n"
         "def score(samples, dim, label):\n"
-        "    \"\"\"Cumulative + shape recovery of per-channel contributions.\"\"\"\n"
+        '    """Cumulative + shape recovery of per-channel contributions."""\n'
         "    s = samples.isel(date=slice(START, None))\n"
         "    totals = s.sum('date').quantile([0.03, 0.5, 0.97], dim=('chain', 'draw'))\n"
         "    mean_path = s.mean(('chain', 'draw'))\n"
@@ -177,14 +177,14 @@ cells = [
         "    return pd.DataFrame(rows)\n"
         "\n"
         "def geometry(idata, label, seconds):\n"
-        "    \"\"\"Sampler-side facts over EVERY posterior variable, unrounded.\n"
+        '    """Sampler-side facts over EVERY posterior variable, unrounded.\n'
         "\n"
         "    Deterministics included on purpose: it keeps this table exactly as\n"
         "    conservative as pymc's own convergence warning, so the two can never\n"
         "    disagree about how healthy a fit looks. `az.rhat` / `az.ess` are used\n"
         "    directly because `az.summary` rounds r-hat to 2 significant figures,\n"
         "    which hides exactly the 1.01-1.05 band this notebook cares about.\n"
-        "    \"\"\"\n"
+        '    """\n'
         "    stats = idata['sample_stats'] if 'sample_stats' in idata else idata.sample_stats\n"
         "    rhat = az.rhat(idata)\n"
         "    ess = az.ess(idata, method='bulk')\n"

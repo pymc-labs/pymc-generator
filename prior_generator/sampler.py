@@ -270,6 +270,29 @@ class SCMPrior:
     # budget that draws 0 still yields exactly one C->Y edge.
     edge_budget: dict[str, int | tuple[int, int]] | None = None
 
+    # Negative-class floor for the direct-effect (C->Y) support signal: the
+    # minimum number of ACTIVE channels a cell must leave *dead* — spend
+    # observed, no direct C->Y arrow, true contribution exactly zero.
+    # 0 (default) => byte-identical legacy draws.
+    #
+    # This is not expressible through ``edge_budget["cy"]``: a cy budget is an
+    # absolute arrow count clamped to the eligible slots, so a cell that draws
+    # few active channels can have every one of them live — cy=(2, 10) with
+    # K_active=2 gives 2 live, 0 dead. Measured on a (2, 10)-active /
+    # (2, 10)-cy recipe: 18 of 40 cells carried no dead channel at all, i.e. no
+    # negative class to learn from. The floor caps the live count at
+    # ``K_active - min_dead_channels`` (never below 1 — the degenerate C->Y
+    # guard wins) while still scattering the live channels over ALL active
+    # slots, so slot index carries no information about the label. One config
+    # with ``n_treatments_active_range=(2, 10)`` and ``min_dead_channels=1``
+    # then spans 1..9 live channels and always leaves >= 1 dead channel.
+    #
+    # "Dead" means no DIRECT arrow. Under a ``cc`` budget a dead channel can
+    # still reach Y through another channel (``worlds.channel_role`` calls that
+    # a feeder); pin ``edge_budget={"cc": 0}`` if the floor must also mean "no
+    # path to Y".
+    min_dead_channels: int = 0
+
     @property
     def layout(self) -> SlotLayout:
         return SlotLayout(
@@ -374,6 +397,7 @@ class SCMPrior:
             ("draws_per_cell", 1),
             ("T", 4),
             ("seed", 0),
+            ("min_dead_channels", 0),
         ):
             _integer(name, getattr(self, name), minimum=minimum)
         _finite_real("query_frac", self.query_frac, positive=True)
@@ -769,6 +793,20 @@ class SCMPrior:
             size = getattr(self, size_name)
             if lo > size:
                 raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
+        # The dead-channel floor must be satisfiable in the SMALLEST cell a
+        # config can draw: that cell has n_treatments_active_range[0] active
+        # channels and the degenerate guard keeps one of them live, so the floor
+        # needs one slot more than itself. Rejecting this here is what makes
+        # "every cell has a negative class" a config-level guarantee instead of
+        # a per-cell accident.
+        if self.min_dead_channels:
+            active_lo = self.n_treatments_active_range[0]
+            if active_lo <= self.min_dead_channels:
+                raise ValueError(
+                    f"min_dead_channels ({self.min_dead_channels}) must be < "
+                    f"n_treatments_active_range[0] ({active_lo}) so every cell can keep at "
+                    "least one live channel besides the dead ones"
+                )
 
 
 def _resolve_budget(rng: np.random.Generator, spec: int | tuple[int, int], n_eligible: int) -> int:
@@ -824,6 +862,7 @@ def _sample_g(
     J_active: int | None = None,
     rates: dict[str, float] | None = None,
     budget: dict[str, int | tuple[int, int]] | None = None,
+    min_dead: int = 0,
 ) -> dict[str, np.ndarray]:
     """Draw one DAG cell from the slot base rates (0/1 numpy arrays).
 
@@ -849,6 +888,11 @@ def _sample_g(
         Bernoulli (see ``_resolve_budget`` / ``_scatter``). Types absent from
         the dict keep their Bernoulli rate; with ``budget=None`` (or ``{}``)
         the RNG stream is byte-identical to the legacy path.
+    min_dead : int
+        Minimum number of active channels left with no direct C->Y edge (see
+        ``SCMPrior.min_dead_channels``). Caps the live count at
+        ``max(1, K_active - min_dead)``; 0 (default) is inert and consumes no
+        extra RNG.
 
     Returns
     -------
@@ -876,11 +920,19 @@ def _sample_g(
     # Generate edges only for active nodes; pad rest with zeros
     g_cy = np.zeros(K_max)
     if K_active > 0:
+        # Cap the live count so the cell keeps `min_dead` active channels with
+        # no direct C->Y edge (the negative class). Live channels are still
+        # scattered over ALL active slots — reserving the tail slots instead
+        # would make slot index predict the label.
+        n_live_max = max(1, K_active - max(0, min_dead))
         if _budget.get("cy") is not None:
-            n = _resolve_budget(rng, _budget["cy"], K_active)
+            n = _resolve_budget(rng, _budget["cy"], n_live_max)
             g_cy[:K_active] = _scatter(rng, n, K_active)
         else:
             g_cy[:K_active] = rng.binomial(1, _rates["cy"], size=K_active)
+            live = np.flatnonzero(g_cy[:K_active])
+            if live.size > n_live_max:  # unreachable when min_dead == 0
+                g_cy[rng.choice(live, size=live.size - n_live_max, replace=False)] = 0.0
         # Degenerate guard: ensure at least one C->Y edge in active range
         if not g_cy[:K_active].any():
             g_cy[rng.integers(0, K_active)] = 1.0
@@ -956,6 +1008,9 @@ def sample_g_additive(
     reported in ``channel_active`` (all channels remain observed; the
     degenerate guard only forces at least one C->Y edge).
 
+    ``cfg.min_dead_channels`` caps how many active channels may be live, so a
+    cell can be made to always carry both classes of the direct-effect signal.
+
     Returns
     -------
     dict with the 8 g-blocks at max (padded) sizes — ``g_cc``/``g_zz`` as
@@ -970,46 +1025,47 @@ def sample_g_additive(
         J_active=J_active,
         rates=cfg.edge_rate_overrides,
         budget=cfg.edge_budget,
+        min_dead=cfg.min_dead_channels,
     )
     K_max, M_max, J_max = layout.K, layout.M, layout.J
-    K_act = base["K_active"]
-    M_act = base["M_active"]
-    J_act = base["J_active"]
+    K_active = base["K_active"]
+    M_active = base["M_active"]
+    J_active = base["J_active"]
     _budget = cfg.edge_budget or {}
 
     g_dz = np.zeros((J_max, M_max))
-    if J_act > 0 and M_act > 0:
+    if J_active > 0 and M_active > 0:
         if _budget.get("dz") is not None:
-            n = _resolve_budget(rng, _budget["dz"], J_act * M_act)
-            g_dz[:J_act, :M_act] = _scatter(rng, n, J_act * M_act).reshape(J_act, M_act)
+            n = _resolve_budget(rng, _budget["dz"], J_active * M_active)
+            g_dz[:J_active, :M_active] = _scatter(rng, n, J_active * M_active).reshape(J_active, M_active)
         else:
-            g_dz[:J_act, :M_act] = rng.binomial(1, cfg.dz_base_rate, size=(J_act, M_act))
+            g_dz[:J_active, :M_active] = rng.binomial(1, cfg.dz_base_rate, size=(J_active, M_active))
 
     g_zc = np.zeros((M_max, K_max))
-    if M_act > 0 and K_act > 0:
+    if M_active > 0 and K_active > 0:
         if _budget.get("zc") is not None:
-            n = _resolve_budget(rng, _budget["zc"], M_act * K_act)
-            g_zc[:M_act, :K_act] = _scatter(rng, n, M_act * K_act).reshape(M_act, K_act)
+            n = _resolve_budget(rng, _budget["zc"], M_active * K_active)
+            g_zc[:M_active, :K_active] = _scatter(rng, n, M_active * K_active).reshape(M_active, K_active)
         else:
-            g_zc[:M_act, :K_act] = rng.binomial(1, cfg.zc_base_rate, size=(M_act, K_act))
+            g_zc[:M_active, :K_active] = rng.binomial(1, cfg.zc_base_rate, size=(M_active, K_active))
 
     g_cc = np.zeros((K_max, K_max))
-    if K_act > 1:
+    if K_active > 1:
         if _budget.get("cc") is not None:
-            n = _resolve_budget(rng, _budget["cc"], K_act * (K_act - 1) // 2)
-            _scatter_triu(rng, K_act, n, g_cc)  # strict upper: src < dst
+            n = _resolve_budget(rng, _budget["cc"], K_active * (K_active - 1) // 2)
+            _scatter_triu(rng, K_active, n, g_cc)  # strict upper: src < dst
         else:
-            draws = rng.binomial(1, cfg.cc_base_rate, size=(K_act, K_act))
-            g_cc[:K_act, :K_act] = np.triu(draws, k=1)  # strict upper: src < dst
+            draws = rng.binomial(1, cfg.cc_base_rate, size=(K_active, K_active))
+            g_cc[:K_active, :K_active] = np.triu(draws, k=1)  # strict upper: src < dst
 
     g_zz = np.zeros((M_max, M_max))
-    if M_act > 1:
+    if M_active > 1:
         if _budget.get("zz") is not None:
-            n = _resolve_budget(rng, _budget["zz"], M_act * (M_act - 1) // 2)
-            _scatter_triu(rng, M_act, n, g_zz)
+            n = _resolve_budget(rng, _budget["zz"], M_active * (M_active - 1) // 2)
+            _scatter_triu(rng, M_active, n, g_zz)
         else:
-            draws = rng.binomial(1, cfg.zz_base_rate, size=(M_act, M_act))
-            g_zz[:M_act, :M_act] = np.triu(draws, k=1)
+            draws = rng.binomial(1, cfg.zz_base_rate, size=(M_active, M_active))
+            g_zz[:M_active, :M_active] = np.triu(draws, k=1)
 
     # Channel-activation rule (D1b): direct C->Y OR outgoing C->C
     channel_active = ((base["g_cy"] == 1) | (g_cc.sum(axis=1) > 0)).astype("float64")
@@ -1809,6 +1865,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             if cfg.edge_budget
             else None
         ),
+        "min_dead_channels": int(cfg.min_dead_channels),
     }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
