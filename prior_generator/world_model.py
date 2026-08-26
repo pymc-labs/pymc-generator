@@ -26,15 +26,16 @@ between the generative and oracle builders so they cannot drift.
 
 from __future__ import annotations
 
-from functools import lru_cache
-from typing import Any, Literal
+from collections.abc import Callable
+from typing import Any, Literal, cast
 
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
+from pytensor.tensor.sharedvar import SharedVariable
 
 from . import mechanisms
-from .random_walk import _centred_walk_scale, _kernel_width, _smooth_columns_numpy
+from .random_walk import _kernel_width, _walk_basis
 from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
 from .symbolic_graph import (
     _adstock_col,
@@ -42,6 +43,136 @@ from .symbolic_graph import (
     _walk_column,
     build_symbolic_graph,
 )
+
+# Compiling a draw function costs seconds, so repeated batches from the SAME
+# model (realism-filter top-up rounds) reuse one. The cache lives on the model
+# object rather than in a module-level dict keyed by ``id(model)``: CPython
+# recycles ids after garbage collection, so a global would eventually hand a
+# stale function to a brand-new model. Attaching it also ties the cache's
+# lifetime to the model's, which is exactly the intended scope.
+_DRAW_FN_CACHE_ATTR = "_prior_generator_draw_fn_cache"
+
+DRAW_FN_CACHE_HITS = 0
+DRAW_FN_CACHE_MISSES = 0
+USE_COMPILE_CACHE = True
+
+
+def set_compile_cache_enabled(enabled: bool) -> None:
+    """Toggle the per-model compiled-draw-function cache (for benchmarks)."""
+    global USE_COMPILE_CACHE
+    USE_COMPILE_CACHE = bool(enabled)
+
+
+def reset_world_model_caches() -> None:
+    """Reset the compile-cache counters (for tests and benchmarks).
+
+    The cache itself is per-model, so it is discarded with the model and needs no
+    explicit clearing.
+    """
+    global DRAW_FN_CACHE_HITS, DRAW_FN_CACHE_MISSES
+    DRAW_FN_CACHE_HITS = 0
+    DRAW_FN_CACHE_MISSES = 0
+
+
+def _structure_compile_inputs(input_vars: list) -> tuple[list, dict]:
+    """Map ``pm.Data`` shared variables to explicit tensor inputs via ``givens``."""
+    givens: dict = {}
+    inputs: list = []
+    for var in input_vars:
+        if isinstance(var, SharedVariable):
+            placeholder = pt.tensor(
+                name=f"{var.name}_input",
+                dtype=var.type.dtype,
+                shape=var.type.shape,
+            )
+            givens[var] = placeholder
+            inputs.append(placeholder)
+        else:
+            inputs.append(var)
+    return inputs, givens
+
+
+def _get_cached_draw_fn(
+    model: pm.Model,
+    out_vars: list,
+    *,
+    mode: str,
+    reference_vars: list | None,
+    input_vars: list | None = None,
+) -> tuple[Callable[..., Any], list]:
+    """Compile a draw function for ``model``, reusing this model's earlier one.
+
+    The RNG list is ordered so that every RNG already reachable from
+    ``reference_vars`` keeps its position; newly reachable ones are appended.
+    That ordering is what makes ``reseed_rngs`` reproduce the same streams when a
+    caller asks for additional outputs.
+    """
+    from pymc.pytensorf import collect_default_updates
+    from pymc.pytensorf import compile as compile_pymc
+
+    global DRAW_FN_CACHE_HITS, DRAW_FN_CACHE_MISSES
+
+    input_vars = input_vars or []
+    compile_inputs, givens = _structure_compile_inputs(input_vars)
+    cache_key = (
+        tuple(v.name for v in out_vars),
+        tuple(v.name for v in input_vars),
+        mode,
+        tuple(v.name for v in reference_vars) if reference_vars else None,
+    )
+    cache: dict[tuple[Any, ...], tuple[Callable[..., Any], list]] | None = None
+    if USE_COMPILE_CACHE:
+        cache = getattr(model, _DRAW_FN_CACHE_ATTR, None)
+        if cache is None:
+            cache = {}
+            object.__setattr__(model, _DRAW_FN_CACHE_ATTR, cache)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            DRAW_FN_CACHE_HITS += 1
+            return cached
+        DRAW_FN_CACHE_MISSES += 1
+
+    with model:
+        draw_fn = compile_pymc(
+            inputs=compile_inputs,
+            outputs=out_vars,
+            mode=mode,
+            **({"givens": givens} if givens else {}),
+        )
+    output_rngs = list(collect_default_updates(inputs=compile_inputs, outputs=out_vars))
+    if reference_vars is None:
+        ordered_rngs = output_rngs
+    else:
+        reference_rngs = list(
+            collect_default_updates(inputs=compile_inputs, outputs=reference_vars)
+        )
+        ordered_rngs = reference_rngs + [rng for rng in output_rngs if rng not in reference_rngs]
+    if cache is not None:
+        cache[cache_key] = (draw_fn, ordered_rngs)
+    return draw_fn, ordered_rngs
+
+
+def _execute_draws(
+    draw_fn: Callable[..., Any],
+    ordered_rngs: list,
+    *,
+    seed: int,
+    draws: int,
+    input_args: tuple[Any, ...] = (),
+) -> list | tuple:
+    """Reseed and run ``draws`` forward passes without recompiling.
+
+    ``draw_fn`` is always compiled with a *list* of outputs, so it returns one
+    element per output even when a single name was requested.
+    """
+    from pymc.pytensorf import reseed_rngs
+    from pymc.util import _get_seeds_per_chain
+
+    (compile_seed,) = _get_seeds_per_chain(np.random.default_rng(seed), 1)
+    reseed_rngs(ordered_rngs, compile_seed)
+    if draws == 1:
+        return cast("list | tuple", draw_fn(*input_args))
+    return [np.stack(values) for values in zip(*(draw_fn(*input_args) for _ in range(draws)))]
 
 
 def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) -> dict:
@@ -298,6 +429,7 @@ def _rw_prior_group(
     std_range=None,
     relative=False,
     std_name: str | None = None,
+    width_index=None,
 ):
     """One node group's scale priors and optional concrete smoothing timescale.
 
@@ -305,8 +437,12 @@ def _rw_prior_group(
     definition of the walk and iid-noise priors — the generative draw and the
     posterior oracle both build their parameters here, so they cannot drift.
     ``std_range`` and ``std_sigma`` are mutually exclusive scale definitions.
-    ``smoothness=None`` denotes iid noise and deliberately omits every
-    random-walk-only field from the returned group.
+    A group is a random walk when it carries a smoothing timescale, given either
+    as a concrete ``smoothness`` or as already-resolved ``width_index`` kernel
+    widths (see :func:`prior_generator.random_walk.walk_width_index`). Width
+    indices may be tensors, which is what lets the width stay a run-time value
+    instead of a compile-time one. With neither, the group is iid noise and every
+    random-walk-only field is deliberately omitted.
     """
     if std_range is not None and std_sigma is not None:
         raise ValueError("std_range and std_sigma are mutually exclusive")
@@ -324,14 +460,17 @@ def _rw_prior_group(
         "std": std,
         "positive_only": positive,
     }
-    if smoothness is None:
+    if smoothness is None and width_index is None:
         if rw_smoothness_max_weeks is not None:
             raise ValueError("iid noise must not carry rw_smoothness_max_weeks")
     else:
         if rw_smoothness_max_weeks is None:
             raise ValueError("random walks require rw_smoothness_max_weeks")
-        out["smoothness"] = smoothness
         out["rw_smoothness_max_weeks"] = rw_smoothness_max_weeks
+        if smoothness is not None:
+            out["smoothness"] = smoothness
+        if width_index is not None:
+            out["width_index"] = width_index
     return out
 
 
@@ -342,6 +481,7 @@ def _walk_priors(
     n_covariates: int,
     n_latent: int,
     include: tuple[str, ...] = ("d", "z", "c", "b", "y"),
+    width_indices: dict[str, Any] | None = None,
 ) -> dict[str, dict]:
     """Walk-prior groups per node type, registered in the LOCKED d/z/c/b/y order.
 
@@ -350,8 +490,13 @@ def _walk_priors(
     confounders. ``include`` selects the groups a model needs (the oracle
     skips the ones replaced by observed data); relative order is always
     preserved.
+
+    ``width_indices`` optionally maps a group name to its resolved kernel-width
+    indices, which keeps random-walk smoothness a run-time value (see
+    :func:`_rw_prior_group`).
     """
     out: dict[str, dict] = {}
+    widths = width_indices or {}
     rw_smoothness_max_weeks = cfg.rw_smoothness_max_weeks
     if "d" in include:
         # A latent factor carries no scale or level of its own: both belong to
@@ -373,9 +518,10 @@ def _walk_priors(
             n_latent,
             False,
             (0.0, 0.0),
-            structural["smoothness_d"],
+            structural.get("smoothness_d"),
             rw_smoothness_max_weeks=rw_smoothness_max_weeks,
             std_range=(1.0, 1.0),
+            width_index=widths.get("rw_d"),
         )
     if "z" in include:
         out["rw_z"] = _rw_prior_group(
@@ -383,9 +529,10 @@ def _walk_priors(
             n_covariates,
             False,
             cfg.rw_mean_range,
-            structural["smoothness_z"],
+            structural.get("smoothness_z"),
             std_sigma=cfg.rw_std_sigma,
             rw_smoothness_max_weeks=rw_smoothness_max_weeks,
+            width_index=widths.get("rw_z"),
         )
     if "c" in include:
         out["rw_c"] = _rw_prior_group(
@@ -393,10 +540,11 @@ def _walk_priors(
             n_treatments,
             True,
             cfg.rw_positive_mean_range,
-            structural["smoothness_c"],
+            structural.get("smoothness_c"),
             rw_smoothness_max_weeks=rw_smoothness_max_weeks,
             std_range=cfg.rw_channel_std_range,
             relative=True,
+            width_index=widths.get("rw_c"),
         )
     if "b" in include:
         if cfg.outcome_std_mode == "relative":
@@ -405,10 +553,11 @@ def _walk_priors(
                 1,
                 False,
                 cfg.rw_baseline_mean_range,
-                structural["smoothness_b"],
+                structural.get("smoothness_b"),
                 rw_smoothness_max_weeks=rw_smoothness_max_weeks,
                 std_range=cfg.rw_baseline_std_range,
                 std_name="rw_b_std_rel",
+                width_index=widths.get("rw_b"),
             )
         else:
             out["rw_b"] = _rw_prior_group(
@@ -416,9 +565,10 @@ def _walk_priors(
                 1,
                 False,
                 cfg.rw_baseline_mean_range,
-                structural["smoothness_b"],
+                structural.get("smoothness_b"),
                 rw_smoothness_max_weeks=rw_smoothness_max_weeks,
                 std_sigma=cfg.rw_baseline_std_sigma_effective,
+                width_index=widths.get("rw_b"),
             )
     if "y" in include:
         if cfg.outcome_std_mode == "relative":
@@ -441,7 +591,168 @@ def _walk_priors(
     return out
 
 
-def _apply_outcome_std_scale(cfg: SCMPrior, rw: dict[str, dict], g_cy: np.ndarray, beta) -> None:
+def _scm_params(
+    cfg: SCMPrior,
+    specs: dict[str, tuple[str, float, float, Any]],
+    rw: dict[str, dict],
+    c_level,
+    *,
+    adstock_family,
+    sat_family,
+    use_hf,
+    use_pulse,
+) -> dict[str, Any]:
+    """Every continuous SCM parameter, in the LOCKED RV creation order.
+
+    Shared by :func:`build_world_model` and
+    :func:`prior_generator.world_model_batched.build_world_model_template` so the
+    per-world and one-compile-per-shard paths cannot drift apart.
+
+    The order is load-bearing: ``reseed_rngs`` hands out random streams by
+    position in the collected RNG list, so inserting, removing, or reordering a
+    draw here changes every generated world.
+    """
+    pulse_prob = _uniform(*specs["pulse_prob"])
+    return {
+        "l_max": cfg.l_max,
+        # linear edge coefficients
+        "w_dc": _uniform(*specs["w_dc"]),
+        "u_dz": _uniform(*specs["u_dz"]),
+        "v_zc": _uniform(*specs["v_zc"]),
+        "alpha_cc": _uniform(*specs["alpha_cc"]),
+        "gamma_zz": _uniform(*specs["gamma_zz"]),
+        "delta_db": _uniform(*specs["delta_db"]),
+        "rho_zb": _uniform(*specs["rho_zb"]),
+        "beta": _uniform(*specs["beta"]),
+        # per-node random walks and iid outcome noise
+        "rw_d": rw["rw_d"],
+        "rw_z": rw["rw_z"],
+        "rw_c": rw["rw_c"],
+        "rw_b": rw["rw_b"],
+        "rw_y": rw["rw_y"],
+        "adstock_family": adstock_family,
+        "sat_family": sat_family,
+        **{name: _uniform(*specs[name]) for name in _MECHANISM_PARAM_NAMES},
+        # channel texture: magnitudes relative to the channel level; fires
+        # are Bernoulli(pulse_prob)
+        "hf_sigma": _uniform(*specs["hf_sigma"]) * c_level,
+        "pulse_amp": _uniform(*specs["pulse_amp"]) * c_level,
+        "pulse_prob": pulse_prob,
+        "use_hf": use_hf,
+        "use_pulse": use_pulse,
+    }
+
+
+def _scm_eps(
+    n_time_steps_full: int,
+    n_treatments: int,
+    n_covariates: int,
+    n_latent: int,
+    pulse_prob,
+) -> dict[str, Any]:
+    """The graph's noise RVs, in the LOCKED creation order (see :func:`_scm_params`)."""
+    return {
+        "eps_d": pm.Normal("eps_d", 0.0, 1.0, shape=(n_time_steps_full, n_latent)),
+        "eps_z": pm.Normal("eps_z", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
+        "eps_c": pm.Normal("eps_c", 0.0, 1.0, shape=(n_time_steps_full, n_treatments)),
+        "eps_b": pm.Normal("eps_b", 0.0, 1.0, shape=(n_time_steps_full,)),
+        "eps_y": pm.Normal("eps_y", 0.0, 1.0, shape=(n_time_steps_full,)),
+        "eps_c_hf": pm.Normal("eps_c_hf", 0.0, 1.0, shape=(n_time_steps_full, n_treatments)),
+        "eps_c_pulse": pm.Bernoulli(
+            "eps_c_pulse",
+            p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
+            shape=(n_time_steps_full, n_treatments),
+        ).astype("float64"),
+    }
+
+
+def _register_param_reports(
+    params: dict[str, Any],
+    rw: dict[str, dict],
+    c_level,
+    confounding_strength,
+) -> tuple[str, ...]:
+    """Register every continuous parameter as a ``param_*`` deterministic.
+
+    A sampled world then carries all the concrete inputs needed to replay its
+    structural graph. Families and smoothness are concrete structure already and
+    are reported with their corresponding groups.
+    """
+    report_specs: dict[str, Any] = {
+        # linear edge coefficients
+        "beta": params["beta"],
+        "w_dc": params["w_dc"],
+        "u_dz": params["u_dz"],
+        "v_zc": params["v_zc"],
+        "alpha_cc": params["alpha_cc"],
+        "gamma_zz": params["gamma_zz"],
+        "delta_db": params["delta_db"],
+        "rho_zb": params["rho_zb"],
+        # every per-channel mechanism shape parameter
+        **{name: params[name] for name in _MECHANISM_PARAM_NAMES},
+        # channel texture magnitudes and fire probability
+        "hf_sigma": params["hf_sigma"],
+        "pulse_amp": params["pulse_amp"],
+        "pulse_prob": params["pulse_prob"],
+    }
+    for group_name in ("rw_d", "rw_z", "rw_c", "rw_b", "rw_y"):
+        report_specs[f"{group_name}_mean"] = rw[group_name]["mean"]
+        report_specs[f"{group_name}_std"] = rw[group_name]["std"]
+    report_specs["channel_level"] = c_level
+    report_specs["confounding_strength"] = confounding_strength
+    for key, tensor in report_specs.items():
+        pm.Deterministic(f"param_{key}", tensor)
+    return tuple(f"param_{k}" for k in report_specs)
+
+
+def _disabled_shock_outputs(
+    n_time_steps: int, n_time_steps_full: int, n_treatments: int
+) -> dict[str, Any]:
+    """Zero-sized stand-ins for the channel-shock outputs, for configs without shocks.
+
+    Corpora always carry the shock columns, but a disabled schedule must stay out
+    of the structural graph and the RV stream entirely, so these are constants
+    rather than a degenerate schedule.
+    """
+    return {
+        "channel_shock_mask": pt.zeros((n_time_steps, n_treatments), dtype="int8"),
+        "channel_shock_mask_full": pt.zeros((n_time_steps_full, n_treatments), dtype="int8"),
+        "channel_shock_channel": pt.zeros((0,), dtype="int64"),
+        "channel_shock_start": pt.zeros((0,), dtype="int64"),
+        "channel_shock_length": pt.zeros((0,), dtype="int64"),
+        "channel_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
+        "channel_shock_level": pt.zeros((0,), dtype="float64"),
+    }
+
+
+def _confounded_channel_eps(cfg: SCMPrior, eps: dict[str, Any]):
+    """Resolve the per-world confounding strength and mix it into ``eps_c``.
+
+    Preserves the legacy innovation dictionary and graph path exactly when
+    confounding is disabled, including its explicit ``(0.0, 0.0)`` spelling.
+    When enabled, rho is a single per-world value and only the channel
+    innovation supplied to the graph changes. The orthonormal mixture leaves
+    every channel innovation's marginal variance at one while correlating it
+    with the baseline innovation.
+    """
+    if cfg.confounding_strength_range is None:
+        return pt.as_tensor_variable(np.asarray(0.0, dtype="float64"))
+    lo, hi = cfg.confounding_strength_range
+    if float(lo) == float(hi):
+        confounding_strength = pt.as_tensor_variable(np.asarray(lo, dtype="float64"))
+    else:
+        confounding_strength = pm.Uniform("confounding_strength", lo, hi)
+    if float(hi) > 0.0:
+        eps["eps_c"] = (
+            pt.sqrt(1.0 - confounding_strength**2) * eps["eps_c"]
+            + confounding_strength * eps["eps_b"][:, None]
+        )
+    return confounding_strength
+
+
+def _apply_outcome_std_scale(
+    cfg: SCMPrior, rw: dict[str, dict], g_cy: np.ndarray, beta, *, prefix: str = ""
+) -> None:
     """Convert relative outcome scales to their parameter-only absolute amplitudes.
 
     ``g_cy`` is concrete per world, so the anchor
@@ -455,12 +766,11 @@ def _apply_outcome_std_scale(cfg: SCMPrior, rw: dict[str, dict], g_cy: np.ndarra
         raise ValueError(
             f"outcome_std_mode must be 'relative' or 'absolute', got {cfg.outcome_std_mode!r}"
         )
-    media_amplitude = pt.sqrt(
-        pt.sum((pt.as_tensor_variable(np.asarray(g_cy, dtype="float64")) * beta) ** 2)
-    )
+    g_cy_t = pt.as_tensor_variable(g_cy)
+    media_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
     for group_name in ("rw_b", "rw_y"):
         rw[group_name]["std"] = pm.Deterministic(
-            f"{group_name}_std",
+            f"{prefix}{group_name}_std",
             rw[group_name]["std"] * media_amplitude,
         )
 
@@ -506,21 +816,6 @@ def _live_mechanism_param_names(structural: dict) -> tuple[str, ...]:
     for family_id in np.asarray(structural["sat_family"]):
         live.update(SATURATION_FAMILY_PARAM_NAMES[SATURATION_FAMILY_KEYS[int(family_id)]])
     return tuple(name for name in _MECHANISM_PARAM_NAMES if name in live)
-
-
-@lru_cache(maxsize=64)
-def _walk_basis(n_time_steps: int, width: int) -> np.ndarray:
-    """Return the fixed ``B = A / c`` operator of one signed random walk.
-
-    :func:`symbolic_random_walk` applies cumulative sum, edge-padded moving
-    average, column centring, and then the fixed
-    :func:`_centred_walk_scale` normalization. Its zero-mean walk is therefore
-    exactly ``std * B @ eps`` for the plain float64 matrix returned here.
-    """
-    steps = np.tril(np.ones((n_time_steps, n_time_steps)))
-    columns = _smooth_columns_numpy(steps, width)
-    columns = columns - columns.mean(axis=0, keepdims=True)
-    return np.asarray(columns / _centred_walk_scale(n_time_steps, width))
 
 
 def _uniform_prior_specs(
@@ -661,36 +956,16 @@ def build_world_model(
         shock_outputs = _channel_shock_schedule(
             cfg, g_active["g_cy"], n_time_steps, burn_in, c_level
         )
-        pulse_prob = _uniform(*specs["pulse_prob"])
-
-        params: dict[str, Any] = {
-            "l_max": cfg.l_max,
-            # linear edge coefficients
-            "w_dc": _uniform(*specs["w_dc"]),
-            "u_dz": _uniform(*specs["u_dz"]),
-            "v_zc": _uniform(*specs["v_zc"]),
-            "alpha_cc": _uniform(*specs["alpha_cc"]),
-            "gamma_zz": _uniform(*specs["gamma_zz"]),
-            "delta_db": _uniform(*specs["delta_db"]),
-            "rho_zb": _uniform(*specs["rho_zb"]),
-            "beta": _uniform(*specs["beta"]),
-            # per-node random walks and iid outcome noise
-            "rw_d": rw["rw_d"],
-            "rw_z": rw["rw_z"],
-            "rw_c": rw_c,
-            "rw_b": rw["rw_b"],
-            "rw_y": rw["rw_y"],
-            "adstock_family": structural["adstock_family"],
-            "sat_family": structural["sat_family"],
-            **{name: _uniform(*specs[name]) for name in _MECHANISM_PARAM_NAMES},
-            # channel texture: magnitudes relative to the channel level; fires
-            # are Bernoulli(pulse_prob)
-            "hf_sigma": _uniform(*specs["hf_sigma"]) * c_level,
-            "pulse_amp": _uniform(*specs["pulse_amp"]) * c_level,
-            "pulse_prob": pulse_prob,
-            "use_hf": structural["use_hf"],
-            "use_pulse": structural["use_pulse"],
-        }
+        params = _scm_params(
+            cfg,
+            specs,
+            rw,
+            c_level,
+            adstock_family=structural["adstock_family"],
+            sat_family=structural["sat_family"],
+            use_hf=structural["use_hf"],
+            use_pulse=structural["use_pulse"],
+        )
         _apply_outcome_std_scale(cfg, rw, g_active["g_cy"], params["beta"])
         if cfg.n_channel_shocks:
             params["channel_shock"] = {
@@ -698,39 +973,10 @@ def build_world_model(
                 "level_full": shock_outputs["level_full"],
             }
 
-        eps = {
-            "eps_d": pm.Normal("eps_d", 0.0, 1.0, shape=(n_time_steps_full, n_latent)),
-            "eps_z": pm.Normal("eps_z", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
-            "eps_c": pm.Normal("eps_c", 0.0, 1.0, shape=(n_time_steps_full, n_treatments)),
-            "eps_b": pm.Normal("eps_b", 0.0, 1.0, shape=(n_time_steps_full,)),
-            "eps_y": pm.Normal("eps_y", 0.0, 1.0, shape=(n_time_steps_full,)),
-            "eps_c_hf": pm.Normal("eps_c_hf", 0.0, 1.0, shape=(n_time_steps_full, n_treatments)),
-            "eps_c_pulse": pm.Bernoulli(
-                "eps_c_pulse",
-                p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
-                shape=(n_time_steps_full, n_treatments),
-            ).astype("float64"),
-        }
-
-        # Preserve the legacy innovation dictionary and graph path exactly when
-        # confounding is disabled, including its explicit ``(0.0, 0.0)``
-        # spelling. When enabled, rho is a single per-world value and only the
-        # channel innovation supplied to the graph changes. The orthonormal
-        # mixture leaves every channel innovation's marginal variance at one
-        # while correlating it with the baseline innovation.
-        if cfg.confounding_strength_range is None:
-            confounding_strength = pt.as_tensor_variable(np.asarray(0.0, dtype="float64"))
-        else:
-            lo, hi = cfg.confounding_strength_range
-            if float(lo) == float(hi):
-                confounding_strength = pt.as_tensor_variable(np.asarray(lo, dtype="float64"))
-            else:
-                confounding_strength = pm.Uniform("confounding_strength", lo, hi)
-            if float(hi) > 0.0:
-                eps["eps_c"] = (
-                    pt.sqrt(1.0 - confounding_strength**2) * eps["eps_c"]
-                    + confounding_strength * eps["eps_b"][:, None]
-                )
+        eps = _scm_eps(
+            n_time_steps_full, n_treatments, n_covariates, n_latent, params["pulse_prob"]
+        )
+        confounding_strength = _confounded_channel_eps(cfg, eps)
 
         graph = build_symbolic_graph(
             g_active,
@@ -759,19 +1005,8 @@ def build_world_model(
                 }
             )
         else:
-            # Keep disabled schedules out of the structural graph and RV stream.
             graph["outputs"].update(
-                {
-                    "channel_shock_mask": pt.zeros((n_time_steps, n_treatments), dtype="int8"),
-                    "channel_shock_mask_full": pt.zeros(
-                        (n_time_steps_full, n_treatments), dtype="int8"
-                    ),
-                    "channel_shock_channel": pt.zeros((0,), dtype="int64"),
-                    "channel_shock_start": pt.zeros((0,), dtype="int64"),
-                    "channel_shock_length": pt.zeros((0,), dtype="int64"),
-                    "channel_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
-                    "channel_shock_level": pt.zeros((0,), dtype="float64"),
-                }
+                _disabled_shock_outputs(n_time_steps, n_time_steps_full, n_treatments)
             )
         out_names = tuple(graph["outputs"].keys())
         for name in out_names:
@@ -784,35 +1019,7 @@ def build_world_model(
             elif existing is not output:
                 raise ValueError(f"graph output {name!r} collides with a different model variable")
 
-        # Register every continuous parameter as a ``param_*`` deterministic so
-        # a sampled single world has all concrete inputs needed to replay its
-        # structural graph. Families / smoothness are concrete already (from
-        # ``structural``) and are reported with their corresponding groups.
-        report_specs: dict[str, Any] = {
-            # linear edge coefficients
-            "beta": params["beta"],
-            "w_dc": params["w_dc"],
-            "u_dz": params["u_dz"],
-            "v_zc": params["v_zc"],
-            "alpha_cc": params["alpha_cc"],
-            "gamma_zz": params["gamma_zz"],
-            "delta_db": params["delta_db"],
-            "rho_zb": params["rho_zb"],
-            # every per-channel mechanism shape parameter
-            **{name: params[name] for name in _MECHANISM_PARAM_NAMES},
-            # channel texture magnitudes and fire probability
-            "hf_sigma": params["hf_sigma"],
-            "pulse_amp": params["pulse_amp"],
-            "pulse_prob": params["pulse_prob"],
-        }
-        for group_name in ("rw_d", "rw_z", "rw_c", "rw_b", "rw_y"):
-            report_specs[f"{group_name}_mean"] = rw[group_name]["mean"]
-            report_specs[f"{group_name}_std"] = rw[group_name]["std"]
-        report_specs["channel_level"] = c_level
-        report_specs["confounding_strength"] = confounding_strength
-        param_names = tuple(f"param_{k}" for k in report_specs)
-        for key, tensor in report_specs.items():
-            pm.Deterministic(f"param_{key}", tensor)
+        param_names = _register_param_reports(params, rw, c_level, confounding_strength)
 
     return model, out_names, param_names
 
@@ -1129,46 +1336,62 @@ def draw_worlds(
     already reachable from the reference keeps its prior seeded stream; newly
     reachable RNGs are appended. This lets APIs expose additional realized
     inputs without changing existing seeded worlds.
-    """
-    if rng_reference_names is None:
-        with model:
-            vals = pm.draw(
-                [model[name] for name in out_names],
-                draws=draws,
-                random_seed=np.random.default_rng(seed),
-                mode=mode,
-            )
-    else:
-        from pymc.pytensorf import (
-            collect_default_updates,
-            reseed_rngs,
-        )
-        from pymc.pytensorf import (
-            compile as compile_pymc,
-        )
-        from pymc.util import _get_seeds_per_chain
 
+    Compiled draw functions are cached per ``(model, out_names, mode, reference)``
+    so repeated batches from the same cell avoid PyTensor recompilation.
+    """
+    with model:
         out_vars = [model[name] for name in out_names]
-        reference_vars = [model[name] for name in rng_reference_names]
-        (compile_seed,) = _get_seeds_per_chain(np.random.default_rng(seed), 1)
-        with model:
-            draw_fn = compile_pymc(
-                inputs=[],
-                outputs=out_vars,
-                random_seed=compile_seed,
-                mode=mode,
-            )
-        reference_rngs = list(collect_default_updates(inputs=[], outputs=reference_vars))
-        output_rngs = list(collect_default_updates(inputs=[], outputs=out_vars))
-        ordered_rngs = reference_rngs + [rng for rng in output_rngs if rng not in reference_rngs]
-        reseed_rngs(ordered_rngs, compile_seed)
-        if draws == 1:
-            vals = draw_fn()
-        else:
-            vals = [np.stack(values) for values in zip(*(draw_fn() for _ in range(draws)))]
+        reference_vars = (
+            [model[name] for name in rng_reference_names] if rng_reference_names else None
+        )
+    draw_fn, ordered_rngs = _get_cached_draw_fn(
+        model,
+        out_vars,
+        mode=mode,
+        reference_vars=reference_vars,
+    )
+    vals = _execute_draws(draw_fn, ordered_rngs, seed=seed, draws=draws)
 
     # pm.draw drops the leading axis when draws == 1; restore it for a uniform
     # (draws, *shape) contract.
+    return {
+        name: (np.asarray(value)[None] if draws == 1 else np.asarray(value))
+        for name, value in zip(out_names, vals)
+    }
+
+
+def draw_worlds_with_inputs(
+    model: pm.Model,
+    out_names: tuple[str, ...],
+    input_names: tuple[str, ...],
+    structure: dict[str, np.ndarray],
+    seed: int,
+    draws: int = 1,
+    mode: str = "FAST_COMPILE",
+    *,
+    rng_reference_names: tuple[str, ...] | None = None,
+) -> dict[str, np.ndarray]:
+    """Draw worlds with structure passed as compiled-function arguments.
+
+    Same semantics as :func:`draw_worlds` after ``pm.set_data(structure)``, but
+    structure arrays are explicit positional inputs to the compiled function.
+    """
+    with model:
+        out_vars = [model[name] for name in out_names]
+        input_vars = [model[name] for name in input_names]
+        reference_vars = (
+            [model[name] for name in rng_reference_names] if rng_reference_names else None
+        )
+    draw_fn, ordered_rngs = _get_cached_draw_fn(
+        model,
+        out_vars,
+        mode=mode,
+        reference_vars=reference_vars,
+        input_vars=input_vars,
+    )
+    input_args = tuple(np.asarray(structure[name]) for name in input_names)
+    vals = _execute_draws(draw_fn, ordered_rngs, seed=seed, draws=draws, input_args=input_args)
     return {
         name: (np.asarray(value)[None] if draws == 1 else np.asarray(value))
         for name, value in zip(out_names, vals)

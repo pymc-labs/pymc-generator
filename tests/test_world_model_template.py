@@ -1,0 +1,599 @@
+"""The one-compile-per-shard template path.
+
+The template trades a denser graph for compiling once per shard instead of once
+per cell, by making the DAG, the mechanism families, and the random-walk kernel
+widths run-time inputs. These tests pin the three equivalences that trade rests
+on — the walk-by-width identity, the dynamic-vs-static graph, and per-cell
+structure actually taking effect — plus the guards that caught real bugs while it
+was being built.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pytensor.tensor as pt
+import pytest
+from pytensor.graph.traversal import ancestors
+
+import prior_generator.world_model as world_model
+from prior_generator import make_scm_prior
+from prior_generator.random_walk import (
+    _kernel_width,
+    _walk_basis_stack,
+    symbolic_random_walk,
+    symbolic_random_walk_by_width,
+    walk_width_index,
+)
+from prior_generator.sampler import (
+    _ADDITIVE_OUT_NAMES,
+    _CORPUS_PARAM_NAMES,
+    _CORPUS_SHOCK_NAMES,
+    _slice_g_active,
+    sample_g_additive,
+)
+from prior_generator.symbolic_graph import build_symbolic_graph
+from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
+from prior_generator.world_model_batched import (
+    TEMPLATE_STRUCTURE_INPUT_NAMES,
+    build_cell_inputs,
+    build_world_model_template,
+    check_template_supported,
+    compile_template_draw_fn,
+    sample_cell_structures,
+)
+
+CORPUS_NAMES = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
+
+
+def _cfg(**overrides: Any):
+    base: dict[str, Any] = {
+        "n_treatments": 3,
+        "n_covariates": 2,
+        "n_latent": 2,
+        "n_time_steps": 32,
+        "n_cells": 3,
+        "draws_per_cell": 2,
+        "seed": 4242,
+        "n_treatments_active_range": (2, 3),
+        "n_covariates_active_range": (1, 2),
+        "n_latent_active_range": (1, 2),
+    }
+    base.update(overrides)
+    return make_scm_prior(**base)
+
+
+@pytest.fixture(scope="module")
+def template():
+    """One compiled template plus the cells it will be driven with."""
+    cfg = _cfg()
+    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
+    model, out_names, param_names = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+    draw = compile_template_draw_fn(model, CORPUS_NAMES)
+    return cfg, cells, model, out_names, param_names, draw
+
+
+# -- the walk-by-width identity -------------------------------------------------
+
+
+@pytest.mark.parametrize("positive_only", (False, True))
+def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only):
+    """Selecting a kernel by index equals baking that kernel into the graph.
+
+    This is the identity the template's single compile rests on: if it failed for
+    any reachable width, template worlds would differ from per-world worlds in a
+    way no shape or dtype check would reveal.
+    """
+    n_time_steps = 40
+    rw_max = 26
+    rng = np.random.default_rng(11)
+    eps = rng.normal(size=n_time_steps)
+    mean, std = 0.3, 1.7
+
+    n_widths = _kernel_width(1.0, n_time_steps, rw_smoothness_max_weeks=rw_max)
+    assert n_widths == min(rw_max, n_time_steps)
+
+    for width in range(1, n_widths + 1):
+        # Recover a smoothness that _kernel_width maps onto exactly this width.
+        smoothness = width / rw_max
+        assert _kernel_width(smoothness, n_time_steps, rw_smoothness_max_weeks=rw_max) == width
+
+        baked = symbolic_random_walk(
+            n_time_steps,
+            mean=mean,
+            std=std,
+            smoothness=smoothness,
+            positive_only=positive_only,
+            rw_smoothness_max_weeks=rw_max,
+            eps=pt.as_tensor_variable(eps),
+        ).eval()
+        by_width = symbolic_random_walk_by_width(
+            n_time_steps,
+            mean=mean,
+            std=std,
+            width_index=width - 1,
+            positive_only=positive_only,
+            rw_smoothness_max_weeks=rw_max,
+            eps=pt.as_tensor_variable(eps),
+        ).eval()
+        np.testing.assert_allclose(by_width, baked, rtol=0, atol=1e-12)
+
+
+def test_walk_width_index_is_zero_based_and_single_sourced():
+    """Width indices route through _kernel_width, so the mapping cannot drift."""
+    n_time_steps = 60
+    rw_max = 26
+    smoothness = np.array([0.0, 0.02, 0.5, 1.0])
+    idx = walk_width_index(smoothness, n_time_steps, rw_smoothness_max_weeks=rw_max)
+    expected = [
+        _kernel_width(float(s), n_time_steps, rw_smoothness_max_weeks=rw_max) - 1
+        for s in smoothness
+    ]
+    assert idx.tolist() == expected
+    assert idx.min() >= 0
+    assert idx.max() < _walk_basis_stack(n_time_steps, rw_max).shape[0]
+
+
+def test_walk_basis_stack_covers_every_reachable_width():
+    """Every index walk_width_index can emit must exist in the stacked basis."""
+    for n_time_steps in (10, 26, 60):
+        stack = _walk_basis_stack(n_time_steps, 26)
+        assert stack.shape == (
+            min(26, n_time_steps),
+            n_time_steps,
+            n_time_steps,
+        )
+        widest = walk_width_index(np.array([1.0]), n_time_steps, rw_smoothness_max_weeks=26)
+        assert int(widest[0]) == stack.shape[0] - 1
+
+
+# -- the dynamic graph computes the same function as the static one --------------
+
+
+def _concrete_scm_inputs(n_treatments, n_covariates, n_latent, n_time_steps_full, seed=7):
+    """Concrete params/eps/g for one world, usable by both graph modes."""
+    rng = np.random.default_rng(seed)
+    g = {
+        "g_cy": np.ones(n_treatments),
+        "g_dc": rng.integers(0, 2, (n_latent, n_treatments)).astype("float64"),
+        "g_dz": rng.integers(0, 2, (n_latent, n_covariates)).astype("float64"),
+        "g_db": np.ones(n_latent),
+        "g_zb": np.ones(n_covariates),
+        "g_zc": rng.integers(0, 2, (n_covariates, n_treatments)).astype("float64"),
+        "g_cc": np.triu(np.ones((n_treatments, n_treatments)), 1),
+        "g_zz": np.triu(np.ones((n_covariates, n_covariates)), 1),
+    }
+    adstock_family = np.array([2, 1, 0][:n_treatments], dtype="int64")
+    sat_family = np.array([1, 3, 0][:n_treatments], dtype="int64")
+
+    def walk(n, positive):
+        return {
+            "mean": rng.uniform(0.2, 0.8, n),
+            "std": rng.uniform(0.3, 0.7, n),
+            "positive_only": positive,
+            "smoothness": rng.uniform(0.1, 0.9, n),
+            "rw_smoothness_max_weeks": 26,
+        }
+
+    params: dict[str, Any] = {
+        "l_max": 8,
+        "w_dc": rng.uniform(0.1, 0.5, (n_latent, n_treatments)),
+        "u_dz": rng.uniform(0.1, 0.5, (n_latent, n_covariates)),
+        "v_zc": rng.uniform(0.1, 0.5, (n_covariates, n_treatments)),
+        "alpha_cc": np.triu(rng.uniform(0.1, 0.3, (n_treatments, n_treatments)), 1),
+        "gamma_zz": np.triu(rng.uniform(0.1, 0.3, (n_covariates, n_covariates)), 1),
+        "delta_db": rng.uniform(0.1, 0.5, n_latent),
+        "rho_zb": rng.uniform(0.1, 0.5, n_covariates),
+        "beta": rng.uniform(0.5, 1.5, n_treatments),
+        "adstock_family": adstock_family,
+        "sat_family": sat_family,
+        "adstock_alpha": rng.uniform(0.2, 0.7, n_treatments),
+        "weibull_lam": rng.uniform(1.0, 3.0, n_treatments),
+        "weibull_k": rng.uniform(1.0, 3.0, n_treatments),
+        "hill_slope": rng.uniform(1.0, 2.0, n_treatments),
+        "hill_kappa_mult": rng.uniform(0.8, 1.5, n_treatments),
+        "logistic_lam": rng.uniform(0.5, 1.5, n_treatments),
+        "mm_kappa_mult": rng.uniform(0.8, 1.5, n_treatments),
+        "tanh_c": rng.uniform(0.8, 1.5, n_treatments),
+        "root_alpha": rng.uniform(0.3, 0.8, n_treatments),
+        "hf_sigma": rng.uniform(0.05, 0.2, n_treatments),
+        "pulse_amp": rng.uniform(0.1, 0.4, n_treatments),
+        "pulse_prob": rng.uniform(0.1, 0.3, n_treatments),
+        "use_hf": np.ones(n_treatments, dtype=bool),
+        "use_pulse": np.ones(n_treatments, dtype=bool),
+        "rw_d": walk(n_latent, False),
+        "rw_z": walk(n_covariates, False),
+        "rw_c": walk(n_treatments, True),
+        "rw_b": walk(1, False),
+        "rw_y": {"mean": np.zeros(1), "std": rng.uniform(0.2, 0.4, 1), "positive_only": False},
+    }
+    eps = {
+        "eps_d": rng.normal(size=(n_time_steps_full, n_latent)),
+        "eps_z": rng.normal(size=(n_time_steps_full, n_covariates)),
+        "eps_c": rng.normal(size=(n_time_steps_full, n_treatments)),
+        "eps_b": rng.normal(size=n_time_steps_full),
+        "eps_y": rng.normal(size=n_time_steps_full),
+        "eps_c_hf": rng.normal(size=(n_time_steps_full, n_treatments)),
+        "eps_c_pulse": rng.integers(0, 2, (n_time_steps_full, n_treatments)).astype("float64"),
+    }
+    return g, params, eps
+
+
+def test_dynamic_graph_matches_static_graph_on_identical_inputs():
+    """dynamic_g must be a different graph for the SAME function.
+
+    The dynamic form wires every candidate edge, switches over every mechanism
+    family, and selects walk kernels by index. Feeding both forms identical
+    concrete values is the only direct check that all three rewrites are
+    faithful rather than merely plausible.
+    """
+    n_treatments, n_covariates, n_latent = 3, 2, 2
+    n_time_steps, burn_in = 24, 8
+    n_time_steps_full = n_time_steps + burn_in
+    g, params, eps = _concrete_scm_inputs(n_treatments, n_covariates, n_latent, n_time_steps_full)
+
+    static = build_symbolic_graph(
+        g,
+        params,
+        n_time_steps,
+        n_treatments,
+        n_covariates,
+        n_latent,
+        burn_in=burn_in,
+        eps=eps,
+    )["outputs"]
+
+    # The dynamic form takes structure as tensors and kernel widths as indices.
+    dyn_params = dict(params)
+    for group, key in (("rw_d", "smoothness"), ("rw_z", "smoothness"), ("rw_c", "smoothness")):
+        dyn_params[group] = dict(params[group])
+        dyn_params[group]["width_index"] = pt.as_tensor_variable(
+            walk_width_index(params[group][key], n_time_steps_full, rw_smoothness_max_weeks=26)
+        )
+    dyn_params["rw_b"] = dict(params["rw_b"])
+    dyn_params["rw_b"]["width_index"] = pt.as_tensor_variable(
+        walk_width_index(
+            params["rw_b"]["smoothness"], n_time_steps_full, rw_smoothness_max_weeks=26
+        )
+    )
+    dyn_params["adstock_family"] = pt.as_tensor_variable(params["adstock_family"])
+    dyn_params["sat_family"] = pt.as_tensor_variable(params["sat_family"])
+
+    dynamic = build_symbolic_graph(
+        {k: pt.as_tensor_variable(v) for k, v in g.items()},
+        dyn_params,
+        n_time_steps,
+        n_treatments,
+        n_covariates,
+        n_latent,
+        burn_in=burn_in,
+        eps=eps,
+        active={
+            "active_treatment": pt.as_tensor_variable(np.ones(n_treatments)),
+            "active_covariate": pt.as_tensor_variable(np.ones(n_covariates)),
+            "active_latent": pt.as_tensor_variable(np.ones(n_latent)),
+        },
+        dynamic_g=True,
+    )["outputs"]
+
+    assert set(static) == set(dynamic)
+    for name in static:
+        np.testing.assert_allclose(
+            np.asarray(dynamic[name].eval(), dtype="float64"),
+            np.asarray(static[name].eval(), dtype="float64"),
+            rtol=1e-10,
+            atol=1e-10,
+            err_msg=f"dynamic_g diverged from the static graph for {name!r}",
+        )
+
+
+def test_concrete_structure_keeps_unused_family_parameters_out_of_the_graph():
+    """The per-world path must not reach the unused families' shape parameters.
+
+    Building every family behind a pt.switch regardless of whether the family is
+    concrete pulls those parameters into the graph, which changes the RNG set
+    reseed_rngs walks and silently shifts every drawn value. This guards the
+    gate that keeps the per-world path sparse.
+    """
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=24,
+        adstock_family_probs={"none": 0.0, "geometric": 0.0, "weibull": 1.0},
+        saturation_family_probs={
+            "linear": 1.0,
+            "hill": 0.0,
+            "logistic": 0.0,
+            "michaelis_menten": 0.0,
+            "tanh": 0.0,
+            "root": 0.0,
+        },
+    )
+    rng = np.random.default_rng(3)
+    g = sample_g_additive(rng, cfg, cfg.layout)
+    g_act = _slice_g_active(g, 2, 2, 1)
+    structural = sample_structure(g_act, cfg, rng)
+    model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
+
+    with model:
+        out_vars = [model[name] for name in out_names]
+    ancestor_set = set(ancestors(out_vars))
+    unreached = {v.name for v in model.free_RVs if v not in ancestor_set}
+    # linear saturation and weibull adstock are the only live families here.
+    assert {"logistic_lam", "mm_kappa_mult", "tanh_c", "root_alpha", "adstock_alpha"} <= unreached
+
+
+# -- the template as a whole ----------------------------------------------------
+
+
+def test_template_exposes_every_persisted_corpus_name(template):
+    """A template shard must be able to emit the same columns as a per-world shard."""
+    _cfg_, _cells, _model, out_names, param_names, _draw = template
+    available = set(out_names) | set(param_names)
+    missing = [name for name in CORPUS_NAMES if name not in available]
+    assert not missing, f"template cannot produce {missing}"
+
+
+def test_template_input_names_match_the_cell_payload(template):
+    """The compiled positional inputs and the per-cell payload cannot drift.
+
+    A payload key the function does not consume would be silently ignored, so a
+    forgotten structural input would look like a working template.
+    """
+    _cfg_, cells, _model, _out, _param, draw = template
+    assert set(cells[0]) == set(TEMPLATE_STRUCTURE_INPUT_NAMES)
+    assert draw.input_names == TEMPLATE_STRUCTURE_INPUT_NAMES
+
+
+def test_template_satisfies_the_additive_identity_on_every_world(template):
+    """The exact decomposition must survive the denser dynamic graph."""
+    cfg, cells, _model, _out, _param, draw = template
+    for i, cell in enumerate(cells):
+        drawn = draw(cell, seed=500 + i, draws=cfg.draws_per_cell)
+        for d in range(cfg.draws_per_cell):
+            w = {k: np.asarray(v[d], dtype="float64") for k, v in drawn.items()}
+            residual = (
+                w["baseline_intrinsic"]
+                + w["confounder_contribution"].sum(-1)
+                + w["control_contribution"].sum(-1)
+                + w["contributions"].sum(-1)
+                + w["indirect_effects_by_source"].sum(-1)
+                - w["sales"]
+            )
+            assert np.abs(residual).max() < 1e-9
+
+
+def test_template_zeroes_inactive_node_slots(template):
+    """Padded slots must be exactly zero, not merely small.
+
+    The template runs at max size, so a cell using fewer nodes carries padded
+    columns. They are switched off inside the graph rather than trimmed
+    afterwards, and consumers read them as real zeros.
+    """
+    cfg, cells, _model, _out, _param, draw = template
+    seen_inactive = False
+    for i, cell in enumerate(cells):
+        drawn = draw(cell, seed=700 + i, draws=1)
+        for key, flags in (
+            ("channels", "active_treatment"),
+            ("controls", "active_covariate"),
+            ("demand", "active_latent"),
+        ):
+            arr = np.asarray(drawn[key][0])
+            for node, is_active in enumerate(cell[flags]):
+                if is_active:
+                    continue
+                seen_inactive = True
+                assert np.abs(arr[:, node]).max() == 0.0, f"{key}[:, {node}] not zeroed"
+    assert seen_inactive, "fixture never produced an inactive node; the guard proved nothing"
+
+
+def test_template_applies_per_cell_smoothness(template):
+    """Kernel widths must come from the cell, not from whichever cell compiled.
+
+    The first attempt baked cell 0's widths into the graph, so every cell reused
+    them. Widths differing across cells is necessary but not sufficient; the
+    payload check below is what pins it.
+    """
+    cfg, cells, _model, _out, _param, _draw = template
+    widths = [tuple(cell["rw_width_c"].tolist()) for cell in cells]
+    assert len(set(widths)) > 1, f"cells share kernel widths ({widths}); test is vacuous"
+
+
+def test_template_smoothness_changes_the_drawn_world(template):
+    """Changing only the kernel widths must change the draw.
+
+    Holds everything else fixed, so a graph that ignored the width input would
+    return identical worlds and fail here.
+    """
+    cfg, cells, _model, _out, _param, draw = template
+    base = dict(cells[0])
+    shifted = dict(base)
+    other = np.asarray(base["rw_width_c"]).copy()
+    other[:] = (other + 5) % _walk_basis_stack(
+        cfg.n_time_steps + cfg.adstock_burn_in, cfg.rw_smoothness_max_weeks
+    ).shape[0]
+    shifted["rw_width_c"] = other
+
+    a = draw(base, seed=99, draws=1)["channels"][0]
+    b = draw(shifted, seed=99, draws=1)["channels"][0]
+    assert not np.allclose(a, b), "kernel-width input had no effect on the draw"
+
+
+def test_template_structure_swap_changes_the_drawn_world(template):
+    """A cell's DAG must reach the graph; a stale pm.Data would go unnoticed."""
+    cfg, cells, _model, _out, _param, draw = template
+    a = draw(cells[0], seed=31, draws=1)["sales"][0]
+    b = draw(cells[1], seed=31, draws=1)["sales"][0]
+    assert not np.allclose(a, b)
+
+
+def test_template_draws_are_seed_deterministic(template):
+    """Same seed and same structure must reproduce the world exactly."""
+    cfg, cells, _model, _out, _param, draw = template
+    a = draw(cells[0], seed=17, draws=2)
+    b = draw(cells[0], seed=17, draws=2)
+    for name in CORPUS_NAMES:
+        np.testing.assert_array_equal(np.asarray(a[name]), np.asarray(b[name]))
+
+
+def test_template_channels_are_non_negative(template):
+    """The softplus positivity guard must survive the dynamic path."""
+    cfg, cells, _model, _out, _param, draw = template
+    for i, cell in enumerate(cells):
+        drawn = draw(cell, seed=800 + i)
+        assert np.asarray(drawn["channels"]).min() >= 0.0
+
+
+def test_sample_cell_structures_matches_the_per_world_prologue():
+    """Template cells must be the SAME structures the per-world path would draw.
+
+    Both consume the config's RNG in the same order, so a template shard and a
+    per-world shard with one seed explore the same set of DAGs.
+    """
+    cfg = _cfg()
+    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
+
+    # Replay the per-world prologue from prior_generator.sampler.
+    rng = np.random.default_rng(cfg.seed)
+    layout = cfg.layout
+    for cell in cells:
+        tr = cfg.n_treatments_active_range_effective
+        cv = cfg.n_covariates_active_range_effective
+        lt = cfg.n_latent_active_range_effective
+        n_t = int(rng.integers(tr[0], tr[1] + 1))
+        n_c = int(rng.integers(cv[0], cv[1] + 1))
+        n_l = int(rng.integers(lt[0], lt[1] + 1))
+        g = sample_g_additive(
+            rng,
+            cfg,
+            layout,
+            n_treatments_active=n_t,
+            n_covariates_active=n_c,
+            n_latent_active=n_l,
+        )
+        g_act = _slice_g_active(g, n_t, n_c, n_l)
+        structural = sample_structure(g_act, cfg, rng)
+        expected = build_cell_inputs(
+            cfg,
+            g,
+            {
+                "active_treatment": g["active_treatment"],
+                "active_covariate": g["active_covariate"],
+                "active_latent": g["active_latent"],
+            },
+            structural,
+        )
+        for name in TEMPLATE_STRUCTURE_INPUT_NAMES:
+            np.testing.assert_array_equal(cell[name], expected[name], err_msg=name)
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    (
+        ({"n_channel_shocks": 1}, "channel shocks"),
+        ({"prior_conditioning": True}, "prior conditioning"),
+        ({"confounding_strength_range": (0.1, 0.6)}, "fixed confounding_strength"),
+    ),
+)
+def test_template_rejects_unsupported_configs(overrides, match):
+    """Unsupported features must fail loudly, not generate a wrong corpus."""
+    with pytest.raises(ValueError, match=match):
+        check_template_supported(_cfg(**overrides))
+
+
+def test_template_accepts_a_fixed_confounding_strength():
+    """A degenerate confounding range is representable without an input slot."""
+    check_template_supported(_cfg(confounding_strength_range=(0.4, 0.4)))
+
+
+# -- the compiled-draw-function cache ------------------------------------------
+
+
+def test_compile_cache_is_transparent_to_draws():
+    """Caching a compiled function must not change what it produces."""
+    cfg = _cfg(n_cells=2)
+    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
+
+    results = {}
+    for enabled in (True, False):
+        world_model.reset_world_model_caches()
+        world_model.set_compile_cache_enabled(enabled)
+        try:
+            model, _out, _param = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+            draw = compile_template_draw_fn(model, ("sales", "channels"))
+            results[enabled] = draw(cells[0], seed=5, draws=2)
+        finally:
+            world_model.set_compile_cache_enabled(True)
+    for name in ("sales", "channels"):
+        np.testing.assert_array_equal(results[True][name], results[False][name])
+
+
+def test_compile_cache_reuses_one_function_per_model():
+    """Repeated batches from one model must compile once, which is the point."""
+    cfg = _cfg(n_cells=2)
+    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
+    world_model.reset_world_model_caches()
+    world_model.set_compile_cache_enabled(True)
+    model, _out, _param = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+    compile_template_draw_fn(model, ("sales",))
+    assert (world_model.DRAW_FN_CACHE_MISSES, world_model.DRAW_FN_CACHE_HITS) == (1, 0)
+    compile_template_draw_fn(model, ("sales",))
+    assert (world_model.DRAW_FN_CACHE_MISSES, world_model.DRAW_FN_CACHE_HITS) == (1, 1)
+
+
+def test_compile_cache_does_not_leak_across_models():
+    """Two models must never share a compiled function.
+
+    A global cache keyed by id(model) could hand a stale function to a new model
+    once the old one was collected; a per-model cache cannot.
+    """
+    cfg = _cfg(n_cells=2)
+    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
+    world_model.reset_world_model_caches()
+    world_model.set_compile_cache_enabled(True)
+
+    first, _o1, _p1 = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+    draw_first = compile_template_draw_fn(first, ("sales",))
+    del first
+    import gc
+
+    gc.collect()
+
+    second, _o2, _p2 = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+    draw_second = compile_template_draw_fn(second, ("sales",))
+    assert draw_second.fn is not draw_first.fn
+
+
+def test_build_world_model_is_not_cached_across_differing_configs():
+    """Two configs differing only in a prior range must get different models.
+
+    A structure-keyed model cache collided here: the second config silently
+    reused the first one's model and reported the first one's parameters.
+    """
+    models = []
+    for hi in (0.0, 0.5):
+        cfg = make_scm_prior(
+            n_treatments=2,
+            n_covariates=2,
+            n_latent=1,
+            n_time_steps=20,
+            seed=71,
+            nonlinearity="linear",
+            edge_budget={"cy": (2, 2)},
+            n_channel_shocks=1,
+            channel_shock_length_range=(3, 3),
+            channel_shock_level_range=(hi, hi),
+        )
+        rng = np.random.default_rng(cfg.seed)
+        g = sample_g_additive(rng, cfg, cfg.layout)
+        g_act = _slice_g_active(g, 2, 2, 1)
+        structural = sample_structure(g_act, cfg, rng)
+        model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
+        drawn = draw_worlds(model, ("channel_shock_level",), seed=5, draws=1)
+        models.append(np.asarray(drawn["channel_shock_level"]))
+
+    assert np.all(models[0] == 0.0), "a zero level multiplier must produce zero levels"
+    assert np.all(models[1] > 0.0), "a nonzero level multiplier must produce nonzero levels"

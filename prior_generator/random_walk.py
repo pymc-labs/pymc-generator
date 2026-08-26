@@ -22,7 +22,7 @@ from functools import lru_cache
 
 import numpy as np
 
-__all__ = ["symbolic_random_walk"]
+__all__ = ["symbolic_random_walk", "symbolic_random_walk_by_width", "walk_width_index"]
 
 
 def _kernel_width(smoothness: float, n_time_steps: int, rw_smoothness_max_weeks: int) -> int:
@@ -125,6 +125,49 @@ def _smooth_columns_numpy(raw: np.ndarray, width: int) -> np.ndarray:
     return np.asarray(window_sums / width)
 
 
+@lru_cache(maxsize=64)
+def _walk_basis(n_time_steps: int, width: int) -> np.ndarray:
+    """Return the fixed ``B = A / c`` operator of one signed random walk.
+
+    :func:`symbolic_random_walk` applies cumulative sum, edge-padded moving
+    average, column centring, and then the fixed
+    :func:`_centred_walk_scale` normalization. Its zero-mean walk is therefore
+    exactly ``std * B @ eps`` for the plain float64 matrix returned here.
+    """
+    steps = np.tril(np.ones((n_time_steps, n_time_steps)))
+    columns = _smooth_columns_numpy(steps, width)
+    columns = columns - columns.mean(axis=0, keepdims=True)
+    return np.asarray(columns / _centred_walk_scale(n_time_steps, width))
+
+
+@lru_cache(maxsize=8)
+def _walk_basis_stack(n_time_steps: int, rw_smoothness_max_weeks: int) -> np.ndarray:
+    """Every walk operator ``_kernel_width`` can select, stacked on axis 0.
+
+    ``_kernel_width`` maps the continuous ``smoothness`` in [0, 1] onto at most
+    ``min(rw_smoothness_max_weeks, n_time_steps)`` distinct integer widths, so
+    the whole family of walk operators is a small finite set. Stacking it lets a
+    graph pick its kernel by integer index at run time instead of baking one
+    width in at compile time — the enabling trick behind the one-compile
+    template path (``(26, 108, 108)`` float64 is 2.4 MB).
+    """
+    n_widths = _kernel_width(1.0, n_time_steps, rw_smoothness_max_weeks=rw_smoothness_max_weeks)
+    return np.stack([_walk_basis(n_time_steps, w) for w in range(1, n_widths + 1)])
+
+
+def walk_width_index(smoothness, n_time_steps: int, *, rw_smoothness_max_weeks: int) -> np.ndarray:
+    """0-based indices into :func:`_walk_basis_stack` for each smoothness value.
+
+    Routes through :func:`_kernel_width` so the smoothness-to-width mapping stays
+    single-sourced with :func:`symbolic_random_walk`.
+    """
+    widths = [
+        _kernel_width(float(s), n_time_steps, rw_smoothness_max_weeks=int(rw_smoothness_max_weeks))
+        for s in np.asarray(smoothness, dtype="float64").ravel()
+    ]
+    return np.asarray(widths, dtype="int64") - 1
+
+
 def symbolic_random_walk(
     n_time_steps: int,
     mean,
@@ -180,6 +223,38 @@ def symbolic_random_walk(
     walk = walk - walk.mean()
     walk = walk * std / _centred_walk_scale(n_time_steps, w)
     walk = walk + mean
+    if positive_only:
+        walk = pt.softplus(walk)
+    return walk
+
+
+def symbolic_random_walk_by_width(
+    n_time_steps: int,
+    mean,
+    std,
+    width_index,
+    positive_only: bool,
+    *,
+    rw_smoothness_max_weeks: int,
+    eps,
+):
+    """A random walk whose smoothing kernel is chosen by a symbolic integer index.
+
+    Mathematically identical to :func:`symbolic_random_walk` — it evaluates
+    ``mean + std * B @ eps`` for the same operator ``B`` — but ``width_index``
+    may be a tensor, so one compiled graph serves every smoothness value.
+    :func:`symbolic_random_walk` instead resolves the width while building the
+    graph, which bakes one kernel in and forces a recompile per structure.
+
+    ``width_index`` is 0-based (see :func:`walk_width_index`).
+    """
+    import pytensor.tensor as pt
+
+    basis = pt.constant(
+        _walk_basis_stack(n_time_steps, rw_smoothness_max_weeks),
+        name="walk_basis_stack",
+    )
+    walk = std * pt.dot(basis[width_index], eps) + mean
     if positive_only:
         walk = pt.softplus(walk)
     return walk
