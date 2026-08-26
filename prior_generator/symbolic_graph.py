@@ -60,12 +60,28 @@ import pytensor.tensor as pt
 from pytensor.tensor import TensorVariable
 
 from . import mechanisms
-from .random_walk import symbolic_random_walk
-from .sampler import SATURATION_FAMILY_KEYS
+from .random_walk import symbolic_random_walk, symbolic_random_walk_by_width
+from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
-__all__ = ["build_symbolic_graph"]
+__all__ = ["build_symbolic_graph", "inactive_zero"]
 
 # Mechanism family ids are projected in sampler canonical order.
+
+
+def inactive_zero(active_flag, expr: TensorVariable) -> TensorVariable:
+    """Zero ``expr`` wherever ``active_flag`` is false.
+
+    The ``dynamic_g`` graph is built at the layout's MAXIMUM node counts so one
+    compiled function serves every cell. Cells that use fewer nodes keep the
+    padded slots in the tensor layout and switch them off here, which is what
+    makes the node count a run-time value rather than a compile-time one.
+    """
+    flag = (
+        active_flag
+        if isinstance(active_flag, TensorVariable)
+        else pt.as_tensor_variable(np.asarray(active_flag, dtype="float64"))
+    )
+    return cast(TensorVariable, pt.switch(pt.neq(flag, 0.0), expr, pt.zeros_like(expr)))
 
 
 def _check_strict_upper(mat: np.ndarray, name: str) -> None:
@@ -93,13 +109,15 @@ def _arr(x, shape):
     return np.asarray(x, dtype="float64").reshape(shape)
 
 
-def _dot_terms(cols: list, g_mask, coeff, n_time_steps: int) -> TensorVariable:
+def _dot_terms(
+    cols: list, g_mask, coeff, n_time_steps: int, *, dynamic_g: bool = False
+) -> TensorVariable:
     """``Σ_i coeff[i]·cols[i]`` over structurally-present parents (``g_mask[i] != 0``).
 
-    ``g_mask`` is the CONCRETE 0/1 edge indicator (graph structure); ``coeff``
-    is the per-parent coefficient, either a numpy array (concrete params) or a
-    symbolic RV vector (params-as-distributions). Only parents with an edge are
-    wired, so absent edges add nothing and the graph stays sparse. Because
+    ``g_mask`` is the 0/1 edge indicator (graph structure); ``coeff`` is the
+    per-parent coefficient, either a numpy array (concrete params) or a symbolic
+    RV vector (params-as-distributions). Only parents with an edge are wired, so
+    absent edges add nothing and the graph stays sparse. Because
     ``g_mask ∈ {0, 1}``, filtering on it and multiplying by ``coeff`` equals the
     old ``Σ (g·coeff)·cols`` exactly.
 
@@ -108,7 +126,20 @@ def _dot_terms(cols: list, g_mask, coeff, n_time_steps: int) -> TensorVariable:
     Adds the canonicalizer flattens into one wide Add, and past ~32 inputs the
     py-backend crashes building the ufunc. Dot is one BLAS op the rewriter never
     flattens (and is faster).
+
+    Under ``dynamic_g`` the mask is a tensor whose value is not known while the
+    graph is built, so the sparsity shortcut is unavailable: every candidate
+    parent is wired as ``g_mask[i]·coeff[i]·cols[i]`` and absent edges are
+    zeroed numerically instead of structurally. That is the cost of swapping
+    DAGs without recompiling.
     """
+    if dynamic_g:
+        g_dyn = pt.as_tensor_variable(g_mask).reshape((-1,))
+        if not cols:
+            return pt.zeros(n_time_steps)
+        terms = [g_dyn[i] * coeff[i] * cols[i] for i in range(len(cols))]
+        return cast(TensorVariable, pt.add(*terms))
+
     g_mask = np.asarray(g_mask, dtype="float64").ravel()
     nz = [i for i in range(len(cols)) if g_mask[i] != 0.0]
     if not nz:
@@ -121,7 +152,27 @@ def _dot_terms(cols: list, g_mask, coeff, n_time_steps: int) -> TensorVariable:
 
 
 def _walk_column(eps_col, rw_group: dict, i: int, n_time_steps: int) -> TensorVariable:
-    """Symbolic random walk for node i of a group, from its eps column."""
+    """Symbolic random walk for node i of a group, from its eps column.
+
+    A ``width_index`` entry on the group switches to the kernel-by-index walk,
+    which keeps smoothness a run-time value. Groups without it (every
+    :func:`prior_generator.world_model._walk_priors` group) resolve their kernel
+    width while the graph is built, as before.
+    """
+    width_index = rw_group.get("width_index")
+    if width_index is not None:
+        return cast(
+            TensorVariable,
+            symbolic_random_walk_by_width(
+                n_time_steps,
+                mean=rw_group["mean"][i],
+                std=rw_group["std"][i],
+                width_index=width_index[i],
+                positive_only=bool(rw_group["positive_only"]),
+                rw_smoothness_max_weeks=int(rw_group["rw_smoothness_max_weeks"]),
+                eps=eps_col,
+            ),
+        )
     return cast(
         TensorVariable,
         symbolic_random_walk(
@@ -139,11 +190,31 @@ def _walk_column(eps_col, rw_group: dict, i: int, n_time_steps: int) -> TensorVa
     )
 
 
-def _adstock_col(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
-    """Adstock transform of a single (n_time_steps,) channel column for channel k."""
+def _adstock_col(
+    c_col: TensorVariable, params: dict, k: int, *, dynamic_family: bool = False
+) -> TensorVariable:
+    """Adstock transform of a single (n_time_steps,) channel column for channel k.
+
+    With a concrete family only the selected transform is built, so the unused
+    families' shape parameters stay out of the graph. Under ``dynamic_family``
+    the family id is a tensor, so every transform is built and selected by
+    ``pt.switch`` — which necessarily pulls all of their parameters in.
+    """
     l_max = params["l_max"]
-    ad_fam = int(params["adstock_family"][k])  # family is concrete/structural
     x2d = c_col[:, None]
+    if dynamic_family:
+        ad_fam = pt.as_tensor_variable(params["adstock_family"])[k]
+        geometric = mechanisms.apply_geometric_adstock(x2d, params["adstock_alpha"][k], l_max)
+        weibull = mechanisms.apply_weibull_pdf_adstock(
+            x2d, params["weibull_lam"][k], params["weibull_k"][k], l_max
+        )
+        out = pt.switch(
+            pt.eq(ad_fam, ADSTOCK_FAMILY_KEYS.index("geometric")),
+            geometric,
+            pt.switch(pt.eq(ad_fam, ADSTOCK_FAMILY_KEYS.index("weibull")), weibull, x2d),
+        )
+        return cast(TensorVariable, out[:, 0])
+    ad_fam = int(params["adstock_family"][k])  # family is concrete/structural
     if ad_fam == 1:
         out = mechanisms.apply_geometric_adstock(x2d, params["adstock_alpha"][k], l_max)
     elif ad_fam == 2:
@@ -178,6 +249,8 @@ def _expected_levels(
     n_treatments: int,
     n_covariates: int,
     use_pulse: np.ndarray,
+    *,
+    dynamic_g: bool = False,
 ) -> list[TensorVariable]:
     """Per-channel saturation anchors from parameters alone.
 
@@ -195,11 +268,14 @@ def _expected_levels(
     series, so ``p(theta)`` is defined independently of the noise and the
     response at week ``t`` cannot depend on spend at later weeks.
     """
+    dot_kw = {"dynamic_g": dynamic_g}
     z_levels: list[TensorVariable] = []
     gamma_zz = _arr(params["gamma_zz"], (n_covariates, n_covariates))
     for m in range(n_covariates):
         level = pt.as_tensor_variable(params["rw_z"]["mean"][m])
-        upstream = _dot_terms([lvl[None] for lvl in z_levels[:m]], g_zz[:m, m], gamma_zz[:m, m], 1)
+        upstream = _dot_terms(
+            [lvl[None] for lvl in z_levels[:m]], g_zz[:m, m], gamma_zz[:m, m], 1, **dot_kw
+        )
         z_levels.append(level + upstream.reshape(()))
 
     rw_c_mean = params["rw_c"]["mean"]
@@ -212,27 +288,23 @@ def _expected_levels(
         own = pt.softplus(rw_c_mean[k])
         if use_pulse[k]:
             own = own + pulse_amp[k] * pulse_prob[k]
-        term_z = _dot_terms([lvl[None] for lvl in z_levels], g_zc[:, k], v_zc[:, k], 1)
-        term_c = _dot_terms([lvl[None] for lvl in c_levels[:k]], g_cc[:k, k], alpha_cc[:k, k], 1)
+        term_z = _dot_terms([lvl[None] for lvl in z_levels], g_zc[:, k], v_zc[:, k], 1, **dot_kw)
+        term_c = _dot_terms(
+            [lvl[None] for lvl in c_levels[:k]], g_cc[:k, k], alpha_cc[:k, k], 1, **dot_kw
+        )
         c_levels.append(pt.softplus(own + term_z.reshape(()) + term_c.reshape(())))
     return c_levels
 
 
-def _saturate_col(
-    ad_col: TensorVariable, mean_ad: TensorVariable, params: dict, k: int
+def _saturate_family(
+    name: str, ad_col: TensorVariable, mean_ad: TensorVariable, params: dict, k: int
 ) -> TensorVariable:
-    """κ-relative saturation of an adstocked column using a *given* scale.
+    """One named κ-relative saturation family evaluated on ``ad_col``.
 
-    ``mean_ad`` is passed in (rather than recomputed) so the SAME structural
-    response function f_k can be evaluated on several channel variants — the
-    observed channel, the base channel, and the telescoping intervention
-    variants — with an identical, pinned saturation scale. This is what makes
-    the decomposition and the per-source indirect split exact.
+    ``linear`` is the only family without a κ-relative wrapper. The
+    name-to-wrapper dispatch lives in mechanisms; these branches only bind each
+    wrapper's distinct shape parameters.
     """
-    name = SATURATION_FAMILY_KEYS[int(params["sat_family"][k])]  # concrete structural family
-    # ``linear`` is the only family without a κ-relative wrapper. The
-    # name-to-wrapper dispatch lives in mechanisms; these branches only bind
-    # each wrapper's distinct shape parameters.
     if name == "linear":
         return cast(TensorVariable, ad_col / mean_ad)
     family = mechanisms.SATURATION_FAMILIES[name]
@@ -252,6 +324,40 @@ def _saturate_col(
     return family(ad_col, mean_ad, alpha=params["root_alpha"][k])
 
 
+def _saturate_col(
+    ad_col: TensorVariable,
+    mean_ad: TensorVariable,
+    params: dict,
+    k: int,
+    *,
+    dynamic_family: bool = False,
+) -> TensorVariable:
+    """κ-relative saturation of an adstocked column using a *given* scale.
+
+    ``mean_ad`` is passed in (rather than recomputed) so the SAME structural
+    response function f_k can be evaluated on several channel variants — the
+    observed channel, the base channel, and the telescoping intervention
+    variants — with an identical, pinned saturation scale. This is what makes
+    the decomposition and the per-source indirect split exact.
+
+    With a concrete family only that family is built. Under ``dynamic_family``
+    the family id is a tensor, so all six are built and selected by
+    ``pt.switch``.
+    """
+    if dynamic_family:
+        sat_fam = pt.as_tensor_variable(params["sat_family"])[k]
+        out = _saturate_family(SATURATION_FAMILY_KEYS[-1], ad_col, mean_ad, params, k)
+        for idx in range(len(SATURATION_FAMILY_KEYS) - 2, -1, -1):
+            out = pt.switch(
+                pt.eq(sat_fam, idx),
+                _saturate_family(SATURATION_FAMILY_KEYS[idx], ad_col, mean_ad, params, k),
+                out,
+            )
+        return out
+    name = SATURATION_FAMILY_KEYS[int(params["sat_family"][k])]  # concrete structural family
+    return _saturate_family(name, ad_col, mean_ad, params, k)
+
+
 def build_symbolic_graph(
     g: dict[str, np.ndarray],
     params: dict[str, Any],
@@ -262,6 +368,8 @@ def build_symbolic_graph(
     *,
     burn_in: int = 0,
     eps: dict[str, Any],
+    active: dict[str, Any] | None = None,
+    dynamic_g: bool = False,
 ) -> dict[str, Any]:
     """Build the symbolic PyTensor graph for the additive causal DAG.
 
@@ -296,6 +404,19 @@ def build_symbolic_graph(
         real history instead of zeros. The κ-relative saturation scale comes
         from ``_expected_levels(...)``, so it uses drawn parameters alone and
         is independent of this window and every realized series.
+    active : dict, optional
+        Per-node 0/1 activity flags ``active_treatment`` (n_treatments,),
+        ``active_covariate`` (n_covariates,), ``active_latent`` (n_latent,).
+        Inactive nodes are zeroed in place (see :func:`inactive_zero`) instead of
+        being left out of the graph, so one max-size graph can serve cells with
+        fewer nodes. Omit it to build at exactly the given node counts.
+    dynamic_g : bool
+        Treat ``g``, the mechanism families, and ``active`` as tensors whose
+        values arrive at call time (typically ``pm.Data``) rather than as
+        concrete structure. This trades a denser graph — every candidate edge is
+        wired and every mechanism family is built behind a ``pt.switch`` — for
+        the ability to swap DAGs without recompiling. Leave it False for the
+        per-world path, which stays exactly as sparse as its structure.
 
     Returns
     -------
@@ -330,19 +451,35 @@ def build_symbolic_graph(
     graph-surgery interventions (see the inline derivation). The three columns
     sum exactly to ``indirect_effects``.
     """
-    _check_strict_upper(g["g_cc"], "g_cc")
-    _check_strict_upper(g["g_zz"], "g_zz")
+    if dynamic_g:
+        # The masks are tensors here, so acyclicity cannot be checked while
+        # building. Callers own that guarantee; the sampler only ever emits
+        # strictly-upper-triangular C->C and Z->Z blocks.
+        pass
+    else:
+        _check_strict_upper(g["g_cc"], "g_cc")
+        _check_strict_upper(g["g_zz"], "g_zz")
     if burn_in < 0:
         raise ValueError(f"burn_in must be >= 0, got {burn_in}")
 
-    g_cy = np.asarray(g["g_cy"], dtype="float64")
-    g_dc = np.asarray(g["g_dc"], dtype="float64").reshape(n_latent, n_treatments)
-    g_dz = np.asarray(g["g_dz"], dtype="float64").reshape(n_latent, n_covariates)
-    g_db = np.asarray(g["g_db"], dtype="float64").reshape(n_latent)
-    g_zb = np.asarray(g["g_zb"], dtype="float64").reshape(n_covariates)
-    g_zc = np.asarray(g["g_zc"], dtype="float64").reshape(n_covariates, n_treatments)
-    g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(n_treatments, n_treatments)
-    g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(n_covariates, n_covariates)
+    if dynamic_g:
+        g_cy = _arr(g["g_cy"], (n_treatments,))
+        g_dc = _arr(g["g_dc"], (n_latent, n_treatments))
+        g_dz = _arr(g["g_dz"], (n_latent, n_covariates))
+        g_db = _arr(g["g_db"], (n_latent,))
+        g_zb = _arr(g["g_zb"], (n_covariates,))
+        g_zc = _arr(g["g_zc"], (n_covariates, n_treatments))
+        g_cc = _arr(g["g_cc"], (n_treatments, n_treatments))
+        g_zz = _arr(g["g_zz"], (n_covariates, n_covariates))
+    else:
+        g_cy = np.asarray(g["g_cy"], dtype="float64")
+        g_dc = np.asarray(g["g_dc"], dtype="float64").reshape(n_latent, n_treatments)
+        g_dz = np.asarray(g["g_dz"], dtype="float64").reshape(n_latent, n_covariates)
+        g_db = np.asarray(g["g_db"], dtype="float64").reshape(n_latent)
+        g_zb = np.asarray(g["g_zb"], dtype="float64").reshape(n_covariates)
+        g_zc = np.asarray(g["g_zc"], dtype="float64").reshape(n_covariates, n_treatments)
+        g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(n_treatments, n_treatments)
+        g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(n_covariates, n_covariates)
 
     # Channel texture. Magnitudes (hf_sigma, pulse_amp) may be symbolic (RV)
     # params; the per-channel ENABLE flags are concrete structure, normally
@@ -373,6 +510,28 @@ def build_symbolic_graph(
         use_pulse = (_pa != 0.0) & (_pp > 0.0)
     use_pulse = np.asarray(use_pulse).reshape(n_treatments)
 
+    # Per-node activity. Absent (the per-world path) every node is present and
+    # `_mask` is the identity, so that path builds exactly the graph it did
+    # before this switch existed.
+    if active is None:
+        active_c: Any = None
+        active_m: Any = None
+        active_j: Any = None
+    elif isinstance(active["active_treatment"], TensorVariable):
+        active_c = active["active_treatment"]
+        active_m = active["active_covariate"]
+        active_j = active["active_latent"]
+    else:
+        active_c = np.asarray(active["active_treatment"], dtype="float64").reshape(n_treatments)
+        active_m = np.asarray(active["active_covariate"], dtype="float64").reshape(n_covariates)
+        active_j = np.asarray(active["active_latent"], dtype="float64").reshape(n_latent)
+
+    def _mask(flags, i: int, expr: TensorVariable) -> TensorVariable:
+        return expr if flags is None else inactive_zero(flags[i], expr)
+
+    dot_kw = {"dynamic_g": dynamic_g}
+    family_kw = {"dynamic_family": True} if dynamic_g else {}
+
     # Nodes are simulated over n_time_steps_full = burn_in + n_time_steps weeks; every
     # output is sliced to the last n_time_steps (the reported window).
     n_time_steps_full = n_time_steps + burn_in
@@ -388,7 +547,8 @@ def build_symbolic_graph(
 
     # -- confounders D (n_time_steps_full, n_latent): pure random walks -------------------------
     d_cols = [
-        _walk_column(eps_d[:, j], params["rw_d"], j, n_time_steps_full) for j in range(n_latent)
+        _mask(active_j, j, _walk_column(eps_d[:, j], params["rw_d"], j, n_time_steps_full))
+        for j in range(n_latent)
     ]
     D = pt.stack(d_cols, axis=1) if n_latent > 0 else pt.zeros((n_time_steps_full, 0))
 
@@ -398,9 +558,9 @@ def build_symbolic_graph(
     z_cols: list[TensorVariable] = []
     for m in range(n_covariates):
         walk = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
-        term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], n_time_steps_full)
-        term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], n_time_steps_full)
-        z_cols.append(term_d + term_z + walk)
+        term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], n_time_steps_full, **dot_kw)
+        term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], n_time_steps_full, **dot_kw)
+        z_cols.append(_mask(active_m, m, term_d + term_z + walk))
     Z = pt.stack(z_cols, axis=1) if n_covariates > 0 else pt.zeros((n_time_steps_full, 0))
 
     # -- channels C (n_time_steps_full, n_treatments): D->C + Z->C + upstream C->C + own drive -----
@@ -432,22 +592,32 @@ def build_symbolic_graph(
             own = own + hf_sigma[k] * eps_c_hf[:, k]
         if use_pulse[k]:
             own = own + pulse_amp[k] * eps_c_pulse[:, k]
-        term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], n_time_steps_full)
-        term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], n_time_steps_full)
+        term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], n_time_steps_full, **dot_kw)
+        term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], n_time_steps_full, **dot_kw)
         # The natural recursion is retained solely for the realism reference.
         # The observed recursion instead sees already-clamped upstream parents,
         # which is the SCM meaning of a channel intervention.
         term_c_unshocked = _dot_terms(
-            c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full
+            c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full, **dot_kw
         )
-        term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full)
+        term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full, **dot_kw)
         # softplus guard: spend-like channels must stay non-negative even
         # when signed upstream contributions push the pre-activation down
-        c_unshocked_cols.append(pt.softplus(term_d + term_z + term_c_unshocked + own))
-        c_cols.append(_clamp_channel(pt.softplus(term_d + term_z + term_c + own), params, k))
-        c_base_cols.append(_clamp_channel(pt.softplus(own), params, k))
-        c_no_cc_cols.append(_clamp_channel(pt.softplus(term_d + term_z + own), params, k))
-        c_no_cc_zc_cols.append(_clamp_channel(pt.softplus(term_d + own), params, k))
+        c_unshocked_cols.append(
+            _mask(active_c, k, pt.softplus(term_d + term_z + term_c_unshocked + own))
+        )
+        c_cols.append(
+            _mask(
+                active_c, k, _clamp_channel(pt.softplus(term_d + term_z + term_c + own), params, k)
+            )
+        )
+        c_base_cols.append(_mask(active_c, k, _clamp_channel(pt.softplus(own), params, k)))
+        c_no_cc_cols.append(
+            _mask(active_c, k, _clamp_channel(pt.softplus(term_d + term_z + own), params, k))
+        )
+        c_no_cc_zc_cols.append(
+            _mask(active_c, k, _clamp_channel(pt.softplus(term_d + own), params, k))
+        )
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
 
@@ -455,8 +625,8 @@ def build_symbolic_graph(
     delta_db = _arr(params["delta_db"], (n_latent,))
     rho_zb = _arr(params["rho_zb"], (n_covariates,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)
-    term_bd = _dot_terms(d_cols, g_db, delta_db, n_time_steps_full)
-    term_bz = _dot_terms(z_cols, g_zb, rho_zb, n_time_steps_full)
+    term_bd = _dot_terms(d_cols, g_db, delta_db, n_time_steps_full, **dot_kw)
+    term_bz = _dot_terms(z_cols, g_zb, rho_zb, n_time_steps_full, **dot_kw)
     B = term_bd + term_bz + walk_b
 
     # -- per-node direct baseline terms (exact split of term_bd / term_bz) ----
@@ -489,7 +659,7 @@ def build_symbolic_graph(
     # baseline + the direct (base-channel) contributions.
     ie_cc_cols, ie_zc_cols, ie_dc_cols = [], [], []
     channel_levels = _expected_levels(
-        params, g_zc, g_cc, g_zz, n_treatments, n_covariates, use_pulse
+        params, g_zc, g_cc, g_zz, n_treatments, n_covariates, use_pulse, dynamic_g=dynamic_g
     )
     for k in range(n_treatments):
         # Adstock over the full simulated horizon, then slice to the reported
@@ -501,7 +671,7 @@ def build_symbolic_graph(
         # The κ scale is the channel's PARAMETER-ONLY expected level, never a
         # statistic of the drawn series: that keeps theta independent of the
         # noise and keeps the response at week t free of spend at t' > t.
-        ad_obs = _adstock_col(c_cols[k], params, k)[window]
+        ad_obs = _adstock_col(c_cols[k], params, k, **family_kw)[window]
         scale_k = pt.maximum(channel_levels[k], 1e-8).copy(name=f"sat_scale_{k}")
         sat_scale_cols.append(scale_k)
 
@@ -509,18 +679,18 @@ def build_symbolic_graph(
         # telescoping split cancels the middle variants, so a divergence here
         # would pass the identity tests while corrupting the per-source split.
         def _f(ad_col, *, _scale=scale_k, _k=k):
-            return _saturate_col(ad_col, _scale, params, _k)
+            return _saturate_col(ad_col, _scale, params, _k, **family_kw)
 
         f_obs = _f(ad_obs)
-        f_base = _f(_adstock_col(c_base_cols[k], params, k)[window])
-        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k)[window])
-        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k)[window])
+        f_base = _f(_adstock_col(c_base_cols[k], params, k, **family_kw)[window])
+        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k, **family_kw)[window])
+        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k, **family_kw)[window])
         gate = g_cy[k] * beta[k]  # g concrete, beta possibly symbolic
-        contrib_obs_cols.append(gate * f_obs)
-        contrib_base_cols.append(gate * f_base)
-        ie_cc_cols.append(gate * (f_obs - f_no_cc))
-        ie_zc_cols.append(gate * (f_no_cc - f_no_cc_zc))
-        ie_dc_cols.append(gate * (f_no_cc_zc - f_base))
+        contrib_obs_cols.append(_mask(active_c, k, gate * f_obs))
+        contrib_base_cols.append(_mask(active_c, k, gate * f_base))
+        ie_cc_cols.append(_mask(active_c, k, gate * (f_obs - f_no_cc)))
+        ie_zc_cols.append(_mask(active_c, k, gate * (f_no_cc - f_no_cc_zc)))
+        ie_dc_cols.append(_mask(active_c, k, gate * (f_no_cc_zc - f_base)))
     contributions_observed = pt.stack(contrib_obs_cols, axis=1)  # (n_time_steps, n_treatments)
     contributions = pt.stack(contrib_base_cols, axis=1)  # (n_time_steps, n_treatments) direct
     indirect_effects = (contributions_observed - contributions).sum(axis=1)  # (n_time_steps,)
@@ -530,9 +700,17 @@ def build_symbolic_graph(
     # Graph surgery against an absent edge family is exactly zero. Returning a
     # literal zero avoids machine-epsilon subtraction residue in persisted truth
     # labels, especially for the structurally edge-free n_treatments=1 C->C block.
-    ie_cc = pt.stack(ie_cc_cols, axis=1).sum(axis=1) if g_cc.any() else pt.zeros(n_time_steps)
-    ie_zc = pt.stack(ie_zc_cols, axis=1).sum(axis=1) if g_zc.any() else pt.zeros(n_time_steps)
-    ie_dc = pt.stack(ie_dc_cols, axis=1).sum(axis=1) if g_dc.any() else pt.zeros(n_time_steps)
+    # Under dynamic_g the masks are tensors, so the edge-free shortcut cannot be
+    # taken; the surgery difference is exactly zero in that case anyway, up to
+    # the epsilon residue the shortcut exists to avoid.
+    def _ie(cols: list, mask) -> TensorVariable:
+        if not dynamic_g and not np.asarray(mask).any():
+            return pt.zeros(n_time_steps)
+        return cast(TensorVariable, pt.stack(cols, axis=1).sum(axis=1))
+
+    ie_cc = _ie(ie_cc_cols, g_cc)
+    ie_zc = _ie(ie_zc_cols, g_zc)
+    ie_dc = _ie(ie_dc_cols, g_dc)
     # (n_time_steps, 3), columns in the locked order cc, zc, dc
     indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)
 
