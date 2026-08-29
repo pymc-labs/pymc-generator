@@ -10,6 +10,38 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **Control texture** (`control_hf_sigma_range`, `control_pulse_prob_range`,
+  `control_pulse_amp_range`): controls now carry high-frequency own drive —
+  iid weekly noise plus a **centred** calendar pulse — instead of being smooth
+  random walks only. A smooth-walk control lives in the same function space as
+  the smooth baseline walk `RW_B`, so the `Z→B` loading `rho_zb` trades off
+  against baseline drift and is only weakly identified; the added
+  high-frequency content is what a smooth baseline cannot mimic (and what real
+  promo / holiday / price-step regressors look like). For control `m` with
+  `s = rw_z_std[m]`, the own drive gains
+  `q*s * eps_z_hf[:, m] + r*s * (eps_z_pulse[:, m] - p)` with
+  `eps_z_pulse ~ Bernoulli(p)`; both magnitudes are drawn RELATIVE to the
+  control's own walk std (a signed control has no positive level anchor), and
+  the pulse is centred so `E[Z_m]` — hence every parameter-only saturation
+  anchor — is unchanged. Measured on 18 controls over six worlds at
+  `n_time_steps=78`, R² against a 5-term smooth cosine basis drops from a
+  median 0.94 (0.54–0.995) to 0.64 (0.22–0.93): ~6.5x more of the variation
+  that identifies `rho_zb`. New reports `param_control_hf_sigma` /
+  `param_control_pulse_amp` / `param_control_pulse_prob`, new innovations
+  `eps_z_hf` / `eps_z_pulse` in `SCM.exogenous`, per-control `texture` records
+  in `SCM.equation_parameters`, and the executed term in `SCM.equations`.
+  `make_scm_prior(texture="diverse")` enables it, which **changes generated
+  worlds at a fixed seed**: the new draws re-partition the seeded RNG list
+  (`reseed_rngs` assigns streams by the compiled graph's traversal order), so
+  every non-structural array moves — not only the controls. Provably unchanged:
+  the structure/mask/split arrays (`g`, `*_active_mask`, `support_mask`,
+  `is_val`, `cell_id`), `adstock_family`, and `channel_level`. A raw
+  `SCMPrior` — or the preset with all three ranges set to `(0.0, 0.0)` — is
+  inert: no graph term, the magnitudes degenerate to constants (so no
+  parameter RV and no RNG consumed; the two noise RVs are created but reach no
+  output), and corpora stay byte-identical to the pre-feature format (pinned by
+  `EXPECTED_UNTEXTURED_CONTROL_HASHES`).
+
 - **Dead-channel floor** (`min_dead_channels`): the minimum number of *active*
   channels a cell must leave with no direct `C→Y` arrow — spend observed, true
   contribution exactly zero, i.e. the negative class for any direct-effect

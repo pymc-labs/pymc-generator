@@ -167,6 +167,7 @@ cells = [
         "| **media response** | `adstock_family`, `adstock_alpha`, `weibull_*`, `sat_family`, `mm_kappa_mult`, `hill_*`, `logistic_lam`, `tanh_c`, `root_alpha` | `*_family_probs`, `adstock_alpha_range` |\n"
         "| **node processes** | `rw_d`, `rw_z`, `rw_c`, `rw_b` random walks, `rw_y` iid noise | `rw_*_range`, `rw_*_sigma`, `rw_smoothness_*` |\n"
         "| **channel texture** | `hf_sigma`, `pulse_amp`, `pulse_prob` | `channel_hf_sigma_range`, `channel_pulse_*_range` |\n"
+        "| **control texture** | `control_hf_sigma`, `control_pulse_amp`, `control_pulse_prob` (pulse centred) | `control_hf_sigma_range`, `control_pulse_*_range` |\n"
         "| **anchors** | `channel_level`, `saturation_scale` | derived from the above |\n"
         "\n"
         "`world.equations` renders the executed structural assignments for this exact\n"

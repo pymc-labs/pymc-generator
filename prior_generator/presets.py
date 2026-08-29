@@ -29,26 +29,39 @@ def _linear_family_probs(family_keys: tuple[str, ...]) -> dict[str, float]:
     return {family: 1.0 if index == 0 else 0.0 for index, family in enumerate(family_keys)}
 
 
-#: Channel-texture prior for ``texture="diverse"``: iid weekly execution noise,
-#: campaign pulses, a floored uniform walk-std (the legacy HalfNormal piles
-#: mass at 0 -> flat contribution targets), a widened channel-level range, and
-#: an adstock burn-in equal to ``l_max`` so the zero-padding warmup never
-#: reaches the reported window. The std/sigma/amp ranges are RELATIVE to each
-#: channel's own level (scale-free, like L1's log-space spend noise); ranges
-#: are deliberately WIDE — the goal is many different plausible worlds
-#: (near-smooth channels through heavily pulsed ones), not uniformly jagged
-#: series. Sized so the post-mechanism signal survives: adstock low-passes the
-#: weekly noise (~2-3x std reduction) and κ-relative saturation roughly halves
-#: relative variation at the knee, so channel CV must reach L1-like territory
-#: (~0.3-0.8) for contribution targets to carry signal. Validate any retuning
-#: against ``prior_generator.signal_diagnostics.check_signal_gate`` on a
-#: freshly generated corpus's ``diagnostics["signal"]`` block.
+#: Texture prior for ``texture="diverse"``.
+#:
+#: Channels get iid weekly execution noise, campaign pulses, a floored uniform
+#: walk-std (the legacy HalfNormal piles mass at 0 -> flat contribution
+#: targets), a widened channel-level range, and an adstock burn-in equal to
+#: ``l_max`` so the zero-padding warmup never reaches the reported window. The
+#: std/sigma/amp ranges are RELATIVE to each channel's own level (scale-free,
+#: like L1's log-space spend noise); ranges are deliberately WIDE — the goal is
+#: many different plausible worlds (near-smooth channels through heavily pulsed
+#: ones), not uniformly jagged series. Sized so the post-mechanism signal
+#: survives: adstock low-passes the weekly noise (~2-3x std reduction) and
+#: κ-relative saturation roughly halves relative variation at the knee, so
+#: channel CV must reach L1-like territory (~0.3-0.8) for contribution targets
+#: to carry signal. Validate any retuning against
+#: ``prior_generator.signal_diagnostics.check_signal_gate`` on a freshly
+#: generated corpus's ``diagnostics["signal"]`` block.
+#:
+#: Controls get the same two high-frequency terms, RELATIVE to each control's
+#: own walk std and with a CENTRED pulse. Without them a control is a smoothed
+#: walk drawn from the same function class as the baseline walk, so ``Z->B`` is
+#: only weakly separable from baseline drift; the added high-frequency content
+#: is what a smooth baseline cannot mimic (and what real promo / holiday /
+#: price-step regressors look like). The ranges keep the diversity spread:
+#: near-smooth seasonality at the low end through spiky calendars at the top.
 _DIVERSE_TEXTURE: dict[str, Any] = {
     "rw_channel_std_range": (0.15, 0.8),
     "rw_positive_mean_range": (0.3, 4.0),
     "channel_hf_sigma_range": (0.08, 0.6),
     "channel_pulse_prob_range": (0.0, 0.25),
     "channel_pulse_amp_range": (0.4, 2.5),
+    "control_hf_sigma_range": (0.1, 0.8),
+    "control_pulse_prob_range": (0.0, 0.25),
+    "control_pulse_amp_range": (0.5, 3.0),
 }
 
 
@@ -96,16 +109,25 @@ def make_scm_prior(
         saturation) for the simplest additive graph; ``"diverse"`` keeps the
         full family mix from ``SCMPrior`` defaults.
     texture : {"diverse"}
-        Channel-texture axis. ``"diverse"`` (the only supported value) gives
-        channels high-frequency exogenous drive — iid weekly noise, campaign
-        pulses, a floored RELATIVE walk std, and a widened channel-level range
-        (``rw_positive_mean_range``) — plus an ``l_max`` adstock burn-in, so
-        spend sweeps its response curve and contribution targets carry signal
-        (:data:`_DIVERSE_TEXTURE`). The relative factors anchor on
-        ``softplus(walk mean)``; heavy pulses raise the realized channel level
-        above that anchor (up to ~1.7x at the range top), so realized CVs run
-        somewhat below the drawn factors — retune against the
-        :mod:`prior_generator.signal_diagnostics` gate, not the raw ranges.
+        Texture axis, for channels AND controls. ``"diverse"`` (the only
+        supported value) gives channels high-frequency exogenous drive — iid
+        weekly noise, campaign pulses, a floored RELATIVE walk std, and a
+        widened channel-level range (``rw_positive_mean_range``) — plus an
+        ``l_max`` adstock burn-in, so spend sweeps its response curve and
+        contribution targets carry signal (:data:`_DIVERSE_TEXTURE`). The
+        relative channel factors anchor on ``softplus(walk mean)``; heavy
+        pulses raise the realized channel level above that anchor (up to ~1.7x
+        at the range top), so realized CVs run somewhat below the drawn factors
+        — retune against the :mod:`prior_generator.signal_diagnostics` gate,
+        not the raw ranges.
+
+        Controls get the same two terms, RELATIVE to each control's own walk
+        std and with a CENTRED pulse (``amp * (fire - prob)``), so a control's
+        expected level stays ``rw_z_mean`` and the saturation anchors are
+        untouched. This is what makes ``Z`` separable from the baseline: both
+        are otherwise smoothed walks over the same function space, which leaves
+        ``Z->B`` weakly identified against baseline drift.
+
         The deprecated ``"legacy"`` (smooth-walk-only) texture from
         structural-pfn was not migrated; reproducing pre-fix corpora requires
         structural-pfn itself.

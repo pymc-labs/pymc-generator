@@ -203,6 +203,8 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
 
     hf_on = float(cfg.channel_hf_sigma_range[1]) > 0.0
     pulse_on = float(cfg.channel_pulse_prob_range[1]) > 0.0
+    control_hf_on = float(cfg.control_hf_sigma_range[1]) > 0.0
+    control_pulse_on = float(cfg.control_pulse_prob_range[1]) > 0.0
     return {
         "adstock_family": ad_fam.astype(int),
         "sat_family": sat_fam.astype(int),
@@ -212,6 +214,8 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
         "smoothness_b": _smooth(1),
         "use_hf": np.full(n_treatments, hf_on),
         "use_pulse": np.full(n_treatments, pulse_on),
+        "use_control_hf": np.full(n_covariates, control_hf_on),
+        "use_control_pulse": np.full(n_covariates, control_pulse_on),
     }
 
 
@@ -601,6 +605,8 @@ def _scm_params(
     sat_family,
     use_hf,
     use_pulse,
+    use_control_hf,
+    use_control_pulse,
 ) -> dict[str, Any]:
     """Every continuous SCM parameter, in the LOCKED RV creation order.
 
@@ -640,6 +646,21 @@ def _scm_params(
         "pulse_prob": pulse_prob,
         "use_hf": use_hf,
         "use_pulse": use_pulse,
+        # control texture: magnitudes relative to the control's OWN walk std
+        # (a signed control has no positive level anchor to scale by); fires
+        # are Bernoulli(control_pulse_prob) and are centred in the structural
+        # equation, so the control's expected level stays rw_z_mean.
+        # These draws leave seeded corpora alone ONLY while their ranges are
+        # degenerate: _uniform then emits a constant and no RNG node exists.
+        # There is no stream-stable position for a live draw — reseed_rngs
+        # walks collect_default_updates' graph-traversal order, not this
+        # creation order — so enabling the texture deliberately reseeds every
+        # world (see tests/test_identifiability.py's two hash contracts).
+        "control_hf_sigma": _uniform(*specs["control_hf_sigma"]) * rw["rw_z"]["std"],
+        "control_pulse_amp": _uniform(*specs["control_pulse_amp"]) * rw["rw_z"]["std"],
+        "control_pulse_prob": _uniform(*specs["control_pulse_prob"]),
+        "use_control_hf": use_control_hf,
+        "use_control_pulse": use_control_pulse,
     }
 
 
@@ -649,6 +670,7 @@ def _scm_eps(
     n_covariates: int,
     n_latent: int,
     pulse_prob,
+    control_pulse_prob,
 ) -> dict[str, Any]:
     """The graph's noise RVs, in the LOCKED creation order (see :func:`_scm_params`)."""
     return {
@@ -662,6 +684,17 @@ def _scm_eps(
             "eps_c_pulse",
             p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
             shape=(n_time_steps_full, n_treatments),
+        ).astype("float64"),
+        # Control texture noise. A disabled config still creates these RVs (the
+        # channel texture noise behaves identically): the graph then references
+        # neither, so they reach no output, collect no RNG stream, and leave
+        # every seeded draw byte-identical — while keeping the audit schema
+        # (SCM.exogenous) the same shape for every config.
+        "eps_z_hf": pm.Normal("eps_z_hf", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
+        "eps_z_pulse": pm.Bernoulli(
+            "eps_z_pulse",
+            p=pt.broadcast_to(control_pulse_prob, (n_time_steps_full, n_covariates)),
+            shape=(n_time_steps_full, n_covariates),
         ).astype("float64"),
     }
 
@@ -694,6 +727,11 @@ def _register_param_reports(
         "hf_sigma": params["hf_sigma"],
         "pulse_amp": params["pulse_amp"],
         "pulse_prob": params["pulse_prob"],
+        # control texture magnitudes (already scaled by rw_z_std) and fire
+        # probability, so a world replays without re-deriving the scale
+        "control_hf_sigma": params["control_hf_sigma"],
+        "control_pulse_amp": params["control_pulse_amp"],
+        "control_pulse_prob": params["control_pulse_prob"],
     }
     for group_name in ("rw_d", "rw_z", "rw_c", "rw_b", "rw_y"):
         report_specs[f"{group_name}_mean"] = rw[group_name]["mean"]
@@ -900,6 +938,25 @@ def _uniform_prior_specs(
             cfg.channel_pulse_prob_range[1],
             n_t,
         ),
+        # control texture factors (relative to the control's own walk std)
+        "control_hf_sigma": (
+            "control_hf_sigma",
+            cfg.control_hf_sigma_range[0],
+            cfg.control_hf_sigma_range[1],
+            n_c,
+        ),
+        "control_pulse_amp": (
+            "control_pulse_amp",
+            cfg.control_pulse_amp_range[0],
+            cfg.control_pulse_amp_range[1],
+            n_c,
+        ),
+        "control_pulse_prob": (
+            "control_pulse_prob",
+            cfg.control_pulse_prob_range[0],
+            cfg.control_pulse_prob_range[1],
+            n_c,
+        ),
     }
 
 
@@ -965,6 +1022,8 @@ def build_world_model(
             sat_family=structural["sat_family"],
             use_hf=structural["use_hf"],
             use_pulse=structural["use_pulse"],
+            use_control_hf=structural["use_control_hf"],
+            use_control_pulse=structural["use_control_pulse"],
         )
         _apply_outcome_std_scale(cfg, rw, g_active["g_cy"], params["beta"])
         if cfg.n_channel_shocks:
@@ -974,7 +1033,12 @@ def build_world_model(
             }
 
         eps = _scm_eps(
-            n_time_steps_full, n_treatments, n_covariates, n_latent, params["pulse_prob"]
+            n_time_steps_full,
+            n_treatments,
+            n_covariates,
+            n_latent,
+            params["pulse_prob"],
+            params["control_pulse_prob"],
         )
         confounding_strength = _confounded_channel_eps(cfg, eps)
 

@@ -47,6 +47,8 @@ _EXOGENOUS_NAMES = (
     "eps_y",
     "eps_c_hf",
     "eps_c_pulse",
+    "eps_z_hf",
+    "eps_z_pulse",
 )
 
 _LEGACY_WORLD_PARAM_NAMES = tuple(
@@ -148,7 +150,9 @@ class SCM:
 
         ``eps_c`` is the independent, pre-mixture channel innovation. The
         graph uses ``sqrt(1-rho**2) * eps_c + rho * eps_b[:, None]`` when
-        confounding is enabled. ``eps_c_pulse`` is a 0/1 Bernoulli fire.
+        confounding is enabled. ``eps_c_pulse`` is a 0/1 Bernoulli channel
+        fire; ``eps_z_pulse`` is the 0/1 control fire, which the control
+        equation centres by subtracting ``control_pulse_prob``.
         """
         return cast(dict[str, np.ndarray], _copy_audit_value(self._exogenous))
 
@@ -443,6 +447,7 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
             "rho": float(np.asarray(params["confounding_strength"])),
             "eps_c": "raw independent pre-mixture innovation",
             "eps_c_pulse": "0/1 Bernoulli fire",
+            "eps_z_pulse": "0/1 Bernoulli fire, centred by control_pulse_prob",
         }
     }
     for j in range(n_latent):
@@ -455,7 +460,16 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
         for m_parent in range(m):
             if g["g_zz"][m_parent, m]:
                 parents[f"Z{m_parent + 1}"] = float(np.asarray(params["gamma_zz"])[m_parent, m])
-        values[f"Z{m + 1}"] = {"random_walk": _rw_parameters(params, "rw_z", m)}
+        values[f"Z{m + 1}"] = {
+            "random_walk": _rw_parameters(params, "rw_z", m),
+            "texture": {
+                "use_control_hf": bool(np.asarray(params["use_control_hf"])[m]),
+                "control_hf_sigma": float(np.asarray(params["control_hf_sigma"])[m]),
+                "use_control_pulse": bool(np.asarray(params["use_control_pulse"])[m]),
+                "control_pulse_amp": float(np.asarray(params["control_pulse_amp"])[m]),
+                "control_pulse_prob": float(np.asarray(params["control_pulse_prob"])[m]),
+            },
+        }
         if parents:
             values[f"Z{m + 1}"]["parents"] = parents
     for k in range(n_treatments):
@@ -540,7 +554,9 @@ def _build_equations(world: SCM) -> dict[str, str]:
             "eps_c_eff = sqrt(1 - rho**2) * eps_c + rho * eps_b[:, None]; "
             "eps_c is the raw independent pre-mixture channel innovation and "
             "eps_c_pulse is a 0/1 Bernoulli fire. rho=0 gives mutually independent "
-            "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent."
+            "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent. "
+            "eps_z_pulse is the 0/1 control fire; the control equation centres it "
+            "by subtracting control_pulse_prob."
         ),
         "RW": (
             f"n_time_steps_full = n_time_steps + adstock_burn_in = {n_time_steps_full}. "
@@ -578,8 +594,18 @@ def _build_equations(world: SCM) -> dict[str, str]:
         for m_parent in range(m):
             if g["g_zz"][m_parent, m]:
                 terms.append(f"gamma_zz[{m_parent}, {m}] * Z{m_parent + 1}_full")
+        control_hf_on = bool(np.asarray(params["use_control_hf"])[m])
+        control_pulse_on = bool(np.asarray(params["use_control_pulse"])[m])
+        own = f"RW_full(eps_z[:, {m}], rw_z[{m}])"
+        if control_hf_on:
+            own += f" + control_hf_sigma[{m}] * eps_z_hf[:, {m}]"
+        if control_pulse_on:
+            own += f" + control_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - control_pulse_prob[{m}])"
         equations[f"Z{m + 1}"] = (
-            f"Z{m + 1}_full = {_join_terms(f'RW_full(eps_z[:, {m}], rw_z[{m}])', terms)}; "
+            f"use_control_hf[{m}]={control_hf_on}; "
+            f"use_control_pulse[{m}]={control_pulse_on}; "
+            f"own_Z{m + 1}_full = {own}; "
+            f"Z{m + 1}_full = {_join_terms(f'own_Z{m + 1}_full', terms)}; "
             f"Z{m + 1} = Z{m + 1}_full[burn_in:]"
         )
 
@@ -843,6 +869,8 @@ def _assemble_params(
     params["sat_family"] = np.array(structural["sat_family"], copy=True)
     params["use_hf"] = np.array(structural["use_hf"], copy=True)
     params["use_pulse"] = np.array(structural["use_pulse"], copy=True)
+    params["use_control_hf"] = np.array(structural["use_control_hf"], copy=True)
+    params["use_control_pulse"] = np.array(structural["use_control_pulse"], copy=True)
     for suffix, positive_only in (
         ("d", False),
         ("z", False),

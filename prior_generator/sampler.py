@@ -226,6 +226,25 @@ class SCMPrior:
     channel_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     channel_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
     channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
+
+    # -- Control texture ---------------------------------------------------
+    # A control's own drive is otherwise a smoothed random walk, i.e. exactly
+    # the function class the equally smooth baseline walk (RW_B) spans, so the
+    # Z->B coefficient trades off against baseline drift and is only weakly
+    # identified. These knobs add the high-frequency content a smooth walk
+    # cannot mimic — iid weekly noise (sigma ~ U(range)) and calendar pulses
+    # (per-week probability ~ U(prob_range), amplitude ~ U(amp_range)) — which
+    # is also what real controls (promos, holidays, price steps) look like.
+    # Both magnitudes are drawn RELATIVE to the control's own walk std, so they
+    # are scale-free like the channel factors; unlike the channel pulse, the
+    # control pulse is CENTRED (``amp * (fire - prob)``), because a control is
+    # signed and its level is identified by ``rw_z_mean`` alone.
+    # Defaults are inert: no graph term, the magnitudes degenerate to constants
+    # (no parameter RV, no RNG consumed) and corpora stay byte-identical to the
+    # pre-texture format. make_scm_prior(texture="diverse") enables them.
+    control_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
+    control_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
+    control_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
     adstock_burn_in: int = 0
 
     # Symbolic, per-draw held-level channel shocks. A shock clamps observed
@@ -555,6 +574,9 @@ class SCMPrior:
         _finite_range("channel_hf_sigma_range", minimum=0.0)
         _finite_range("channel_pulse_prob_range", minimum=0.0, maximum=0.5)
         _finite_range("channel_pulse_amp_range", minimum=0.0)
+        _finite_range("control_hf_sigma_range", minimum=0.0)
+        _finite_range("control_pulse_prob_range", minimum=0.0, maximum=0.5)
+        _finite_range("control_pulse_amp_range", minimum=0.0)
 
         # Prior-conditioning hyperprior (ACE)
         if self.prior_cond_width_ranges is not None:
@@ -719,6 +741,12 @@ class SCMPrior:
         if float(p_hi) > 0.0 and float(self.channel_pulse_amp_range[1]) <= 0.0:
             raise ValueError(
                 "channel_pulse_prob_range enables pulses but channel_pulse_amp_range "
+                "has zero amplitude — disable pulses via the prob range instead"
+            )
+        control_p_hi = float(self.control_pulse_prob_range[1])
+        if control_p_hi > 0.0 and float(self.control_pulse_amp_range[1]) <= 0.0:
+            raise ValueError(
+                "control_pulse_prob_range enables pulses but control_pulse_amp_range "
                 "has zero amplitude — disable pulses via the prob range instead"
             )
         # Symbolic channel-shock schedule. Keep this validation explicit rather

@@ -66,6 +66,66 @@ def test_factory_diverse_texture_defaults():
     assert cfg.channel_pulse_prob_range[1] > 0
     assert cfg.rw_channel_std_range == (0.15, 0.8)
     assert cfg.adstock_burn_in == cfg.l_max
+    # The diverse texture also textures the CONTROLS, which is what keeps them
+    # out of the smooth baseline walk's function space.
+    assert cfg.control_hf_sigma_range == (0.1, 0.8)
+    assert cfg.control_pulse_prob_range == (0.0, 0.25)
+    assert cfg.control_pulse_amp_range == (0.5, 3.0)
+
+
+def test_control_texture_is_inert_on_a_raw_config():
+    """A hand-built SCMPrior must not gain the mechanism (nor a parameter RV)."""
+    cfg = SCMPrior()
+    assert cfg.control_hf_sigma_range == (0.0, 0.0)
+    assert cfg.control_pulse_prob_range == (0.0, 0.0)
+    assert cfg.control_pulse_amp_range == (0.0, 0.0)
+    cfg.validate()
+
+
+def test_explicit_control_texture_overrides_win_over_the_preset():
+    cfg = pg.make_scm_prior(
+        n_treatments=2,
+        n_covariates=2,
+        n_latent=1,
+        control_hf_sigma_range=(0.0, 0.0),
+        control_pulse_prob_range=(0.0, 0.0),
+        control_pulse_amp_range=(0.0, 0.0),
+    )
+    assert cfg.control_hf_sigma_range == (0.0, 0.0)
+    assert cfg.control_pulse_prob_range == (0.0, 0.0)
+    assert cfg.control_pulse_amp_range == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("control_hf_sigma_range", (-0.1, 0.5)),
+        ("control_hf_sigma_range", (0.5, 0.1)),
+        ("control_hf_sigma_range", (0.0, np.inf)),
+        ("control_hf_sigma_range", None),
+        ("control_pulse_prob_range", (0.1, 0.6)),
+        ("control_pulse_prob_range", (-0.1, 0.2)),
+        ("control_pulse_amp_range", (1.0, 0.5)),
+        ("control_pulse_amp_range", (np.nan, 1.0)),
+    ),
+)
+def test_control_texture_ranges_fail_fast_on_invalid_bounds(name, value):
+    # A live amplitude keeps the pulse cross-check from answering for the bounds
+    # check, and matching the bounds message pins WHICH rule rejected the range
+    # (plain `match=name` would also accept the cross-check error).
+    kwargs = {"control_pulse_amp_range": (1.0, 1.0), name: value}
+    with pytest.raises(ValueError, match=rf"{name} (has invalid bounds|must be a finite)"):
+        SCMPrior(**kwargs).validate()
+
+
+def test_control_pulse_probability_ceiling_is_inclusive():
+    """0.5 is the documented maximum, so it must be accepted, not merely near-valid."""
+    SCMPrior(control_pulse_prob_range=(0.0, 0.5), control_pulse_amp_range=(1.0, 1.0)).validate()
+
+
+def test_control_pulses_require_a_nonzero_amplitude():
+    with pytest.raises(ValueError, match="control_pulse_prob_range enables pulses"):
+        SCMPrior(control_pulse_prob_range=(0.1, 0.2), control_pulse_amp_range=(0.0, 0.0)).validate()
 
 
 def test_family_probability_defaults_are_exact_and_independent():

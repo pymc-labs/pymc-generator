@@ -169,7 +169,8 @@ corresponding edge exists in the drawn DAG):
 
 ```text
 D_j = RW_j                                                  (confounder — a random walk)
-Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + RW_m         (control)
+F_m = RW_m + s_m·η_tm + c_m·(h_tm − q_m),  h_tm ~ Bernoulli(q_m)  (control's own drive)
+Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + F_m          (control)
 E_k = RW_k + σ_k·ε_tk + a_k·b_tk,  b_tk ~ Bernoulli(p_k)    (channel's own exogenous drive)
 C_k = softplus( Σ_j w_jk·D_j + Σ_m v_mk·Z_m
                 + Σ_{k'<k} α_{k'k}·C_{k'} + E_k )            (channel spend — non-negative)
@@ -184,11 +185,19 @@ Two structural facts do the heavy lifting:
    input→input interactions (`dc, zc, cc, dz, zz`) and the baseline drivers
    (`db, zb`) are plain linear loadings. This keeps the interaction structure
    interpretable while the media response stays realistically curved.
-2. **Every node carries its own random-walk noise term**, and channels
-   additionally carry high-frequency drive — iid weekly execution noise `σ_k·ε`
-   and campaign pulses `a_k·b` (a Bernoulli fire). That high-frequency variation
-   is what makes spend *sweep* its response curve; without it, the contribution
-   targets degenerate to flat lines.
+2. **Every node carries its own random-walk noise term**, and channels and
+   controls additionally carry high-frequency drive. For channels — iid weekly
+   execution noise `σ_k·ε` and campaign pulses `a_k·b` (a Bernoulli fire) —
+   that variation is what makes spend *sweep* its response curve; without it,
+   the contribution targets degenerate to flat lines. For controls the same two
+   terms (`s_m·η`, `c_m·(h − q_m)`) exist for a different reason: a
+   smooth-walk-only control occupies the same function space as the smooth
+   baseline walk, which leaves `Z → B` weakly identified against baseline
+   drift. The control pulse is **centred** on its own fire probability, so both
+   added terms are mean-zero and a control's expected level stays `rw_z_mean`
+   (i.e. `E[F_m − RW_m] = 0`). Control
+   magnitudes are drawn relative to the control's own walk std; channel
+   magnitudes relative to the channel's level.
 
 ## How a world is created
 
@@ -239,6 +248,12 @@ the base rates and budgets.
   priors (`SATURATION_PRIOR_RANGES`).
 - **Channel texture** — weekly-jitter `pm.Normal` and campaign-pulse
   `pm.Bernoulli`, with magnitudes scaled relative to each channel's own level.
+- **Control texture** — the same pair for controls (`control_hf_sigma`,
+  `control_pulse_amp`, `control_pulse_prob`), with magnitudes scaled relative
+  to each control's own walk std and the pulse centred on its fire
+  probability. Both are inert on a raw `SCMPrior` — no graph term, no RNG
+  consumed, byte-identical corpora — and enabled by
+  `make_scm_prior(texture="diverse")`.
 
 Persisted `param_rw_*_std` labels declare the walks' **expected standard
 deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.

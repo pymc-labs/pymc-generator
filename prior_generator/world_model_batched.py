@@ -238,7 +238,7 @@ def build_world_model_template(
         # Smoothness reaches the graph as a kernel-width index rather than a
         # float, which is what keeps the walk operators out of the compiled
         # structure. Texture flags stay concrete: they gate whole terms, and the
-        # supported configs enable them uniformly across channels.
+        # supported configs enable them uniformly across channels and controls.
         rw = _walk_priors(
             cfg,
             {},
@@ -262,11 +262,18 @@ def build_world_model_template(
             sat_family=data["sat_family"],
             use_hf=_texture_flag(cfg.channel_hf_sigma_range, n_treatments),
             use_pulse=_texture_flag(cfg.channel_pulse_prob_range, n_treatments),
+            use_control_hf=_texture_flag(cfg.control_hf_sigma_range, n_covariates),
+            use_control_pulse=_texture_flag(cfg.control_pulse_prob_range, n_covariates),
         )
         _apply_outcome_std_scale(cfg, rw, g_data["g_cy"], params["beta"])
 
         eps = _scm_eps(
-            n_time_steps_full, n_treatments, n_covariates, n_latent, params["pulse_prob"]
+            n_time_steps_full,
+            n_treatments,
+            n_covariates,
+            n_latent,
+            params["pulse_prob"],
+            params["control_pulse_prob"],
         )
         confounding_strength = _confounded_channel_eps(cfg, eps)
 
@@ -293,13 +300,13 @@ def build_world_model_template(
     return model, out_names, param_names
 
 
-def _texture_flag(value_range: tuple[float, float], n_treatments: int) -> np.ndarray:
-    """Whether a channel-texture term is enabled anywhere in this config.
+def _texture_flag(value_range: tuple[float, float], n_nodes: int) -> np.ndarray:
+    """Whether a texture term is enabled anywhere in this config.
 
     The flag gates a whole additive term in the graph, so it must be concrete.
     A config whose upper bound is zero can never produce the term.
     """
-    return np.full(n_treatments, float(value_range[1]) > 0.0)
+    return np.full(n_nodes, float(value_range[1]) > 0.0)
 
 
 @dataclass(frozen=True)

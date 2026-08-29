@@ -67,6 +67,22 @@ def _channel_lines(g: dict, params: dict) -> list[str]:
     return lines
 
 
+def _control_lines(g: dict, params: dict) -> list[str]:
+    n_covariates = len(g["g_zb"])
+    lines = []
+    for m in range(n_covariates):
+        bits = [
+            f"Z{m + 1}: zb={int(g['g_zb'][m])}",
+            f"walk(mean={params['rw_z']['mean'][m]:.2f},std={params['rw_z']['std'][m]:.2f},"
+            f"smooth={params['rw_z']['smoothness'][m]:.2f})",
+            f"control_hf_sigma={params['control_hf_sigma'][m]:.2f}",
+            f"pulse(p={params['control_pulse_prob'][m]:.2f},"
+            f"amp={params['control_pulse_amp'][m]:.2f},centred)",
+        ]
+        lines.append("  " + "  ".join(bits))
+    return lines
+
+
 def _format_signal_metric(signal: dict, key: str, index: int) -> str:
     """Render an estimable signal metric, or ``n/a`` when it is unavailable."""
     if not signal[f"{key}_valid"][index]:
@@ -117,6 +133,8 @@ def describe_scm(world: SCM) -> str:
         )
     f.write("\nChannels (mechanism + own-drive texture):\n")
     f.write("\n".join(_channel_lines(g, params)) + "\n\n")
+    f.write("Controls (walk + own-drive texture):\n")
+    f.write("\n".join(_control_lines(g, params)) + "\n\n")
     prior_cond = world.extras.get("prior_cond")
     if prior_cond:
         spec = cfg.prior_cond_spec()
@@ -135,6 +153,11 @@ def describe_scm(world: SCM) -> str:
     f.write(f"  channel_pulse_prob_range={cfg.channel_pulse_prob_range}\n")
     f.write(f"  channel_pulse_amp_range={cfg.channel_pulse_amp_range} (relative)\n")
     f.write(f"  rw_positive_mean_range={cfg.rw_positive_mean_range}\n")
+    f.write(f"  control_hf_sigma_range={cfg.control_hf_sigma_range} (relative to rw_z_std)\n")
+    f.write(f"  control_pulse_prob_range={cfg.control_pulse_prob_range}\n")
+    f.write(
+        f"  control_pulse_amp_range={cfg.control_pulse_amp_range} (relative to rw_z_std, centred)\n"
+    )
     f.write(f"  beta_additive_range={cfg.beta_additive_range}\n")
     f.write("  saturation prior ranges: ")
     f.write(json.dumps(SATURATION_PRIOR_RANGES) + "\n\n")

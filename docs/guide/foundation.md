@@ -65,7 +65,8 @@ exists in the drawn DAG:
 $$
 \begin{aligned}
 D_j &= \mathrm{RW}_j && \text{(confounder — a random walk)}\\[2pt]
-Z_m &= \textstyle\sum_j u_{jm}\,D_j + \sum_{m'<m} \gamma_{m'm}\,Z_{m'} + \mathrm{RW}_m && \text{(control)}\\[2pt]
+F_m &= \mathrm{RW}_m + s_m\,\eta_{tm} + c_m\,(h_{tm} - q_m),\quad h_{tm}\sim\mathrm{Bernoulli}(q_m) && \text{(control's own drive)}\\[2pt]
+Z_m &= \textstyle\sum_j u_{jm}\,D_j + \sum_{m'<m} \gamma_{m'm}\,Z_{m'} + F_m && \text{(control)}\\[2pt]
 E_k &= \mathrm{RW}_k + \sigma_k\,\varepsilon_{tk} + a_k\,b_{tk},\quad b_{tk}\sim\mathrm{Bernoulli}(p_k) && \text{(channel's own drive)}\\[2pt]
 C_k &= \mathrm{softplus}\!\Big(\textstyle\sum_j w_{jk} D_j + \sum_m v_{mk} Z_m + \sum_{k'<k}\alpha_{k'k} C_{k'} + E_k\Big) && \text{(spend — non-negative)}\\[2pt]
 B &= \textstyle\sum_j \delta_j D_j + \sum_m \rho_m Z_m + \mathrm{RW}_B && \text{(baseline)}\\[2pt]
@@ -80,11 +81,39 @@ Two structural facts do the heavy lifting:
    input→input interactions (`dc, zc, cc, dz, zz`) and the baseline drivers
    (`db, zb`) are plain linear loadings. Interaction *structure* is rich;
    interaction *shape* is linear.
-2. **Every node carries its own random-walk noise term**, and channels
-   additionally carry high-frequency drive — iid weekly execution noise
-   $\sigma_k\varepsilon$ and campaign pulses $a_k b$ (a Bernoulli fire). That
-   high-frequency variation is what makes spend *sweep* its response curve;
-   without it, the contribution targets degenerate to flat lines.
+2. **Every node carries its own random-walk noise term**, and channels and
+   controls additionally carry high-frequency drive. For channels — iid weekly
+   execution noise $\sigma_k\varepsilon$ and campaign pulses $a_k b$ (a
+   Bernoulli fire) — that variation is what makes spend *sweep* its response
+   curve; without it, the contribution targets degenerate to flat lines.
+
+### Why controls carry texture too
+
+A smooth-walk-only control is drawn from the **same function space as the
+smooth baseline walk** $\mathrm{RW}_B$. Over a typical horizon the two are
+nearly collinear, so $\rho_m$ (the `Z → B` loading) trades off against baseline
+drift and is only weakly identified — an unregularised fit blows up, and a
+shrinking estimator is doing the right thing on an unidentified direction.
+
+The fix is at the source: give a control high-frequency content the smooth
+baseline cannot mimic. That is $s_m\eta_{tm}$ (iid weekly noise) and
+$c_m(h_{tm}-q_m)$ (a calendar pulse), which is also what real controls — promos,
+holidays, price steps — actually look like. Two properties matter:
+
+- **Relative to the control's own walk std.** A signed control has no positive
+  level to anchor on, so $s_m$ and $c_m$ are drawn as factors of
+  $\texttt{rw\_z\_std}[m]$, which keeps them scale-free.
+- **The pulse is centred** on its own fire probability, so both added terms are
+  mean-zero ($E[F_m - \mathrm{RW}_m]=0$): a control's expected level is still
+  its walk mean, and the parameter-only saturation anchors below are untouched.
+  (The channel pulse is deliberately *not* centred — a channel is positive and
+  its level may rise.)
+
+Measured on 18 controls over six worlds at `n_time_steps=78`: $R^2$ against a
+5-term smooth cosine basis falls from a median of **0.94** (range 0.54–0.995)
+to **0.64** (range 0.22–0.93), i.e. the variation that identifies $\rho_m$
+grows ~6.5× at the median. Set the three `control_*_range` knobs to
+`(0.0, 0.0)` to recover the pre-texture (smooth-walk-only) controls exactly.
 
 ## A drawn graph
 
@@ -134,7 +163,7 @@ then parameters and noise (as a PyMC model). This mirrors the design principle:
 
     `build_world_model` assembles one `pm.Model` in which **every continuous
     quantity is a random variable**: edge coefficients (`pm.Uniform`), random-walk
-    means/stds and innovations, mechanism shapes, and channel texture. Every graph
+    means/stds and innovations, mechanism shapes, and channel/control texture. Every graph
     output is a `pm.Deterministic`, so a single **`pm.draw`** returns the
     parameters, the series, and the full decomposition jointly. Candidate draws
     are run through the [realism filter](#the-realism-filter); the first accepted
@@ -173,8 +202,10 @@ deliberate, and they bound what a model trained on this data can learn.
 - **κ-relative saturation.** Each curve's knee is set from a parameter-only
   expected channel level:
   `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted expected
-  Z→C / C→C parent terms)`. Latent `D→C` drops out because demand is mean-zero.
-  The same pinned scale is used for every decomposition variant.
+  Z→C / C→C parent terms)`. Latent `D→C` drops out because demand is mean-zero,
+  and control texture drops out because both of its terms are mean-zero (its
+  pulse is centred). The same pinned scale is used for every decomposition
+  variant.
 - **Adstock burn-in.** Worlds simulate `n_time_steps + adstock_burn_in` weeks and
   report the last `n_time_steps`, so the reported window sees real history.
 

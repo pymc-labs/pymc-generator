@@ -1,9 +1,64 @@
 # Configuration
 
 Build configs through [`make_scm_prior`](#prior_generator.presets.make_scm_prior)
-— it pins the layout and enables the supported *diverse* channel texture — and
-reach for [`SCMPrior`](#prior_generator.sampler.SCMPrior) directly only when you
-need a field the preset does not surface.
+— it pins the layout and enables the supported *diverse* channel **and control**
+texture — and reach for [`SCMPrior`](#prior_generator.sampler.SCMPrior) directly
+only when you need a field the preset does not surface.
+
+## Control texture
+
+A control's own drive is otherwise a smoothed random walk, i.e. the same
+function class as the smooth baseline walk `RW_B`. The two are then nearly
+collinear over a typical horizon, so the `Z → B` loading `rho_zb` trades off
+against baseline drift and is only weakly identified. These three knobs add the
+high-frequency content a smooth baseline cannot mimic:
+
+```python
+from prior_generator import make_scm_prior
+
+cfg = make_scm_prior(            # the diverse preset already sets these
+    control_hf_sigma_range=(0.1, 0.8),
+    control_pulse_prob_range=(0.0, 0.25),
+    control_pulse_amp_range=(0.5, 3.0),
+)
+smooth = make_scm_prior(         # pre-texture controls, byte-identical corpora
+    control_hf_sigma_range=(0.0, 0.0),
+    control_pulse_prob_range=(0.0, 0.0),
+    control_pulse_amp_range=(0.0, 0.0),
+)
+```
+
+For control `m`, with `s = rw_z_std[m]`:
+
+$$
+F_m = \mathrm{RW}_m + \underbrace{q\,s}_{\texttt{control\_hf\_sigma}}\eta_{tm}
+    + \underbrace{r\,s}_{\texttt{control\_pulse\_amp}}\,(h_{tm} - p),\qquad
+h_{tm}\sim\mathrm{Bernoulli}(p).
+$$
+
+- `control_hf_sigma_range: tuple[float, float] = (0.0, 0.0)` — the iid weekly
+  factor `q`, **relative to the control's own walk std** (a signed control has
+  no positive level to anchor on). Bounds must be finite with `0 <= lo <= hi`.
+- `control_pulse_prob_range: tuple[float, float] = (0.0, 0.0)` — the per-week
+  fire probability `p`, with `0 <= lo <= hi <= 0.5`. Its upper bound is the
+  on/off switch for the pulse term.
+- `control_pulse_amp_range: tuple[float, float] = (0.0, 0.0)` — the pulse
+  amplitude factor `r`, also relative to the walk std. It is an *amplitude*,
+  not a standard deviation: the term's variance is
+  `(r*s)**2 * p * (1 - p)`. Enabling `control_pulse_prob_range` with a
+  zero-only amplitude is a validation error.
+
+The pulse is **centred**: subtracting `p` makes both added terms mean-zero
+(`E[F_m - RW_m] = 0`), so a control's expected level stays `rw_z_mean` and the
+parameter-only saturation anchors are unchanged. (Channel pulses are
+deliberately uncentred — a channel is positive
+and its realized level may rise above the walk anchor.) Centring holds in
+expectation conditional on the drawn parameters, not as the temporal mean of
+every finite path.
+
+All three default to `(0.0, 0.0)` on a raw `SCMPrior`: no term enters the graph,
+the parameters degenerate to constants, and the corpus is byte-identical to one
+generated before the mechanism existed.
 
 ## Baseline walk scale
 

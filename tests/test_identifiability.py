@@ -27,12 +27,68 @@ from prior_generator.world_model import build_world_model, draw_worlds, sample_s
 #: Byte-level contract for every serialized corpus array. When a hash moves,
 #: record WHY here — a silent regeneration is how a real regression hides.
 #:
-#: Last moved by outcome-side noise: ``RW_Y`` is now iid and default outcome
-#: amplitudes are relative to the parameter-only media anchor. Removing
-#: ``smoothness_y`` and replacing the two outcome scale RVs changes all
-#: later seeded draws, so this breaking corpus-semantics change intentionally
-#: moves every generated-world array downstream of the fixed graph.
+#: Last moved by CONTROL TEXTURE: ``make_scm_prior(texture="diverse")`` now
+#: gives controls high-frequency own drive (iid weekly noise + a centred
+#: calendar pulse, both relative to the control's own walk std), so a control
+#: is no longer a smooth walk drawn from the same function space as the smooth
+#: baseline walk. The new draws re-partition the seeded RNG list (``reseed_rngs``
+#: assigns streams by the compiled graph's traversal order), so EVERY
+#: non-structural array moves here, including ones with no control ancestor
+#: (``demand``, ``adstock_alpha``, ``weibull_*``). Unchanged: the
+#: structure/mask/split arrays, ``adstock_family``, and ``channel_level``.
+#: ``EXPECTED_UNTEXTURED_CONTROL_HASHES`` below pins the pre-texture bytes.
 EXPECTED_CORPUS_HASHES = {
+    "spend_raw": "50ee92c932a13ba4db21c7e60db0acf1e082458a80a677c1c9db0b79ae56b680",
+    "spend_norm": "c6d2f305497aa46f7957e826512dec5af595a1a8e4d59d8b2a883d752ac5b152",
+    "spend_share": "974ec3a99ab5305b390ff67108b9f9ba0736aea41384685044e70c33bd211f59",
+    "controls": "2b1e89f1dfcb06918121cfacb1f445ec2a20f56a83a51c76092a7fd9bb03acb5",
+    "sales_raw": "931690c12039de059c3ef16406fb84edef0944168f11a203480b53211e054c23",
+    "sales_norm": "2487da7fc2420256fa40dd3dcee2a83cd0fbaa1d9f395aacf0baddd9134a16f9",
+    "support_mask": "003f9ad7fd18ab65a0ca13820be76c5f1637b7e15c7d94fa1b5e327f148c7508",
+    "is_future": "7801dc551deac4014f0121c44146e6565844cf603d6ad9e3e61ad1007743afe9",
+    "g": "e74d8d2a53ee7a978fe94b066510147be374f197504cff24e02e24cb00478e5c",
+    "contributions_raw": "0cdc73b55bbbbd539efb578356327ee81d24ce99856052ed9720a6b316319aec",
+    "baseline_raw": "b79c215f68878bb2ae77c01802bd555b4d9e9a91fd92c939a356bd3fe1ea3e24",
+    "demand": "383c26cf53401e8b4637cefa3c5de504e1cc226d6cf9d72b5c838b57217cc2fd",
+    "spend_means": "6e0cf461894d812b53b70f69a76769f61859eaa7f64d54c2c896dcd5a2c709ff",
+    "sales_scale": "78cb8fcc79b3428bc12f439759f32d5849b82bab075d4f23c1ec4d15a439d655",
+    "is_val": "eb4b02f10d5660691db02cfd97e0fee99ab9f2461e8e802369f07300b5285ad4",
+    "cell_id": "85bf0249350a8edb436598ba927c2298bca0e058665eb864b071e65830562096",
+    "treatment_active_mask": "3a7cd171c96fc8fb27a1dadbd085253acf5fb34ff5976402507504ddadd92889",
+    "covariate_active_mask": "28a1a7f96dc3b37a56bc3bed913b9f7d3433e765ca26ec6adaedaa272b87baa2",
+    "latent_active_mask": "c5d57bca6001a56485f5bb07b383f17e38716d894f10a46c648521ce1d7a677f",
+    "n_treatments_active": "c1198a3bdca08a0ae0112be2f753ffc046cece6c10a96c3b4edd974798b21530",
+    "n_covariates_active": "9ae6b0b1e6912e108c443a1e35a8fd522c1e0455c79b1152d8d44744d080504f",
+    "n_latent_active": "33462003b0a367a219d05faffcae2fa50ef2f8bdac6cb881e694c7c46335f46e",
+    "indirect_effects": "3d20abcfbd838bdb23b2888d8542794d35eb1d2da9f4f6893b4ffcbc53e03847",
+    "channel_active": "e6a619d2852bed3ed0f8890b700bec0062e3f6f7352eec5a769792bd8c191671",
+    "control_contribution": "a8ea808e9304f892e7bd43616a9a9f1f879c18dfdd370b7f1a47a7b5babf321c",
+    "confounder_contribution": "ac7d0ad77be2a513bdb2ec46ea024d8c7ee7d2d63961f38ed109c495be0766f2",
+    "baseline_intrinsic": "731555b9dd9953eab9288079850faae6a6d4dac2a93dc2c244c45660b1535ef3",
+    "indirect_effects_by_source": "773c263e398cd6aaafc5f4b3b741deffd0ac9f5f78f8d75562b00219dd5fe5ad",
+    "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
+    "channel_shock_mask": "a2c17b7c3b20dff7ef9b8ef7316a3ef323f705522c3fef1744df2a33a3af832b",
+    "channel_shock_channel": "7f956e232d961d634c20094542cf11ae23525f62749f31010e76d0cbcacc7e82",
+    "channel_shock_start": "52d81fd29e1721a2b63114638580692d9faf97a1ef36eb6d5129adf758cd1f35",
+    "channel_shock_length": "fc492e4b1613b6e1cf17271739cd12251266644e410cb1c14180e21c6b07c59e",
+    "channel_shock_level_multiplier": "ab57f647547011d917a044e853a1d5796e715c0ccacb505d2c51442e4da8c341",
+    "channel_shock_level": "1550bbf2bded16bb609b5f52669f0b29e6fdf0d7a0898bfb82c5c51a9db3124a",
+    "channel_level": "dc4751c12f53123084e1d827851c8fbedf4d214f0513f4c046852697889e3cb4",
+    "saturation_scale": "3aaa9bb34f12c5a9844bfd51112158912e787f2c77480c062098622e25c6fad4",
+    "adstock_family": "b8b595535043fbd9bee4855aa2adc923c2a7cf6c5d91fd9b538f1779223d66c8",
+    "adstock_alpha": "47c6002f084de409224518f5f5f2dcd769065bc800e492b346309f27a7c08df2",
+    "weibull_lam": "64ee54fc37b421f641f6da185965522fb12996987717d4d76f552002be4c2228",
+    "weibull_k": "607ee7504d909286e200ac704d8ac4715cc97635ef8fd6cb226733bda0430e13",
+    "signal_metrics": "e881193b08a34921a9cd742bd2c69e5ab95b49016da20fe8836f67988048f1be",
+    "signal_metric_valid": "f1ecbab717272a25f5802cb87be6fd3b1bdd88cede7e75a141f74ebacf212b16",
+}
+
+#: The SAME corpus with the control texture explicitly disabled, pinned to the
+#: hashes generated BEFORE the mechanism existed. This is the RNG-isolation
+#: contract: the new parameters degenerate to constants and the new noise RVs
+#: reach no output, so they collect no random stream and every legacy byte
+#: survives. It moves only when something outside the control texture changes.
+EXPECTED_UNTEXTURED_CONTROL_HASHES = {
     "spend_raw": "c0bab46c1873c91e56d05fb383b1eef66e02002ffa080de0ca814a6b7b6d4adf",
     "spend_norm": "e0f991be830a85ca0ab20917d1e0bf60848ae167426c98835f07bff7f88cb8ef",
     "spend_share": "5b58d30f1281b1101132ff820e33f91a3158ee41fd63737941aa731c03ac1254",
@@ -106,6 +162,13 @@ EXPECTED_DEFAULT_FREE_RVS = (
     "root_alpha",
     "hf_sigma",
     "pulse_amp",
+    # Control texture. These are creation-order pins, not stream positions:
+    # reseed_rngs walks the compiled graph's traversal order. A disabled config
+    # keeps its bytes because the magnitudes degenerate to constants and the two
+    # noise RVs reach no output (see the byte contract below).
+    "control_hf_sigma",
+    "control_pulse_amp",
+    "control_pulse_prob",
     "eps_d",
     "eps_z",
     "eps_c",
@@ -113,6 +176,8 @@ EXPECTED_DEFAULT_FREE_RVS = (
     "eps_y",
     "eps_c_hf",
     "eps_c_pulse",
+    "eps_z_hf",
+    "eps_z_pulse",
 )
 
 
@@ -125,8 +190,7 @@ def _hash_array(key: str, value: np.ndarray) -> str:
     return hasher.hexdigest()
 
 
-def test_additive_corpus_matches_default_outcome_noise_hashes():
-    """Default relative outcome-noise corpora retain an explicit byte contract."""
+def _corpus_hashes(**overrides) -> dict[str, str]:
     cfg = pg.make_scm_prior(
         n_treatments=2,
         n_covariates=2,
@@ -145,9 +209,9 @@ def test_additive_corpus_matches_default_outcome_noise_hashes():
             "cc": (1, 1),
             "zz": (1, 1),
         },
+        **overrides,
     )
     corpus = pg.sample_prior_predictive(cfg)
-
     # Diagnostics include elapsed timing, so only the serialized top-level arrays
     # participate in this deterministic legacy contract.
     hashes = {
@@ -158,8 +222,27 @@ def test_additive_corpus_matches_default_outcome_noise_hashes():
     hashes.update(
         {key: _hash_array(key, value) for key, value in corpus["identifiability"].items()}
     )
+    return hashes
 
-    assert hashes == EXPECTED_CORPUS_HASHES
+
+def test_additive_corpus_matches_default_outcome_noise_hashes():
+    """Default relative outcome-noise corpora retain an explicit byte contract."""
+    assert _corpus_hashes() == EXPECTED_CORPUS_HASHES
+
+
+def test_disabling_control_texture_reproduces_the_pre_texture_corpus_bytes():
+    """Control texture must be RNG-inert when switched off.
+
+    Its parameters degenerate to constants and its noise RVs reach no output,
+    so they collect no random stream. Any drift here means a new draw slipped
+    into an existing stream and silently changed every downstream world.
+    """
+    hashes = _corpus_hashes(
+        control_hf_sigma_range=(0.0, 0.0),
+        control_pulse_prob_range=(0.0, 0.0),
+        control_pulse_amp_range=(0.0, 0.0),
+    )
+    assert hashes == EXPECTED_UNTEXTURED_CONTROL_HASHES
 
 
 def test_default_world_model_free_rvs_match_outcome_noise_contract():
@@ -276,6 +359,12 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         "channel_hf_sigma_range": (0.08, 0.08),
         "channel_pulse_prob_range": (0.0, 0.0),
         "channel_pulse_amp_range": (0.0, 0.0),
+        # This fixture isolates rho, so every other texture axis is pinned —
+        # the controls here are edge-free anyway, and leaving their texture on
+        # would only move the calibrated constants below.
+        "control_hf_sigma_range": (0.0, 0.0),
+        "control_pulse_prob_range": (0.0, 0.0),
+        "control_pulse_amp_range": (0.0, 0.0),
         "rw_mean_range": (3.0, 3.0),
         "rw_positive_mean_range": (3.0, 3.0),
         "rw_baseline_mean_range": (3.0, 3.0),

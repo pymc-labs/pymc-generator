@@ -202,6 +202,11 @@ def _concrete_scm_inputs(n_treatments, n_covariates, n_latent, n_time_steps_full
         "pulse_prob": rng.uniform(0.1, 0.3, n_treatments),
         "use_hf": np.ones(n_treatments, dtype=bool),
         "use_pulse": np.ones(n_treatments, dtype=bool),
+        "control_hf_sigma": rng.uniform(0.05, 0.2, n_covariates),
+        "control_pulse_amp": rng.uniform(0.1, 0.4, n_covariates),
+        "control_pulse_prob": rng.uniform(0.1, 0.3, n_covariates),
+        "use_control_hf": np.ones(n_covariates, dtype=bool),
+        "use_control_pulse": np.ones(n_covariates, dtype=bool),
         "rw_d": walk(n_latent, False),
         "rw_z": walk(n_covariates, False),
         "rw_c": walk(n_treatments, True),
@@ -216,6 +221,8 @@ def _concrete_scm_inputs(n_treatments, n_covariates, n_latent, n_time_steps_full
         "eps_y": rng.normal(size=n_time_steps_full),
         "eps_c_hf": rng.normal(size=(n_time_steps_full, n_treatments)),
         "eps_c_pulse": rng.integers(0, 2, (n_time_steps_full, n_treatments)).astype("float64"),
+        "eps_z_hf": rng.normal(size=(n_time_steps_full, n_covariates)),
+        "eps_z_pulse": rng.integers(0, 2, (n_time_steps_full, n_covariates)).astype("float64"),
     }
     return g, params, eps
 
@@ -286,6 +293,96 @@ def test_dynamic_graph_matches_static_graph_on_identical_inputs():
             atol=1e-10,
             err_msg=f"dynamic_g diverged from the static graph for {name!r}",
         )
+
+
+def test_disabled_control_texture_needs_no_control_noise_and_enabled_texture_demands_it():
+    """Direct concrete callers may omit the control-texture innovations.
+
+    A config with the texture off builds the pre-texture control equation, so
+    omitting ``eps_z_hf`` / ``eps_z_pulse`` must be identical to passing them
+    with the flags off — while an ENABLED term with no innovation is a caller
+    bug and must fail loudly instead of silently defaulting to zero.
+    """
+    n_treatments, n_covariates, n_latent = 2, 2, 1
+    n_time_steps, burn_in = 16, 8
+    g, params, eps = _concrete_scm_inputs(
+        n_treatments, n_covariates, n_latent, n_time_steps + burn_in
+    )
+    off = dict(params)
+    off["use_control_hf"] = np.zeros(n_covariates, dtype=bool)
+    off["use_control_pulse"] = np.zeros(n_covariates, dtype=bool)
+    without_noise = {k: v for k, v in eps.items() if k not in ("eps_z_hf", "eps_z_pulse")}
+
+    def controls(params_in, eps_in):
+        graph = build_symbolic_graph(
+            g,
+            params_in,
+            n_time_steps,
+            n_treatments,
+            n_covariates,
+            n_latent,
+            burn_in=burn_in,
+            eps=eps_in,
+        )
+        return np.asarray(graph["outputs"]["controls"].eval(), dtype="float64")
+
+    np.testing.assert_array_equal(controls(off, without_noise), controls(off, eps))
+    # ... and the enabled graph really consumes them, so it cannot be equal.
+    assert not np.allclose(controls(params, eps), controls(off, eps), rtol=0.0, atol=1e-12)
+
+    for flag, missing in (("use_control_hf", "eps_z_hf"), ("use_control_pulse", "eps_z_pulse")):
+        enabled_one = dict(off)
+        enabled_one[flag] = np.ones(n_covariates, dtype=bool)
+        with pytest.raises(ValueError, match=missing):
+            controls(enabled_one, {k: v for k, v in eps.items() if k != missing})
+
+
+def test_absent_control_flags_are_derived_from_the_concrete_magnitudes():
+    """A caller may omit the flags entirely; magnitudes then decide.
+
+    ``build_world_model`` always passes ``use_control_*``, but a direct concrete
+    caller may not, so the graph derives them: hf from a nonzero sigma, and the
+    pulse from a nonzero amplitude AND a positive fire probability (an amplitude
+    with probability zero can never fire).
+    """
+    n_treatments, n_covariates, n_latent = 2, 2, 1
+    n_time_steps, burn_in = 16, 8
+    g, params, eps = _concrete_scm_inputs(
+        n_treatments, n_covariates, n_latent, n_time_steps + burn_in
+    )
+
+    def controls(params_in, eps_in):
+        graph = build_symbolic_graph(
+            g,
+            params_in,
+            n_time_steps,
+            n_treatments,
+            n_covariates,
+            n_latent,
+            burn_in=burn_in,
+            eps=eps_in,
+        )
+        return np.asarray(graph["outputs"]["controls"].eval(), dtype="float64")
+
+    derived = {k: v for k, v in params.items() if k not in ("use_control_hf", "use_control_pulse")}
+    np.testing.assert_array_equal(controls(derived, eps), controls(params, eps))
+
+    # A live amplitude with a zero fire probability stays OFF, so its innovation
+    # is not even required.
+    dead_pulse = dict(derived)
+    dead_pulse["control_pulse_prob"] = np.zeros(n_covariates)
+    dead_pulse["control_hf_sigma"] = np.zeros(n_covariates)
+    off = dict(params)
+    off["use_control_hf"] = np.zeros(n_covariates, dtype=bool)
+    off["use_control_pulse"] = np.zeros(n_covariates, dtype=bool)
+    np.testing.assert_array_equal(
+        controls(dead_pulse, {k: v for k, v in eps.items() if k != "eps_z_pulse"}),
+        controls(off, eps),
+    )
+
+    # A derived-on term with no innovation is still a loud error.
+    with pytest.raises(ValueError, match="eps_z_hf"):
+        controls(derived, {k: v for k, v in eps.items() if k != "eps_z_hf"})
 
 
 def test_concrete_structure_keeps_unused_family_parameters_out_of_the_graph():
@@ -370,24 +467,29 @@ def test_template_zeroes_inactive_node_slots(template):
 
     The template runs at max size, so a cell using fewer nodes carries padded
     columns. They are switched off inside the graph rather than trimmed
-    afterwards, and consumers read them as real zeros.
+    afterwards, and consumers read them as real zeros. Every node family is
+    tracked separately: control texture adds a term inside the control mask, so
+    a guard satisfied by an inactive channel alone would prove nothing about it.
     """
     cfg, cells, _model, _out, _param, draw = template
-    seen_inactive = False
+    keys = (
+        ("channels", "active_treatment"),
+        ("controls", "active_covariate"),
+        ("control_contribution", "active_covariate"),
+        ("demand", "active_latent"),
+    )
+    seen_inactive = dict.fromkeys(keys, False)
     for i, cell in enumerate(cells):
         drawn = draw(cell, seed=700 + i, draws=1)
-        for key, flags in (
-            ("channels", "active_treatment"),
-            ("controls", "active_covariate"),
-            ("demand", "active_latent"),
-        ):
+        for key, flags in keys:
             arr = np.asarray(drawn[key][0])
             for node, is_active in enumerate(cell[flags]):
                 if is_active:
                     continue
-                seen_inactive = True
+                seen_inactive[(key, flags)] = True
                 assert np.abs(arr[:, node]).max() == 0.0, f"{key}[:, {node}] not zeroed"
-    assert seen_inactive, "fixture never produced an inactive node; the guard proved nothing"
+    unproven = [key for key, seen in seen_inactive.items() if not seen]
+    assert not unproven, f"fixture never produced an inactive node for {unproven}"
 
 
 def test_template_applies_per_cell_smoothness(template):

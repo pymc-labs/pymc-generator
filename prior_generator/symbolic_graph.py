@@ -6,7 +6,8 @@ interactions as one symbolic PyTensor graph:
 .. code-block:: text
 
     D_j = RW_j                                        (confounder, signed)
-    Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + RW_m   (control, signed)
+    F_m = RW_m + s_m·η_tm + c_m·(h_tm − q_m),  h_tm ~ Bernoulli(q_m)  (control own drive)
+    Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + F_m    (control, signed)
     E_k = RW_k + σ_k·ε_tk + a_k·b_tk,  b_tk ~ Bernoulli(p_k)  (channel own drive)
     C_k = softplus( Σ_j w_jk·D_j + Σ_m v_mk·Z_m
                     + Σ_{k'<k} α_{k'k}·C_{k'} + E_k )     (channel, positive)
@@ -20,7 +21,14 @@ has iid observation noise ``RW_Y = rw_y_std * eps_y``. The channel own drive
 pulses (amplitude a_k, per-week fire probability p_k) — the high-frequency
 exogenous variation that lets spend sweep its response
 curve (without it, contribution targets degenerate to flat lines; the
-neutral defaults σ_k = 0, p_k = 0 disable both). C→C and Z→Z edges
+neutral defaults σ_k = 0, p_k = 0 disable both). The control own drive ``F_m``
+carries the same two terms (s_m, c_m, q_m), for a different reason: a
+smooth-walk-only control lives in the same function space as the smooth
+baseline walk, which leaves ``Z → B`` weakly identified against baseline
+drift. Its pulse is CENTRED (``h − q``) because a control is signed and its
+level belongs to ``rw_z_mean``: both added terms are then mean-zero, so
+``E[Z_m]`` and the parameter-only expected levels below are unaffected.
+C→C and Z→Z edges
 are restricted to the strict upper triangle (src index < dst index) which
 guarantees acyclicity. The nonlinear transform ``f_k`` (adstock +
 saturation, from ``mechanisms``) applies only on the direct C→Y path;
@@ -94,6 +102,19 @@ def _check_strict_upper(mat: np.ndarray, name: str) -> None:
             f"{name} must be strictly upper-triangular (src index < dst index) "
             "to guarantee acyclicity; found nonzero entries on/below the diagonal"
         )
+
+
+def _required_eps(eps: dict[str, Any], name: str, enabled: bool) -> Any:
+    """One optional texture innovation, demanded only when its term is enabled.
+
+    A caller building the graph directly (no ``pm.Model``) may leave a disabled
+    term's noise out entirely. Enabling the term without it is a caller bug, so
+    it fails here instead of silently degenerating to a zero drive.
+    """
+    value = eps.get(name)
+    if enabled and value is None:
+        raise ValueError(f"eps[{name!r}] is required while its texture term is enabled")
+    return value
 
 
 def _arr(x, shape):
@@ -264,9 +285,13 @@ def _expected_levels(
 
     ``D -> C`` drops out because the latent factor is normalized to mean zero;
     weekly jitter is mean-zero and contributes nothing to this first-order
-    anchor. The construction reads neither a simulation window nor a realized
-    series, so ``p(theta)`` is defined independently of the noise and the
-    response at week ``t`` cannot depend on spend at later weeks.
+    anchor. The control texture needs no term here either: both of its terms are
+    mean-zero (its pulse is centred on its own fire probability), so a control's
+    expected level stays ``rw_z_mean`` plus its upstream ``Z -> Z`` terms —
+    which is exactly the ``z_levels`` recursion below. The construction reads
+    neither a simulation window nor a realized series, so ``p(theta)`` is
+    defined independently of the noise and the response at week ``t`` cannot
+    depend on spend at later weeks.
     """
     dot_kw = {"dynamic_g": dynamic_g}
     z_levels: list[TensorVariable] = []
@@ -391,8 +416,12 @@ def build_symbolic_graph(
         ``n_time_steps_full = n_time_steps + burn_in``:
         ``eps_d`` (n_time_steps_full, n_latent), ``eps_z`` (n_time_steps_full, n_covariates),
         ``eps_c`` (n_time_steps_full, n_treatments), ``eps_b`` (n_time_steps_full,),
-        ``eps_y`` (n_time_steps_full,), and the channel-texture noise
-        ``eps_c_hf`` (weekly jitter) / ``eps_c_pulse`` (a 0/1 Bernoulli fire).
+        ``eps_y`` (n_time_steps_full,), the channel-texture noise
+        ``eps_c_hf`` (weekly jitter) / ``eps_c_pulse`` (a 0/1 Bernoulli fire),
+        and the control-texture noise ``eps_z_hf`` (n_time_steps_full,
+        n_covariates) / ``eps_z_pulse`` (a 0/1 Bernoulli fire, centred by the
+        control equation). The control pair is required only when the control
+        texture is enabled.
     n_time_steps, n_treatments, n_covariates, n_latent : int
         Time steps and node counts.
     burn_in : int
@@ -510,6 +539,41 @@ def build_symbolic_graph(
         use_pulse = (_pa != 0.0) & (_pp > 0.0)
     use_pulse = np.asarray(use_pulse).reshape(n_treatments)
 
+    # Control texture, the signed counterpart of the channel texture above:
+    # magnitudes (control_hf_sigma, control_pulse_amp) may be symbolic (RV)
+    # params, the per-control ENABLE flags are concrete structure (normally
+    # ``use_control_hf`` / ``use_control_pulse`` from build_world_model, derived
+    # from concrete magnitudes as a fallback when absent). The pulse enters
+    # CENTRED — ``eps_z_pulse - control_pulse_prob`` with ``eps_z_pulse ~
+    # Bernoulli(control_pulse_prob)`` — so a control's expected level is still
+    # its walk mean and no expected-level anchor moves.
+    control_hf_sigma = _arr(params.get("control_hf_sigma", np.zeros(n_covariates)), (n_covariates,))
+    control_pulse_amp = _arr(
+        params.get("control_pulse_amp", np.zeros(n_covariates)), (n_covariates,)
+    )
+    control_pulse_prob = _arr(
+        params.get("control_pulse_prob", np.zeros(n_covariates)), (n_covariates,)
+    )
+    use_control_hf = params.get("use_control_hf")
+    if use_control_hf is None:
+        use_control_hf = (
+            np.asarray(
+                params.get("control_hf_sigma", np.zeros(n_covariates)), dtype="float64"
+            ).reshape(n_covariates)
+            > 0.0
+        )
+    use_control_hf = np.asarray(use_control_hf).reshape(n_covariates)
+    use_control_pulse = params.get("use_control_pulse")
+    if use_control_pulse is None:
+        _ca = np.asarray(
+            params.get("control_pulse_amp", np.zeros(n_covariates)), dtype="float64"
+        ).reshape(n_covariates)
+        _cp = np.asarray(
+            params.get("control_pulse_prob", np.zeros(n_covariates)), dtype="float64"
+        ).reshape(n_covariates)
+        use_control_pulse = (_ca != 0.0) & (_cp > 0.0)
+    use_control_pulse = np.asarray(use_control_pulse).reshape(n_covariates)
+
     # Per-node activity. Absent (the per-world path) every node is present and
     # `_mask` is the identity, so that path builds exactly the graph it did
     # before this switch existed.
@@ -544,6 +608,12 @@ def build_symbolic_graph(
     eps_d, eps_z, eps_c = eps["eps_d"], eps["eps_z"], eps["eps_c"]
     eps_b, eps_y = eps["eps_b"], eps["eps_y"]
     eps_c_hf, eps_c_pulse = eps["eps_c_hf"], eps["eps_c_pulse"]
+    # Control texture noise is optional for direct concrete callers: a config
+    # with the texture disabled builds the pre-texture control equation exactly
+    # and never reads these. An ENABLED term with no innovation is a caller bug,
+    # not a silent fallback to zero.
+    eps_z_hf = _required_eps(eps, "eps_z_hf", bool(use_control_hf.any()))
+    eps_z_pulse = _required_eps(eps, "eps_z_pulse", bool(use_control_pulse.any()))
 
     # -- confounders D (n_time_steps_full, n_latent): pure random walks -------------------------
     d_cols = [
@@ -552,15 +622,25 @@ def build_symbolic_graph(
     ]
     D = pt.stack(d_cols, axis=1) if n_latent > 0 else pt.zeros((n_time_steps_full, 0))
 
-    # -- controls Z (n_time_steps_full, n_covariates): D->Z + upstream Z->Z + own walk ---
+    # -- controls Z (n_time_steps_full, n_covariates): D->Z + upstream Z->Z + own drive ---
     u_dz = _arr(params["u_dz"], (n_latent, n_covariates))
     gamma_zz = _arr(params["gamma_zz"], (n_covariates, n_covariates))
     z_cols: list[TensorVariable] = []
     for m in range(n_covariates):
-        walk = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
+        # Own exogenous drive = smoothed walk + iid weekly noise + centred
+        # calendar pulses. Without the high-frequency terms a control is a
+        # smoothed walk over the SAME function space as the baseline walk, so
+        # rho_zb trades off against baseline drift and Z->B is only weakly
+        # identified. Both terms are mean-zero (the pulse subtracts its own fire
+        # probability), so E[Z_m] is unchanged and _expected_levels stays exact.
+        own = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
+        if use_control_hf[m]:
+            own = own + control_hf_sigma[m] * eps_z_hf[:, m]
+        if use_control_pulse[m]:
+            own = own + control_pulse_amp[m] * (eps_z_pulse[:, m] - control_pulse_prob[m])
         term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], n_time_steps_full, **dot_kw)
         term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], n_time_steps_full, **dot_kw)
-        z_cols.append(_mask(active_m, m, term_d + term_z + walk))
+        z_cols.append(_mask(active_m, m, term_d + term_z + own))
     Z = pt.stack(z_cols, axis=1) if n_covariates > 0 else pt.zeros((n_time_steps_full, 0))
 
     # -- channels C (n_time_steps_full, n_treatments): D->C + Z->C + upstream C->C + own drive -----

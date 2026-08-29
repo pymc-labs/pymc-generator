@@ -33,6 +33,8 @@ _RAW_EPS_NAMES = (
     "eps_y",
     "eps_c_hf",
     "eps_c_pulse",
+    "eps_z_hf",
+    "eps_z_pulse",
 )
 _CORE_OUTPUTS = (
     "demand",
@@ -189,6 +191,9 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
         "hf_sigma",
         "pulse_amp",
         "pulse_prob",
+        "control_hf_sigma",
+        "control_pulse_amp",
+        "control_pulse_prob",
         "channel_level",
         "confounding_strength",
         *(f"rw_{group}_{stat}" for group in ("d", "z", "c", "b", "y") for stat in ("mean", "std")),
@@ -204,6 +209,9 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
     assert drawn["param_rw_c_mean"].shape == (1, 2)
     assert drawn["param_rw_b_std"].shape == (1, 1)
     assert drawn["param_rw_y_std"].shape == (1, 1)
+    assert drawn["param_control_hf_sigma"].shape == (1, 2)
+    assert drawn["param_control_pulse_amp"].shape == (1, 2)
+    assert drawn["param_control_pulse_prob"].shape == (1, 2)
 
 
 def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
@@ -224,6 +232,8 @@ def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
         "eps_y": (n_time_steps_full,),
         "eps_c_hf": (n_time_steps_full, world.n_treatments),
         "eps_c_pulse": (n_time_steps_full, world.n_treatments),
+        "eps_z_hf": (n_time_steps_full, world.n_covariates),
+        "eps_z_pulse": (n_time_steps_full, world.n_covariates),
     }
     schedule = world.params["channel_shock"]
     assert schedule["mask_full"].shape == (n_time_steps_full, world.n_treatments)
@@ -264,14 +274,20 @@ def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
 
     exposed_eps = world.exogenous
     exposed_eps["eps_c"][:] = 0.0
+    exposed_eps["eps_z_hf"][:] = 0.0
+    exposed_eps["eps_z_pulse"][:] = 1.0
     exposed_params = world.equation_parameters
     exposed_params["C1"]["texture"]["hf_sigma"] = 1e9
     exposed_params["channel_shocks"]["mask_full"][:] = 0
     exposed_params["channel_shocks"]["level_full"][:] = 0.0
     exposed_params["C1"]["random_walk"]["std"] = 1e9
     exposed_params["C1"]["response"]["saturation"]["scale"] = 1e9
+    exposed_params["Z1"]["texture"]["control_hf_sigma"] = 1e9
 
     assert np.array_equal(world.exogenous["eps_c"], before_eps["eps_c"])
+    assert np.array_equal(world.exogenous["eps_z_hf"], before_eps["eps_z_hf"])
+    assert np.array_equal(world.exogenous["eps_z_pulse"], before_eps["eps_z_pulse"])
+    assert world.equation_parameters["Z1"]["texture"]["control_hf_sigma"] != 1e9
     assert world.equation_parameters["C1"]["texture"]["hf_sigma"] != 1e9
     assert world.equation_parameters["C1"]["random_walk"]["std"] != 1e9
     assert world.equation_parameters["C1"]["response"]["saturation"]["scale"] != 1e9
@@ -517,6 +533,243 @@ def test_saturation_anchor_equals_the_closed_form_expected_level():
     np.testing.assert_allclose(
         np.asarray(world.data["saturation_scale"], dtype=float), expected, rtol=1e-12
     )
+
+
+def test_control_texture_is_relative_to_the_control_walk_std():
+    """Both magnitudes are drawn as a factor of the control's OWN walk std.
+
+    A signed control has no positive level to anchor on (``rw_z_mean`` straddles
+    zero), so the scale-free anchor is its walk amplitude. Recovering the drawn
+    factor from the reported magnitude proves the scaling is applied once, with
+    the right denominator.
+    """
+    cfg = _config(
+        control_hf_sigma_range=(0.2, 0.6),
+        control_pulse_prob_range=(0.05, 0.25),
+        control_pulse_amp_range=(0.5, 2.0),
+    )
+    world = sample_scm(cfg, seed=13)
+    walk_std = np.asarray(world.params["rw_z"]["std"], dtype=float)
+    assert (walk_std > 0.0).all()
+
+    hf_factor = np.asarray(world.params["control_hf_sigma"], dtype=float) / walk_std
+    amp_factor = np.asarray(world.params["control_pulse_amp"], dtype=float) / walk_std
+    prob = np.asarray(world.params["control_pulse_prob"], dtype=float)
+    for factor, (lo, hi) in (
+        (hf_factor, cfg.control_hf_sigma_range),
+        (amp_factor, cfg.control_pulse_amp_range),
+        (prob, cfg.control_pulse_prob_range),
+    ):
+        assert ((factor >= lo) & (factor <= hi)).all(), (factor, lo, hi)
+    assert world.params["use_control_hf"].all()
+    assert world.params["use_control_pulse"].all()
+
+    # Containment alone would survive a per-node mixup, so pin the identity on a
+    # degenerate-range world: the magnitude is EXACTLY factor * that control's
+    # own walk std, and the fire probability is never scaled.
+    pinned = sample_scm(
+        _config(
+            control_hf_sigma_range=(0.4, 0.4),
+            control_pulse_prob_range=(0.2, 0.2),
+            control_pulse_amp_range=(1.5, 1.5),
+        ),
+        seed=13,
+    )
+    pinned_std = np.asarray(pinned.params["rw_z"]["std"], dtype=float)
+    assert np.ptp(pinned_std) > 1e-6  # the controls differ, so alignment is testable
+    np.testing.assert_allclose(
+        np.asarray(pinned.params["control_hf_sigma"], dtype=float),
+        0.4 * pinned_std,
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(pinned.params["control_pulse_amp"], dtype=float),
+        1.5 * pinned_std,
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(pinned.params["control_pulse_prob"], dtype=float), 0.2, rtol=1e-12
+    )
+
+
+def test_control_pulse_is_centred_on_its_own_fire_probability():
+    """The exact per-week own-drive delta is ``amp * (fire - prob)``.
+
+    Centring is what keeps a control's expected level at ``rw_z_mean``, so the
+    parameter-only saturation anchors stay valid. An uncentred pulse (the
+    channel form) would shift every control by ``+amp * prob``.
+    """
+    cfg = _config(
+        control_hf_sigma_range=(0.3, 0.3),
+        control_pulse_prob_range=(0.2, 0.2),
+        control_pulse_amp_range=(1.5, 1.5),
+    )
+    world = _fixed_world(_edgeless_graph(), cfg, seed=31)
+    exogenous = world.exogenous
+    amp = np.asarray(world.params["control_pulse_amp"], dtype=float)
+    sigma = np.asarray(world.params["control_hf_sigma"], dtype=float)
+    prob = np.asarray(world.params["control_pulse_prob"], dtype=float)
+    zeros = np.zeros_like(exogenous["eps_z_pulse"])
+
+    # The controls are edgeless here, so each column IS its own drive. The
+    # reference is the SAME world with both texture flags off, so the deltas
+    # below are the texture's exact contribution, not a restatement of it.
+    off_params = dict(world.params)
+    off_params["use_control_hf"] = np.zeros(world.n_covariates, dtype=bool)
+    off_params["use_control_pulse"] = np.zeros(world.n_covariates, dtype=bool)
+    walk_only = np.asarray(
+        build_symbolic_graph(
+            world.g,
+            off_params,
+            world.n_time_steps,
+            world.n_treatments,
+            world.n_covariates,
+            world.n_latent,
+            burn_in=cfg.adstock_burn_in,
+            eps=exogenous,
+        )["outputs"]["controls"].eval(),
+        dtype=float,
+    )
+    never = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=zeros)["controls"]
+    always = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=np.ones_like(zeros))[
+        "controls"
+    ]
+
+    weeks = never.shape[0]
+    np.testing.assert_allclose(
+        never - walk_only, np.broadcast_to(-amp * prob, (weeks, amp.size)), rtol=0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        always - walk_only,
+        np.broadcast_to(amp * (1.0 - prob), (weeks, amp.size)),
+        rtol=0.0,
+        atol=1e-12,
+    )
+    # Probability-weighted, the pulse term contributes exactly nothing.
+    np.testing.assert_allclose(
+        prob * (always - walk_only) + (1.0 - prob) * (never - walk_only),
+        0.0,
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+    # One spiked COLUMN: the control must read its own innovation column, at its
+    # own magnitude, in that week only.
+    spike = np.zeros_like(exogenous["eps_z_hf"])
+    week = cfg.adstock_burn_in + 3
+    spike[week, 0] = 1.0
+    spiked = _replay(world, exogenous["eps_c"], eps_z_hf=spike, eps_z_pulse=zeros)["controls"]
+    delta = spiked - never
+    expected_week = np.zeros(world.n_covariates)
+    expected_week[0] = sigma[0]
+    np.testing.assert_allclose(
+        delta[week - cfg.adstock_burn_in], expected_week, rtol=0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        np.delete(delta, week - cfg.adstock_burn_in, axis=0), 0.0, rtol=0.0, atol=1e-12
+    )
+
+    # Same for the pulse: one firing COLUMN moves only that control, by amp.
+    one_fire = np.zeros_like(exogenous["eps_z_pulse"])
+    one_fire[:, 0] = 1.0
+    fired = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=one_fire)["controls"]
+    expected_fire = np.zeros(world.n_covariates)
+    expected_fire[0] = amp[0]
+    np.testing.assert_allclose(
+        fired - never,
+        np.broadcast_to(expected_fire, (weeks, world.n_covariates)),
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+
+def test_control_texture_leaves_the_parameter_only_saturation_anchor_exact():
+    """Enabled control texture must not be ADDED to the κ anchor.
+
+    The anchor sums PARAMETER-only expected levels, and a control's expected
+    level is still its walk mean because both texture terms are mean-zero. The
+    live check here is the "do not mirror the uncentred channel pulse" one: a
+    ``+ amp * prob`` correction on the control levels would move the anchor by a
+    measurable amount, asserted below. The graph-side centring that justifies
+    the omission is pinned by
+    ``test_control_pulse_is_centred_on_its_own_fire_probability``.
+    """
+    cfg = _config(
+        channel_hf_sigma_range=(0.0, 0.0),
+        channel_pulse_prob_range=(0.0, 0.0),
+        control_hf_sigma_range=(0.4, 0.8),
+        control_pulse_prob_range=(0.2, 0.25),
+        control_pulse_amp_range=(2.0, 3.0),
+        edge_budget={
+            "cy": (2, 2),
+            "dc": (0, 0),
+            "dz": (0, 0),
+            "db": (0, 0),
+            "zb": (2, 2),
+            "zc": (2, 2),
+            "cc": (0, 0),
+            "zz": (0, 0),
+        },
+    )
+    world = sample_scm(cfg, seed=17)
+    params, g = world.params, world.g
+    z_levels = np.asarray(params["rw_z"]["mean"], dtype=float)  # no Z->Z here
+    own = np.logaddexp(0.0, np.asarray(params["rw_c"]["mean"], dtype=float))
+    upstream = (np.asarray(g["g_zc"], dtype=float) * np.asarray(params["v_zc"], dtype=float)).T @ (
+        z_levels
+    )
+    expected = np.logaddexp(0.0, own + upstream)
+
+    assert np.asarray(g["g_zc"]).sum() == 2  # the Z->C terms are live, not vacuous
+    assert world.params["use_control_pulse"].all()
+    np.testing.assert_allclose(
+        np.asarray(world.data["saturation_scale"], dtype=float), expected, rtol=1e-12
+    )
+
+    # The uncentred-channel-style alternative is materially different, so the
+    # assertion above is not satisfied by a negligible term.
+    pulse_mean = np.asarray(params["control_pulse_amp"], dtype=float) * np.asarray(
+        params["control_pulse_prob"], dtype=float
+    )
+    mirrored = np.logaddexp(
+        0.0,
+        own
+        + (np.asarray(g["g_zc"], dtype=float) * np.asarray(params["v_zc"], dtype=float)).T
+        @ (z_levels + pulse_mean),
+    )
+    assert np.abs(mirrored - expected).max() > 1e-3
+
+
+def test_disabled_control_texture_renders_the_pre_texture_control_equation():
+    """The rendered audit must show the exact executed own drive, or none."""
+    enabled = sample_scm(
+        _config(
+            control_hf_sigma_range=(0.3, 0.3),
+            control_pulse_prob_range=(0.2, 0.2),
+            control_pulse_amp_range=(1.0, 1.0),
+        ),
+        seed=5,
+    )
+    for m in (0, 1):
+        assert f"control_hf_sigma[{m}] * eps_z_hf[:, {m}]" in enabled.equations[f"Z{m + 1}"]
+        assert (
+            f"control_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - control_pulse_prob[{m}])"
+            in enabled.equations[f"Z{m + 1}"]
+        )
+
+    disabled = sample_scm(
+        _config(
+            control_hf_sigma_range=(0.0, 0.0),
+            control_pulse_prob_range=(0.0, 0.0),
+            control_pulse_amp_range=(0.0, 0.0),
+        ),
+        seed=5,
+    )
+    for m in (0, 1):
+        assert "eps_z_hf" not in disabled.equations[f"Z{m + 1}"]
+        assert "eps_z_pulse" not in disabled.equations[f"Z{m + 1}"]
+        assert f"use_control_hf[{m}]=False" in disabled.equations[f"Z{m + 1}"]
+        assert f"use_control_pulse[{m}]=False" in disabled.equations[f"Z{m + 1}"]
 
 
 def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
