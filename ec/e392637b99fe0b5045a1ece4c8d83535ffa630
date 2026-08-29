@@ -1,0 +1,48 @@
+CHANGELOG.md
+  h_d36ca8649a0e95 13-44
+README.md
+  h_d36ca8649a0e95 172-173,188-200,251-256
+docs/examples/index.ipynb
+  h_d36ca8649a0e95 306
+docs/guide/corpus.md
+  h_d36ca8649a0e95 288
+docs/guide/foundation.md
+  h_d36ca8649a0e95 68-69,84-116,166,205-208
+docs/reference/config.md
+  h_d36ca8649a0e95 4-61
+docs_gen/build_examples_nb.py
+  h_d36ca8649a0e95 170
+prior_generator/describe.py
+  h_d36ca8649a0e95 70-85,136-137,156-160
+prior_generator/presets.py
+  h_d36ca8649a0e95 32-55,62-64,112-130
+prior_generator/sampler.py
+  h_d36ca8649a0e95 229-247,577-579,746-751
+prior_generator/symbolic_graph.py
+  h_d36ca8649a0e95 9-10,24-31,107-119,288-294,419-424,542-576,611-616,625,630-640,643
+prior_generator/world_model.py
+  h_d36ca8649a0e95 206-207,217-218,608-609,649-663,673,688-698,730-734,941-959,1025-1026,1036-1041
+prior_generator/world_model_batched.py
+  h_d36ca8649a0e95 241,265-266,271-276,303-304,309
+prior_generator/worlds.py
+  h_d36ca8649a0e95 50-51,153-155,450,463-472,557-559,597-603,605-608,872-873
+tests/test_config.py
+  h_d36ca8649a0e95 69-128
+tests/test_identifiability.py
+  h_d36ca8649a0e95 30-39,41-91,165-171,179-180,193,212,225-231,233-245,362-367
+tests/test_scm_audit.py
+  h_d36ca8649a0e95 36-37,194-196,212-214,235-236,277-278,285,288-290,538-774
+tests/test_world_model_template.py
+  h_d36ca8649a0e95 205-209,224-225,298-387,470-472,475-481,484,489,491-492
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ece392637b99fe0b5045a1ece4c8d83535ffa630",
+  "prompts": {},
+  "humans": {
+    "h_d36ca8649a0e95": {
+      "author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
