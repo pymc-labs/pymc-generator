@@ -712,34 +712,86 @@ def build_symbolic_graph(
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
 
-    # -- intercept B (n_time_steps_full,): its OWN walk, optionally floored ----
-    # D and Z do NOT enter here: they attach directly to Y below. Two reasons.
-    # (1) The intercept is then a pure, separately reported level, and Y reads as
-    #     the equation a standard MMM assumes: intercept + linear controls +
-    #     nonlinear media + noise.
-    # (2) It is what makes the floor safe. Flooring a sum that contained the
-    #     parents would make ``control_contribution`` no longer exactly
-    #     ``g_zb·ρ·Z`` and would break the exact per-node decomposition; the
-    #     floor here clips ONE additive term, so every other term is untouched.
+    # -- intercept B and the non-media aggregate, optionally floored -----------
+    # D and Z do NOT enter the intercept: they attach directly to Y below, so
+    # the intercept is a pure, separately reported level and Y reads as the
+    # equation a standard MMM assumes.
+    #
+    # ``baseline_floor_scope`` decides WHAT the floor clips.
+    #
+    # "intercept": clip the intercept walk only. Every other term stays exactly
+    #     linear in its node (``control_contribution[:, m] == g_zb·ρ·Z``), which
+    #     is the cheapest, most estimator-friendly option — but a large negative
+    #     ρ·Z can still drag the non-media total (and sales) below zero.
+    # "non_media": clip the RUNNING TOTAL as each parent is added, in the LOCKED
+    #     order intercept -> confounders (j ascending) -> controls (m ascending).
+    #     Each per-node column is then the telescoping difference it caused,
+    #     ``A_i - A_{i-1}``, exactly as ``indirect_effects_by_source`` is defined
+    #     for channels. Three consequences, all of them the point:
+    #       * the non-media total is >= floor by construction, so a negative
+    #         control effect is credited only down to the floor and the excess is
+    #         absorbed rather than pushing sales negative;
+    #       * the columns still telescope EXACTLY, so the decomposition identity
+    #         is untouched;
+    #       * where the floor does not bind, every column is bit-identical to the
+    #         linear split, so this is a clip and never a re-parameterisation.
     delta_db = _arr(params["delta_db"], (n_latent,))
     rho_zb = _arr(params["rho_zb"], (n_covariates,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)
     baseline_floor = params.get("baseline_floor")
-    intercept = walk_b if baseline_floor is None else pt.maximum(walk_b, float(baseline_floor))
+    floor_scope = params.get("baseline_floor_scope", "intercept")
+    absorb = baseline_floor is not None and floor_scope == "non_media"
+
+    def _clip(expr):
+        return expr if baseline_floor is None else pt.maximum(expr, float(baseline_floor))
+
+    intercept = _clip(walk_b)
     term_bd = _dot_terms(d_cols, g_db, delta_db, n_time_steps_full, **dot_kw)
     term_bz = _dot_terms(z_cols, g_zb, rho_zb, n_time_steps_full, **dot_kw)
-    non_media = intercept + term_bd + term_bz
 
-    # -- per-node direct baseline terms (exact split of term_bd / term_bz) ----
-    # column m of control_contribution   = g_zb[m]·ρ[m]·Z[:,m]  (sums to term_bz)
-    # column j of confounder_contribution = g_db[j]·δ[j]·D[:,j] (sums to term_bd)
-    control_contrib_cols = [(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(n_covariates)]
+    # -- per-node direct baseline terms (an exact split of term_bd / term_bz) --
+    if absorb:
+        # Sequential graph surgery on the running non-media total. ``running`` is
+        # the clipped total after each node joins; the column a node contributes
+        # is the change it caused. Nodes with no edge are skipped outright rather
+        # than added with a zero coefficient: a zero-gated term would still make
+        # that node's innovation an ancestor of ``baseline``, which changes which
+        # RNGs the compiled graph reaches and therefore every seeded draw. Under
+        # ``dynamic_g`` the masks are tensors, so the full chain is wired (the
+        # template graph is dense by design).
+        def _edge_live(mask, i) -> bool:
+            return dynamic_g or bool(np.asarray(mask)[i])
+
+        zero_col = pt.zeros(n_time_steps_full)
+        running = intercept
+        confounder_contrib_cols = []
+        for j in range(n_latent):
+            if not _edge_live(g_db, j):
+                confounder_contrib_cols.append(zero_col)
+                continue
+            nxt = _clip(running + (g_db[j] * delta_db[j]) * d_cols[j])
+            confounder_contrib_cols.append(nxt - running)
+            running = nxt
+        control_contrib_cols = []
+        for m in range(n_covariates):
+            if not _edge_live(g_zb, m):
+                control_contrib_cols.append(zero_col)
+                continue
+            nxt = _clip(running + (g_zb[m] * rho_zb[m]) * z_cols[m])
+            control_contrib_cols.append(nxt - running)
+            running = nxt
+        non_media = running
+    else:
+        # column m of control_contribution   = g_zb[m]·ρ[m]·Z[:,m]  (sums to term_bz)
+        # column j of confounder_contribution = g_db[j]·δ[j]·D[:,j] (sums to term_bd)
+        control_contrib_cols = [(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(n_covariates)]
+        confounder_contrib_cols = [(g_db[j] * delta_db[j]) * d_cols[j] for j in range(n_latent)]
+        non_media = intercept + term_bd + term_bz
     control_contribution = (
         pt.stack(control_contrib_cols, axis=1)
         if n_covariates > 0
         else pt.zeros((n_time_steps_full, 0))
     )  # (n_time_steps_full, n_covariates)
-    confounder_contrib_cols = [(g_db[j] * delta_db[j]) * d_cols[j] for j in range(n_latent)]
     confounder_contribution = (
         pt.stack(confounder_contrib_cols, axis=1)
         if n_latent > 0

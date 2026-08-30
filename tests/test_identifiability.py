@@ -244,15 +244,18 @@ def test_disabling_control_texture_is_rng_inert():
     assert hashes == EXPECTED_UNTEXTURED_CONTROL_HASHES
 
 
-def test_the_intercept_floor_is_a_pure_clip_and_consumes_no_rng():
+@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+def test_the_intercept_floor_is_a_pure_clip_and_consumes_no_rng(scope):
     """A floor must clip, never re-seed.
 
     ``pt.maximum`` adds no random variable and no graph output, so a floor that
-    never binds has to reproduce the unfloored corpus byte for byte. If this
-    drifts, the floor is silently changing worlds it was supposed to leave
-    alone — which is what would make it unsafe to enable on an existing recipe.
+    never binds has to reproduce the unfloored corpus byte for byte — in either
+    scope. If this drifts, the floor is silently changing worlds it was supposed
+    to leave alone, which is what would make it unsafe to enable on an existing
+    recipe. (Both scopes rearrange the float64 summation slightly, ~2e-15; that
+    vanishes in the corpus's float32 storage, which is the persisted contract.)
     """
-    floored = _corpus_hashes(baseline_floor=0.0)
+    floored = _corpus_hashes(baseline_floor=0.0, baseline_floor_scope=scope)
     assert floored == EXPECTED_CORPUS_HASHES
 
 

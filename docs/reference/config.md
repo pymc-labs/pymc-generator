@@ -96,6 +96,51 @@ to know about:
   `max(RW_B, floor)` is not Gaussian and the analytic covariance would be wrong.
   Use `latent="sampled"`, which applies the identical clip.
 
+### What the floor clips: `baseline_floor_scope`
+
+`baseline_floor_scope: Literal["intercept", "non_media"] = "intercept"`.
+
+A floored *intercept* alone does not make sales non-negative: a large negative
+$\rho_m Z_m$ can still drag the non-media total under (measured on a stress
+fixture: 112 negative weeks with `scope="intercept"`). `scope="non_media"`
+clips the **running total** as each parent joins, in the locked order
+intercept → confounders ($j$ ascending) → controls ($m$ ascending):
+
+$$A^{(0)} = B,\qquad A^{(i)} = \max\!\big(A^{(i-1)} + \text{node}_i,\ \texttt{floor}\big),\qquad A = A^{(\text{last})}.$$
+
+Each per-node column is the telescoping difference that node caused,
+$A^{(i)} - A^{(i-1)}$ — the same construction `indirect_effects_by_source` uses
+for channels. So:
+
+- the non-media total is `≥ floor` **by construction**: a negative control
+  effect is credited only down to the floor and the excess is absorbed instead
+  of pushing sales negative (same fixture: 0 negative weeks, 111 weeks sitting
+  exactly at the floor);
+- the columns still sum **exactly** to the total, so the decomposition identity
+  is untouched (measured identity error 1.8e-15);
+- where the floor does not bind, every column equals the linear split
+  ($g^{zb}_m \rho_m Z_m$) and the persisted corpus is byte-identical to the
+  unfloored one.
+
+The cost is that a per-node column is **no longer linear in its node** where the
+floor binds: a linear MMM's $\rho_m Z_m$ term cannot reproduce the absorbed
+part. Nodes with no edge are skipped entirely rather than added with a zero
+coefficient, so they neither take part in the clipping order nor change which
+innovations the graph reaches.
+
+#### Why sales still is not strictly guaranteed
+
+With `scope="non_media"` every term of the sales **mean** is non-negative
+($A \ge 0$, media $\ge 0$). What remains is the additive observation noise
+$\mathrm{RW}_Y$, which is symmetric and unbounded, so
+$P(Y<0)>0$ is unavoidable for *any* additive-Gaussian outcome — that is a
+property of the likelihood, not of this generator. Strictness would require
+censoring the observation or bounding the noise, both of which change the
+function class an MMM can represent. Measured margin under the absorbing scope:
+the sales mean sits **88 σ** of observation noise above zero at its worst week
+over 12 worlds, so the residual probability is ~$10^{-1700}$, and the
+acceptance filter remains the exact backstop.
+
 ### Decomposition columns
 
 `baseline_intrinsic` is the intercept **alone** (`B`), and the iid observation

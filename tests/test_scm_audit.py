@@ -846,6 +846,105 @@ def test_sales_is_never_censored_and_the_filter_carries_non_negativity():
     )
 
 
+def _absorbing_stress(**overrides):
+    """Live zb/db edges and a low, wide intercept: the floor really binds."""
+    stress = {
+        "outcome_std_mode": "absolute",
+        "rw_baseline_mean_range": (0.5, 1.5),
+        "rw_baseline_std_sigma": 1.5,
+        "rw_sales_std_sigma": 0.05,
+        "rw_std_sigma": 2.0,
+        "n_time_steps": 52,
+        "n_covariates": 3,
+        "n_latent": 2,
+        "edge_budget": {
+            "cy": (2, 2),
+            "dc": (0, 0),
+            "dz": (0, 0),
+            "db": (2, 2),
+            "zb": (3, 3),
+            "zc": (0, 0),
+            "cc": (0, 0),
+            "zz": (0, 0),
+        },
+    }
+    stress.update(overrides)
+    return _config(**stress)
+
+
+def _non_media(world) -> np.ndarray:
+    d = world.data
+    return (
+        np.asarray(d["baseline_intrinsic"], dtype=float)
+        + np.asarray(d["control_contribution"], dtype=float).sum(1)
+        + np.asarray(d["confounder_contribution"], dtype=float).sum(1)
+    )
+
+
+def test_absorbing_floor_makes_the_whole_non_media_total_non_negative():
+    """A negative control effect is credited only down to the floor.
+
+    Flooring the intercept alone cannot stop a large negative ``rho_zb * Z``
+    from dragging the non-media total under; ``scope="non_media"`` clips the
+    running total instead, so the excess is absorbed. The per-node columns
+    become the telescoping difference each node caused, so they still sum
+    EXACTLY to the total.
+    """
+    intercept_only = _absorbing_stress(baseline_floor=0.0)
+    absorbing = _absorbing_stress(baseline_floor=0.0, baseline_floor_scope="non_media")
+
+    for seed in range(60, 80):
+        signed = sample_scm(intercept_only, seed=seed, connect_all=False, max_eps_draws=40)
+        if (_non_media(signed) < -1e-12).any():
+            break
+    else:  # pragma: no cover - the stress fixture is calibrated to dip
+        pytest.fail("intercept-only scope never dipped; the comparison would prove nothing")
+
+    floored = sample_scm(absorbing, seed=seed, connect_all=False, max_eps_draws=40)
+    total = _non_media(floored)
+    assert (total >= -1e-12).all(), "the absorbing scope must hold the whole total at the floor"
+    assert np.isclose(total, 0.0, atol=1e-12).any(), "the total must be able to sit AT the floor"
+
+    # The columns are a split of THAT total, not of the unclipped one.
+    np.testing.assert_allclose(
+        total,
+        np.asarray(floored.data["baseline"], dtype=float)
+        - np.asarray(floored.data["sales_noise"], dtype=float),
+        rtol=0.0,
+        atol=1e-12,
+    )
+    assert floored.identity_error() < 1e-9
+    # Clipping can only raise the total, never lower it.
+    assert (total >= _non_media(signed) - 1e-12).all()
+
+
+@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+def test_a_floor_that_never_binds_leaves_every_column_alone(scope):
+    """Both scopes are clips, so a non-binding floor changes nothing material."""
+    plain = sample_scm(_config(), seed=9, max_eps_draws=40)
+    assert (np.asarray(plain.data["baseline_intrinsic"], dtype=float) > 0.0).all()
+    assert (_non_media(plain) > 0.0).all(), "fixture already dips; pick a calmer one"
+
+    floored = sample_scm(
+        _config(baseline_floor=0.0, baseline_floor_scope=scope), seed=9, max_eps_draws=40
+    )
+    for key in (
+        "sales",
+        "baseline",
+        "baseline_intrinsic",
+        "sales_noise",
+        "control_contribution",
+        "confounder_contribution",
+    ):
+        np.testing.assert_allclose(
+            np.asarray(floored.data[key], dtype=float),
+            np.asarray(plain.data[key], dtype=float),
+            rtol=0.0,
+            atol=1e-12,
+            err_msg=f"a non-binding floor moved {key!r}",
+        )
+
+
 def test_intercept_and_sales_noise_are_separate_decomposition_columns():
     """``baseline_intrinsic`` is the intercept ALONE; the noise is its own column."""
     world = sample_scm(_config(), seed=57, max_eps_draws=40)

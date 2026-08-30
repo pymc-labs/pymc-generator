@@ -151,13 +151,16 @@ def world_and_oracle():
     return gen_model, oracle_marginal, oracle_sampled, world
 
 
-def test_floored_intercept_rejects_the_analytic_marginal_oracle():
+@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+def test_floored_intercept_rejects_the_analytic_marginal_oracle(scope):
     """A censored walk is not Gaussian, so marginalising it would be wrong.
 
     Better a loud refusal than a reference posterior built on the wrong
-    covariance: the sampled mode applies the identical clip and stays exact.
+    covariance: the sampled mode applies the identical clip — in either scope,
+    including the absorbing one whose clip sits on the running total — and so
+    stays exactly the generative model.
     """
-    cfg = _small_cfg(baseline_floor=0.0)
+    cfg = _small_cfg(baseline_floor=0.0, baseline_floor_scope=scope)
     rng = np.random.default_rng(2)
     g = sample_g_additive(
         rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1

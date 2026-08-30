@@ -691,14 +691,25 @@ def _build_equations(world: SCM) -> dict[str, str]:
     b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_db"][j]] + [
         f"rho_zb[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zb"][m]
     ]
+    if floor is not None and world.cfg.baseline_floor_scope == "non_media":
+        non_media = (
+            f"non_media_full = clip the running total at {float(floor)} as each parent "
+            "joins, in the locked order B -> D1..DJ -> Z1..ZM; each per-node column is "
+            "the telescoping difference that node caused, so the columns still sum "
+            "exactly to non_media_full while a negative rho_zb * Z is credited only "
+            "down to the floor"
+        )
+    else:
+        non_media = f"non_media_full = {_join_terms('B_full', b_terms)}"
     equations["Y"] = (
-        f"non_media_full = {_join_terms('B_full', b_terms)}; "
+        f"{non_media}; "
         "sales_noise = rw_y[0].std * eps_y[burn_in:]; "
         "baseline = non_media_full[burn_in:] + sales_noise; "
         "baseline_intrinsic = B; "
         "Y (sales) = baseline + sum_k contributions_observed[:, k]. "
-        "Sales is never clipped: D->Y / Z->Y are signed, so non-negative sales "
-        "is enforced by the acceptance filter, not by censoring the outcome."
+        "Sales is never clipped: the observation noise is symmetric, so a clamp "
+        "here would censor the OBSERVATION; the acceptance filter enforces "
+        "non-negative sales instead."
     )
     return equations
 
@@ -876,6 +887,7 @@ def _assemble_params(
     }
     params["l_max"] = cfg.l_max
     params["baseline_floor"] = cfg.baseline_floor
+    params["baseline_floor_scope"] = cfg.baseline_floor_scope
     params["adstock_family"] = np.array(structural["adstock_family"], copy=True)
     params["sat_family"] = np.array(structural["sat_family"], copy=True)
     params["use_hf"] = np.array(structural["use_hf"], copy=True)

@@ -23,6 +23,27 @@ While the project is on 0.x, minor versions may contain breaking changes.
   walk; the floor adds no RV and consumes no RNG, so a floor that never binds
   reproduces the unfloored corpus byte for byte.
 
+  `baseline_floor_scope` (`"intercept"` default, or `"non_media"`) selects WHAT
+  the floor clips. A floored intercept alone does not stop a large negative
+  `ρ·Z` from dragging the non-media total under (measured: 112 negative weeks on
+  a stress fixture). `"non_media"` clips the running total as each parent joins,
+  in the locked order intercept → confounders → controls, and each per-node
+  column becomes the telescoping difference that node caused — the same
+  construction `indirect_effects_by_source` uses for channels. The non-media
+  total is then `>= floor` by construction (same fixture: 0 negative weeks, 111
+  weeks exactly at the floor, identity error 1.8e-15), the columns still sum
+  exactly, and a non-binding floor leaves the persisted corpus byte-identical in
+  either scope. The cost: a column is no longer linear in its node where the
+  floor binds. Nodes with no edge are skipped rather than added with a zero
+  coefficient, so they neither join the clipping order nor change which
+  innovations the compiled graph reaches.
+
+  Even so, sales cannot be *strictly* guaranteed non-negative: the additive
+  observation noise is symmetric and unbounded, so `P(Y<0)>0` holds for any
+  additive-Gaussian outcome. The absorbing scope makes every term of the sales
+  MEAN non-negative and leaves the residual to the acceptance filter; measured
+  headroom is 88 observation-noise sigma at the worst week over 12 worlds.
+
   Motivation: the intercept walk is signed, so the baseline could dip below
   zero — measured 0.08% of weeks under the shipped relative-mode prior, and
   19/50 tasks in a low-mean absolute-mode recipe. **Sales is deliberately NOT

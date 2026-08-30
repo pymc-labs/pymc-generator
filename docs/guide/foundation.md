@@ -138,15 +138,39 @@ additive term, so `control_contribution[:, m]` stays exactly
 $g^{zb}_m \rho_m Z_{m}$ and the decomposition stays exact. Flooring a sum that
 contained the parents would destroy that.
 
-!!! warning "Sales is never censored"
-    A clamp on `Y` would censor the **observation**, not a prior — and every
-    additive-Gaussian estimator, including this package's own
-    [oracle](oracle.md), would be misspecified against its own data. Sales
-    therefore stays uncensored and non-negativity is enforced by the
-    [realism filter](#the-realism-filter). Measured headroom on the shipped
-    prior: sales sits 28–83 observation-noise $\sigma$ above zero, and a
-    negative intercept week occurs in ~0.08% of weeks (relative mode) — so the
-    floor is a guarantee, not a frequent intervention.
+`baseline_floor_scope` decides *what* the floor clips. The default,
+`"intercept"`, clips $B$ only — cheap and fully linear elsewhere, but a large
+negative $\rho_m Z_m$ can still drag the non-media total below zero.
+`"non_media"` clips the **running total** as each parent joins (locked order:
+intercept → confounders → controls), so
+
+$$A^{(i)} = \max\!\big(A^{(i-1)} + \text{node}_i,\ \texttt{floor}\big),\qquad
+\text{column}_i = A^{(i)} - A^{(i-1)}.$$
+
+A negative control effect is then credited only down to the floor and the excess
+is **absorbed** — "the negative effect cannot be bigger than the rest" — while
+the columns still telescope exactly, so the identity is untouched. Measured on a
+stress fixture: 112 negative non-media weeks under `"intercept"` become 0 under
+`"non_media"`, with 111 weeks sitting exactly at the floor and identity error
+1.8e-15. Where the floor does not bind, every column equals the linear split and
+the persisted corpus is byte-identical. The price: a column is no longer linear
+in its node where the floor binds.
+
+!!! warning "Sales itself is never censored — and cannot be strictly guaranteed"
+    With `scope="non_media"` every term of the sales **mean** is non-negative
+    ($A \ge 0$, media $\ge 0$). What is left is the additive observation noise
+    $\mathrm{RW}_Y$: symmetric and unbounded, so $P(Y<0)>0$ for *any*
+    additive-Gaussian outcome. That is a property of the likelihood, not of this
+    generator — strictness would need a censored observation or bounded noise,
+    and either one leaves the function class an MMM (including this package's
+    own [oracle](oracle.md)) can represent.
+
+    So sales stays uncensored and non-negativity is enforced by the
+    [realism filter](#the-realism-filter), which is exact for every persisted
+    world. The residual risk is negligible by construction rather than by luck:
+    under the absorbing scope the sales mean sits **88 σ** of observation noise
+    above zero at its worst week over 12 worlds ($P \approx 10^{-1700}$), and a
+    negative intercept week occurs in ~0.08% of weeks on the shipped prior.
 
     A floored intercept is also not Gaussian, so the oracle's analytic
     `latent="marginal"` mode raises for such configs; use `latent="sampled"`,

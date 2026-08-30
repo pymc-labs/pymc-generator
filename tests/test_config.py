@@ -141,6 +141,17 @@ def test_baseline_floor_must_be_none_or_finite(value):
         SCMPrior(baseline_floor=value).validate()
 
 
+@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+def test_baseline_floor_scope_accepts_both_documented_values(scope):
+    assert SCMPrior().baseline_floor_scope == "intercept"
+    SCMPrior(baseline_floor=0.0, baseline_floor_scope=scope).validate()
+
+
+def test_baseline_floor_scope_rejects_anything_else():
+    with pytest.raises(ValueError, match="baseline_floor_scope must be"):
+        SCMPrior(baseline_floor_scope="aggregate").validate()
+
+
 def test_family_probability_defaults_are_exact_and_independent():
     first = SCMPrior()
     second = SCMPrior()

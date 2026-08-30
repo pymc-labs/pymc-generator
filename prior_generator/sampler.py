@@ -265,6 +265,20 @@ class SCMPrior:
     # censored walk is not Gaussian.
     # None (default) keeps the signed walk and byte-identical draws.
     baseline_floor: float | None = None
+    # WHAT the floor clips, when one is configured.
+    #   "intercept" (default): the intercept walk only. Every other term stays
+    #       exactly linear in its node, so ``control_contribution[:, m]`` remains
+    #       ``g_zb[m]·ρ[m]·Z[:, m]`` — but a large negative ρ·Z can still drag
+    #       the non-media total, and sales, below zero.
+    #   "non_media": the running non-media TOTAL, clipped as each parent joins in
+    #       the locked order intercept -> confounders -> controls. A negative
+    #       control effect is then credited only down to the floor and the excess
+    #       is absorbed, so the whole mean function of sales is >= 0 by
+    #       construction (media contributions are already >= 0). Per-node columns
+    #       become the telescoping differences each node caused — exact, and
+    #       identical to the linear split wherever the floor does not bind, but
+    #       no longer linear in the node where it does.
+    baseline_floor_scope: Literal["intercept", "non_media"] = "intercept"
     adstock_burn_in: int = 0
 
     # Symbolic, per-draw held-level channel shocks. A shock clamps observed
@@ -605,6 +619,11 @@ class SCMPrior:
                 or not np.isfinite(floor)
             ):
                 raise ValueError(f"baseline_floor must be None or a finite number, got {floor!r}")
+        if self.baseline_floor_scope not in ("intercept", "non_media"):
+            raise ValueError(
+                "baseline_floor_scope must be 'intercept' or 'non_media', got "
+                f"{self.baseline_floor_scope!r}"
+            )
 
         # Prior-conditioning hyperprior (ACE)
         if self.prior_cond_width_ranges is not None:

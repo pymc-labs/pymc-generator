@@ -623,6 +623,7 @@ def _scm_params(
         "l_max": cfg.l_max,
         # Concrete structural constant, not a draw: it clips the intercept walk.
         "baseline_floor": cfg.baseline_floor,
+        "baseline_floor_scope": cfg.baseline_floor_scope,
         # linear edge coefficients
         "w_dc": _uniform(*specs["w_dc"]),
         "u_dz": _uniform(*specs["u_dz"]),
@@ -1373,14 +1374,29 @@ def build_oracle_model(
             ]
             D_full = pt.stack(d_cols, axis=1)  # (n_time_steps_full, n_latent)
             walk_b = _walk_column(eps_b, rw["rw_b"], 0, n_time_steps_full)
-            if cfg.baseline_floor is not None:
-                # The SAME clip generation applies, so the oracle stays exactly
-                # the generative model rather than an approximation of it.
-                walk_b = pt.maximum(walk_b, float(cfg.baseline_floor))
             pm.Deterministic("demand", D_full[window])
 
-            term_bd = pt.dot(D_full[window], g_db * delta_db)  # (n_time_steps,)
-            baseline = pm.Deterministic("baseline", term_bd + term_bz + walk_b[window])
+            # The SAME clip generation applies, so the oracle stays exactly the
+            # generative model rather than an approximation of it.
+            floor = cfg.baseline_floor
+
+            def _clip(expr, _floor=floor):
+                return expr if _floor is None else pt.maximum(expr, float(_floor))
+
+            if floor is not None and cfg.baseline_floor_scope == "non_media":
+                # Absorbing scope: clip the running total as each parent joins,
+                # in the same locked order (confounders, then controls).
+                running = _clip(walk_b[window])
+                for j in range(n_latent):
+                    running = _clip(running + (g_db[j] * delta_db[j]) * D_full[window][:, j])
+                for m in range(n_covariates):
+                    running = _clip(
+                        running + (g_zb[m] * rho_zb[m]) * pt.as_tensor_variable(controls)[:, m]
+                    )
+                baseline = pm.Deterministic("baseline", running)
+            else:
+                term_bd = pt.dot(D_full[window], g_db * delta_db)  # (n_time_steps,)
+                baseline = pm.Deterministic("baseline", term_bd + term_bz + _clip(walk_b)[window])
             sales_mu = pm.Deterministic("sales_mu", baseline + contributions.sum(axis=1))
             pm.Normal(
                 "sales",

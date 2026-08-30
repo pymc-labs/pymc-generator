@@ -209,11 +209,16 @@ Three structural facts do the heavy lifting:
    what makes the floor safe: it clips one additive term, leaving
    `control_contribution[:, m] = g_zb[m]·ρ[m]·Z[:, m]` exact.
 
-   **Sales is never censored.** Clamping `Y` would censor the *observation*, and
-   every additive-Gaussian estimator — including this package's own oracle —
-   would be misspecified. Non-negative sales is enforced by the
-   [realism filter](#the-realism-filter) instead. Measured headroom on the
-   shipped prior: sales sits 28–83 observation-noise σ above zero.
+   **Sales is never censored, and cannot be strictly guaranteed.** With
+   `baseline_floor_scope="non_media"` the floor clips the *running* non-media
+   total as each parent joins, so a negative `ρ·Z` is credited only down to the
+   floor and the excess is absorbed — every term of the sales **mean** is then
+   `≥ 0`. What remains is the symmetric observation noise `RW_Y`, so `P(Y<0)>0`
+   for any additive-Gaussian outcome: that is the likelihood's property, not the
+   generator's. Clamping `Y` would censor the observation and break every
+   additive estimator, so non-negativity is enforced by the
+   [realism filter](#the-realism-filter) — with the sales mean measured at 88
+   noise-σ above zero under the absorbing scope.
 
 ## How a world is created
 
