@@ -1,0 +1,36 @@
+CHANGELOG.md
+  h_d36ca8649a0e95 26-46
+README.md
+  h_d36ca8649a0e95 212-221
+docs/guide/foundation.md
+  h_d36ca8649a0e95 141-173
+docs/reference/config.md
+  h_d36ca8649a0e95 99-143
+prior_generator/sampler.py
+  h_d36ca8649a0e95 268-281,622-626
+prior_generator/symbolic_graph.py
+  h_d36ca8649a0e95 715-737,742-748,752-789
+prior_generator/world_model.py
+  h_d36ca8649a0e95 626,1379-1399
+prior_generator/worlds.py
+  h_d36ca8649a0e95 694-703,705,710-712,890
+tests/test_config.py
+  h_d36ca8649a0e95 144-154
+tests/test_identifiability.py
+  h_d36ca8649a0e95 247-248,252-256,258
+tests/test_oracle.py
+  h_d36ca8649a0e95 154-155,159-161,163
+tests/test_scm_audit.py
+  h_d36ca8649a0e95 849-947
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "90773bb8960a9c7570ece93e293bee66b1fd3a94",
+  "prompts": {},
+  "humans": {
+    "h_d36ca8649a0e95": {
+      "author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
