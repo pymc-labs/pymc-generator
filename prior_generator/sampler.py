@@ -245,6 +245,26 @@ class SCMPrior:
     control_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     control_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
     control_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
+
+    # -- Intercept floor ---------------------------------------------------
+    # The intercept walk RW_B is signed, so the baseline — and, once the signed
+    # D->Y / Z->Y terms are added, sales — can dip below zero. Rare at the
+    # default relative-mode scale (mean 3-8, amplitude <= ~0.12 x the media
+    # amplitude; measured 0.08% of weeks) but routine in absolute mode with a
+    # low mean. A floor CENSORS the intercept: ``B = max(RW_B, baseline_floor)``,
+    # so B is >= floor by construction and may sit exactly AT it (a censored
+    # walk, not a softplus — zeros are a legitimate baseline).
+    #
+    # This is a PRIOR-level constraint on one additive term, so it stays inside
+    # the function class a consuming MMM can represent. Sales is deliberately
+    # NOT clamped: that would censor the OBSERVATION (a likelihood-level
+    # change) and make every additive-Gaussian estimator — including this
+    # package's own oracle — misspecified. Non-negative sales remains enforced
+    # exactly by the acceptance filter. Note the oracle's analytic
+    # ``latent="marginal"`` mode is unavailable with a floor, because a
+    # censored walk is not Gaussian.
+    # None (default) keeps the signed walk and byte-identical draws.
+    baseline_floor: float | None = None
     adstock_burn_in: int = 0
 
     # Symbolic, per-draw held-level channel shocks. A shock clamps observed
@@ -577,6 +597,14 @@ class SCMPrior:
         _finite_range("control_hf_sigma_range", minimum=0.0)
         _finite_range("control_pulse_prob_range", minimum=0.0, maximum=0.5)
         _finite_range("control_pulse_amp_range", minimum=0.0)
+        if self.baseline_floor is not None:
+            floor = self.baseline_floor
+            if (
+                isinstance(floor, (bool, np.bool_))
+                or not isinstance(floor, (int, float, np.integer, np.floating))
+                or not np.isfinite(floor)
+            ):
+                raise ValueError(f"baseline_floor must be None or a finite number, got {floor!r}")
 
         # Prior-conditioning hyperprior (ACE)
         if self.prior_cond_width_ranges is not None:
@@ -1297,6 +1325,7 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
             "full_decomposition_max_abs_error": float(
                 np.abs(
                     corpus["baseline_intrinsic"]
+                    + corpus["sales_noise"]
                     + corpus["confounder_contribution"].sum(axis=-1)
                     + corpus["control_contribution"].sum(axis=-1)
                     + corpus["contributions_raw"].sum(axis=-1)
@@ -1307,6 +1336,7 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
             "baseline_decomposition_max_abs_error": float(
                 np.abs(
                     corpus["baseline_intrinsic"]
+                    + corpus["sales_noise"]
                     + corpus["confounder_contribution"].sum(axis=-1)
                     + corpus["control_contribution"].sum(axis=-1)
                     - corpus["baseline_raw"]
@@ -1459,6 +1489,9 @@ _ADDITIVE_OUT_NAMES = (
     "indirect_effects_by_source",
     "sales",
     "confounding_strength",
+    # Appended last: this tuple is the draw-name order, which fixes PyTensor's
+    # RNG traversal, so a new name must not displace an existing one.
+    "sales_noise",
 )
 
 # Corpus audit metadata.  These are already deterministics in each cell model;
@@ -1590,15 +1623,19 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
       picks it up unchanged.
     * ``confounder_contribution`` (n_tasks, n_time_steps, n_latent) — direct
       D->B effect per confounder (``g_db[j]·δ[j]·D[:, j]``).
-    * ``baseline_intrinsic`` (n_tasks, n_time_steps) — ``RW_B + RW_Y``
-      (baseline minus all parent terms).
+    * ``baseline_intrinsic`` (n_tasks, n_time_steps) — the intercept ``B``
+      alone (``max(RW_B, baseline_floor)``; the plain signed walk when no floor
+      is configured). Parents and observation noise are NOT folded in.
+    * ``sales_noise`` (n_tasks, n_time_steps) — ``RW_Y``, the iid observation
+      noise, reported as its own decomposition column.
     * ``indirect_effects_by_source`` (n_tasks, n_time_steps, 3) — telescoping
       3-way indirect split in the LOCKED order ``(cc, zc, dc)``; the three
       columns sum exactly to ``indirect_effects``.
 
     The full additive invariant holds exactly (float64 pre-storage):
-    ``baseline_intrinsic + Σ_j confounder_contribution + Σ_m control_contribution
-    + Σ_k contributions + indirect_effects_by_source.sum(-1) == sales``.
+    ``baseline_intrinsic + sales_noise + Σ_j confounder_contribution
+    + Σ_m control_contribution + Σ_k contributions
+    + indirect_effects_by_source.sum(-1) == sales``.
 
     The additive decomposition invariant holds exactly:
     ``baseline_raw + contributions_raw.sum(-1) + indirect_effects == sales_raw``
@@ -1760,6 +1797,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                         "demand": demand_pad,
                         "indirect_effects": drawn["indirect_effects"],
                         "baseline_intrinsic": drawn["baseline_intrinsic"],
+                        "sales_noise": drawn["sales_noise"],
                         "control_contribution": control_contrib_pad,
                         "confounder_contribution": confounder_contrib_pad,
                         "indirect_effects_by_source": drawn["indirect_effects_by_source"],
@@ -1801,6 +1839,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     indirect_effects = np.stack([tk["indirect_effects"] for tk in tasks])  # (n_tasks, n_time_steps)
     # (n_tasks, n_time_steps)
     baseline_intrinsic = np.stack([tk["baseline_intrinsic"] for tk in tasks])
+    sales_noise = np.stack([tk["sales_noise"] for tk in tasks])  # (n_tasks, n_time_steps)
     # (n_tasks, n_time_steps, n_covariates)
     control_contribution = np.stack([tk["control_contribution"] for tk in tasks])
     # (n_tasks, n_time_steps, n_latent)
@@ -1997,6 +2036,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "control_contribution": control_contribution.astype(np.float32),
         "confounder_contribution": confounder_contribution.astype(np.float32),
         "baseline_intrinsic": baseline_intrinsic.astype(np.float32),
+        "sales_noise": sales_noise.astype(np.float32),
         "indirect_effects_by_source": indirect_effects_by_source.astype(np.float32),
         "confounding_strength": confounding_strength.astype(np.float32),
         "channel_shock_mask": channel_shock_mask.astype(np.uint8),

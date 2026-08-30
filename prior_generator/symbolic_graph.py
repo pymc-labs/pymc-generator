@@ -11,8 +11,18 @@ interactions as one symbolic PyTensor graph:
     E_k = RW_k + σ_k·ε_tk + a_k·b_tk,  b_tk ~ Bernoulli(p_k)  (channel own drive)
     C_k = softplus( Σ_j w_jk·D_j + Σ_m v_mk·Z_m
                     + Σ_{k'<k} α_{k'k}·C_{k'} + E_k )     (channel, positive)
-    B   = Σ_j δ_j·D_j + Σ_m ρ_m·Z_m + RW_B                (baseline, signed)
-    Y   = B + Σ_k g_cy·β_k·f_k(C_k) + RW_Y                (sales)
+    B   = max(RW_B, floor)                                (intercept, floored)
+    Y   = B + Σ_j δ_j·D_j + Σ_m ρ_m·Z_m
+              + Σ_k g_cy·β_k·f_k(C_k) + RW_Y              (sales)
+
+The intercept ``B`` carries no parents: latent demand and the controls enter
+``Y`` DIRECTLY through ``δ_j`` / ``ρ_m``, so ``Y`` reads as the equation a
+standard MMM assumes and ``B`` is a level that can be reported on its own.
+``baseline_floor`` censors that level (``None`` leaves the signed walk), which
+is safe precisely because the parents sit outside it: the floor clips one
+additive term and leaves every other decomposition column exact. Sales itself
+is never clamped — that would censor the OBSERVATION and leave the additive
+function class a standard MMM can represent.
 
 Every node except ``Y`` carries an independent random-walk noise term
 (``random_walk`` module); node means are folded into those walks. ``Y`` instead
@@ -463,16 +473,17 @@ def build_symbolic_graph(
         ``contributions_observed`` (n_time_steps, n_treatments),
         ``indirect_effects`` (n_time_steps,),
         ``indirect_effects_by_source`` (n_time_steps, 3),
-        ``sales`` (n_time_steps,).
+        ``sales`` (n_time_steps,), ``sales_noise`` (n_time_steps,).
 
     Notes
     -----
-    Per-node baseline terms split the aggregated D->B / Z->B baseline terms:
+    Per-node terms split the aggregated D->Y / Z->Y baseline-side terms:
     ``control_contribution[:, m] = g_zb[m]·ρ[m]·Z[:, m]`` and
     ``confounder_contribution[:, j] = g_db[j]·δ[j]·D[:, j]``, with
-    ``baseline_intrinsic = RW_B + RW_Y`` (baseline minus all parent terms), so
-    ``baseline_intrinsic + Σ_j confounder_contribution + Σ_m control_contribution
-    == baseline``.
+    ``baseline_intrinsic = B`` (the floored intercept alone) and
+    ``sales_noise = RW_Y``, so
+    ``baseline_intrinsic + sales_noise + Σ_j confounder_contribution
+    + Σ_m control_contribution == baseline``.
 
     ``indirect_effects_by_source`` (n_time_steps, 3) is the telescoping 3-way
     indirect split in the LOCKED order ``(cc, zc, dc)`` — channel->channel,
@@ -701,13 +712,23 @@ def build_symbolic_graph(
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
 
-    # -- baseline B (n_time_steps_full,): D->B + Z->B + own walk --------------------------
+    # -- intercept B (n_time_steps_full,): its OWN walk, optionally floored ----
+    # D and Z do NOT enter here: they attach directly to Y below. Two reasons.
+    # (1) The intercept is then a pure, separately reported level, and Y reads as
+    #     the equation a standard MMM assumes: intercept + linear controls +
+    #     nonlinear media + noise.
+    # (2) It is what makes the floor safe. Flooring a sum that contained the
+    #     parents would make ``control_contribution`` no longer exactly
+    #     ``g_zb·ρ·Z`` and would break the exact per-node decomposition; the
+    #     floor here clips ONE additive term, so every other term is untouched.
     delta_db = _arr(params["delta_db"], (n_latent,))
     rho_zb = _arr(params["rho_zb"], (n_covariates,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)
+    baseline_floor = params.get("baseline_floor")
+    intercept = walk_b if baseline_floor is None else pt.maximum(walk_b, float(baseline_floor))
     term_bd = _dot_terms(d_cols, g_db, delta_db, n_time_steps_full, **dot_kw)
     term_bz = _dot_terms(z_cols, g_zb, rho_zb, n_time_steps_full, **dot_kw)
-    B = term_bd + term_bz + walk_b
+    non_media = intercept + term_bd + term_bz
 
     # -- per-node direct baseline terms (exact split of term_bd / term_bz) ----
     # column m of control_contribution   = g_zb[m]·ρ[m]·Z[:,m]  (sums to term_bz)
@@ -794,14 +815,30 @@ def build_symbolic_graph(
     # (n_time_steps, 3), columns in the locked order cc, zc, dc
     indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)
 
-    walk_y = params["rw_y"]["std"][0] * eps_y
-    baseline = (B + walk_y)[window]  # sales noise folded into the baseline component
-    # "Y independent of everything": baseline minus all parent (D/Z) terms.
-    baseline_intrinsic = (walk_b + walk_y)[window]  # (n_time_steps,)
+    # ``as_tensor_variable`` matters on the concrete path: with numpy params AND
+    # numpy eps this product is a plain ndarray, and ``sales_noise`` is now an
+    # OUTPUT in its own right, so every output must be a tensor.
+    walk_y = pt.as_tensor_variable(params["rw_y"]["std"][0] * eps_y)
+    # ``baseline`` stays "everything that is not media": the intercept, the
+    # direct D->Y / Z->Y terms, and the iid sales noise.
+    baseline = (non_media + walk_y)[window]
+    # The intercept ALONE — floored when a floor is configured, so this target
+    # is >= floor by construction. The iid sales noise is reported separately
+    # (``sales_noise``) instead of being folded in here, which is what keeps
+    # this a clean level rather than a level plus observation error.
+    baseline_intrinsic = intercept[window]  # (n_time_steps,)
+    sales_noise = walk_y[window]  # (n_time_steps,)
     sales = baseline + contributions_observed.sum(axis=1)
     # identity: sales == baseline + contributions.sum(1) + indirect_effects
-    #        == baseline_intrinsic + Σ confounder_contribution + Σ control_contribution
+    #        == baseline_intrinsic + sales_noise
+    #           + Σ confounder_contribution + Σ control_contribution
     #           + contributions.sum(1) + indirect_effects_by_source.sum(1)
+    #
+    # Sales is deliberately NOT floored. A clamp on Y is a LIKELIHOOD-level
+    # change (censored observations), which would put every world outside the
+    # additive-Gaussian class a standard MMM — and this package's own oracle —
+    # can represent. Non-negative sales stays enforced exactly by the
+    # acceptance filter (``_additive_task_ok``).
 
     outputs = {
         "demand": D[window],
@@ -818,6 +855,9 @@ def build_symbolic_graph(
         "indirect_effects": indirect_effects,
         "indirect_effects_by_source": indirect_effects_by_source,
         "sales": sales,
+        # Appended last: output order fixes PyTensor's RNG traversal, so a new
+        # output must not displace an existing one.
+        "sales_noise": sales_noise,
     }
     # These are intentionally audit-only paths.  They are drawn to decide
     # whether the *natural* world is realistic, never persisted in corpora.

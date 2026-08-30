@@ -60,6 +60,53 @@ All three default to `(0.0, 0.0)` on a raw `SCMPrior`: no term enters the graph,
 the parameters degenerate to constants, and the corpus is byte-identical to one
 generated before the mechanism existed.
 
+## Intercept floor
+
+`baseline_floor: float | None = None` censors the intercept walk:
+
+$$B_t = \max(\mathrm{RW}_{B,t},\ \texttt{baseline\_floor}).$$
+
+A **censored** walk, not a softplus, so `B` can sit exactly *at* the floor —
+"zero or above, never below". `None` keeps the signed walk.
+
+```python
+from prior_generator import make_scm_prior
+
+cfg = make_scm_prior(baseline_floor=0.0)   # baseline >= 0 by construction
+```
+
+Why this is safe: the intercept carries **no parents**. Latent demand and the
+controls enter `Y` directly, so the floor clips one additive term and
+`control_contribution[:, m]` stays exactly `g_zb[m] * rho_zb[m] * Z[:, m]`.
+Flooring a sum that contained the parents would break that identity.
+
+The floor is a pure clip: it adds no random variable and consumes no RNG, so a
+floor that never binds reproduces the unfloored corpus byte for byte (pinned by
+`test_the_intercept_floor_is_a_pure_clip_and_consumes_no_rng`). Two consequences
+to know about:
+
+- **Sales is not censored.** A clamp on `Y` would censor the *observation*,
+  putting every world outside the additive-Gaussian class an MMM likelihood —
+  including this package's own oracle — can represent. Non-negative sales stays
+  enforced by the acceptance filter. Measured on the shipped prior, sales sits
+  28–83 observation-noise σ above zero and a negative intercept week occurs in
+  ~0.08% of weeks, so the floor is a guarantee rather than a frequent
+  intervention.
+- **The oracle's `latent="marginal"` mode raises** for a floored config, because
+  `max(RW_B, floor)` is not Gaussian and the analytic covariance would be wrong.
+  Use `latent="sampled"`, which applies the identical clip.
+
+### Decomposition columns
+
+`baseline_intrinsic` is the intercept **alone** (`B`), and the iid observation
+noise is its own `sales_noise` column, so the persisted identity is
+
+```text
+baseline_intrinsic + sales_noise + Σ control_contribution
+  + Σ confounder_contribution + Σ contributions
+  + Σ indirect_effects_by_source == sales
+```
+
 ## Baseline walk scale
 
 `rw_baseline_std_sigma: float | None = None` controls **only** the `RW_B`

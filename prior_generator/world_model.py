@@ -621,6 +621,8 @@ def _scm_params(
     pulse_prob = _uniform(*specs["pulse_prob"])
     return {
         "l_max": cfg.l_max,
+        # Concrete structural constant, not a draw: it clips the intercept walk.
+        "baseline_floor": cfg.baseline_floor,
         # linear edge coefficients
         "w_dc": _uniform(*specs["w_dc"]),
         "u_dz": _uniform(*specs["u_dz"]),
@@ -1327,6 +1329,14 @@ def build_oracle_model(
         term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (n_time_steps,)
 
         if latent == "marginal":
+            if cfg.baseline_floor is not None:
+                raise ValueError(
+                    "latent='marginal' cannot represent a floored intercept: "
+                    "max(RW_B, baseline_floor) is not Gaussian, so marginalising "
+                    "the baseline walk analytically would use the wrong "
+                    "covariance. Use latent='sampled', which applies the same "
+                    "floor as generation."
+                )
             sales_mu = pm.Deterministic(
                 "sales_mu",
                 rw["rw_b"]["mean"][0] + term_bz + contributions.sum(axis=1),
@@ -1363,6 +1373,10 @@ def build_oracle_model(
             ]
             D_full = pt.stack(d_cols, axis=1)  # (n_time_steps_full, n_latent)
             walk_b = _walk_column(eps_b, rw["rw_b"], 0, n_time_steps_full)
+            if cfg.baseline_floor is not None:
+                # The SAME clip generation applies, so the oracle stays exactly
+                # the generative model rather than an approximation of it.
+                walk_b = pt.maximum(walk_b, float(cfg.baseline_floor))
             pm.Deterministic("demand", D_full[window])
 
             term_bd = pt.dot(D_full[window], g_db * delta_db)  # (n_time_steps,)

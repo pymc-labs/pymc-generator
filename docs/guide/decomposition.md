@@ -116,7 +116,8 @@ scm = world(1, 0)
 d = scm.data
 
 manual = (
-    d["baseline_intrinsic"]
+    d["baseline_intrinsic"]                   # the intercept B
+    + d["sales_noise"]                        # iid observation noise
     + d["confounder_contribution"].sum(1)     # D → B
     + d["control_contribution"].sum(1)        # Z → B
     + d["contributions"].sum(1)               # direct C → Y

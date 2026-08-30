@@ -174,6 +174,7 @@ class SCM:
         d = self.data
         return np.asarray(
             d["baseline_intrinsic"]
+            + d["sales_noise"]
             + d["confounder_contribution"].sum(1)
             + d["control_contribution"].sum(1)
             + d["contributions"].sum(1)
@@ -496,17 +497,21 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
         }
         if parents:
             values[f"C{k + 1}"]["parents"] = parents
-    b_parents: dict[str, float] = {}
+    # D and Z attach to Y directly, so their loadings are reported on Y; B is
+    # the intercept alone (with its floor, when configured).
+    y_parents: dict[str, float] = {}
     for j in range(n_latent):
         if g["g_db"][j]:
-            b_parents[f"D{j + 1}"] = float(np.asarray(params["delta_db"])[j])
+            y_parents[f"D{j + 1}"] = float(np.asarray(params["delta_db"])[j])
     for m in range(n_covariates):
         if g["g_zb"][m]:
-            b_parents[f"Z{m + 1}"] = float(np.asarray(params["rho_zb"])[m])
+            y_parents[f"Z{m + 1}"] = float(np.asarray(params["rho_zb"])[m])
     values["B"] = {"random_walk": _rw_parameters(params, "rw_b", 0)}
-    if b_parents:
-        values["B"]["parents"] = b_parents
+    if world.cfg.baseline_floor is not None:
+        values["B"]["floor"] = float(world.cfg.baseline_floor)
     values["Y"] = {"iid_noise": _rw_parameters(params, "rw_y", 0)}
+    if y_parents:
+        values["Y"]["parents"] = y_parents
     if "channel_shock" in params:
         schedule = params["channel_shock"]
         values["channel_shocks"] = {
@@ -667,12 +672,11 @@ def _build_equations(world: SCM) -> dict[str, str]:
             f"gate[{k}] = g_cy[{k}] * beta[{k}]"
         )
 
-    b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_db"][j]] + [
-        f"rho_zb[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zb"][m]
-    ]
-    equations["B"] = (
-        f"B_full = {_join_terms('RW_full(eps_b, rw_b[0])', b_terms)}; B = B_full[burn_in:]"
-    )
+    floor = world.cfg.baseline_floor
+    intercept = "RW_full(eps_b, rw_b[0])"
+    if floor is not None:
+        intercept = f"maximum({intercept}, {float(floor)})"
+    equations["B"] = f"B_full = {intercept}; B = B_full[burn_in:]"
     equations["contributions"] = (
         "contributions[:, k] = gate[k] * f{k}(C_base{k}_full); "
         "contributions_observed[:, k] = gate[k] * f{k}(C{k}_full), for k=1..n_treatments."
@@ -684,11 +688,17 @@ def _build_equations(world: SCM) -> dict[str, str]:
         "indirect_effects_by_source = [IE_cc, IE_zc, IE_dc]; "
         "indirect_effects = sum_k(contributions_observed[:, k] - contributions[:, k])."
     )
+    b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_db"][j]] + [
+        f"rho_zb[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zb"][m]
+    ]
     equations["Y"] = (
-        "baseline = B_full[burn_in:] + rw_y[0].std * eps_y[burn_in:]; "
-        "baseline_intrinsic = RW_full(eps_b, rw_b[0])[burn_in:] + "
-        "rw_y[0].std * eps_y[burn_in:]; "
-        "Y (sales) = baseline + sum_k contributions_observed[:, k]."
+        f"non_media_full = {_join_terms('B_full', b_terms)}; "
+        "sales_noise = rw_y[0].std * eps_y[burn_in:]; "
+        "baseline = non_media_full[burn_in:] + sales_noise; "
+        "baseline_intrinsic = B; "
+        "Y (sales) = baseline + sum_k contributions_observed[:, k]. "
+        "Sales is never clipped: D->Y / Z->Y are signed, so non-negative sales "
+        "is enforced by the acceptance filter, not by censoring the outcome."
     )
     return equations
 
@@ -865,6 +875,7 @@ def _assemble_params(
         for param_name in param_names
     }
     params["l_max"] = cfg.l_max
+    params["baseline_floor"] = cfg.baseline_floor
     params["adstock_family"] = np.array(structural["adstock_family"], copy=True)
     params["sat_family"] = np.array(structural["sat_family"], copy=True)
     params["use_hf"] = np.array(structural["use_hf"], copy=True)

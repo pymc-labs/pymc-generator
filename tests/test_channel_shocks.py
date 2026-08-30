@@ -206,12 +206,14 @@ def test_shocked_world_preserves_every_decomposition_identity():
     telescoping_error = np.abs(d["indirect_effects_by_source"].sum(1) - d["indirect_effects"])
     baseline_error = np.abs(
         d["baseline_intrinsic"]
+        + d["sales_noise"]
         + d["confounder_contribution"].sum(1)
         + d["control_contribution"].sum(1)
         - d["baseline"]
     )
     full_error = np.abs(
         d["baseline_intrinsic"]
+        + d["sales_noise"]
         + d["confounder_contribution"].sum(1)
         + d["control_contribution"].sum(1)
         + d["contributions"].sum(1)
@@ -265,6 +267,7 @@ def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_out
         ),
         np.abs(
             f("baseline_intrinsic")
+            + f("sales_noise")
             + f("confounder_contribution").sum(2)
             + f("control_contribution").sum(2)
             + f("contributions_raw").sum(2)

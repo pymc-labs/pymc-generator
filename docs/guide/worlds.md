@@ -44,8 +44,8 @@ for name, arr in scm.data.items():
 | Group | Keys |
 | --- | --- |
 | **Observable** (what a modeller sees) | `channels`, `controls`, `sales` |
-| **Direct truth** | `contributions` (per channel), `baseline`, `baseline_intrinsic` |
-| **Baseline split** | `control_contribution` (Z→B), `confounder_contribution` (D→B) |
+| **Direct truth** | `contributions` (per channel), `baseline`, `baseline_intrinsic` (the intercept), `sales_noise` |
+| **Baseline split** | `control_contribution` (Z→Y), `confounder_contribution` (D→Y) |
 | **Indirect truth** | `indirect_effects`, `indirect_effects_by_source` (cc, zc, dc) |
 | **Latent / audit** | `demand`, `channels_base`, `contributions_observed`; with channel shocks enabled: `channels_unshocked`, `sales_unshocked`, and the `channel_shock_*` schedule |
 

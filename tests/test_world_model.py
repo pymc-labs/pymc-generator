@@ -47,7 +47,7 @@ def test_model_is_pm_model_with_priors_and_outputs(built):
     model, out_names = built
     # continuous priors + noise are real RVs; every graph output is registered
     assert len(model.free_RVs) > 10
-    assert out_names[:15] == (
+    assert out_names[:16] == (
         "demand",
         "controls",
         "channels",
@@ -62,6 +62,7 @@ def test_model_is_pm_model_with_priors_and_outputs(built):
         "indirect_effects",
         "indirect_effects_by_source",
         "sales",
+        "sales_noise",
         "confounding_strength",
     )
     assert "sales" in out_names and "indirect_effects_by_source" in out_names
@@ -75,6 +76,7 @@ def test_pm_draw_preserves_additive_identity(built):
     telescoping = np.abs(d["indirect_effects_by_source"].sum(1) - d["indirect_effects"]).max()
     full = np.abs(
         d["baseline_intrinsic"]
+        + d["sales_noise"]
         + d["confounder_contribution"].sum(1)
         + d["control_contribution"].sum(1)
         + d["contributions"].sum(1)

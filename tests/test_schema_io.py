@@ -98,6 +98,7 @@ def test_required_keys_and_shapes(corpus):
         "control_contribution": (n_tasks, n_time_steps, n_covariates),
         "confounder_contribution": (n_tasks, n_time_steps, n_latent),
         "baseline_intrinsic": (n_tasks, n_time_steps),
+        "sales_noise": (n_tasks, n_time_steps),
         "channel_active": (n_tasks, n_treatments),
         "treatment_active_mask": (n_tasks, n_treatments),
         "covariate_active_mask": (n_tasks, n_covariates),
@@ -249,6 +250,7 @@ def test_validate_corpus_flags_missing_key(corpus):
         "control_contribution",
         "confounder_contribution",
         "baseline_intrinsic",
+        "sales_noise",
         "indirect_effects_by_source",
     ),
 )

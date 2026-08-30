@@ -413,6 +413,7 @@ def test_validator_checks_signal_layout_dtype_and_eligibility():
         "control_contribution": np.zeros((1, 4, 1), dtype=np.float32),
         "confounder_contribution": np.zeros((1, 4, 1), dtype=np.float32),
         "baseline_intrinsic": np.ones((1, 4), dtype=np.float32),
+        "sales_noise": np.zeros((1, 4), dtype=np.float32),
         "indirect_effects_by_source": np.zeros((1, 4, 3), dtype=np.float32),
         "channel_shock_mask": np.zeros((1, 4, 1), dtype=np.uint8),
         "channel_shock_channel": np.empty((1, 0), dtype=np.int32),

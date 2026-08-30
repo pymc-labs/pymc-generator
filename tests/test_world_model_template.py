@@ -453,6 +453,7 @@ def test_template_satisfies_the_additive_identity_on_every_world(template):
             w = {k: np.asarray(v[d], dtype="float64") for k, v in drawn.items()}
             residual = (
                 w["baseline_intrinsic"]
+                + w["sales_noise"]
                 + w["confounder_contribution"].sum(-1)
                 + w["control_contribution"].sum(-1)
                 + w["contributions"].sum(-1)

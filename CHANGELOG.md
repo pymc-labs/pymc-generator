@@ -10,6 +10,42 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **The intercept is its own node, and can be floored** (`baseline_floor`).
+  `B` no longer absorbs its parents: latent demand and the controls attach
+  DIRECTLY to `Y`, so the sales equation is literally the one a standard MMM
+  assumes — `B + Σ δ_j D_j + Σ ρ_m Z_m + Σ g_cy β_k f_k(C_k) + RW_Y` — and the
+  intercept is a level that can be reported on its own. With no floor this is
+  pure associativity, but it is what makes the floor safe: `baseline_floor`
+  censors ONE additive term (`B = max(RW_B, floor)`, a censored walk, so `B`
+  may sit exactly AT the floor), leaving `control_contribution[:, m]` exactly
+  `g_zb[m]·ρ[m]·Z[:, m]` and the decomposition exact. Flooring a sum that still
+  contained the parents would break both. `None` (default) keeps the signed
+  walk; the floor adds no RV and consumes no RNG, so a floor that never binds
+  reproduces the unfloored corpus byte for byte.
+
+  Motivation: the intercept walk is signed, so the baseline could dip below
+  zero — measured 0.08% of weeks under the shipped relative-mode prior, and
+  19/50 tasks in a low-mean absolute-mode recipe. **Sales is deliberately NOT
+  censored**: a clamp on `Y` censors the *observation*, which would put every
+  world outside the additive-Gaussian class an MMM likelihood — including this
+  package's own oracle — can represent, and measurement shows sales already
+  sits 28–83 observation-noise σ above zero. Non-negative sales stays enforced
+  exactly by the acceptance filter.
+
+  `baseline_intrinsic` now carries the intercept ALONE (previously
+  `RW_B + RW_Y`) and the iid observation noise becomes its own `sales_noise`
+  corpus column, so the persisted identity is `baseline_intrinsic + sales_noise
+  + Σ control + Σ confounder + Σ contributions + Σ indirect_by_source ==
+  sales`. The oracle's analytic `latent="marginal"` mode raises for a floored
+  config (a censored walk is not Gaussian); `latent="sampled"` applies the
+  identical clip and stays exactly the generative model.
+
+  BREAKING: the new `sales_noise` column and the narrowed `baseline_intrinsic`
+  change the corpus schema, and because `baseline_intrinsic` no longer touches
+  `eps_y` the graph's RNG traversal is re-partitioned — every non-structural
+  array moves at a fixed seed. Structure/mask/split arrays and
+  `adstock_family` are unchanged.
+
 - **Control texture** (`control_hf_sigma_range`, `control_pulse_prob_range`,
   `control_pulse_amp_range`): controls now carry high-frequency own drive —
   iid weekly noise plus a **centred** calendar pulse — instead of being smooth

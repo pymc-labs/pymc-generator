@@ -69,8 +69,8 @@ F_m &= \mathrm{RW}_m + s_m\,\eta_{tm} + c_m\,(h_{tm} - q_m),\quad h_{tm}\sim\mat
 Z_m &= \textstyle\sum_j u_{jm}\,D_j + \sum_{m'<m} \gamma_{m'm}\,Z_{m'} + F_m && \text{(control)}\\[2pt]
 E_k &= \mathrm{RW}_k + \sigma_k\,\varepsilon_{tk} + a_k\,b_{tk},\quad b_{tk}\sim\mathrm{Bernoulli}(p_k) && \text{(channel's own drive)}\\[2pt]
 C_k &= \mathrm{softplus}\!\Big(\textstyle\sum_j w_{jk} D_j + \sum_m v_{mk} Z_m + \sum_{k'<k}\alpha_{k'k} C_{k'} + E_k\Big) && \text{(spend — non-negative)}\\[2pt]
-B &= \textstyle\sum_j \delta_j D_j + \sum_m \rho_m Z_m + \mathrm{RW}_B && \text{(baseline)}\\[2pt]
-Y &= B + \textstyle\sum_k g^{cy}_k\,\beta_k\, f_k(C_k) + \mathrm{RW}_Y && \text{(sales)}
+B &= \max(\mathrm{RW}_B,\ \texttt{baseline\_floor}) && \text{(intercept)}\\[2pt]
+Y &= B + \textstyle\sum_j \delta_j D_j + \sum_m \rho_m Z_m + \sum_k g^{cy}_k\,\beta_k\, f_k(C_k) + \mathrm{RW}_Y && \text{(sales)}
 \end{aligned}
 $$
 
@@ -114,6 +114,43 @@ Measured on 18 controls over six worlds at `n_time_steps=78`: $R^2$ against a
 to **0.64** (range 0.22–0.93), i.e. the variation that identifies $\rho_m$
 grows ~6.5× at the median. Set the three `control_*_range` knobs to
 `(0.0, 0.0)` to recover the pre-texture (smooth-walk-only) controls exactly.
+
+### The intercept, and what is *not* censored
+
+`B` carries no parents. Latent demand and the controls enter `Y` directly
+through $\delta_j$ / $\rho_m$, which does two things: `Y` becomes literally the
+equation a standard MMM assumes (intercept + linear controls + nonlinear media
++ noise), and the intercept becomes a level worth reporting on its own. It is
+persisted as `baseline_intrinsic`, with the observation noise split out into
+`sales_noise`, so the identity reads
+
+```text
+baseline_intrinsic + sales_noise + Σ control_contribution
+  + Σ confounder_contribution + Σ contributions
+  + Σ indirect_effects_by_source == sales
+```
+
+`baseline_floor` (default `None`) censors the intercept: `B = max(RW_B, floor)`.
+A censored walk — not a softplus — so `B` can sit exactly *at* the floor, which
+is what a baseline that "can be zero but never negative" means. Keeping the
+parents outside `B` is precisely what makes this safe: the floor clips **one**
+additive term, so `control_contribution[:, m]` stays exactly
+$g^{zb}_m \rho_m Z_{m}$ and the decomposition stays exact. Flooring a sum that
+contained the parents would destroy that.
+
+!!! warning "Sales is never censored"
+    A clamp on `Y` would censor the **observation**, not a prior — and every
+    additive-Gaussian estimator, including this package's own
+    [oracle](oracle.md), would be misspecified against its own data. Sales
+    therefore stays uncensored and non-negativity is enforced by the
+    [realism filter](#the-realism-filter). Measured headroom on the shipped
+    prior: sales sits 28–83 observation-noise $\sigma$ above zero, and a
+    negative intercept week occurs in ~0.08% of weeks (relative mode) — so the
+    floor is a guarantee, not a frequent intervention.
+
+    A floored intercept is also not Gaussian, so the oracle's analytic
+    `latent="marginal"` mode raises for such configs; use `latent="sampled"`,
+    which applies the identical clip.
 
 ## A drawn graph
 

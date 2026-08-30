@@ -261,6 +261,7 @@ class DataGenerator:
             "control_contribution",
             "confounder_contribution",
             "baseline_intrinsic",
+            "sales_noise",
             "indirect_effects_by_source",
             "channel_shock_mask",
             "channel_shock_channel",
@@ -363,6 +364,7 @@ class DataGenerator:
             "control_contribution": (n_tasks, n_time_steps, n_covariates),
             "confounder_contribution": (n_tasks, n_time_steps, n_latent),
             "baseline_intrinsic": (n_tasks, n_time_steps),
+            "sales_noise": (n_tasks, n_time_steps),
             "indirect_effects_by_source": (n_tasks, n_time_steps, 3),
             "channel_shock_mask": (n_tasks, n_time_steps, n_treatments),
             "channel_shock_channel": (n_tasks, n_channel_shocks),
@@ -444,6 +446,7 @@ class DataGenerator:
             "control_contribution": np.float32,
             "confounder_contribution": np.float32,
             "baseline_intrinsic": np.float32,
+            "sales_noise": np.float32,
             "indirect_effects_by_source": np.float32,
             "channel_shock_channel": np.int32,
             "channel_shock_start": np.int32,
@@ -1003,6 +1006,7 @@ class DataGenerator:
         indirect = corpus["indirect_effects"].astype(np.float64)
         indirect_by_source = corpus["indirect_effects_by_source"].astype(np.float64)
         intrinsic = corpus["baseline_intrinsic"].astype(np.float64)
+        sales_noise = corpus["sales_noise"].astype(np.float64)
         control_contribution = corpus["control_contribution"].astype(np.float64)
         confounder_contribution = corpus["confounder_contribution"].astype(np.float64)
         tolerance_factor = 32 * np.finfo(corpus["sales_raw"].dtype).eps
@@ -1018,6 +1022,7 @@ class DataGenerator:
             "baseline decomposition": (
                 np.abs(
                     intrinsic
+                    + sales_noise
                     + confounder_contribution.sum(axis=2)
                     + control_contribution.sum(axis=2)
                     - baseline
@@ -1027,6 +1032,7 @@ class DataGenerator:
             "full decomposition": (
                 np.abs(
                     intrinsic
+                    + sales_noise
                     + confounder_contribution.sum(axis=2)
                     + control_contribution.sum(axis=2)
                     + contributions.sum(axis=2)

@@ -151,6 +151,38 @@ def world_and_oracle():
     return gen_model, oracle_marginal, oracle_sampled, world
 
 
+def test_floored_intercept_rejects_the_analytic_marginal_oracle():
+    """A censored walk is not Gaussian, so marginalising it would be wrong.
+
+    Better a loud refusal than a reference posterior built on the wrong
+    covariance: the sampled mode applies the identical clip and stays exact.
+    """
+    cfg = _small_cfg(baseline_floor=0.0)
+    rng = np.random.default_rng(2)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
+    g_act = _slice_g_active(g, 2, 1, 1)
+    structural = sample_structure(g_act, cfg, rng)
+    gen_model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
+    drawn = pg.draw_worlds(gen_model, out_names + SHARED_RV_NAMES, seed=17, draws=1)
+    world = {name: value[0] for name, value in drawn.items()}
+    data = {key: world[key] for key in ("channels", "controls", "sales", "saturation_scale")}
+
+    with pytest.raises(ValueError, match="latent='marginal' cannot represent a floored intercept"):
+        build_oracle_model(g_act, cfg, structural, data)
+
+    # The sampled oracle reproduces the generative baseline EXACTLY at the truth,
+    # clip included — that is what "coherent with the model" has to mean.
+    oracle = build_oracle_model(g_act, cfg, structural, data, latent="sampled")
+    np.testing.assert_allclose(
+        _oracle_deterministic_at_truth(oracle, world, "baseline"),
+        np.asarray(world["baseline"], dtype=float) - np.asarray(world["sales_noise"], dtype=float),
+        rtol=0.0,
+        atol=1e-10,
+    )
+
+
 def test_shared_priors_same_measure(world_and_oracle):
     """Every mode shares generation's priors, restricted to live mechanisms."""
     gen_model, oracle_marginal, oracle_sampled, world = world_and_oracle

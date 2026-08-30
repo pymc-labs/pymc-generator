@@ -27,31 +27,29 @@ from prior_generator.world_model import build_world_model, draw_worlds, sample_s
 #: Byte-level contract for every serialized corpus array. When a hash moves,
 #: record WHY here — a silent regeneration is how a real regression hides.
 #:
-#: Last moved by CONTROL TEXTURE: ``make_scm_prior(texture="diverse")`` now
-#: gives controls high-frequency own drive (iid weekly noise + a centred
-#: calendar pulse, both relative to the control's own walk std), so a control
-#: is no longer a smooth walk drawn from the same function space as the smooth
-#: baseline walk. The new draws re-partition the seeded RNG list (``reseed_rngs``
-#: assigns streams by the compiled graph's traversal order), so EVERY
-#: non-structural array moves here, including ones with no control ancestor
-#: (``demand``, ``adstock_alpha``, ``weibull_*``). Unchanged: the
-#: structure/mask/split arrays, ``adstock_family``, and ``channel_level``.
-#: ``EXPECTED_UNTEXTURED_CONTROL_HASHES`` below pins the pre-texture bytes.
+#: Last moved by the INTERCEPT SPLIT: ``B`` is now the intercept alone (D and Z
+#: attach directly to ``Y``), ``baseline_intrinsic`` reports that intercept
+#: WITHOUT the iid sales noise, and the noise became its own ``sales_noise``
+#: column. Dropping ``RW_Y`` from ``baseline_intrinsic`` means ``eps_y`` is
+#: first reached later in the graph, and ``reseed_rngs`` assigns streams by the
+#: compiled graph's traversal order, so every non-structural array moves.
+#: Unchanged: the structure/mask/split arrays (``g``, ``*_active_mask``,
+#: ``support_mask``, ``is_val``, ``cell_id``) and ``adstock_family``.
 EXPECTED_CORPUS_HASHES = {
-    "spend_raw": "50ee92c932a13ba4db21c7e60db0acf1e082458a80a677c1c9db0b79ae56b680",
-    "spend_norm": "c6d2f305497aa46f7957e826512dec5af595a1a8e4d59d8b2a883d752ac5b152",
-    "spend_share": "974ec3a99ab5305b390ff67108b9f9ba0736aea41384685044e70c33bd211f59",
-    "controls": "2b1e89f1dfcb06918121cfacb1f445ec2a20f56a83a51c76092a7fd9bb03acb5",
-    "sales_raw": "931690c12039de059c3ef16406fb84edef0944168f11a203480b53211e054c23",
-    "sales_norm": "2487da7fc2420256fa40dd3dcee2a83cd0fbaa1d9f395aacf0baddd9134a16f9",
+    "spend_raw": "a28507d6843679e98d015a67d0da943c4d76df5991b82540f470045a2ed048f2",
+    "spend_norm": "f45cf176672584e285706eff6563747e3fa4e802f3555aa9d9b5d1899a3d195a",
+    "spend_share": "876d8f409dc9393189973f3b04125083c979be2c09f322fd07635b7c048cd603",
+    "controls": "19289710c49ee30b61b6cd40cc330e98ffdc77382964edfe927ec9a976fb1962",
+    "sales_raw": "e8b8f3d5b72d3f9d48096863b706cee76d0fe55c400abf586e3cd07492da2ec1",
+    "sales_norm": "3b5718f8eab1e3d02f73908e7e4019760f4904b44424321b6f5b9dee21305f17",
     "support_mask": "003f9ad7fd18ab65a0ca13820be76c5f1637b7e15c7d94fa1b5e327f148c7508",
     "is_future": "7801dc551deac4014f0121c44146e6565844cf603d6ad9e3e61ad1007743afe9",
     "g": "e74d8d2a53ee7a978fe94b066510147be374f197504cff24e02e24cb00478e5c",
-    "contributions_raw": "0cdc73b55bbbbd539efb578356327ee81d24ce99856052ed9720a6b316319aec",
-    "baseline_raw": "b79c215f68878bb2ae77c01802bd555b4d9e9a91fd92c939a356bd3fe1ea3e24",
-    "demand": "383c26cf53401e8b4637cefa3c5de504e1cc226d6cf9d72b5c838b57217cc2fd",
-    "spend_means": "6e0cf461894d812b53b70f69a76769f61859eaa7f64d54c2c896dcd5a2c709ff",
-    "sales_scale": "78cb8fcc79b3428bc12f439759f32d5849b82bab075d4f23c1ec4d15a439d655",
+    "contributions_raw": "a68d569b571e38285f78c26278ce109041c676f53bfc531f541bbb5e6c6a8c57",
+    "baseline_raw": "ffb5ee541626f221f37eb240320763981369bc697dadd2fd898435f18b0611aa",
+    "demand": "9b885bdb0f6878ee4a5cd4f29a8a2226b583df76c4d8bafce4ef3277a07f5b3c",
+    "spend_means": "0e2a1c38805785b53eba7026a2cd6c034dc7312e325db0d7bd74da985cf541da",
+    "sales_scale": "d2c04c6028e121e67a1beb72e9c4aed1dbdd4b49fa112a5942000fe9c57caf50",
     "is_val": "eb4b02f10d5660691db02cfd97e0fee99ab9f2461e8e802369f07300b5285ad4",
     "cell_id": "85bf0249350a8edb436598ba927c2298bca0e058665eb864b071e65830562096",
     "treatment_active_mask": "3a7cd171c96fc8fb27a1dadbd085253acf5fb34ff5976402507504ddadd92889",
@@ -60,12 +58,12 @@ EXPECTED_CORPUS_HASHES = {
     "n_treatments_active": "c1198a3bdca08a0ae0112be2f753ffc046cece6c10a96c3b4edd974798b21530",
     "n_covariates_active": "9ae6b0b1e6912e108c443a1e35a8fd522c1e0455c79b1152d8d44744d080504f",
     "n_latent_active": "33462003b0a367a219d05faffcae2fa50ef2f8bdac6cb881e694c7c46335f46e",
-    "indirect_effects": "3d20abcfbd838bdb23b2888d8542794d35eb1d2da9f4f6893b4ffcbc53e03847",
+    "indirect_effects": "24f1fed8da9de9ee18e84132be4d6a772da2ca9eeb5af09c2b985e31b4a16c2e",
     "channel_active": "e6a619d2852bed3ed0f8890b700bec0062e3f6f7352eec5a769792bd8c191671",
-    "control_contribution": "a8ea808e9304f892e7bd43616a9a9f1f879c18dfdd370b7f1a47a7b5babf321c",
-    "confounder_contribution": "ac7d0ad77be2a513bdb2ec46ea024d8c7ee7d2d63961f38ed109c495be0766f2",
-    "baseline_intrinsic": "731555b9dd9953eab9288079850faae6a6d4dac2a93dc2c244c45660b1535ef3",
-    "indirect_effects_by_source": "773c263e398cd6aaafc5f4b3b741deffd0ac9f5f78f8d75562b00219dd5fe5ad",
+    "control_contribution": "0368e70dc2d1e4bb90c022c17945860e672a7b7b938281f09f7d17c2d3a0d8a5",
+    "confounder_contribution": "c053f2fd79ae81912551bbc0d1e71a91abf2de23671465cb0d31eb51199241d6",
+    "baseline_intrinsic": "9034c76ba9be5ed3cd6fc2a3f47d52db69d092dd758c0ef0fa018df556fe4540",
+    "indirect_effects_by_source": "ad69f3ec5fcdf3e26012ddd75af788005c7840c56899ee986c06d3584ab13a10",
     "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
     "channel_shock_mask": "a2c17b7c3b20dff7ef9b8ef7316a3ef323f705522c3fef1744df2a33a3af832b",
     "channel_shock_channel": "7f956e232d961d634c20094542cf11ae23525f62749f31010e76d0cbcacc7e82",
@@ -73,36 +71,37 @@ EXPECTED_CORPUS_HASHES = {
     "channel_shock_length": "fc492e4b1613b6e1cf17271739cd12251266644e410cb1c14180e21c6b07c59e",
     "channel_shock_level_multiplier": "ab57f647547011d917a044e853a1d5796e715c0ccacb505d2c51442e4da8c341",
     "channel_shock_level": "1550bbf2bded16bb609b5f52669f0b29e6fdf0d7a0898bfb82c5c51a9db3124a",
-    "channel_level": "dc4751c12f53123084e1d827851c8fbedf4d214f0513f4c046852697889e3cb4",
-    "saturation_scale": "3aaa9bb34f12c5a9844bfd51112158912e787f2c77480c062098622e25c6fad4",
+    "channel_level": "c8dc59f99e57ad30039969921e10ac444de23336f162f7143de84c5e9d055659",
+    "saturation_scale": "ff5ba62a84aa40872f2343049ef67c871c5f5fce7a4fa73672cb18f8ff8c11f6",
     "adstock_family": "b8b595535043fbd9bee4855aa2adc923c2a7cf6c5d91fd9b538f1779223d66c8",
-    "adstock_alpha": "47c6002f084de409224518f5f5f2dcd769065bc800e492b346309f27a7c08df2",
-    "weibull_lam": "64ee54fc37b421f641f6da185965522fb12996987717d4d76f552002be4c2228",
-    "weibull_k": "607ee7504d909286e200ac704d8ac4715cc97635ef8fd6cb226733bda0430e13",
-    "signal_metrics": "e881193b08a34921a9cd742bd2c69e5ab95b49016da20fe8836f67988048f1be",
+    "adstock_alpha": "964b21cdccd0420c8b4e173b9e805d7227315adfd97efbaec6cd0913742588c7",
+    "weibull_lam": "a00faf5a38b43360cd8298be9c5f42a2bd390a7eb1e5a2691539d6be0bec8a43",
+    "weibull_k": "d1e1ab9e38a9b1557f2383cddc56ae9e083f62bf131ec64e5b6db330efe0a25b",
+    "signal_metrics": "2890d03dfacc9264a9d07dbfb48c379925a0c758ff06b0d3eea7069647fe5187",
     "signal_metric_valid": "f1ecbab717272a25f5802cb87be6fd3b1bdd88cede7e75a141f74ebacf212b16",
+    "sales_noise": "6e95377b5e6f66ce17a3b621e72b0b27c7ecd5d7d4e3ada9b277ccef14e8413c",
 }
 
-#: The SAME corpus with the control texture explicitly disabled, pinned to the
-#: hashes generated BEFORE the mechanism existed. This is the RNG-isolation
-#: contract: the new parameters degenerate to constants and the new noise RVs
-#: reach no output, so they collect no random stream and every legacy byte
-#: survives. It moves only when something outside the control texture changes.
+#: The SAME corpus with the control texture explicitly disabled. This is the
+#: RNG-isolation contract for that mechanism: its parameters degenerate to
+#: constants and its noise RVs reach no output, so they collect no random
+#: stream. It is a snapshot at this commit, not a pre-texture reproduction —
+#: the intercept split above moved both dicts together.
 EXPECTED_UNTEXTURED_CONTROL_HASHES = {
-    "spend_raw": "c0bab46c1873c91e56d05fb383b1eef66e02002ffa080de0ca814a6b7b6d4adf",
-    "spend_norm": "e0f991be830a85ca0ab20917d1e0bf60848ae167426c98835f07bff7f88cb8ef",
-    "spend_share": "5b58d30f1281b1101132ff820e33f91a3158ee41fd63737941aa731c03ac1254",
-    "controls": "2fc7043959d83b4475c71dfddbe1a297a6b8a4226cc74c9dbc8335bee40f0ad5",
-    "sales_raw": "d31551fcb8b4a444e6ebd44eaea81c90bd0e965b94555880bf544bb56f9fb6f6",
-    "sales_norm": "43bff67e36ae5cc305d2dab3264790c018f311eeef80e5f11e15e2464ff16260",
+    "spend_raw": "dbdf729791679436315c883a009364f25f2e408ea31356402b966231cea67c77",
+    "spend_norm": "953649ac8c065c41250786bab74114a941b16959e0c9860efaf7e3bc88a82a1b",
+    "spend_share": "572bb7d88f47e606bfb0ed6030c8faf411168cccd4006ae197a46f318d53c6f7",
+    "controls": "06471033e7eeef15a1801ead29801aa09fa0cc7308797c54d1b4dd4782338c78",
+    "sales_raw": "3f973b17d9b2af66affd0ebb53ce13032577f1d77b55538ec8a68a7d731a9689",
+    "sales_norm": "6d425ac1aeb6d3399423ec9172338fcec548f71a08f8ac5df4f704dd4346dee3",
     "support_mask": "003f9ad7fd18ab65a0ca13820be76c5f1637b7e15c7d94fa1b5e327f148c7508",
     "is_future": "7801dc551deac4014f0121c44146e6565844cf603d6ad9e3e61ad1007743afe9",
     "g": "e74d8d2a53ee7a978fe94b066510147be374f197504cff24e02e24cb00478e5c",
-    "contributions_raw": "9d0ae9fff70ee95831fedb5e2c441d2b9fca0a0d9e43beef94753371e344b55f",
-    "baseline_raw": "9b35e472341b7f7355f058529572b8de2ccbdbc8321ee3dfe4fb45c925584030",
-    "demand": "ddd9004bf39dd0e790cf550ea99ebac2454868815bc6591f9ee321326a1f758e",
-    "spend_means": "8f0598524beaec26652a7809811b44a587420f0ea11ca4130ff04461d267dcdc",
-    "sales_scale": "6e611bd5cd659ec8f6959dd5e759c30ef0c3402ec8d414d01b740c3138696108",
+    "contributions_raw": "13b9f430aeae2287321e28e415625d189b16ba2fce8b83c22bfa5dc5ff5ec897",
+    "baseline_raw": "d8cd100cabff6db38a850bce2eb028a057b0ad61adaa816b770375f5dd7a8602",
+    "demand": "0235e997f7a33422a66327bcf454ad173aa7b3d00bce993f2c6668cfa4903ea0",
+    "spend_means": "d8f7f278540aa6a0ac23cc5be7ace4b9c6f850dd12723743ef894febe699dc02",
+    "sales_scale": "52474f5f9aa9c42ff54060377d4f9ff68bb4e276c4f54dd9f11602f40e31267b",
     "is_val": "eb4b02f10d5660691db02cfd97e0fee99ab9f2461e8e802369f07300b5285ad4",
     "cell_id": "85bf0249350a8edb436598ba927c2298bca0e058665eb864b071e65830562096",
     "treatment_active_mask": "3a7cd171c96fc8fb27a1dadbd085253acf5fb34ff5976402507504ddadd92889",
@@ -111,12 +110,12 @@ EXPECTED_UNTEXTURED_CONTROL_HASHES = {
     "n_treatments_active": "c1198a3bdca08a0ae0112be2f753ffc046cece6c10a96c3b4edd974798b21530",
     "n_covariates_active": "9ae6b0b1e6912e108c443a1e35a8fd522c1e0455c79b1152d8d44744d080504f",
     "n_latent_active": "33462003b0a367a219d05faffcae2fa50ef2f8bdac6cb881e694c7c46335f46e",
-    "indirect_effects": "7f79fb8eb08e2c904dea27c78f8a24d3f181c25cdd0dac0d2e166265a0c968e9",
+    "indirect_effects": "b09fa64911c7ca14a34c0988bfa64edeb0157329d76c5f11b45e7470bab151eb",
     "channel_active": "e6a619d2852bed3ed0f8890b700bec0062e3f6f7352eec5a769792bd8c191671",
-    "control_contribution": "27c49ad126d6a7e67033d5fd17785f66e68a0f0141c5bc5104c9c74ed5b3a55b",
-    "confounder_contribution": "a87dee854c1b45c48847c4d7508b2033ce955fa799f94b702de1f503cd849ca7",
-    "baseline_intrinsic": "36aefc7f3c797f2eabe023525b324de46475b8a0e7e4e1eede7b267720eb1725",
-    "indirect_effects_by_source": "0b8fde4981e3422bfccc1524db3e4e962316a8e7fb778f5c88882bbf84744309",
+    "control_contribution": "9ac67afb6432eec1d7a687b6f8e33089661c502acabdef3bad54a0a9051b676a",
+    "confounder_contribution": "e1a62ff6a697acae060678dba203e1e557c735d4a6bc91947d9b99063c715900",
+    "baseline_intrinsic": "0a88397d6aefc8db85b7d043264644905c2506598849d9a1f4137e495df4cbf1",
+    "indirect_effects_by_source": "906c8f58ba38a9692fc897a2cea2e35339a5816d428980474a0d76b1a0ef706d",
     "confounding_strength": "1ebfc5942a66b91e14dd2667a96be1e65275c531c1f4de99471e8982f6367421",
     "channel_shock_mask": "a2c17b7c3b20dff7ef9b8ef7316a3ef323f705522c3fef1744df2a33a3af832b",
     "channel_shock_channel": "7f956e232d961d634c20094542cf11ae23525f62749f31010e76d0cbcacc7e82",
@@ -124,16 +123,16 @@ EXPECTED_UNTEXTURED_CONTROL_HASHES = {
     "channel_shock_length": "fc492e4b1613b6e1cf17271739cd12251266644e410cb1c14180e21c6b07c59e",
     "channel_shock_level_multiplier": "ab57f647547011d917a044e853a1d5796e715c0ccacb505d2c51442e4da8c341",
     "channel_shock_level": "1550bbf2bded16bb609b5f52669f0b29e6fdf0d7a0898bfb82c5c51a9db3124a",
-    "channel_level": "dc4751c12f53123084e1d827851c8fbedf4d214f0513f4c046852697889e3cb4",
-    "saturation_scale": "70287d636760848f2f81e503695a23449e0c4611601ef4863eba74ec3b4ba155",
+    "channel_level": "c8dc59f99e57ad30039969921e10ac444de23336f162f7143de84c5e9d055659",
+    "saturation_scale": "11cb93d14c48fac9dba725594d7ab86e91b887b0dde918ffa4712ced084ad7b8",
     "adstock_family": "b8b595535043fbd9bee4855aa2adc923c2a7cf6c5d91fd9b538f1779223d66c8",
-    "adstock_alpha": "7f6a515b0ec2e49cff4ef09be52324f3b4209b81888f3b9f0231b71c2ae07ec2",
-    "weibull_lam": "24767f169da9b06c638e12aedbcf929e0cb7e8515fdf032ac8b0604796d4bf08",
-    "weibull_k": "d799a934d9ac7e843eb624fef3ca42e8b48e0cef0dd2987a838de9cd6bb4ce7a",
-    "signal_metrics": "97283a4f1011aca9a6306edae61093907f7481574d375b0d55fbb08164373d8e",
+    "adstock_alpha": "87b6928e3d6732651243a012ea29d6d9d499aa3a245693382e6e567075089e4a",
+    "weibull_lam": "52355c719e7345dee371e28a8273b58e0a2de9212785736c9b42a858c0eea0a9",
+    "weibull_k": "b157e14238bdbcef6f87a1bcdb9ea22312dc4eca9a0c5be514274afd47050118",
+    "signal_metrics": "5cd58dd8dcf6b1ec40ad5cf25b176e87e31cb04edb0f1894a6018aba0bef5814",
     "signal_metric_valid": "f1ecbab717272a25f5802cb87be6fd3b1bdd88cede7e75a141f74ebacf212b16",
+    "sales_noise": "6e95377b5e6f66ce17a3b621e72b0b27c7ecd5d7d4e3ada9b277ccef14e8413c",
 }
-
 EXPECTED_DEFAULT_FREE_RVS = (
     "rw_z_mean",
     "rw_z_std",
@@ -230,7 +229,7 @@ def test_additive_corpus_matches_default_outcome_noise_hashes():
     assert _corpus_hashes() == EXPECTED_CORPUS_HASHES
 
 
-def test_disabling_control_texture_reproduces_the_pre_texture_corpus_bytes():
+def test_disabling_control_texture_is_rng_inert():
     """Control texture must be RNG-inert when switched off.
 
     Its parameters degenerate to constants and its noise RVs reach no output,
@@ -243,6 +242,18 @@ def test_disabling_control_texture_reproduces_the_pre_texture_corpus_bytes():
         control_pulse_amp_range=(0.0, 0.0),
     )
     assert hashes == EXPECTED_UNTEXTURED_CONTROL_HASHES
+
+
+def test_the_intercept_floor_is_a_pure_clip_and_consumes_no_rng():
+    """A floor must clip, never re-seed.
+
+    ``pt.maximum`` adds no random variable and no graph output, so a floor that
+    never binds has to reproduce the unfloored corpus byte for byte. If this
+    drifts, the floor is silently changing worlds it was supposed to leave
+    alone — which is what would make it unsafe to enable on an existing recipe.
+    """
+    floored = _corpus_hashes(baseline_floor=0.0)
+    assert floored == EXPECTED_CORPUS_HASHES
 
 
 def test_default_world_model_free_rvs_match_outcome_noise_contract():

@@ -128,6 +128,19 @@ def test_control_pulses_require_a_nonzero_amplitude():
         SCMPrior(control_pulse_prob_range=(0.1, 0.2), control_pulse_amp_range=(0.0, 0.0)).validate()
 
 
+def test_baseline_floor_defaults_to_none_and_accepts_a_finite_value():
+    assert SCMPrior().baseline_floor is None
+    SCMPrior().validate()
+    SCMPrior(baseline_floor=0.0).validate()
+    SCMPrior(baseline_floor=-2.5).validate()
+
+
+@pytest.mark.parametrize("value", (np.nan, np.inf, -np.inf, True, "0", [0.0]))
+def test_baseline_floor_must_be_none_or_finite(value):
+    with pytest.raises(ValueError, match="baseline_floor must be None or a finite number"):
+        SCMPrior(baseline_floor=value).validate()
+
+
 def test_family_probability_defaults_are_exact_and_independent():
     first = SCMPrior()
     second = SCMPrior()

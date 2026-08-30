@@ -49,10 +49,11 @@ def test_telescoping_split_sums_to_indirect(corpus):
 
 
 def test_full_per_node_additivity(corpus):
-    """baseline_intrinsic + Σ confounder + Σ control + Σ direct + Σ by_source == sales."""
+    """baseline_intrinsic + sales_noise + Σ confounder + Σ control + Σ direct + Σ by_source == sales."""
     f = lambda k: corpus[k].astype(np.float64)  # noqa: E731
     recon = (
         f("baseline_intrinsic")
+        + f("sales_noise")
         + f("confounder_contribution").sum(-1)
         + f("control_contribution").sum(-1)
         + f("contributions_raw").sum(-1)
@@ -75,6 +76,7 @@ def test_diagnostics_report_persisted_identity_error(corpus):
     ).max()
     expected_full = np.abs(
         corpus["baseline_intrinsic"]
+        + corpus["sales_noise"]
         + corpus["confounder_contribution"].sum(axis=-1)
         + corpus["control_contribution"].sum(axis=-1)
         + corpus["contributions_raw"].sum(axis=-1)
@@ -83,6 +85,7 @@ def test_diagnostics_report_persisted_identity_error(corpus):
     ).max()
     expected_baseline = np.abs(
         corpus["baseline_intrinsic"]
+        + corpus["sales_noise"]
         + corpus["confounder_contribution"].sum(axis=-1)
         + corpus["control_contribution"].sum(axis=-1)
         - corpus["baseline_raw"]

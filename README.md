@@ -111,7 +111,7 @@ Every corpus satisfies, exactly (float64 pre-storage):
 
 ```
 sales = baseline + Σ direct_contributions + indirect_effects
-      = baseline_intrinsic + Σ confounder + Σ control + Σ direct + Σ indirect_by_source
+      = baseline_intrinsic + sales_noise + Σ confounder + Σ control + Σ direct + Σ indirect_by_source
 ```
 
 ## Foundation: the structural causal model
@@ -174,11 +174,12 @@ Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + F_m          (control)
 E_k = RW_k + σ_k·ε_tk + a_k·b_tk,  b_tk ~ Bernoulli(p_k)    (channel's own exogenous drive)
 C_k = softplus( Σ_j w_jk·D_j + Σ_m v_mk·Z_m
                 + Σ_{k'<k} α_{k'k}·C_{k'} + E_k )            (channel spend — non-negative)
-B   = Σ_j δ_j·D_j + Σ_m ρ_m·Z_m + RW_B                      (baseline)
-Y   = B + Σ_k g_cy·β_k·f_k(C_k) + RW_Y                      (sales)
+B   = max(RW_B, baseline_floor)                             (intercept — floored, ≥ floor)
+Y   = B + Σ_j δ_j·D_j + Σ_m ρ_m·Z_m
+          + Σ_k g_cy·β_k·f_k(C_k) + RW_Y                     (sales)
 ```
 
-Two structural facts do the heavy lifting:
+Three structural facts do the heavy lifting:
 
 1. **Only the direct `C → Y` path is nonlinear.** `f_k` is that channel's
    adstock ⊙ saturation response. **Every other edge is linear** — all the
@@ -198,6 +199,21 @@ Two structural facts do the heavy lifting:
    (i.e. `E[F_m − RW_m] = 0`). Control
    magnitudes are drawn relative to the control's own walk std; channel
    magnitudes relative to the channel's level.
+3. **The intercept is separate, and may be floored.** `B` carries no parents:
+   latent demand and the controls enter `Y` *directly*, so `Y` reads as the
+   equation a standard MMM assumes — intercept + linear controls + nonlinear
+   media + noise — and `B` is reported on its own as `baseline_intrinsic`, with
+   the observation noise in its own `sales_noise` column. `baseline_floor`
+   censors that intercept (`max(RW_B, floor)`), so it is `≥ floor` by
+   construction and may sit exactly *at* it. Keeping the parents outside `B` is
+   what makes the floor safe: it clips one additive term, leaving
+   `control_contribution[:, m] = g_zb[m]·ρ[m]·Z[:, m]` exact.
+
+   **Sales is never censored.** Clamping `Y` would censor the *observation*, and
+   every additive-Gaussian estimator — including this package's own oracle —
+   would be misspecified. Non-negative sales is enforced by the
+   [realism filter](#the-realism-filter) instead. Measured headroom on the
+   shipped prior: sales sits 28–83 observation-noise σ above zero.
 
 ## How a world is created
 
@@ -341,7 +357,8 @@ Finally, the baseline itself splits per node, so the corpus also satisfies the
 fully-decomposed identity:
 
 ```text
-sales = baseline_intrinsic                 (organic level, walks only)
+sales = baseline_intrinsic                 (the intercept B, floored if configured)
+      + sales_noise                        (iid observation noise RW_Y)
       + Σ_j confounder_contribution_j      (D → B)
       + Σ_m control_contribution_m         (Z → B)
       + Σ_k contributions_k                (direct C → Y)
@@ -529,7 +546,7 @@ is the packed DAG width, and `P` is the locked prior-conditioning width.
 | `spend_raw`, `spend_norm`, `spend_share` | `(n_tasks, n_time_steps, n_treatments)` | `float32` |
 | `spend_means`, `channel_level`, `saturation_scale`, `adstock_alpha`, `weibull_lam`, `weibull_k` | `(n_tasks, n_treatments)` | `float32` |
 | `controls` | `(n_tasks, n_time_steps, n_covariates)` | `float32` |
-| `sales_raw`, `sales_norm`, `baseline_raw`, `baseline_intrinsic`, `indirect_effects` | `(n_tasks, n_time_steps)` | `float32` |
+| `sales_raw`, `sales_norm`, `baseline_raw`, `baseline_intrinsic`, `sales_noise`, `indirect_effects` | `(n_tasks, n_time_steps)` | `float32` |
 | `sales_scale`, `confounding_strength` | `(n_tasks,)` | `float32` |
 | `contributions_raw` | `(n_tasks, n_time_steps, n_treatments)` | `float32` |
 | `control_contribution` | `(n_tasks, n_time_steps, n_covariates)` | `float32` |

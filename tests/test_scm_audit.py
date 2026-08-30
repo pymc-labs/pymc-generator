@@ -10,6 +10,7 @@ import prior_generator.symbolic_graph as symbolic_graph
 from prior_generator import make_scm_prior, sample_scm
 from prior_generator.describe import describe_scm
 from prior_generator.random_walk import _kernel_width
+from prior_generator.sampler import _additive_task_ok
 from prior_generator.symbolic_graph import build_symbolic_graph
 from prior_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
@@ -43,6 +44,7 @@ _CORE_OUTPUTS = (
     "channels_base",
     "baseline",
     "baseline_intrinsic",
+    "sales_noise",
     "contributions",
     "contributions_observed",
     "indirect_effects",
@@ -488,7 +490,7 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     assert "smoothness_y" not in world.extras["structural"]
     assert "smoothness" not in world.params["rw_y"]
     assert "rw_smoothness_max_weeks" not in world.params["rw_y"]
-    assert set(world.equation_parameters["Y"]) == {"iid_noise"}
+    assert set(world.equation_parameters["Y"]) == {"iid_noise"}  # edgeless: no Y parents
     assert "smoothness" not in world.equation_parameters["Y"]["iid_noise"]
     assert "RW_full(eps_y" not in world.equations["Y"]
 
@@ -502,11 +504,19 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     expected_change = std * (
         replacement_eps_y[cfg.adstock_burn_in :] - world.exogenous["eps_y"][cfg.adstock_burn_in :]
     )
+    # The noise is its own column now, so it moves ``sales_noise`` and
+    # ``baseline`` pointwise and leaves the intercept target alone.
     np.testing.assert_allclose(
-        replay["baseline_intrinsic"] - world.data["baseline_intrinsic"],
+        replay["sales_noise"] - world.data["sales_noise"],
         expected_change,
         rtol=0.0,
         atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        replay["baseline"] - world.data["baseline"], expected_change, rtol=0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        replay["baseline_intrinsic"], world.data["baseline_intrinsic"], rtol=0.0, atol=1e-12
     )
 
 
@@ -738,6 +748,130 @@ def test_control_texture_leaves_the_parameter_only_saturation_anchor_exact():
         @ (z_levels + pulse_mean),
     )
     assert np.abs(mirrored - expected).max() > 1e-3
+
+
+def test_intercept_is_censored_at_the_floor_and_the_parents_stay_exact():
+    """A floored intercept hits zero and never goes below it.
+
+    The floor clips ONE additive term, so every other decomposition column is
+    untouched: the identity still closes and the per-node baseline terms stay
+    exactly ``coefficient x node``. Flooring a sum that contained D and Z could
+    not offer either guarantee.
+    """
+    # Low intercept level + a wide absolute-mode walk, so the floor really binds.
+    # Live zb/db edges too, so the "parents stay exact" check is not vacuous.
+    stress = {
+        "outcome_std_mode": "absolute",
+        "rw_baseline_mean_range": (0.5, 1.5),
+        "rw_baseline_std_sigma": 1.5,
+        "rw_sales_std_sigma": 0.05,
+        "n_time_steps": 52,
+        "adstock_burn_in": 4,
+        "l_max": 4,
+        "edge_budget": {
+            "cy": (2, 2),
+            "dc": (0, 0),
+            "dz": (0, 0),
+            "db": (1, 1),
+            "zb": (2, 2),
+            "zc": (0, 0),
+            "cc": (0, 0),
+            "zz": (0, 0),
+        },
+    }
+    signed_cfg = _config(**stress)
+    floored_cfg = _config(baseline_floor=0.0, **stress)
+    for seed in range(40, 60):
+        signed = sample_scm(signed_cfg, seed=seed, max_eps_draws=40)
+        signed_intercept = np.asarray(signed.data["baseline_intrinsic"], dtype=float)
+        if (signed_intercept < 0.0).any():
+            break
+    else:  # pragma: no cover - the stress fixture is calibrated to dip
+        pytest.fail("no seed produced a negative intercept; the floor would prove nothing")
+    floored = sample_scm(floored_cfg, seed=seed, max_eps_draws=40)
+    floored_intercept = np.asarray(floored.data["baseline_intrinsic"], dtype=float)
+    assert (floored_intercept >= 0.0).all()
+    assert (floored_intercept == 0.0).any(), "a censored walk must be able to sit AT the floor"
+
+    # Exactly a clip of the same path: unclipped weeks are bit-identical.
+    unclipped = signed_intercept > 0.0
+    np.testing.assert_allclose(
+        floored_intercept[unclipped], signed_intercept[unclipped], rtol=0.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        floored_intercept, np.maximum(signed_intercept, 0.0), rtol=0.0, atol=1e-12
+    )
+
+    # The floor does not disturb any other column.
+    assert floored.identity_error() < 1e-9
+    params, g = floored.params, floored.g
+    for m in range(floored.n_covariates):
+        expected = (
+            float(np.asarray(g["g_zb"])[m])
+            * float(np.asarray(params["rho_zb"])[m])
+            * np.asarray(floored.data["controls"], dtype=float)[:, m]
+        )
+        np.testing.assert_allclose(
+            np.asarray(floored.data["control_contribution"], dtype=float)[:, m],
+            expected,
+            rtol=0.0,
+            atol=1e-12,
+        )
+
+
+def test_sales_is_never_censored_and_the_filter_carries_non_negativity():
+    """Y stays uncensored: a clamp there would censor the OBSERVATION.
+
+    ``sales == baseline + Σ observed contributions`` exactly, with no clip, so
+    every world stays inside the additive function class an MMM likelihood can
+    represent. Non-negative sales is the acceptance filter's job.
+    """
+    world = sample_scm(_config(baseline_floor=0.0), seed=51, max_eps_draws=40)
+    d = world.data
+    np.testing.assert_allclose(
+        np.asarray(d["sales"], dtype=float),
+        np.asarray(d["baseline"], dtype=float)
+        + np.asarray(d["contributions_observed"], dtype=float).sum(1),
+        rtol=0.0,
+        atol=1e-12,
+    )
+    assert (np.asarray(d["sales"], dtype=float) >= 0.0).all()
+    # The filter is what rejects a negative-sales draw, so it must still bite.
+    assert not _additive_task_ok(
+        spend=np.asarray(d["channels"], dtype=float),
+        sales=np.asarray(d["sales"], dtype=float) - float(d["sales"].max()) - 1.0,
+        arrays={"sales": np.asarray(d["sales"], dtype=float)},
+        g_cy_active=world.g["g_cy"],
+        cv_floor=0.0,
+    )
+
+
+def test_intercept_and_sales_noise_are_separate_decomposition_columns():
+    """``baseline_intrinsic`` is the intercept ALONE; the noise is its own column."""
+    world = sample_scm(_config(), seed=57, max_eps_draws=40)
+    d, params = world.data, world.params
+    burn_in = world.cfg.adstock_burn_in
+    expected_noise = (
+        float(np.asarray(params["rw_y"]["std"])[0])
+        * np.asarray(world.exogenous["eps_y"], dtype=float)[burn_in:]
+    )
+    np.testing.assert_allclose(
+        np.asarray(d["sales_noise"], dtype=float), expected_noise, rtol=0.0, atol=1e-12
+    )
+    # intrinsic carries no observation noise any more, and no parent terms.
+    assert not np.allclose(
+        np.asarray(d["baseline_intrinsic"], dtype=float),
+        np.asarray(d["baseline_intrinsic"], dtype=float) + expected_noise,
+    )
+    np.testing.assert_allclose(
+        np.asarray(d["baseline"], dtype=float),
+        np.asarray(d["baseline_intrinsic"], dtype=float)
+        + np.asarray(d["sales_noise"], dtype=float)
+        + np.asarray(d["control_contribution"], dtype=float).sum(1)
+        + np.asarray(d["confounder_contribution"], dtype=float).sum(1),
+        rtol=0.0,
+        atol=1e-12,
+    )
 
 
 def test_disabled_control_texture_renders_the_pre_texture_control_equation():
