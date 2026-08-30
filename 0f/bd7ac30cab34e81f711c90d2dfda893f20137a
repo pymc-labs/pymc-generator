@@ -1,0 +1,58 @@
+CHANGELOG.md
+  h_d36ca8649a0e95 13-48
+README.md
+  h_d36ca8649a0e95 114,177-179,182,202-216,360-361,549
+docs/examples/index.ipynb
+  h_d36ca8649a0e95 256-259
+docs/guide/decomposition.md
+  h_d36ca8649a0e95 119-120
+docs/guide/foundation.md
+  h_d36ca8649a0e95 72-73,118-154
+docs/guide/worlds.md
+  h_d36ca8649a0e95 47-48
+docs/reference/config.md
+  h_d36ca8649a0e95 63-109
+docs_gen/build_examples_nb.py
+  h_d36ca8649a0e95 146-149
+prior_generator/data_generator.py
+  h_d36ca8649a0e95 264,367,449,1009,1025,1035
+prior_generator/sampler.py
+  h_d36ca8649a0e95 248-267,600-607,1328,1339,1492-1494,1626-1630,1636-1638,1800,1842,2039
+prior_generator/symbolic_graph.py
+  h_d36ca8649a0e95 14-25,476,480,483-486,715-723,727-728,731,818-830,833-834,836-841,858-860
+prior_generator/world_model.py
+  h_d36ca8649a0e95 624-625,1332-1339,1376-1379
+prior_generator/worlds.py
+  h_d36ca8649a0e95 177,500-502,505,508,510-511,513-514,675-679,691-693,695-701,878
+tests/test_channel_shocks.py
+  h_d36ca8649a0e95 209,216,270
+tests/test_config.py
+  h_d36ca8649a0e95 131-143
+tests/test_decomposition.py
+  h_d36ca8649a0e95 52,56,79,88
+tests/test_identifiability.py
+  h_d36ca8649a0e95 30-37,39-44,48-52,61,63-66,74-75,77-80,82,85-89,91-96,100-104,113,115-118,126-127,129-132,134,232,247-258
+tests/test_oracle.py
+  h_d36ca8649a0e95 154-185
+tests/test_schema_io.py
+  h_d36ca8649a0e95 101,253
+tests/test_scm_audit.py
+  h_d36ca8649a0e95 13,47,493,507-508,510,515-520,753-876
+tests/test_signal_diagnostics.py
+  h_d36ca8649a0e95 416
+tests/test_world_model.py
+  h_d36ca8649a0e95 50,65,79
+tests/test_world_model_template.py
+  h_d36ca8649a0e95 456
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "0fbd7ac30cab34e81f711c90d2dfda893f20137a",
+  "prompts": {},
+  "humans": {
+    "h_d36ca8649a0e95": {
+      "author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
