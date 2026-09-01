@@ -40,6 +40,7 @@ cells = [
         "| 7 | controls and interactions: `Z→B`, `Z→C`, `C→C` |\n"
         "| 8 | hidden confounding: `D→C` with `D→B` |\n"
         "| 9 | a corpus of many worlds, validated |\n"
+        "| 10 | how large is everything? outcome distributions across worlds |\n"
         "\n"
         "> Every cell below is executed when the docs are built — the outputs and\n"
         "> figures you see are real."
@@ -600,8 +601,93 @@ cells = [
         "    print(' ', line)\n"
         "print('\\ngate passes:', passed)"
     ),
+    # ---------------------------------------------------------------- 10
     md(
-        "## 10 · Persist a corpus and an auditable bundle\n"
+        "## 10 · How large is everything?\n"
+        "\n"
+        "Everything above describes a corpus in **parameter** space (which arrows,\n"
+        "which coefficients) or **signal** space (is the target textured enough to\n"
+        "learn). Neither answers the magnitude question you ask of a prior before\n"
+        "trusting it: *how large are the outcomes, and how large are the pieces that\n"
+        "add up to them?*\n"
+        "\n"
+        "`outcome_distributions` pools every world along the **quantity** axis. Each\n"
+        "row below is one quantity over all worlds: `units` counts the pooled units,\n"
+        "`zero` is the fraction of units that are identically zero, and the\n"
+        "quantiles describe the distribution."
+    ),
+    code("dist = pg.outcome_distributions(corpus)\nprint(dist.table())"),
+    md(
+        "A **unit** is one world for a scalar quantity (`sales`, `baseline`, ...)\n"
+        "and one `(world, channel)` / `(world, control)` / `(world, latent)` pair for\n"
+        "a column quantity. Padded inactive columns are dropped, so no zero padding\n"
+        "reaches a statistic.\n"
+        "\n"
+        "The same object in **share** units answers the attribution-size question:\n"
+        "`unit_share = Σ_t value / Σ_t sales`. Because the decomposition is exact,\n"
+        "these shares are a real budget — the additive pieces sum to 1.0 per world."
+    ),
+    code(
+        "print(dist.table(of='share'))\n"
+        "\n"
+        "budget = dist.additive_share_total()\n"
+        "print(f'\\nadditive shares sum to {budget.min():.6f} .. {budget.max():.6f} '\n"
+        "      'per world (exact decomposition)')"
+    ),
+    md(
+        "Structurally-null channels — active, spend observed, no `C→Y` arrow — stay\n"
+        "in as exact zeros rather than being silently filtered, because they are a\n"
+        "real outcome of the prior and they do drag every contribution statistic\n"
+        "toward zero. `zero_unit_fraction` reports them; `select` conditions on\n"
+        "units when you want direct channels only."
+    ),
+    code(
+        "media = dist['channel_contribution']\n"
+        "direct = media.select(media.unit_max > 0)\n"
+        "print(f'active channels        : {media.n_units}'\n"
+        "      f' ({media.zero_unit_fraction:.0%} have no C->Y arrow)')\n"
+        'print(f\'median share, all      : {media.quantiles(of="share")["q50"]:.3f}\')\n'
+        'print(f\'median share, direct   : {direct.quantiles(of="share")["q50"]:.3f}\')\n'
+        "\n"
+        "print('\\nper-world media share (Σ direct + indirect) / Σ sales:')\n"
+        "total_media = dist['media_contribution']\n"
+        "for level in (0.05, 0.5, 0.95):\n"
+        "    q = np.quantile(total_media.unit_share, level)\n"
+        "    print(f'  q{level * 100:>4.0f}: {q:.3f}')"
+    ),
+    md(
+        "Conditioning is a world row mask, not a separate API — anything you can\n"
+        "express over corpus rows works, e.g. one cell of the corpus at a time."
+    ),
+    code(
+        "for cell in np.unique(corpus['cell_id'])[:3]:\n"
+        "    d = pg.outcome_distributions(corpus, worlds=corpus['cell_id'] == cell)\n"
+        '    print(f"cell {cell}: {d.n_worlds} worlds"\n'
+        "          f\" | median Y {d['sales'].pooled['q50']:7.2f}\"\n"
+        "          f\" | media share {np.median(d['media_contribution'].unit_share):.3f}\")"
+    ),
+    md(
+        "Worlds have arbitrary sales levels, so pooled *raw* values mix scales.\n"
+        "`normalize='sales_scale'` divides every Y-scale quantity by the world's own\n"
+        "scale; shares are ratios and never move. The histogram grid shows the\n"
+        "whole set of worlds at once — spread in outcome space, not parameter space."
+    ),
+    code(
+        "fig_path = os.path.join(tempfile.mkdtemp(), 'outcomes.png')\n"
+        "viz.plot_outcome_distributions(dist, fig_path, of='share')\n"
+        "display(Image(filename=fig_path))"
+    ),
+    md(
+        "`dist.summary()` is JSON-ready for a report, and `dist.to_frame()` is a\n"
+        "long-form pandas table with one row per unit."
+    ),
+    code(
+        "frame = dist.to_frame()\n"
+        "print(frame.groupby('quantity')[['mean', 'std', 'share']]\n"
+        "      .median(numeric_only=True).round(4).to_string())"
+    ),
+    md(
+        "## 11 · Persist a corpus and an auditable bundle\n"
         "\n"
         "`save_corpus` / `load_corpus` round-trip a compressed `.npz` that needs only\n"
         "numpy to read. `write_scm_bundle` writes one world as a human-auditable\n"
@@ -633,6 +719,8 @@ cells = [
         "   ratio — the axis that decides whether any model can recover a world.\n"
         "7. `zc` and `cc` add observed confounding and channel interaction.\n"
         "8. `dc` + `db` (or `confounding_strength_range`) break causal sufficiency.\n"
+        "9. `outcome_distributions` reads the corpus in outcome space: how large Y\n"
+        "   gets, and what share of it each cause accounts for.\n"
         "\n"
         "Next: [Simple configurable corpus](simple-model.ipynb) fits a real MMM to one\n"
         "of these worlds, shows where it fails, and compares it against the posterior\n"
