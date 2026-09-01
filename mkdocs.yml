@@ -170,3 +170,4 @@ nav:
       - Named scenarios: reference/scenarios.md
       - Visualization: reference/viz.md
       - Signal diagnostics: reference/signal.md
+      - Outcome distributions: reference/outcomes.md

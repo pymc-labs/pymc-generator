@@ -14,3 +14,4 @@ backend first (`matplotlib.use("Agg")`).
         - plot_timeseries
         - plot_decomposition
         - plot_channels
+        - plot_outcome_distributions

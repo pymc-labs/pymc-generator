@@ -10,6 +10,30 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **Outcome-space distributions** (`outcome_distributions`). Every existing
+  diagnostic describes a corpus in PARAMETER space (edge marginals, drawn
+  coefficients) or SIGNAL space (per-channel CV, Spearman, warmup ratio).
+  Neither answers the magnitude question: how large are the outcomes, and how
+  large are the pieces that add up to them? `outcome_distributions(corpus)` —
+  or a list of `SCM` worlds — pools every world along the QUANTITY axis and
+  returns, per quantity (sales, baseline, per-node baseline components,
+  per-channel contribution, indirect effects by source, total media, spend,
+  controls, latent demand): every drawn value (`series` / `.values`), per-unit
+  stats over time (`unit_mean/std/min/max/total`, whose spread IS the
+  across-world spread), and `unit_share = Σ_t value / Σ_t sales`. A unit is one
+  world for a scalar quantity, one `(world, column)` pair for a column
+  quantity; padded inactive columns are dropped, and structurally-null channels
+  are kept as exact zeros and reported via `zero_unit_fraction` instead of
+  being silently filtered. Because the decomposition is exact, the additive
+  quantities' shares are a real budget: `additive_share_total()` is 1.0 per
+  world. Conditioning stays a row mask (`worlds=corpus["cell_id"] == 3`), unit
+  filtering is `QuantityDistribution.select`, and `normalize="sales_scale"` /
+  `"sales_mean"` makes pooled magnitudes comparable across worlds without
+  touching shares. Reports: `table(of=...)` (text), `summary()` (JSON-ready),
+  `to_frame()` (long-form pandas), and `viz.plot_outcome_distributions` (a
+  histogram grid, constant panels skipped). Purely an analysis API — nothing
+  in the persisted corpus or its `diagnostics` changed.
+
 - **The intercept is its own node, and can be floored** (`baseline_floor`).
   `B` no longer absorbs its parents: latent demand and the controls attach
   DIRECTLY to `Y`, so the sales equation is literally the one a standard MMM

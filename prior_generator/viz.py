@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from .outcomes import OutcomeDistributions, QuantityDistribution, StatName
 from .worlds import SCM, channel_role, edges_with_coeffs, mechanism_label, node_status
 
 # Validated categorical palette — slots are assigned in FIXED order per entity
@@ -296,6 +297,65 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
     fig.suptitle(
         f"{title} — per-channel spend vs true contribution (mean=1)", fontsize=11, color=INK
     )
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
+def plot_outcome_distributions(
+    dist: OutcomeDistributions,
+    path: str,
+    *,
+    of: StatName = "value",
+    bins: int = 60,
+    title: str | None = None,
+) -> None:
+    """Histogram grid over the QUANTITY axis: how large every outcome gets.
+
+    One panel per quantity of an :func:`~prior_generator.outcomes.outcome_distributions`
+    result. ``of="value"`` pools every drawn value across worlds and time;
+    ``of="mean"`` shows the across-world spread of per-world levels;
+    ``of="share"`` shows the share-of-sales budget (media/baseline/noise).
+
+    Quantities with no spread under the chosen statistic are skipped — e.g.
+    ``sales`` is identically 1.0 in the share budget and would waste a panel.
+    """
+    import matplotlib.pyplot as plt
+
+    panels: list[tuple[QuantityDistribution, np.ndarray]] = []
+    for d in dist.quantities.values():
+        if of == "share" and not d.on_y_scale:
+            continue
+        x = np.asarray(d.stat(of), dtype=np.float64).ravel()
+        x = x[np.isfinite(x)]
+        if x.size and x.min() < x.max():
+            panels.append((d, x))
+    if not panels:
+        raise ValueError(f"no quantity has any spread for of={of!r}")
+    ncols = min(3, len(panels))
+    nrows = int(np.ceil(len(panels) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 2.7 * nrows))
+    axes = np.atleast_1d(axes).ravel()
+    for i, (d, x) in enumerate(panels):
+        ax = axes[i]
+        median = float(np.median(x))
+        ax.hist(x, bins=bins, color=PALETTE[i % len(PALETTE)], alpha=0.85, edgecolor="none")
+        ax.axvline(median, color=INK, lw=1.0, ls="--")
+        ax.set_title(
+            f"{d.name} — n={x.size:,} — median {median:,.3g}",
+            fontsize=9,
+            color=INK,
+            loc="left",
+        )
+        ax.set_ylabel("count", fontsize=8, color=MUTED)
+        _style_ax(ax)
+    for ax in axes[len(panels) :]:
+        ax.axis("off")
+    scale = "" if dist.normalize == "none" else f" (normalize={dist.normalize})"
+    head = title or (
+        f"outcome distributions — {of} — {dist.n_worlds} worlds × {dist.n_time_steps} steps{scale}"
+    )
+    fig.suptitle(head, fontsize=11, color=INK)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)

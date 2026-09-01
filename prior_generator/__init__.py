@@ -38,6 +38,11 @@ _LAZY_IMPORTS = {
     "sample_structure": (".world_model", "sample_structure"),
     "sample_prior_cond": (".world_model", "sample_prior_cond"),
     "draw_worlds": (".world_model", "draw_worlds"),
+    # outcome-space (quantity axis) distributions across worlds
+    "outcome_distributions": (".outcomes", "outcome_distributions"),
+    "OutcomeDistributions": (".outcomes", "OutcomeDistributions"),
+    "QuantityDistribution": (".outcomes", "QuantityDistribution"),
+    "OUTCOME_QUANTITIES": (".outcomes", "OUTCOME_QUANTITIES"),
     "describe_scm": (".describe", "describe_scm"),
     "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
@@ -58,10 +63,13 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "OUTCOME_QUANTITIES",
     "SCENARIOS",
     "SCMPrior",
     "DataGenerator",
     "SCM",
+    "OutcomeDistributions",
+    "QuantityDistribution",
     "SIGNAL_METRIC_LAYOUT",
     "SIGNAL_METRIC_VERSION",
     "__version__",
@@ -69,6 +77,7 @@ __all__ = [
     "build_world_model",
     "describe_scm",
     "draw_worlds",
+    "outcome_distributions",
     "sample_prior_predictive",
     "load_corpus",
     "make_scm_prior",

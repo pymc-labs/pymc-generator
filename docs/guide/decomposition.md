@@ -152,3 +152,16 @@ When you generate a [corpus](corpus.md), all four invariants — the additive
 identity, the telescoping split, the full per-node decomposition, and
 zero-padding of inactive slots — are computed at generation time and reported in
 `corpus["diagnostics"]`, and asserted directly in the test suite.
+
+## How large is each piece, across every world?
+
+The identity holds per world, per week. To see the *magnitudes* — how large
+sales gets, and what fraction of it each component accounts for, pooled over a
+whole corpus — use
+[`outcome_distributions`](../reference/outcomes.md). Because the decomposition
+is exact, the shares it reports are a true budget summing to 1.0 per world.
+
+```python
+dist = pg.outcome_distributions(corpus)
+print(dist.table(of="share"))
+```

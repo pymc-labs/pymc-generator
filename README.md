@@ -40,6 +40,7 @@ it locally.
 - [Foundation: the structural causal model](#foundation-the-structural-causal-model)
 - [How a world is created](#how-a-world-is-created)
 - [The exact decomposition](#the-exact-decomposition)
+- [Outcome distributions: how large is everything?](#outcome-distributions-how-large-is-everything)
 - [Assumptions and design choices](#assumptions-and-design-choices)
 - [Dialing complexity](#dialing-complexity)
 - [Outputs](#outputs)
@@ -375,6 +376,63 @@ All four invariants are computed at generation time and reported in
 `full_decomposition_…`, `baseline_decomposition_…`); the test suite asserts them
 directly.
 
+## Outcome distributions: how large is everything?
+
+The diagnostics above describe a corpus in *parameter* space (edge marginals,
+drawn coefficients) or *signal* space (per-channel CV, Spearman). Neither
+answers the magnitude question you ask of a prior before trusting it: **how
+large are the outcomes, and how large are the pieces that add up to them?**
+
+`outcome_distributions` pools every world along the **quantity** axis instead:
+
+```python
+dist = pg.outcome_distributions(corpus)      # or a list of SCM worlds
+
+print(dist.table())                          # pooled value quantiles
+print(dist.table(of="share"))                # the share-of-sales budget
+print(dist.table(of="mean"))                 # across-world spread of levels
+
+y      = dist["sales"].values                # every Y value, all worlds
+media  = dist["channel_contribution"]        # one unit per (world, channel)
+media.quantiles(of="share")                  # how big media effects get
+```
+
+```text
+outcome distributions — share — 100 worlds × 104 steps
+quantity                 units  zero       mean         q5        q50        q95
+--------------------------------------------------------------------------------
+sales                      100  0.00      1.000      1.000      1.000      1.000
+baseline                   100  0.00      0.606      0.410      0.620      0.756
+control_contribution       300  0.33   9.86e-04     -0.021      0.000      0.025
+channel_contribution       500  0.16      0.076      0.000      0.074      0.167
+media_contribution         100  0.00      0.394      0.244      0.380      0.590
+```
+
+A **unit** is one world for a scalar quantity (`sales`, `baseline`, …) and one
+`(world, column)` pair for a column quantity (per channel / control / latent /
+indirect source). Padded inactive columns are dropped; a structurally-null
+channel stays in as an exact zero and is reported by `zero_unit_fraction` (0.16
+above — 16% of active channels have no `C→Y` edge) rather than silently
+filtered. Each quantity carries
+
+- `series` — `(n_units, n_time_steps)` of all values, so `.values` is the flat
+  distribution of "all values for Y";
+- `unit_mean` / `unit_std` / `unit_min` / `unit_max` / `unit_total` — per-unit
+  stats over time, whose spread **is** the across-world spread;
+- `unit_share` — `Σ_t value / Σ_t sales`, for every quantity in sales units.
+
+Because the decomposition above is exact, the shares of the additive
+quantities are a true budget: `dist.additive_share_total()` is 1.0 per world.
+
+Conditioning is a row mask, not a new API — `worlds=corpus["cell_id"] == 3`,
+`worlds=corpus["n_treatments_active"] > 4` — and `select` conditions on units,
+e.g. direct channels only: `media.select(media.unit_max > 0)`. Worlds have
+arbitrary sales levels, so `normalize="sales_scale"` (or `"sales_mean"`) makes
+pooled magnitudes comparable across worlds; shares are ratios and never move.
+`dist.summary()` is JSON-ready, `dist.to_frame()` is a long-form pandas table,
+and `viz.plot_outcome_distributions(dist, "outcomes.png", of="share")` renders
+the histogram grid.
+
 ## Assumptions and design choices
 
 These are the modeling commitments baked into the generator. They are deliberate,
@@ -634,6 +692,9 @@ scm = pg.sample_scm(sc.prior(n_time_steps=104, seed=0), seed=0,
 | `describe_scm` | Plain-text description of a world. |
 | `write_scm_bundle` | Write one world's auditable folder. |
 | `write_scenario_bundles` | Write the full five-scenario inspection set (the CLI's datasets). |
+| `outcome_distributions` | Pool worlds along the quantity axis: outcome/contribution magnitudes and the share-of-sales budget. |
+| `OutcomeDistributions` / `QuantityDistribution` | The returned report and one quantity's distribution. |
+| `OUTCOME_QUANTITIES` | The reported quantity names, in report order. |
 
 The public surface reads mathematically: **treatments** (`n_treatments`, media
 channels), **covariates** (`n_covariates`, controls), and **latent** factors

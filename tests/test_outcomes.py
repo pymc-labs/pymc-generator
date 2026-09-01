@@ -1,0 +1,320 @@
+"""Outcome-space distributions: masking, exactness of the share budget, adapters."""
+
+from __future__ import annotations
+
+import json
+
+import numpy as np
+import pytest
+
+import prior_generator as pg
+from prior_generator.outcomes import (
+    ADDITIVE_QUANTITIES,
+    OUTCOME_QUANTITIES,
+    outcome_distributions,
+)
+
+
+@pytest.fixture(scope="module")
+def corpus():
+    cfg = pg.make_scm_prior(
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=48,
+        n_cells=2,
+        draws_per_cell=4,
+        seed=11,
+        edge_budget={"cy": (3, 4), "cc": (1, 2), "zc": (1, 2), "dc": (1, 2)},
+    )
+    return pg.sample_prior_predictive(cfg)
+
+
+@pytest.fixture(scope="module")
+def dist(corpus):
+    return outcome_distributions(corpus)
+
+
+# -- structure ---------------------------------------------------------------
+
+
+def test_every_quantity_present(dist):
+    assert dist.names == OUTCOME_QUANTITIES
+    assert len(dist) == len(OUTCOME_QUANTITIES)
+
+
+def test_scalar_quantity_is_one_unit_per_world(corpus, dist):
+    n_tasks = corpus["sales_raw"].shape[0]
+    sales = dist["sales"]
+    assert sales.n_units == n_tasks
+    assert (sales.column_index == -1).all()
+    assert np.array_equal(sales.world_index, np.arange(n_tasks))
+
+
+def test_column_units_count_active_columns_only(corpus, dist):
+    """Padded (inactive) channels/controls/latents must not become units."""
+    for name, mask_key in (
+        ("channel_contribution", "treatment_active_mask"),
+        ("spend", "treatment_active_mask"),
+        ("control_contribution", "covariate_active_mask"),
+        ("confounder_contribution", "latent_active_mask"),
+    ):
+        expected = int(corpus[mask_key].sum())
+        assert dist[name].n_units == expected, name
+
+
+def test_series_holds_exactly_the_active_values(corpus, dist):
+    """The pooled channel series is the unpadded corpus contribution block."""
+    contrib = corpus["contributions_raw"].astype(np.float64)
+    mask = corpus["treatment_active_mask"].astype(bool)
+    expected = contrib.transpose(0, 2, 1)[mask]
+    got = dist["channel_contribution"].series
+    assert got is not None
+    assert got.shape == expected.shape
+    assert np.allclose(got, expected, rtol=1e-6, atol=1e-7)
+    assert dist["channel_contribution"].values.size == expected.size
+
+
+def test_unit_stats_match_direct_numpy(corpus, dist):
+    contrib = corpus["contributions_raw"].astype(np.float64)
+    mask = corpus["treatment_active_mask"].astype(bool)
+    d = dist["channel_contribution"]
+    for unit in (0, d.n_units // 2, d.n_units - 1):
+        w, k = int(d.world_index[unit]), int(d.column_index[unit])
+        assert mask[w, k]
+        series = contrib[w, :, k]
+        assert d.unit_mean[unit] == pytest.approx(series.mean(), rel=1e-6)
+        assert d.unit_std[unit] == pytest.approx(series.std(), rel=1e-6)
+        assert d.unit_min[unit] == pytest.approx(series.min(), rel=1e-6, abs=1e-9)
+        assert d.unit_max[unit] == pytest.approx(series.max(), rel=1e-6, abs=1e-9)
+
+
+def test_pooled_sales_distribution_is_the_corpus_sales(corpus, dist):
+    expected = np.sort(corpus["sales_raw"].astype(np.float64).ravel())
+    got = np.sort(dist["sales"].values.astype(np.float64))
+    assert got.shape == expected.shape
+    assert np.allclose(got, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_labels_follow_the_node_vocabulary(dist):
+    assert set(dist["channel_contribution"].labels()) <= {"C1", "C2", "C3", "C4"}
+    assert set(dist["control_contribution"].labels()) <= {"Z1", "Z2"}
+    assert set(dist["confounder_contribution"].labels()) == {"D1"}
+    assert set(dist["indirect_by_source"].labels()) == {"cc", "zc", "dc"}
+    assert set(dist["sales"].labels()) == {""}
+
+
+# -- share budget ------------------------------------------------------------
+
+
+def test_additive_shares_sum_to_one_per_world(dist):
+    """The generator's decomposition is exact, so the budget closes."""
+    total = dist.additive_share_total()
+    assert total.shape == (dist.n_worlds,)
+    assert np.allclose(total, 1.0, rtol=0, atol=1e-4)
+
+
+def test_media_plus_baseline_share_is_one(dist):
+    media = np.bincount(
+        dist["media_contribution"].world_index,
+        weights=dist["media_contribution"].unit_share,
+        minlength=dist.n_worlds,
+    )
+    baseline = dist["baseline"].unit_share
+    assert np.allclose(media + baseline, 1.0, rtol=0, atol=1e-4)
+
+
+def test_share_equals_total_over_sales_total(corpus, dist):
+    sales_total = corpus["sales_raw"].astype(np.float64).sum(axis=1)
+    d = dist["channel_contribution"]
+    expected = d.unit_total / sales_total[d.world_index]
+    assert np.allclose(d.unit_share, expected, rtol=1e-6, atol=1e-9)
+
+
+def test_exogenous_quantities_have_no_share(dist):
+    for name in ("spend", "controls", "demand"):
+        assert not dist[name].on_y_scale
+        assert np.isnan(dist[name].unit_share).all(), name
+
+
+def test_additive_set_is_the_documented_one():
+    additive = {name for name in OUTCOME_QUANTITIES if name in ADDITIVE_QUANTITIES}
+    assert additive == {
+        "baseline_intrinsic",
+        "sales_noise",
+        "control_contribution",
+        "confounder_contribution",
+        "channel_contribution",
+        "indirect_by_source",
+    }
+
+
+def test_incomplete_subset_refuses_to_report_a_budget(corpus):
+    partial = outcome_distributions(corpus, quantities=["sales", "channel_contribution"])
+    with pytest.raises(ValueError, match="incomplete"):
+        partial.additive_share_total()
+
+
+# -- normalization -----------------------------------------------------------
+
+
+def test_normalize_sales_scale_divides_y_scale_quantities(corpus, dist):
+    scaled = outcome_distributions(corpus, normalize="sales_scale")
+    scale = corpus["sales_scale"].astype(np.float64)
+    assert np.allclose(
+        scaled["sales"].unit_mean,
+        dist["sales"].unit_mean / scale,
+        rtol=1e-6,
+    )
+    # exogenous inputs are not in sales units and stay untouched
+    assert np.allclose(scaled["spend"].unit_mean, dist["spend"].unit_mean, rtol=1e-6)
+
+
+def test_normalization_leaves_shares_invariant(corpus, dist):
+    for mode in ("sales_scale", "sales_mean"):
+        scaled = outcome_distributions(corpus, normalize=mode)
+        assert np.allclose(
+            scaled["channel_contribution"].unit_share,
+            dist["channel_contribution"].unit_share,
+            rtol=1e-6,
+            atol=1e-9,
+        ), mode
+
+
+# -- selection ---------------------------------------------------------------
+
+
+def test_world_subset_selects_rows_and_records_ids(corpus):
+    keep = corpus["cell_id"] == 0
+    subset = outcome_distributions(corpus, worlds=keep)
+    assert subset.n_worlds == int(keep.sum())
+    assert np.array_equal(subset.world_ids, np.flatnonzero(keep))
+    expected = np.sort(corpus["sales_raw"][keep].astype(np.float64).ravel())
+    assert np.allclose(np.sort(subset["sales"].values.astype(np.float64)), expected, rtol=1e-5)
+    assert np.allclose(subset.additive_share_total(), 1.0, atol=1e-4)
+
+
+def test_select_drops_structurally_null_channels(dist):
+    media = dist["channel_contribution"]
+    direct = media.select(media.unit_max > 0.0)
+    assert direct.n_units <= media.n_units
+    assert direct.zero_unit_fraction == 0.0
+    assert direct.pooled["max"] == pytest.approx(media.pooled["max"], rel=1e-6)
+    assert direct.n_units == media.n_units - round(media.zero_unit_fraction * media.n_units)
+
+
+def test_select_validates_shape(dist):
+    with pytest.raises(ValueError, match="boolean mask"):
+        dist["sales"].select(np.ones(dist["sales"].n_units + 1, dtype=bool))
+
+
+def test_empty_world_selection_raises(corpus):
+    with pytest.raises(ValueError, match="empty"):
+        outcome_distributions(corpus, worlds=np.zeros(corpus["sales_raw"].shape[0], bool))
+
+
+# -- reports -----------------------------------------------------------------
+
+
+def test_summary_is_json_serializable(dist):
+    payload = json.dumps(dist.summary())
+    assert "channel_contribution" in payload
+    summary = dist.summary()
+    assert summary["n_worlds"] == dist.n_worlds
+    assert summary["quantities"]["sales"]["share"] is not None
+    assert summary["quantities"]["spend"]["share"] is None
+
+
+def test_table_lists_quantities_and_share_table_drops_exogenous(dist):
+    values = dist.table()
+    assert "channel_contribution" in values
+    assert "spend" in values
+    shares = dist.table(of="share")
+    assert "channel_contribution" in shares
+    assert "\nspend" not in shares
+
+
+def test_to_frame_has_one_row_per_unit(dist):
+    frame = dist.to_frame()
+    assert len(frame) == sum(d.n_units for d in dist)
+    channels = frame[frame["quantity"] == "channel_contribution"]
+    assert set(channels["label"]) <= {"C1", "C2", "C3", "C4"}
+    assert frame["world"].max() < dist.n_worlds
+
+
+def test_quantiles_of_each_statistic(dist):
+    d = dist["sales"]
+    pooled = d.quantiles()
+    assert pooled["min"] <= pooled["q50"] <= pooled["max"]
+    means = d.quantiles(of="mean")
+    assert means["n"] == d.n_units
+    with pytest.raises(ValueError, match="unknown stat"):
+        d.quantiles(of="nope")
+
+
+def test_keep_series_false_keeps_stats_but_drops_values(corpus):
+    lean = outcome_distributions(corpus, keep_series=False)
+    assert lean["sales"].series is None
+    assert lean["sales"].pooled["q50"] == pytest.approx(
+        outcome_distributions(corpus)["sales"].pooled["q50"], rel=1e-6
+    )
+    with pytest.raises(ValueError, match="keep_series"):
+        _ = lean["sales"].values
+    assert np.allclose(lean.additive_share_total(), 1.0, atol=1e-4)
+
+
+# -- validation + SCM adapter ------------------------------------------------
+
+
+def test_unknown_quantity_and_bad_normalize_raise(corpus):
+    with pytest.raises(ValueError, match="unknown quantities"):
+        outcome_distributions(corpus, quantities=["nope"])
+    with pytest.raises(ValueError, match="normalize"):
+        outcome_distributions(corpus, normalize="zscore")
+    with pytest.raises(ValueError, match="quantile levels"):
+        outcome_distributions(corpus, quantiles=[1.5])
+
+
+def test_missing_corpus_key_names_it():
+    with pytest.raises(KeyError, match="missing keys"):
+        outcome_distributions({"sales_raw": np.zeros((2, 3))})
+
+
+def test_plot_outcome_distributions_writes_a_figure(dist, tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from prior_generator.viz import plot_outcome_distributions
+
+    for of in ("value", "mean", "share"):
+        path = tmp_path / f"outcomes_{of}.png"
+        plot_outcome_distributions(dist, str(path), of=of)
+        assert path.stat().st_size > 0
+
+
+def test_scm_sequence_path_matches_its_worlds():
+    cfg = pg.make_scm_prior(
+        n_treatments=3,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=32,
+        seed=5,
+        edge_budget={"cy": (2, 3), "cc": (1, 1), "zc": (1, 1), "dc": (1, 1)},
+    )
+    worlds = [pg.sample_scm(cfg, seed=s) for s in (1, 2)]
+    dist = outcome_distributions(worlds)
+
+    assert dist.n_worlds == 2
+    assert dist.n_time_steps == 32
+    assert dist["channel_contribution"].n_units == 2 * 3
+    assert np.allclose(dist.additive_share_total(), 1.0, atol=1e-4)
+    expected = np.sort(np.concatenate([w.data["sales"] for w in worlds]))
+    assert np.allclose(np.sort(dist["sales"].values.astype(np.float64)), expected, rtol=1e-5)
+    # the exact per-world identity survives the pooling
+    for i, world in enumerate(worlds):
+        assert dist["sales"].unit_mean[i] == pytest.approx(world.data["sales"].mean(), rel=1e-6)
+
+
+def test_non_sequence_source_rejected():
+    with pytest.raises(TypeError, match="corpus mapping or a sequence"):
+        outcome_distributions(42)  # type: ignore[arg-type]
