@@ -11,6 +11,8 @@ from __future__ import annotations
 import io
 import json
 
+import numpy as np
+
 from .mechanisms import SATURATION_PRIOR_RANGES
 from .worlds import (
     ADSTOCK_NAMES,
@@ -90,6 +92,27 @@ def _format_signal_metric(signal: dict, key: str, index: int) -> str:
     return f"{signal[key][index]:.2f}"
 
 
+def _texture_label(params: dict) -> str:
+    """Summarize the REALIZED texture: how many nodes drew each drive term.
+
+    Never a preset name. The texture preset is not recorded on the world, and
+    a bare :class:`~prior_generator.sampler.SCMPrior` defaults every
+    high-frequency range to ``(0.0, 0.0)`` — so a hardcoded "diverse" label
+    describes a world that may have none of it. The drawn ``use_*`` flags are
+    the ground truth: they are what the structural equations branch on.
+    """
+    parts = []
+    for label, key in (
+        ("channel hf", "use_hf"),
+        ("channel pulse", "use_pulse"),
+        ("control hf", "use_control_hf"),
+        ("control pulse", "use_control_pulse"),
+    ):
+        flags = np.asarray(params[key])
+        parts.append(f"{label} {int(np.count_nonzero(flags))}/{flags.size}")
+    return "drawn: " + ", ".join(parts)
+
+
 def describe_scm(world: SCM) -> str:
     """Render the full plain-text description of one :class:`SCM`.
 
@@ -104,7 +127,7 @@ def describe_scm(world: SCM) -> str:
     signal = world.signal()
 
     f = io.StringIO()
-    f.write(f"Dataset: {world.name} (additive SCM, texture=diverse)\n")
+    f.write(f"Dataset: {world.name} (additive SCM)\n")
     f.write("=" * 70 + "\n\n")
     f.write(f"Purpose:\n  {world.purpose}\n\n")
     f.write(
@@ -147,7 +170,7 @@ def describe_scm(world: SCM) -> str:
                 f"support=({s_lo}, {s_hi})\n"
             )
         f.write("\n")
-    f.write("Texture prior (diverse):\n")
+    f.write(f"Texture prior ({_texture_label(params)}):\n")
     f.write(f"  rw_channel_std_range={cfg.rw_channel_std_range} (relative)\n")
     f.write(f"  channel_hf_sigma_range={cfg.channel_hf_sigma_range} (relative)\n")
     f.write(f"  channel_pulse_prob_range={cfg.channel_pulse_prob_range}\n")
@@ -172,8 +195,9 @@ def describe_scm(world: SCM) -> str:
         "  world.equation_parameters is the sparse executed-parameter audit; "
         "world.exogenous holds defensive copies of raw full-horizon innovations.\n\n"
     )
-    f.write("Decomposition identity (baseline_intrinsic + confounder + control\n")
-    f.write("  + direct contributions + indirect_by_source == sales):\n")
+    f.write("Decomposition identity (baseline_intrinsic + sales_noise + confounder\n")
+    f.write("  + control + direct contributions + indirect_by_source == sales,\n")
+    f.write("  exactly the sum SCM.reconstruction() forms):\n")
     f.write(f"  max |error| = {ident_err:.2e}\n\n")
     f.write("Signal metrics (per direct channel):\n")
     for i in range(len(signal["spend_cv"])):

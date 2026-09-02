@@ -4,9 +4,12 @@ Each bundle contains:
 
 * ``dataset.csv``           — what a model eats: week, spend_C*, control_Z*, sales_Y
 * ``true_components.csv``   — the full additive truth: baseline_intrinsic,
-  per-confounder and per-control contributions, per-channel DIRECT
-  contributions, indirect effects by source (cc/zc/dc), plus the latent
-  demand and base-channel series
+  sales_noise, per-confounder and per-control contributions, per-channel
+  DIRECT contributions, indirect effects by source (cc/zc/dc), plus the
+  latent demand and base-channel series. Every column except ``week``,
+  ``sales_reconstructed`` and the ``demand_*``/``channel_base_*`` diagnostics
+  is an ADDITIVE term of ``sales_Y``: they sum to it exactly (this is
+  ``SCM.reconstruction()``, the quantity ``SCM.identity_error()`` scores).
 * ``true_contribution.csv`` — legacy-compatible view (contribution_C*, baseline_B)
 * ``description.txt``       — DAG edges with drawn coefficients, per-channel
   mechanism/texture parameters, decomposition identity check, signal metrics
@@ -29,8 +32,9 @@ import numpy as np
 import pandas as pd
 
 from .describe import describe_scm, world_to_dot
+from .sampler import SCMPrior
 from .scenarios import SCENARIOS, Scenario
-from .worlds import SCM, sample_scm
+from .worlds import SCM, draw_feasible_graph, sample_scm
 
 
 def write_scm_bundle(
@@ -81,6 +85,11 @@ def write_scm_bundle(
     pd.DataFrame(model_cols).to_csv(out / "dataset.csv", index=False)
 
     truth_cols = {"week": weeks, "baseline_intrinsic": d["baseline_intrinsic"]}
+    # The observation noise is an additive term of sales like any other, so it
+    # belongs in the exported truth: without it the additive columns sum to
+    # sales MINUS the noise and an auditor reads a residual of max|sales_noise|
+    # where SCM.identity_error() reports ~1e-15.
+    truth_cols["sales_noise"] = d["sales_noise"]
     truth_cols.update(
         {
             f"confounder_contribution_D{j + 1}": d["confounder_contribution"][:, j]
@@ -151,7 +160,11 @@ def write_scenario_bundles(
         Base seed; scenario ``idx`` uses ``seed + idx``.
     require_path_to_y : bool
         Force full connectivity in EVERY scenario (overrides each scenario's
-        ``connect_all``; removes the deliberate isolated-null traps).
+        ``connect_all``; removes the deliberate isolated-null traps). Each
+        scenario's ``connect_all_edge_budget`` then SUBSTITUTES its
+        connectivity-feasible budget, because a budget tuned for isolated-null
+        traps can put "every node reaches Y" out of reach — thinly budgeted,
+        even permanently (see :class:`~prior_generator.scenarios.Scenario`).
     plots : bool
         Render PNG figures per bundle.
     verbose : bool
@@ -161,16 +174,48 @@ def write_scenario_bundles(
     -------
     list of Path
         The bundle directories, in scenario order.
+
+    Raises
+    ------
+    RuntimeError
+        When some scenario's config admits no DAG satisfying its connectivity
+        rule. Every scenario is pre-flighted before ANY directory is created,
+        so this names all the infeasible ones at once and leaves ``out_root``
+        untouched rather than stranding a half-written inspection set.
     """
     out_root = Path(out_root)
+    # Pre-flight. Feasibility is a property of (edge_budget, connect_all)
+    # alone — no amount of writing folders changes it — so discovering it
+    # mid-loop would strand the bundles written so far on disk. This runs the
+    # REAL search (worlds.draw_feasible_graph, the same function sample_scm
+    # calls, at the same default round budget) on a generator seeded exactly
+    # the way sample_scm seeds its own, so a scenario that passes here is one
+    # sample_scm draws the identical accepted graph for.
+    plans: list[tuple[Scenario, SCMPrior, bool]] = []
+    infeasible: list[str] = []
+    for idx, sc in enumerate(scenarios):
+        connect_all = True if require_path_to_y else sc.connect_all
+        cfg = sc.prior(n_time_steps=n_time_steps, seed=seed + idx, connect_all=connect_all)
+        plans.append((sc, cfg, connect_all))
+        probe = draw_feasible_graph(cfg, np.random.default_rng(seed + idx), connect_all=connect_all)
+        if probe is None:
+            infeasible.append(f"[{idx}] {sc.name!r}")
+    if infeasible:
+        raise RuntimeError(
+            "no DAG satisfies the connectivity rule for "
+            + ", ".join(infeasible)
+            + f" (require_path_to_y={require_path_to_y}); nothing was written. "
+            "Widen the scenario's edge_budget, or its connect_all_edge_budget "
+            "when only forced connectivity is infeasible."
+        )
+
     out_root.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for idx, sc in enumerate(scenarios):
-        cfg = sc.prior(n_time_steps=n_time_steps, seed=seed + idx)
+    for idx, (sc, cfg, connect_all) in enumerate(plans):
         world = sample_scm(
             cfg,
             seed=seed + idx,
-            connect_all=True if require_path_to_y else sc.connect_all,
+            connect_all=connect_all,
             name=sc.name,
             purpose=sc.purpose,
         )

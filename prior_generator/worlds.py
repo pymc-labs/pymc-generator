@@ -666,7 +666,7 @@ def _build_equations(world: SCM) -> dict[str, str]:
         sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
         equations[f"f{k + 1}"] = (
             f"ad_C{k + 1} = adstock[{ad_name}](C{k + 1}_full); "
-            f"saturation_scale[{k}] = max(E[C{k + 1}] from parameters, 1e-8); "
+            f"saturation_scale[{k}] = max(parameter-only reference level for C{k + 1}, 1e-8); "
             f"f{k + 1}(X_full) = {sat_name}(adstock[{ad_name}](X_full)"
             f"[burn_in:], saturation_scale[{k}]); "
             f"gate[{k}] = g_cy[{k}] * beta[{k}]"
@@ -714,6 +714,71 @@ def _build_equations(world: SCM) -> dict[str, str]:
     return equations
 
 
+def draw_feasible_graph(
+    cfg: SCMPrior,
+    rng: np.random.Generator,
+    *,
+    connect_all: bool = False,
+    max_graph_rounds: int = 2000,
+) -> dict[str, np.ndarray] | None:
+    """Draw active-size DAG blocks until they satisfy the connectivity rule.
+
+    The rule lives HERE and nowhere else, so a caller cannot drift from what
+    :func:`sample_scm` actually accepts: dead-end nodes (nodes that touch
+    edges but reach Y through none of them) are NEVER admissible, and
+    fully-isolated null nodes are admissible only when ``connect_all=False``.
+
+    Each round consumes ``rng`` exactly once, through
+    :func:`~prior_generator.sampler.sample_g_additive`. A caller that hands
+    over a freshly seeded generator therefore draws the very graph
+    ``sample_scm`` would draw from that seed — which is what lets
+    :func:`prior_generator.bundles.write_scenario_bundles` pre-flight a
+    scenario's feasibility EXACTLY instead of indicatively.
+
+    Parameters
+    ----------
+    cfg : SCMPrior
+        The config whose layout, sizes and ``edge_budget`` drive the draw. All
+        ``n_treatments``/``n_covariates``/``n_latent`` nodes are active.
+    rng : numpy.random.Generator
+        The world's RNG stream, advanced in place.
+    connect_all : bool
+        Require every node to have a directed path to Y (no isolated nulls).
+    max_graph_rounds : int
+        Attempts before giving up.
+
+    Returns
+    -------
+    dict of ndarray or None
+        The accepted active-size ``g`` blocks, or None when all
+        ``max_graph_rounds`` draws failed the rule — the budget then admits no
+        satisfying DAG at all (a budget can make one structurally impossible:
+        controls with no ``zb``/``zc``/``zz``/``dz`` arrow can never reach Y),
+        or admits one too rarely to find. None rather than an exception so a
+        caller can probe several configs and report every infeasible one at
+        once.
+    """
+    layout = cfg.layout
+    n_treatments, n_covariates, n_latent = cfg.n_treatments, cfg.n_covariates, cfg.n_latent
+    for _g_round in range(max_graph_rounds):
+        g = sample_g_additive(
+            rng,
+            cfg,
+            layout,
+            n_treatments_active=n_treatments,
+            n_covariates_active=n_covariates,
+            n_latent_active=n_latent,
+        )
+        g_act = _slice_g_active(g, n_treatments, n_covariates, n_latent)
+        status = node_status(g_act)
+        if any(s == "dead-end" for s in status.values()):
+            continue
+        if connect_all and any(s == "isolated" for s in status.values()):
+            continue
+        return g_act
+    return None
+
+
 def sample_scm(
     cfg: SCMPrior,
     seed: int = 0,
@@ -747,6 +812,23 @@ def sample_scm(
         Require every node to have a directed path to Y.
     name, purpose : str
         Labels carried into descriptions and bundles.
+    max_graph_rounds : int
+        DAG draws allowed before the connectivity rule is declared
+        unsatisfiable. Exhausting it raises ``RuntimeError`` — the
+        ``edge_budget`` admits no (or too rare a) DAG under this
+        ``connect_all``; see :func:`draw_feasible_graph`.
+    max_param_rounds : int
+        Batched ``pm.draw`` rounds allowed before the realism filter is
+        declared unsatisfiable. Each round draws ``max_eps_draws`` candidate
+        worlds from the SAME built model, so exhausting all
+        ``max_param_rounds * max_eps_draws`` candidates raises ``RuntimeError``
+        — the accepted DAG's continuous priors keep producing unrealistic
+        worlds (non-finite arrays, negative sales, flat spend, spikes).
+    max_eps_draws : int
+        Candidate worlds per round. Purely a batching knob (a bigger batch
+        amortizes the compile over more candidates), but it multiplies the
+        total candidate budget with ``max_param_rounds`` and it changes the
+        draw stream, so worlds are only reproducible at a fixed value.
 
     Returns
     -------
@@ -756,31 +838,12 @@ def sample_scm(
 
     cfg.validate()
     rng = np.random.default_rng(seed)
-    layout = cfg.layout
-    n_treatments, n_covariates, n_latent, n_time_steps = (
-        cfg.n_treatments,
-        cfg.n_covariates,
-        cfg.n_latent,
-        cfg.n_time_steps,
-    )
+    n_time_steps = cfg.n_time_steps
 
-    for _g_round in range(max_graph_rounds):
-        g = sample_g_additive(
-            rng,
-            cfg,
-            layout,
-            n_treatments_active=n_treatments,
-            n_covariates_active=n_covariates,
-            n_latent_active=n_latent,
-        )
-        g_act = _slice_g_active(g, n_treatments, n_covariates, n_latent)
-        status = node_status(g_act)
-        if any(s == "dead-end" for s in status.values()):
-            continue
-        if connect_all and any(s == "isolated" for s in status.values()):
-            continue
-        break
-    else:
+    g_act = draw_feasible_graph(
+        cfg, rng, connect_all=connect_all, max_graph_rounds=max_graph_rounds
+    )
+    if g_act is None:
         raise RuntimeError(
             f"world {name!r}: no DAG satisfying the connectivity rule in {max_graph_rounds} draws"
         )
