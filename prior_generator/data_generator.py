@@ -24,6 +24,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,68 @@ from .slots import (
     PRIOR_COND_QUANTITIES,
     SlotLayout,
 )
+
+# ---------------------------------------------------------------------------
+# Schema-version and timing guards (shared by validate / save / load)
+# ---------------------------------------------------------------------------
+
+
+def _schema_version_error(diagnostics: object) -> str | None:
+    """Why ``diagnostics`` fails the corpus schema stamp, or ``None`` if it passes.
+
+    The stamp is the whole point of versioning the format: a consumer that
+    silently accepts an unknown version reads a *different* schema through the
+    current vocabulary, which is exactly the failure mode a version field is
+    supposed to prevent. Reject a missing stamp too — the only version-less
+    corpora that ever existed are v1 shards, and ``load_corpus`` migrates and
+    stamps those BEFORE this check runs. ``True`` is an ``int`` in Python, so a
+    bool is refused explicitly rather than compared numerically.
+
+    All three entry points share this so they cannot drift: ``validate_corpus``
+    reports the string, ``save_corpus`` and ``load_corpus`` raise it.
+    """
+    if not isinstance(diagnostics, dict):
+        return "diagnostics must be a mapping carrying schema_version"
+    if "schema_version" not in diagnostics:
+        return (
+            f"diagnostics is missing schema_version; this corpus must be stamped "
+            f"schema_version={CORPUS_SCHEMA_VERSION}"
+        )
+    version = diagnostics["schema_version"]
+    if isinstance(version, (bool, np.bool_)) or not isinstance(version, (int, np.integer)):
+        return (
+            f"diagnostics schema_version must be a non-bool integer, got "
+            f"{type(version).__name__} {version!r}"
+        )
+    if int(version) != CORPUS_SCHEMA_VERSION:
+        return (
+            f"corpus schema_version {int(version)} is not supported; this build reads "
+            f"schema_version={CORPUS_SCHEMA_VERSION}"
+        )
+    return None
+
+
+def _timing_error(diagnostics: dict) -> str | None:
+    """Why ``diagnostics["timing"]`` is malformed, or ``None`` if absent or well-formed.
+
+    ``timing`` is the wall-clock block a freshly generated corpus carries and
+    ``save_corpus`` strips (it is the only nondeterministic diagnostic, so
+    persisting it would break byte-identical same-seed shards). Both states are
+    therefore legal; only a present-but-wrong block is an error.
+    """
+    if "timing" not in diagnostics:
+        return None
+    timing = diagnostics["timing"]
+    if not isinstance(timing, dict):
+        return "diagnostics timing must be a mapping"
+    for key in ("elapsed_s", "tasks_per_sec"):
+        value = timing.get(key)
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value, (int, float, np.integer, np.floating)
+        ):
+            return f"diagnostics timing {key} must be a real number"
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Data generator
@@ -656,6 +719,12 @@ class DataGenerator:
             normalized_edge_types = None
         if normalized_edge_types != list(EDGE_TYPES_EXTENDED):
             errors.append("diagnostics edge_types does not match the canonical layout")
+        version_problem = _schema_version_error(diagnostics)
+        if version_problem is not None:
+            errors.append(version_problem)
+        timing_problem = _timing_error(diagnostics)
+        if timing_problem is not None:
+            errors.append(timing_problem)
 
         metric_version = signal_diagnostics.get("metric_version")
 
@@ -1151,6 +1220,9 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
         if k == "diagnostics":
             if not isinstance(v, dict):
                 raise TypeError("diagnostics must be a mapping")
+            version_problem = _schema_version_error(v)
+            if version_problem is not None:
+                raise ValueError(version_problem)
             import json
 
             def _json_default(value):
@@ -1162,7 +1234,14 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
                     return value.tolist()
                 raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
-            save_dict[k] = np.array(json.dumps(v, default=_json_default))
+            # Drop the wall-clock block: it is the only nondeterministic
+            # diagnostic, so persisting it would give two same-seed generations
+            # different bytes for identical worlds. Deep-copy rather than pop —
+            # this function must leave the caller's corpus exactly as it found
+            # it, telemetry and nested structures included.
+            persisted = copy.deepcopy(v)
+            persisted.pop("timing", None)
+            save_dict[k] = np.array(json.dumps(persisted, default=_json_default))
         elif k == "identifiability":
             if not isinstance(v, dict):
                 raise TypeError("identifiability metadata must be a mapping")
@@ -1248,5 +1327,14 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
         diagnostics = corpus.get("diagnostics")
         if isinstance(diagnostics, dict):
             diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
+
+    # Only NOW is the stamp meaningful: a genuine v1 shard legitimately arrives
+    # without one and was just migrated and stamped above. Anything still
+    # unstamped, or stamped with a version this build does not read, would be
+    # reinterpreted through the current vocabulary — refuse it instead.
+    if "diagnostics" in corpus:
+        version_problem = _schema_version_error(corpus["diagnostics"])
+        if version_problem is not None:
+            raise ValueError(f"corpus {path}: {version_problem}")
 
     return corpus

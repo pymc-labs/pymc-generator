@@ -561,7 +561,12 @@ def test_save_corpus_rejects_unreadable_payloads(tmp_path, payload, message):
         ({"diagnostics": [1, 2]}, "diagnostics must be a mapping"),
         ({"identifiability": [np.ones(1)]}, "identifiability metadata must be a mapping"),
         (
-            {"diagnostics": {"bad": np.array([object()], dtype=object)}},
+            {
+                "diagnostics": {
+                    "schema_version": CORPUS_SCHEMA_VERSION,
+                    "bad": np.array([object()], dtype=object),
+                }
+            },
             "diagnostics arrays may not have object dtype",
         ),
     ),
@@ -1144,7 +1149,10 @@ def test_validate_corpus_rejects_zero_active_count(padded_corpus):
 def test_validate_corpus_rejects_graph_edges_incident_to_padding(padded_corpus, edge_type):
     broken = dict(padded_corpus)
     layout = SlotLayout(n_treatments=4, n_covariates=3, n_latent=2, edge_types=EDGE_TYPES_EXTENDED)
-    parts = layout.unpack(padded_corpus["g"][:1])
+    # unpack() reshapes the non-square blocks in place, so it hands back VIEWS
+    # into the g-vector: writing an edge through them would corrupt this
+    # module-scoped fixture for every later test. Copy first.
+    parts = layout.unpack(padded_corpus["g"][:1].copy())
     inactive = {"c": 2, "m": 1, "j": 1}
     indices = {
         "cy": (inactive["c"],),
@@ -1161,6 +1169,8 @@ def test_validate_corpus_rejects_graph_edges_incident_to_padding(padded_corpus, 
     bad[0] = layout.pack(**{f"g_{name}": value for name, value in parts.items()})[0]
     broken["g"] = bad
     assert any(f"g_{edge_type}" in error for error in DataGenerator.validate_corpus(broken))
+    # The fixture itself must survive every parameterized case untouched.
+    assert DataGenerator.validate_corpus(padded_corpus) == []
 
 
 @pytest.mark.parametrize(("edge_type", "index"), (("cc", (1, 0)), ("zz", (1, 0))))

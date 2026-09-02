@@ -31,6 +31,7 @@ import numpy as np
 from .signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
+    admitted_response_support_weeks,
     dense_signal_metrics,
     summarize_signal_metrics,
 )
@@ -96,24 +97,98 @@ PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
 #: configuration validation unbounded.
 MAX_QUERY_HORIZON_SEARCH_STEPS = 1_000_000
 
+#: Every series and parameter array in the corpus is persisted as float32 (see
+#: the cast block at the end of ``_generate_corpus_additive``), so this is the
+#: largest magnitude the schema can actually hold.
+CORPUS_STORAGE_DTYPE = np.float32
+CORPUS_STORAGE_MAX = float(np.finfo(CORPUS_STORAGE_DTYPE).max)
+
 
 def _n_query(n_time_steps: int, query_frac: float) -> int:
     """Return query weeks from the canonical rounded query-fraction rule."""
     return int(round(query_frac * n_time_steps))
 
 
-def _minimum_valid_query_horizon(n_time_steps: int, query_frac: float, l_max: int) -> int | None:
-    """Return the first valid candidate horizon at or above ``n_time_steps``, if bounded."""
-    warmup_boundary = l_max - 1
+def _minimum_valid_query_horizon(
+    n_time_steps: int, query_frac: float, response_support: int
+) -> int | None:
+    """Return the first valid candidate horizon at or above ``n_time_steps``, if bounded.
+
+    ``response_support`` is the largest lag the admitted adstock kernels can
+    reach (see :func:`~prior_generator.signal_diagnostics.
+    admitted_response_support_weeks`), i.e. the number of leading reported
+    weeks whose media response depends on pre-window spend.
+    """
     for candidate in range(n_time_steps, n_time_steps + MAX_QUERY_HORIZON_SEARCH_STEPS + 1):
         n_query = _n_query(candidate, query_frac)
         if (
             0 < n_query < candidate
             and n_query <= candidate - 2
-            and min(candidate - n_query, candidate // 2) >= warmup_boundary
+            and min(candidate - n_query, candidate // 2) >= response_support
         ):
             return candidate
     return None
+
+
+def _reject_unrepresentable_bounds(name: str, value: object, lo: float, hi: float) -> None:
+    """Reject a prior range the float32 corpus storage cannot hold.
+
+    A range endpoint above :data:`CORPUS_STORAGE_MAX` is perfectly finite in the
+    float64 draw and only overflows to ``inf`` at the storage cast, several
+    hundred lines later — at which point generation dies on a finiteness
+    assertion that names a downstream array rather than the config field that
+    caused it. Rejecting here keeps the diagnosis attached to the knob the
+    caller set. The bound is deliberately NOT clamped: silently shrinking a
+    prior would change the world distribution behind the caller's back.
+    """
+    for bound in (lo, hi):
+        if abs(bound) > CORPUS_STORAGE_MAX:
+            raise ValueError(
+                f"{name} bound {bound!r} exceeds the float32 corpus storage maximum "
+                f"({CORPUS_STORAGE_MAX:.9g}); corpus arrays are persisted as "
+                f"{np.dtype(CORPUS_STORAGE_DTYPE).name}, so this endpoint would "
+                f"overflow to inf. Got {name}={value!r}"
+            )
+
+
+#: Frame that marks an exception as having escaped a node PyTensor was
+#: evaluating. Every linker funnels its ``except Exception`` through
+#: ``pytensor.link.utils.raise_with_op``, which re-raises the ORIGINAL
+#: exception object (annotating it only under non-default
+#: ``config.exception_verbosity``), so the frame — not the type, the message,
+#: or an attribute — is the one verbosity-independent marker available.
+_PYTENSOR_RAISE_WITH_OP = ("pytensor.link.utils", "raise_with_op")
+
+#: Exception types a node evaluation raises for a numeric/domain failure that a
+#: DIFFERENT parameter draw can step around: an out-of-domain distribution
+#: parameter produced by an upstream draw (``ValueError``), or an overflow /
+#: divide error escaping ``numpy.errstate`` (``ArithmeticError``, which covers
+#: ``FloatingPointError`` and ``OverflowError``). A ``TypeError``,
+#: ``AttributeError``, ``KeyError`` or the like from the same place is a bug in
+#: the graph, not a draw that landed badly, and must never be retried.
+_RETRYABLE_DRAW_ERRORS = (ValueError, ArithmeticError)
+
+
+def _is_retryable_draw_failure(exc: BaseException) -> bool:
+    """Is ``exc`` a sporadic per-draw numeric failure worth resampling?
+
+    The batch draw is the one place in generation where retrying is legitimate:
+    a hierarchical draw can hand a downstream distribution an out-of-domain
+    parameter, and a fresh seed simply lands elsewhere. Retrying anything else
+    turns a repeatable programming error into a silent stream of empty batches,
+    which is what the caller then misreads as a strict realism filter — so the
+    predicate demands BOTH that the failure is numeric AND that it escaped a
+    node PyTensor was evaluating (rather than our own call frames around it).
+    """
+    if not isinstance(exc, _RETRYABLE_DRAW_ERRORS):
+        return False
+    tb = exc.__traceback__
+    while tb is not None:
+        frame = tb.tb_frame
+        if (frame.f_globals.get("__name__"), frame.f_code.co_name) == _PYTENSOR_RAISE_WITH_OP:
+            return True
+        tb = tb.tb_next
+    return False
 
 
 @dataclass
@@ -549,6 +624,7 @@ class SCMPrior:
                 if reason is not None:
                     message += f"; {reason}"
                 raise ValueError(message)
+            _reject_unrepresentable_bounds(name, value, lo, hi)
             return lo, hi
 
         _finite_range("adstock_alpha_range", minimum=0.0, maximum=1.0)
@@ -746,14 +822,28 @@ class SCMPrior:
                 f"in the reported window"
             )
         if self.adstock_burn_in > 0:
-            warmup_boundary = self.l_max - 1
+            # The boundary is the response's REACH, not the kernel length: an
+            # identity-only family mix (nonlinearity="linear") convolves nothing,
+            # so no reported week depends on pre-window spend and a short horizon
+            # is perfectly scorable even though the presets still pin
+            # adstock_burn_in = l_max. Take the upper bound over every family the
+            # config admits (probability > 0) — the families are drawn per world,
+            # so validation cannot know which one a given world gets.
+            admitted_families = [
+                index
+                for index, key in enumerate(ADSTOCK_FAMILY_KEYS)
+                if self.adstock_family_probs[key] > 0.0
+            ]
+            warmup_boundary = admitted_response_support_weeks(
+                admitted_families, self.l_max, adstock_alpha_range=self.adstock_alpha_range
+            )
             short_query_start = self.n_time_steps - self.n_query
             long_query_start = self.n_time_steps // 2
             # Check both split types even at degenerate probabilities: validation-split repair can
             # force either type, and every scored target must have persisted response history.
-            if min(short_query_start, long_query_start) < warmup_boundary:
+            if warmup_boundary > 0 and min(short_query_start, long_query_start) < warmup_boundary:
                 suggested_n_time_steps = _minimum_valid_query_horizon(
-                    self.n_time_steps, self.query_frac, self.l_max
+                    self.n_time_steps, self.query_frac, warmup_boundary
                 )
                 horizon_remedy = (
                     f"raise n_time_steps to at least {suggested_n_time_steps}, "
@@ -766,14 +856,16 @@ class SCMPrior:
                     f"n_query={self.n_query}; "
                     f"short-horizon query start n_time_steps - n_query={short_query_start}, "
                     f"long-horizon query start n_time_steps // 2={long_query_start}. With "
-                    f"burn-in, the first l_max - 1 = {warmup_boundary} reported weeks carry a "
+                    f"burn-in, the first admitted_response_support_weeks = "
+                    f"{warmup_boundary} reported weeks carry a "
                     "media response that depends on unpersisted pre-window spend. Both the "
                     "short-horizon (n_time_steps - n_query) and long-horizon "
                     "(n_time_steps // 2) query windows must "
                     "start at or after that boundary, otherwise tasks are scored on targets that "
                     "are not a function of the persisted inputs. To reach this world anyway, "
                     "either set adstock_burn_in=0 (the convolution then zero-pads, which is "
-                    f"reproducible from persisted spend at every week), {horizon_remedy}or lower "
+                    "reproducible from persisted spend at every week), restrict "
+                    f"adstock_family_probs to the identity family, {horizon_remedy}or lower "
                     "query_frac / l_max."
                 )
         for name in ("channel_hf_sigma_range", "channel_pulse_amp_range"):
@@ -836,6 +928,12 @@ class SCMPrior:
                 "channel_shock_level_range must satisfy finite 0 <= lo <= hi, "
                 f"got {self.channel_shock_level_range!r}"
             )
+        _reject_unrepresentable_bounds(
+            "channel_shock_level_range",
+            self.channel_shock_level_range,
+            shock_level_lo,
+            shock_level_hi,
+        )
         if self.n_channel_shocks > self.n_time_steps:
             raise ValueError(
                 f"n_channel_shocks must be <= n_time_steps ({self.n_time_steps}), "
@@ -1248,7 +1346,7 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
     layout = cfg.layout
     n_tasks = corpus["spend_raw"].shape[0]
     diagnostics = corpus["diagnostics"]
-    elapsed = diagnostics["elapsed_s"]
+    elapsed = diagnostics["timing"]["elapsed_s"]
 
     g_tasks = corpus["g"]
     treatment_active_mask = corpus["treatment_active_mask"]
@@ -1316,7 +1414,6 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
         {
             "n_tasks": int(n_tasks),
             "n_cells": int(np.unique(corpus["cell_id"]).size),
-            "tasks_per_sec": float(n_tasks / elapsed),
             "edge_marginals": edge_marginals,
             "media_share_quantiles": {
                 f"q{int(q * 100)}": float(np.quantile(media_share, q)) for q in qs
@@ -1324,6 +1421,14 @@ def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
             "spend_cv_quantiles": {f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs},
         }
     )
+    # Wall-clock telemetry, kept apart from every other diagnostic because it is
+    # the ONLY nondeterministic entry: two same-seed generations agree on every
+    # array and every other key, so quarantining the clock here is what lets
+    # ``save_corpus`` drop it and persist byte-identical shards.
+    diagnostics["timing"] = {
+        "elapsed_s": float(elapsed),
+        "tasks_per_sec": float(n_tasks / elapsed),
+    }
     # These errors must describe the persisted float32 arrays rather than the
     # pre-storage calculations used to produce them.
     diagnostics.update(
@@ -1682,6 +1787,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     cell_prior_rows: list[np.ndarray] = []
     n_evaluated = 0
     n_rejected = 0
+    n_draw_failures = 0
 
     for cell in range(cfg.n_cells):
         tr = cfg.n_treatments_active_range_effective
@@ -1718,6 +1824,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
         )
         accepted: list[dict] = []
+        cell_evaluated = 0
+        cell_rejected = 0
+        cell_draw_failures = 0
         last_draw_error: str | None = None
         for _round in range(MAX_TOPUPS_PER_CELL):
             if len(accepted) == cfg.draws_per_cell:
@@ -1740,15 +1849,23 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 else:
                     draw_names = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
                 drawn_b = draw_worlds(model, draw_names, draw_seed, draws=n_req)
-            except Exception as exc:
-                # A sporadic pytensor py-linker evaluation crash on large graphs
-                # (or any draw failure) — count the whole batch as rejected and
-                # retry with a new seed; keep the error so a genuine, repeatable
-                # failure surfaces in the RuntimeError below instead of being
-                # disguised as filter strictness.
+            except _RETRYABLE_DRAW_ERRORS as exc:
+                if not _is_retryable_draw_failure(exc):
+                    # Not a numeric failure from inside a PyTensor node
+                    # evaluation: a bug here recurs at every seed, so retrying
+                    # only buries it under MAX_TOPUPS_PER_CELL empty rounds and
+                    # then blames the realism filter. Let it out untouched.
+                    raise
+                # A sporadic numeric draw failure — a hierarchical draw handed a
+                # downstream distribution an out-of-domain parameter. Retry with
+                # a new seed. This batch produced NO candidates, so it must not
+                # enter the evaluated/rejected accounting: those two describe the
+                # realism filter, and inflating them makes a broken draw look
+                # like a strict gate. Keep the error so a repeatable failure
+                # still surfaces in the RuntimeError below.
                 last_draw_error = repr(exc)
-                n_rejected += n_req
-                n_evaluated += n_req
+                n_draw_failures += 1
+                cell_draw_failures += 1
                 continue
 
             for b in range(n_req):
@@ -1756,6 +1873,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     break
                 drawn = {name: drawn_b[name][b] for name in draw_names}
                 n_evaluated += 1
+                cell_evaluated += 1
 
                 if not _additive_task_ok(
                     spend=drawn["channels"],
@@ -1767,6 +1885,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     realism_sales=drawn.get("sales_unshocked"),
                 ):
                     n_rejected += 1
+                    cell_rejected += 1
                     continue
 
                 support, split_type = _make_support_mask(
@@ -1775,6 +1894,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 sales_scale = float(np.std(drawn["sales"][support == 1]))
                 if not (np.isfinite(sales_scale) and sales_scale > 0.0):
                     n_rejected += 1
+                    cell_rejected += 1
                     continue
 
                 # Zero-pad active-size outputs to max sizes
@@ -1839,10 +1959,16 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     }
                 )
         if len(accepted) < cfg.draws_per_cell:
+            # Name the actual culprit: a strict realism gate and a draw that
+            # keeps blowing up look identical from the accepted count alone, and
+            # they call for opposite remedies (loosen the prior vs fix the
+            # graph). Report both tallies so the reader can tell which happened.
             raise RuntimeError(
                 f"cell {cell}: only {len(accepted)}/{cfg.draws_per_cell} tasks "
                 f"accepted after {MAX_TOPUPS_PER_CELL} rounds — the realism filter "
-                f"rejected the rest for this G-cell"
+                f"rejected {cell_rejected}/{cell_evaluated} evaluated candidates, and "
+                f"{cell_draw_failures}/{MAX_TOPUPS_PER_CELL} rounds produced no "
+                f"candidates at all because the draw itself failed"
                 + (f"; last draw error: {last_draw_error}" if last_draw_error else "")
             )
         tasks.extend(accepted)
@@ -1985,14 +2111,20 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     effective_legacy_edge_rates = {**EDGE_BASE_RATES, **(cfg.edge_rate_overrides or {})}
 
     # -- static diagnostics --------------------------------------------------
-    elapsed = time.perf_counter() - t_start
+    # Every entry here is a deterministic function of (config, seed) EXCEPT the
+    # "timing" sub-block, which quarantines the wall clock so ``save_corpus``
+    # can drop it and persist byte-identical shards for a same-seed rerun.
     diagnostics = {
         "edge_types": list(layout.edge_types),
         "draws_per_cell": int(cfg.draws_per_cell),
         "short_horizon_n_query": int(n_query),
-        "elapsed_s": float(elapsed),
         "n_draws_evaluated": int(n_evaluated),
         "rejection_rate": float(n_rejected / max(n_evaluated, 1)),
+        # Draw batches that raised a retryable numeric failure and were
+        # resampled. These produced no candidates, so they are deliberately
+        # absent from n_draws_evaluated / rejection_rate: a nonzero value here
+        # means the GRAPH misbehaved, not that the realism filter is strict.
+        "n_draw_failures": int(n_draw_failures),
         "edge_base_rates": {
             "cy": float(effective_legacy_edge_rates["cy"]),
             "dc": float(effective_legacy_edge_rates["dc"]),
@@ -2013,6 +2145,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         ),
         "min_dead_channels": int(cfg.min_dead_channels),
         "schema_version": CORPUS_SCHEMA_VERSION,
+        # Wall clock lives under its own key so the rest of the block stays a
+        # pure function of (config, seed); _finalize_corpus adds tasks_per_sec
+        # next to it and save_corpus drops the whole block.
+        "timing": {"elapsed_s": float(time.perf_counter() - t_start)},
     }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
