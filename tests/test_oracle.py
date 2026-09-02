@@ -326,6 +326,48 @@ def test_walk_basis_reproduces_symbolic_random_walk(smoothness: float, expected_
     np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
 
 
+def test_walk_horizon_below_two_weeks_is_rejected_not_silently_nan():
+    """A one-week walk has no calibratable amplitude, so the horizon is refused.
+
+    Centring a single-point path annihilates it, so the walk operator is the
+    zero matrix and its normalizing constant is 0. Rescaling by that constant
+    used to divide by zero and hand back a NaN walk; the calibration
+    ``E[var_pop(path)] == std ** 2`` is unsatisfiable at one week, so the
+    horizon is rejected instead.
+    """
+    assert _centred_walk_scale(1, 1) == 0.0
+    assert _centred_walk_scale(2, 1) > 0.0
+
+    with pytest.raises(ValueError, match="n_time_steps must be an integer >= 2"):
+        _kernel_width(0.5, 1, rw_smoothness_max_weeks=26)
+    with pytest.raises(ValueError, match="n_time_steps must be an integer >= 2"):
+        symbolic_random_walk(
+            1,
+            mean=0.0,
+            std=1.0,
+            smoothness=0.5,
+            positive_only=False,
+            rw_smoothness_max_weeks=26,
+        )
+
+    # Two weeks is the first horizon the calibration can hold on, exactly
+    # (sum(B ** 2) / n_time_steps == 1 is the operator form of E[var_pop]).
+    np.testing.assert_allclose(np.sum(_walk_basis(2, 1) ** 2) / 2, 1.0, rtol=0.0, atol=1e-14)
+    walk = np.asarray(
+        symbolic_random_walk(
+            2,
+            mean=3.0,
+            std=0.5,
+            smoothness=0.5,
+            positive_only=False,
+            rw_smoothness_max_weeks=26,
+            eps=np.array([0.7, -0.2]),
+        ).eval()
+    )
+    assert np.isfinite(walk).all()
+    np.testing.assert_allclose(walk.mean(), 3.0, rtol=0.0, atol=1e-12)
+
+
 def test_marginal_sales_logp_matches_numpy_mvn():
     """The marginal sales factor is the independently assembled exact MvNormal."""
     cfg = _small_cfg(
@@ -584,6 +626,110 @@ def test_oracle_warmup_exempts_identity_adstock():
             )
 
     assert shapes == {"identity": (20,), "geometric": (16,)}
+
+
+def test_oracle_warmup_follows_the_carryover_its_own_priors_admit():
+    """The discarded prefix is the priors' reach, not the adstock family label.
+
+    The oracle's families are fixed but its kernel SHAPE parameters are free
+    RVs, so the unreproducible prefix is as long as the longest carryover any
+    admitted draw can have. A geometric decay prior pinned at ``alpha == 0``
+    admits contemporaneous response only — whether it is pinned by the config
+    range or by a ``prior_cond`` interval — while Weibull admits ``l_max - 1``
+    regardless of its own shape box.
+    """
+    geometric = {"none": 0.0, "geometric": 1.0, "weibull": 0.0}
+    weibull = {"none": 0.0, "geometric": 0.0, "weibull": 1.0}
+    rows = {}
+    for name, family, family_probs, alpha_range, prior_cond in (
+        ("geometric", 1, geometric, (0.2, 0.8), None),
+        ("pinned_range", 1, geometric, (0.0, 0.0), None),
+        ("pinned_prior_cond", 1, geometric, (0.0, 0.8), {"adstock_alpha": (0.0, 0.0)}),
+        ("weibull", 2, weibull, (0.2, 0.8), None),
+    ):
+        cfg = _small_cfg(
+            n_time_steps=20,
+            l_max=5,
+            nonlinearity="linear",
+            adstock_family_probs=family_probs,
+            adstock_alpha_range=alpha_range,
+        )
+        assert cfg.adstock_burn_in == cfg.l_max
+        g = _direct_only_graph()
+        structural = sample_structure(g, cfg, np.random.default_rng(20))
+        assert np.all(structural["adstock_family"] == family)
+        oracle = build_oracle_model(
+            g,
+            cfg,
+            structural,
+            {
+                "channels": np.zeros((cfg.n_time_steps, 2)),
+                "controls": np.zeros((cfg.n_time_steps, 1)),
+                "sales": np.zeros(cfg.n_time_steps),
+                "saturation_scale": np.ones(2),
+            },
+            prior_cond=prior_cond,
+        )
+        rows[name] = tuple(oracle["sales"].shape.eval())
+
+    assert rows == {
+        "geometric": (16,),
+        "pinned_range": (20,),
+        "pinned_prior_cond": (20,),
+        "weibull": (16,),
+    }
+
+
+def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
+    """The rows a zero admitted support keeps really are reproducible rows.
+
+    The counterpart of
+    :func:`test_oracle_likelihood_starts_at_first_reproducible_response_week`:
+    there the pre-warmup weeks are provably wrong, here a geometric world whose
+    decay is pinned at 0 carries no response state across the reported boundary,
+    so week 0 onwards matches the truth exactly.
+    """
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=20,
+        l_max=5,
+        nonlinearity="linear",
+        adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        adstock_alpha_range=(0.0, 0.0),
+        edge_budget={
+            "cy": (1, 1),
+            "dc": 0,
+            "db": 0,
+            "zb": 0,
+            "dz": 0,
+            "zc": 0,
+            "cc": 0,
+            "zz": 0,
+        },
+    )
+    assert cfg.adstock_burn_in == cfg.l_max
+    world = pg.sample_scm(cfg, seed=23, max_eps_draws=4)
+    assert np.array_equal(world.params["adstock_family"], np.array([1]))
+    assert np.array_equal(world.params["adstock_alpha"], np.array([0.0]))
+
+    oracle = world.oracle_model()
+    assert tuple(oracle["sales"].shape.eval()) == (cfg.n_time_steps,)
+
+    truth_values = {**world.params, **world.exogenous}
+    media_amplitude = np.sqrt(np.sum((world.g["g_cy"] * world.params["beta"]) ** 2))
+    for group in ("rw_b", "rw_y"):
+        truth_values[f"{group}_mean"] = world.params[group]["mean"]
+        truth_values[f"{group}_std"] = world.params[group]["std"]
+        truth_values[f"{group}_std_rel"] = world.params[group]["std"] / media_amplitude
+    oracle_contributions = _oracle_deterministic_at_truth(oracle, truth_values, "contributions")
+    np.testing.assert_allclose(
+        oracle_contributions,
+        world.data["contributions_observed"],
+        rtol=0.0,
+        atol=1e-15,
+    )
 
 
 @pytest.mark.parametrize(

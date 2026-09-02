@@ -810,19 +810,31 @@ def check_signal_gate(signal: dict, gate: dict[str, float] | None = None) -> tup
     """Check a ``signal_summary`` block against minimum-signal thresholds.
 
     Returns ``(ok, lines)`` where ``lines`` are human-readable PASS/FAIL rows.
-    A missing or ``None`` metric (e.g. a corpus with zero direct channels)
-    FAILS loudly — no signal measured is not a pass. Generation pipelines can
-    call this on each shard's ``diagnostics["signal"]`` to reject weak-signal
-    priors at generation time.
+    A missing or ``None`` metric FAILS loudly — no signal measured is not a
+    pass — and its row names WHY it is missing, which is not always the same
+    thing: a corpus can have no direct channels to measure at all, or it can
+    have them and still leave a metric unmeasured because every eligible pair's
+    value was invalid (a horizon too short for the metric's window, a constant
+    series, ...). Only ``signal["n_direct_channels"]`` separates the two, so a
+    summary that omits the count gets an agnostic row rather than a guess.
+    Generation pipelines can call this on each shard's ``diagnostics["signal"]``
+    to reject weak-signal priors at generation time.
     """
     thresholds = DEFAULT_GATE if gate is None else gate
+    n_direct = signal.get("n_direct_channels")
+    if n_direct is None:
+        missing_reason = "n_direct_channels not reported"
+    elif int(n_direct) == 0:
+        missing_reason = "no direct channels measured"
+    else:
+        missing_reason = f"no valid observations across {int(n_direct)} direct channels"
     ok = True
     lines: list[str] = []
     for key, thresh in thresholds.items():
         val = signal.get(key)
         if val is None:
             ok = False
-            lines.append(f"[FAIL] {key} missing (no direct channels measured)")
+            lines.append(f"[FAIL] {key} missing ({missing_reason})")
             continue
         passed = val <= thresh
         ok &= passed

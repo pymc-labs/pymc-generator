@@ -14,10 +14,13 @@ from prior_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
     _adstock_numpy,
+    _adstock_weights,
+    admitted_response_support_weeks,
     check_signal_gate,
     contemporaneous_weight,
     dense_signal_metrics,
     per_channel_signal,
+    response_support_weeks,
     signal_summary,
     summarize_signal_metrics,
 )
@@ -301,7 +304,14 @@ def test_summary_uses_valid_denominators_and_gate_contracts():
     assert summary["frac_spearman_lt_03"] is None
     assert summary["frac_warmup_gt_3"] == 0.0
     ok, lines = check_signal_gate(summary)
-    assert not ok and any("frac_spearman_lt_03 missing" in line for line in lines)
+    assert not ok
+    # Two direct channels were eligible; the metric is missing because neither
+    # pair produced a valid value, which the row must say instead of blaming
+    # an absence of direct channels.
+    assert (
+        "[FAIL] frac_spearman_lt_03 missing (no valid observations across 2 direct channels)"
+        in lines
+    )
 
 
 def test_empty_signal_summary_has_none_quantiles():
@@ -605,6 +615,58 @@ def test_summary_validates_sales_and_sales_scale():
         summarize_signal_metrics(metrics, valid, np.ones((1, 2)), mask, sales_scale=np.zeros(1))
 
 
+def test_response_support_weeks_tracks_the_realized_kernel_not_the_family():
+    """Temporal reach is a property of the kernel weights, not of the family id."""
+    # A geometric channel drawn at alpha == 0 is contemporaneous despite its
+    # non-identity family; any positive decay puts weight on every lag.
+    assert response_support_weeks(1, 0.0, 1.0, 1.0, 8) == 0
+    assert response_support_weeks(1, 0.5, 1.0, 1.0, 8) == 7
+
+    # Weibull min-max rescaling subtracts the kernel's own minimum. For a
+    # monotonically decreasing pdf that minimum IS the final tap, so the
+    # response reaches one week less far than l_max advertises.
+    zero_final_tap = _adstock_weights(2, 0.0, 3.0, 2.0, 8)
+    assert zero_final_tap is not None
+    assert zero_final_tap[-1] == 0.0
+    assert zero_final_tap[-2] > 0.0
+    assert response_support_weeks(2, 0.0, 3.0, 2.0, 8) == 6
+
+    # A rising-then-falling Weibull is minimized at its FIRST tap instead, so
+    # its final tap survives and it does reach l_max - 1.
+    assert response_support_weeks(2, 0.0, 8.0, 1.5, 8) == 7
+
+    # Identity, single-lag and fully annihilated kernels reach nothing. The
+    # (lam, k) pair here is the degenerate Weibull of the guard test above.
+    assert response_support_weeks(0, 0.0, 1.0, 1.0, 8) == 0
+    assert response_support_weeks(1, 0.5, 1.0, 1.0, 1) == 0
+    assert response_support_weeks(2, 0.0, 2.0804050381276453, 2.0, 2) == 0
+
+
+def test_admitted_response_support_weeks_bounds_every_draw_the_priors_allow():
+    """The pre-draw bound must hold for free shape parameters, per family."""
+    assert admitted_response_support_weeks([0], 8, adstock_alpha_range=(0.0, 0.8)) == 0
+    assert admitted_response_support_weeks([1], 8, adstock_alpha_range=(0.0, 0.0)) == 0
+    assert admitted_response_support_weeks([1], 8, adstock_alpha_range=(0.0, 0.8)) == 7
+    # Weibull needs no decay range: its bound does not depend on one.
+    assert admitted_response_support_weeks([2], 8, adstock_alpha_range=(0.0, 0.0)) == 7
+
+    # It is a maximum over the channels, and an empty channel set or a
+    # single-lag kernel admits no carryover at all.
+    assert admitted_response_support_weeks([0, 2], 8, adstock_alpha_range=(0.0, 0.0)) == 7
+    assert admitted_response_support_weeks([], 8, adstock_alpha_range=(0.0, 0.8)) == 0
+    assert admitted_response_support_weeks([1, 2], 1, adstock_alpha_range=(0.0, 0.8)) == 0
+
+    # The bound is only useful if it never under-reports a realized draw from
+    # the same box — that is what makes it safe to slice a likelihood with.
+    bound = admitted_response_support_weeks([1], 8, adstock_alpha_range=(0.0, 0.8))
+    assert bound >= max(
+        response_support_weeks(1, alpha, 1.0, 1.0, 8) for alpha in (0.0, 0.2, 0.5, 0.8)
+    )
+
+    with pytest.raises(ValueError, match="adstock_alpha_range"):
+        admitted_response_support_weeks([1], 8, adstock_alpha_range=(0.8, 0.2))
+
+
 def test_response_warmup_and_contemporaneous_diagnostics():
     metrics = np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
     valid = np.zeros_like(metrics, dtype=np.uint8)
@@ -663,6 +725,40 @@ def test_response_warmup_and_contemporaneous_diagnostics():
 
     assert contemporaneous_weight(2, 0.0, 8.0, 4.0, 8) == 0.0
     assert contemporaneous_weight(1, 0.5, 1.0, 1.0, 8) > 0.0
+
+
+def test_response_warmup_weeks_uses_realized_reach_when_kernels_are_persisted():
+    """With all four kernel arrays, the warmup is the realized reach, not l_max - 1."""
+    metrics = np.zeros((1, 1, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
+    valid = np.zeros_like(metrics, dtype=np.uint8)
+    sales = np.arange(10, dtype=float)[None]
+    mask = np.ones((1, 1), dtype=bool)
+
+    def warmup(family: int, alpha: float, lam: float, k: float) -> int:
+        return int(
+            summarize_signal_metrics(
+                metrics,
+                valid,
+                sales,
+                mask,
+                sales_scale=np.ones(1),
+                l_max=8,
+                adstock_burn_in=8,
+                adstock_family=np.array([[family]], dtype=np.uint8),
+                adstock_alpha=np.array([[alpha]], dtype=np.float32),
+                weibull_lam=np.array([[lam]], dtype=np.float32),
+                weibull_k=np.array([[k]], dtype=np.float32),
+            )["response_warmup_weeks"]
+        )
+
+    # A geometric corpus drawn at alpha == 0 carries no response state into the
+    # reported window, so no reported week is missing history ...
+    assert warmup(1, 0.0, 1.0, 1.0) == 0
+    # ... whereas positive decay reaches back the full l_max - 1 weeks.
+    assert warmup(1, 0.5, 1.0, 1.0) == 7
+    # A Weibull whose min-max rescaling annihilates its final tap reaches one
+    # week less far than the conservative family-only bound would claim.
+    assert warmup(2, 0.0, 3.0, 2.0) == 6
 
 
 def test_response_warmup_matches_persisted_response_boundary():
@@ -779,3 +875,31 @@ def test_default_gate_rejects_low_amplitude_and_collinear_targets():
     assert not ok
     assert any("[FAIL] frac_contrib_rel_std_lt_001" in line for line in lines)
     assert any("[FAIL] frac_contrib_r2_gt_095" in line for line in lines)
+
+
+def test_gate_missing_metric_row_names_only_the_cause_it_can_prove():
+    """A None metric always FAILS, but the row must not invent the reason.
+
+    A short horizon can leave a metric unmeasured while every direct channel is
+    present and eligible, so ``n_direct_channels`` is what separates "nothing to
+    measure" from "measured nothing".
+    """
+    gate = {"frac_spearman_lt_03": 0.3}
+
+    eligible_ok, eligible_lines = check_signal_gate(
+        {"n_direct_channels": 4, "frac_spearman_lt_03": None}, gate
+    )
+    assert not eligible_ok
+    assert eligible_lines == [
+        "[FAIL] frac_spearman_lt_03 missing (no valid observations across 4 direct channels)"
+    ]
+
+    empty_ok, empty_lines = check_signal_gate(
+        {"n_direct_channels": 0, "frac_spearman_lt_03": None}, gate
+    )
+    assert not empty_ok
+    assert empty_lines == ["[FAIL] frac_spearman_lt_03 missing (no direct channels measured)"]
+
+    unknown_ok, unknown_lines = check_signal_gate({"frac_spearman_lt_03": None}, gate)
+    assert not unknown_ok
+    assert unknown_lines == ["[FAIL] frac_spearman_lt_03 missing (n_direct_channels not reported)"]

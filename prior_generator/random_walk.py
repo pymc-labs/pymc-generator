@@ -32,6 +32,10 @@ def _kernel_width(smoothness: float, n_time_steps: int, rw_smoothness_max_weeks:
     rw_smoothness_max_weeks))`` weeks. ``rw_smoothness_max_weeks`` is an
     absolute timescale, so changing ``n_time_steps`` changes only the short-series
     clamp.
+
+    ``n_time_steps`` must be at least 2 — a walk over a single week has no
+    amplitude to calibrate (see :func:`_centred_walk_scale`), so every walk
+    entry point rejects that horizon here rather than downstream.
     """
     if not 0.0 <= smoothness <= 1.0:
         raise ValueError(f"smoothness must be in [0, 1], got {smoothness}")
@@ -46,9 +50,12 @@ def _kernel_width(smoothness: float, n_time_steps: int, rw_smoothness_max_weeks:
     if (
         isinstance(n_time_steps, (bool, np.bool_))
         or not isinstance(n_time_steps, (int, np.integer))
-        or n_time_steps < 1
+        or n_time_steps < 2
     ):
-        raise ValueError(f"n_time_steps must be an integer >= 1, got {n_time_steps!r}")
+        raise ValueError(
+            "n_time_steps must be an integer >= 2 (a one-week random walk has no "
+            f"calibratable amplitude), got {n_time_steps!r}"
+        )
     width = max(1, int(round(smoothness * rw_smoothness_max_weeks)))
     return min(width, int(n_time_steps))
 
@@ -71,6 +78,18 @@ def _centred_walk_scale(n_time_steps: int, width: int) -> float:
     is that the walk is now an ordinary multivariate normal with covariance
     ``(std / c) ** 2 * A A^T`` -- a distribution with a density, which the
     normalized version did not have.
+
+    That calibration is unsatisfiable at ``n_time_steps == 1``: centring a
+    one-week path subtracts its only value, so ``A`` is the zero operator,
+    ``c`` is 0, and no finite ``std`` scaling can give the path the population
+    variance ``std ** 2`` a single point cannot have. Rescaling by ``c`` would
+    divide by zero, and defining the path as its ``mean`` instead would quietly
+    return a walk with no amplitude and no injectivity — ``eps -> walk`` would
+    map every innovation vector to the same constant, the exact flat-likelihood
+    failure this normalization exists to avoid. A single-week walk is therefore
+    not defined at all: :func:`_kernel_width` rejects the horizon for every
+    entry point in this module (the top-level config separately requires
+    ``n_time_steps >= 4``).
 
     In generation, this function's ``n_time_steps`` argument is the FULL horizon
     ``n_time_steps_full`` — the reported ``n_time_steps`` plus ``adstock_burn_in``. Persisted
@@ -186,7 +205,9 @@ def symbolic_random_walk(
     Parameters
     ----------
     n_time_steps : int
-        Number of time steps (static — determines graph shape).
+        Number of time steps (static — determines graph shape). Must be at
+        least 2; a one-week walk has no calibratable amplitude (see
+        :func:`_centred_walk_scale`) and is rejected.
     mean, std : pt.TensorVariable | float
         Walk center and amplitude (symbolic scalars or floats).
     smoothness : float

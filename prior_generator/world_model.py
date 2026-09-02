@@ -37,6 +37,7 @@ from pytensor.tensor.sharedvar import SharedVariable
 from . import mechanisms
 from .random_walk import _kernel_width, _walk_basis
 from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
+from .signal_diagnostics import admitted_response_support_weeks
 from .symbolic_graph import (
     _adstock_col,
     _saturate_col,
@@ -1196,9 +1197,17 @@ def build_oracle_model(
        ``sales_mu`` with observed ``sales`` for total fit.
     5. **Reproducible likelihood window**: the oracle convolves only reported
        spend with a zero-padded start, whereas generation used real burn-in
-       history. When burn-in is enabled and at least one direct channel has a
-       non-identity adstock kernel, it therefore observes only
-       ``sales[l_max - 1:]``. If every direct channel has identity adstock,
+       history. When burn-in is enabled it therefore discards the leading
+       weeks whose response reaches outside the reported window — as many as
+       the longest carryover its OWN adstock priors admit
+       (:func:`prior_generator.signal_diagnostics.admitted_response_support_weeks`
+       over the direct channels), which is ``l_max - 1`` for a Weibull or an
+       unpinned geometric channel and ``0`` when every direct channel is
+       identity-adstock or its geometric decay prior is pinned at
+       ``alpha == 0``. The bound is the priors' reach, not the generating
+       draw's: the oracle infers the kernel shape parameters, so a slice
+       fitted to the truth's realized reach would keep rows the sampler can
+       visit values for that cannot reproduce them. With a zero warmup,
        persisted spend reproduces the full response and it observes all sales.
        ``contributions`` and ``sales_mu`` remain full-length deterministics in
        both modes; ``baseline`` is full-length in sampled mode only. For
@@ -1267,21 +1276,40 @@ def build_oracle_model(
     g_cy = np.asarray(g_active["g_cy"], dtype="float64")
     adstock_family = np.asarray(structural["adstock_family"])
     burn_in = cfg.adstock_burn_in
-    warmup = cfg.l_max - 1 if burn_in > 0 and np.any((g_cy != 0.0) & (adstock_family != 0)) else 0
+    g_db = np.asarray(g_active["g_db"], dtype="float64")
+    g_zb = np.asarray(g_active["g_zb"], dtype="float64")
+    specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
+    # How far back the response reaches decides how many leading weeks the
+    # zero-padded convolution of reported spend cannot reproduce. The families
+    # are fixed per channel, but the kernel SHAPE parameters are free RVs here,
+    # so the discard must cover the longest reach any admitted draw can have —
+    # not the generating draw's realized reach, which the oracle never sees and
+    # the sampler is free to move away from. `_uniform_prior_specs` has already
+    # resolved `prior_cond`, so reading the geometric decay range back out of it
+    # ties the slice to the exact inference prior the oracle registers below.
+    _, adstock_alpha_lo, adstock_alpha_hi, _ = specs["adstock_alpha"]
+    warmup = (
+        admitted_response_support_weeks(
+            adstock_family[g_cy != 0.0],
+            cfg.l_max,
+            adstock_alpha_range=(adstock_alpha_lo, adstock_alpha_hi),
+        )
+        if burn_in > 0
+        else 0
+    )
     # K2 makes this unreachable after SCMPrior.validate(); retain it for callers
     # that invoke build_oracle_model directly with an unvalidated config.
     if warmup >= n_time_steps:
         raise ValueError(
             "oracle likelihood has no reproducible observations: "
-            f"n_time_steps={n_time_steps} must exceed warmup={warmup} "
-            f"(l_max={cfg.l_max}, adstock_burn_in={burn_in})"
+            f"n_time_steps={n_time_steps} must exceed warmup={warmup}, the response "
+            "support admitted by the oracle's adstock priors "
+            f"(l_max={cfg.l_max}, adstock_burn_in={burn_in}, "
+            f"adstock_alpha_range={(adstock_alpha_lo, adstock_alpha_hi)})"
         )
     n_time_steps_full = n_time_steps + burn_in
     window = slice(burn_in, None)
     rows = np.arange(burn_in + warmup, n_time_steps_full)
-    g_db = np.asarray(g_active["g_db"], dtype="float64")
-    g_zb = np.asarray(g_active["g_zb"], dtype="float64")
-    specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
     _validate_oracle_channel_shocks(cfg, g_cy, data, n_time_steps)
     mech_names = _live_mechanism_param_names(structural)
 
