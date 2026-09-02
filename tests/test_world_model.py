@@ -110,13 +110,125 @@ def test_batched_draws_have_leading_axis(built):
     assert d["contributions"].shape == (5, 48, 4)
 
 
-def test_diverse_texture_gives_nonflat_targets(built):
-    model, out_names = built
-    contrib = draw_worlds(model, out_names, seed=3, draws=1)["contributions"][
-        0
-    ]  # (n_time_steps, n_treatments)
-    cv = contrib.std(0) / (np.abs(contrib.mean(0)) + 1e-9)
-    assert cv.max() > 0.05
+#: Innovation streams the channel texture reads, requested alongside the graph
+#: outputs so the paired arms below can be checked for identical draws.
+TEXTURE_EPS_NAMES = ("eps_c", "eps_c_hf", "eps_c_pulse")
+
+
+@pytest.fixture(scope="module")
+def texture_arms():
+    """One world, three texture wirings, byte-identical draws.
+
+    ``sample_structure`` reads the per-channel texture ENABLE flags off the
+    config's ranges, but the MAGNITUDES (``hf_sigma``, ``pulse_amp``) and the
+    Bernoulli fires are drawn either way. Flipping only the flags therefore
+    leaves the RV set — and, at a fixed seed, every drawn value — identical
+    while rewiring the channel equation, which makes these three arms a
+    controlled experiment: any difference between them IS the texture.
+
+    ``cc``/``zc``/``dc`` are budgeted out so each channel column is its own
+    exogenous drive through the softplus, leaving nothing else that a change
+    could be attributed to.
+    """
+    cfg = make_scm_prior(
+        n_treatments=3,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=104,
+        edge_budget={"cy": (3, 3), "cc": 0, "zc": 0, "dc": 0},
+        channel_hf_sigma_range=(0.4, 0.4),
+        channel_pulse_prob_range=(0.15, 0.15),
+        channel_pulse_amp_range=(1.5, 1.5),
+    )
+    rng = np.random.default_rng(0)
+    g = sample_g_additive(rng, cfg, cfg.layout)
+    g_act = _slice_g_active(g, 3, 2, 1)
+    structural = sample_structure(g_act, cfg, rng)
+
+    def arm(*, use_hf: bool, use_pulse: bool) -> dict[str, np.ndarray]:
+        wiring = dict(structural)
+        wiring["use_hf"] = np.full(3, use_hf)
+        wiring["use_pulse"] = np.full(3, use_pulse)
+        model, out_names, param_names = build_world_model(g_act, cfg, wiring, cfg.n_time_steps)
+        drawn = draw_worlds(model, out_names + param_names + TEXTURE_EPS_NAMES, seed=5, draws=1)
+        return {name: values[0] for name, values in drawn.items()}
+
+    return cfg, {
+        "smooth": arm(use_hf=False, use_pulse=False),
+        "jittery": arm(use_hf=True, use_pulse=False),
+        "pulsed": arm(use_hf=False, use_pulse=True),
+    }
+
+
+def test_texture_arms_differ_only_in_their_wiring(texture_arms):
+    """The three arms are the same drawn world, so their deltas are the texture.
+
+    Load-bearing for the two tests below: ``reseed_rngs`` hands out streams by
+    graph-traversal order, so a future change that made a disabled texture term
+    reach an output (or that drew its magnitude conditionally) would shift every
+    stream and turn those paired deltas into a comparison of two DIFFERENT
+    worlds — which would still look plausible.
+    """
+    _cfg, arms = texture_arms
+    reference = arms["smooth"]
+    shared = (
+        "param_beta",
+        "param_rw_c_mean",
+        "param_rw_c_std",
+        "param_channel_level",
+        "param_hf_sigma",
+        "param_pulse_amp",
+        "param_pulse_prob",
+        *TEXTURE_EPS_NAMES,
+    )
+    for arm in ("jittery", "pulsed"):
+        for name in shared:
+            assert np.array_equal(reference[name], arms[arm][name]), (
+                f"{name} differs between the 'smooth' and {arm!r} arms"
+            )
+
+
+def test_high_frequency_texture_moves_every_week_in_the_sign_of_its_innovation(texture_arms):
+    """``use_hf`` adds ``hf_sigma * eps_c_hf`` inside the channel softplus.
+
+    The signature is mechanism-specific and exact: the term is iid WEEKLY, so
+    every single week moves, and softplus is strictly increasing, so each week
+    moves in the sign of its own innovation. A texture that had been wired to
+    the wrong innovation, scaled to zero, or smoothed would break this while
+    still producing a perfectly plausible-looking jagged channel — which is
+    what the previous ``cv.max() > 0.05`` check could not tell apart (it passes
+    at 0.71 on the 'smooth' arm below, with the texture OFF).
+    """
+    cfg, arms = texture_arms
+    window = slice(cfg.adstock_burn_in, None)
+    delta = arms["jittery"]["channels"] - arms["smooth"]["channels"]
+    jitter = arms["smooth"]["eps_c_hf"][window]
+
+    assert (delta != 0.0).all(), "an iid weekly term must move every week"
+    assert (np.sign(delta) == np.sign(jitter)).all()
+
+
+def test_pulse_texture_moves_only_the_weeks_its_bernoulli_fires(texture_arms):
+    """``use_pulse`` adds ``pulse_amp * eps_c_pulse`` with a 0/1 fire indicator.
+
+    The complement of the high-frequency signature: a pulse is SPARSE, so the
+    channel must be untouched — bit for bit — on every non-fire week, and
+    strictly raised on every fire week (``pulse_amp > 0`` and softplus is
+    strictly increasing). A pulse implemented as a threshold on continuous
+    noise, or centred like the CONTROL pulse, would fail here.
+    """
+    cfg, arms = texture_arms
+    window = slice(cfg.adstock_burn_in, None)
+    delta = arms["pulsed"]["channels"] - arms["smooth"]["channels"]
+    fired = arms["smooth"]["eps_c_pulse"][window] > 0
+
+    # both classes must be represented, or one of the two claims below is vacuous
+    assert fired.any(axis=0).all() and (~fired).any(axis=0).all(), (
+        f"every channel needs both fire and quiet weeks, got "
+        f"{fired.sum(axis=0)} of {fired.shape[0]}"
+    )
+    assert (delta[fired] > 0.0).all(), "every fire week must raise the channel"
+    assert (delta[~fired] == 0.0).all(), "a non-fire week must be untouched"
 
 
 def test_single_draw_has_leading_axis(built):

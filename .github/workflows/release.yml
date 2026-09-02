@@ -33,8 +33,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      # --runslow un-skips the @pytest.mark.slow set that tests/conftest.py
+      # gates off by default. A release is not latency-sensitive, so it runs
+      # the whole suite in one pass rather than splitting fast/slow the way
+      # ci.yml does — a tag must never ship past an untested code path.
       - name: Run tests
-        run: pytest tests/ -q
+        run: pytest tests/ -q --runslow
 
   build:
     runs-on: ubuntu-latest
