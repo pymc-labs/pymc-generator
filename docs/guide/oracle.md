@@ -57,13 +57,37 @@ that is the quantity an MMM fit on observables estimates. The do()-style
 `contributions` truth additionally removes upstream influence from spend and is
 not identifiable from the observables alone.
 
-The oracle's `baseline` deterministic is `B`, including its `D→B` and `Z→B`
-parent terms, but excluding `RW_Y`; the generator persists `baseline = B +
-RW_Y`. Because `RW_Y` is not persisted separately, those baselines are **not**
-directly comparable. `contributions` is exactly comparable with
-`world.data["contributions_observed"]`; compare `sales_mu` with
-`world.data["sales"]` for total mean fit. Baseline recovery carries an
-irreducible floor of one sales-noise walk.
+### Two latent modes, two different posteriors
+
+`oracle_model()` takes `latent="marginal"` (the **default**) or
+`latent="sampled"`, and they expose different variables. Marginal mode
+integrates the outcome-side Gaussian latents analytically — no latent-walk
+dimensions, an exact multivariate-normal likelihood — which is why it samples
+far better; sampled mode keeps the walks as explicit RVs so you can look at
+them.
+
+| | `latent="marginal"` (default) | `latent="sampled"` |
+| --- | --- | --- |
+| likelihood | `pm.MvNormal` on `sales` (exact walk covariance + iid `RW_Y` on the diagonal, plus a `1e-12 I` factorization guard) | `pm.Normal` on `sales`, `sigma=rw_y_std` |
+| deterministics | `contributions`, `sales_mu`, plus `rw_b_std` / `rw_y_std` in relative outcome-noise mode | the same, **plus** `baseline` and `demand` |
+| extra free RVs | — | `eps_d`, `eps_b` (the walk innovations) |
+| floored intercept | raises — `max(RW_B, baseline_floor)` is not Gaussian | supported, applies the identical clip |
+
+So the default oracle has **no `baseline` and no `demand` deterministic**: its
+`sales_mu` is `E[sales | θ]` and excludes every latent walk realization. Ask for
+`latent="sampled"` when you need posterior baseline or demand paths, and expect
+the `O(n³)` Cholesky per gradient in marginal mode to be the cheaper trade at
+weekly horizons.
+
+What is comparable, in both modes: `contributions` against
+`world.data["contributions_observed"]` (exactly), and `sales_mu` against
+`world.data["sales"]` for total mean fit. Sampled mode's `baseline` is `B`
+including its `D→B` and `Z→B` parent terms but *excluding* `RW_Y`, while the
+persisted `world.data["baseline"]` is `B + RW_Y` — so subtract the persisted
+`world.data["sales_noise"]` column (`RW_Y` is stored in its own right) before
+comparing, or compare against `world.data["baseline_intrinsic"]` plus the
+parent terms. Without that adjustment, baseline recovery carries an irreducible
+floor of one observation-noise draw.
 
 Because the oracle runs under the same prior the world was drawn from, the
 comparison is apples-to-apples for a PFN trained on corpora from the same
@@ -72,8 +96,9 @@ intervals, which `SCM.oracle_model()` picks up automatically when enabled.
 
 ## What the oracle is — and is not
 
-`build_oracle_model` keeps everything upstream of the observation exact, with
-six explicit concessions (all documented in the API reference):
+`build_oracle_model` keeps everything upstream of the observation exact and
+documents six explicit, **mode-dependent** qualifications (the same six, in the
+same order, as the API reference):
 
 1. **Structure-known.** The true DAG, mechanism families, and walk smoothness
    are given. This is the *structure-known* oracle — an **upper bound** for any
@@ -84,30 +109,53 @@ six explicit concessions (all documented in the API reference):
     `p(Z | D)` is not modeled. This also deliberately does **not** model
     `p(C | eps_b)` or exploit baseline information encoded through the
     channel–baseline correlation (rho, configured here as confounding strength);
-    demand is inferred from the sales residual via `D → B` only. This is a
-    plug-in-channel concession, not a claim of exact conditioning.
-3. **iid sales-noise representation.** The oracle represents `RW_Y` as iid
-   `Normal(0, rw_y_std)` with the **same** `HalfNormal` prior on the scale.
-   Since the walk is normalized by a constant rather than by its own realized
-   standard deviation, it is an ordinary multivariate normal and an exact
-   density does exist — this concession is removable, just not yet removed. The
-   latent demand and baseline walks stay exact (same transform, same horizon,
-   sliced to the reported window).
+    demand is inferred from the sales residual via `D → B` only — in sampled
+    mode as an explicit latent, in marginal mode by integrating that same path
+    through the residual covariance. This is a
+    plug-in-channel qualification, not a claim of exact conditioning.
+3. **Outcome-side Gaussian representation.** This is *not* an approximation of
+   `RW_Y`: generation already draws `RW_Y = rw_y_std * eps_y` as iid Gaussian
+   observation noise, so both oracle modes use its exact process. Under the
+   default `outcome_std_mode="relative"` the free scale RV is the dimensionless
+   `rw_y_std_rel` (`pm.Uniform` over `rw_sales_std_range`) and `rw_y_std` is a
+   deterministic — `rel × sqrt(Σ (g_cy·β)²)`, the parameter-only media anchor;
+   the `HalfNormal` scale prior appears only under
+   `outcome_std_mode="absolute"`, where `rw_y_std` is itself the free RV.
+   Marginal mode integrates `RW_D` and `RW_B` with their exact observed-window
+   covariances and adds the iid `RW_Y` variance to the diagonal; sampled mode
+   keeps the full-horizon walk transforms and the same exact iid `RW_Y`
+   likelihood. The `1e-12 I` covariance floor in marginal mode is a
+   factorization guard only — its implied `1e-6` standard deviation is ~`1e-6`
+   of any realistic sales sd and cannot carry inference.
 
-4. **Baseline label.** The oracle's `baseline` is `B` (including its `D→B`
-   and `Z→B` parent terms) without `RW_Y`, whereas the generator persists
-   `B + RW_Y`. `RW_Y` is not stored separately, so baseline is not directly
-   comparable. `contributions` is exactly comparable with
-   `world.data["contributions_observed"]`; compare `sales_mu` with observed
-   `sales` for total fit. Baseline recovery has an irreducible one-walk floor.
+4. **Posterior-series labels.** Marginal mode has no `demand` and no
+   `baseline` deterministic; its full-length `sales_mu` is `E[sales | θ]` and
+   excludes every latent walk realization. Sampled mode's `baseline` is `B`
+   (including its `D→B` and `Z→B` parent terms) without `RW_Y`, whereas the
+   persisted `data["baseline"]` is `B + RW_Y` — subtract the persisted
+   `sales_noise` column to compare them. `contributions` is exactly comparable
+   with `world.data["contributions_observed"]` in both modes; compare
+   `sales_mu` with observed `sales` for total fit.
 5. **Reproducible likelihood window.** The adstock convolution sees only the
    reported window (zero-padded start) while generation used
-   `adstock_burn_in` weeks of real history. With positive burn-in and an
-   eligible direct nonidentity adstock kernel, the oracle observes only
-   `sales[l_max - 1:]`; otherwise every reported week is reproducible and the
-   likelihood uses the full window. The full-length deterministics remain
-   available for band comparison. The per-channel `saturation_scale` is a
-   function of the drawn parameters alone; it is persisted and supplied by
+   `adstock_burn_in` weeks of real history. With burn-in enabled the oracle
+   therefore observes `sales[warmup:]`, where `warmup` is the response support
+   **admitted by the oracle's own inference priors**: the direct channels'
+   adstock families, `l_max`, and the geometric decay range *after* any ACE
+   prior-conditioning narrowing. Weibull's shape box
+   (`weibull_lam_range` / `weibull_k_range`) is deliberately not consulted — a
+   Weibull family's admitted reach is `l_max - 1` whatever its shape range.
+   Concretely: a family set admitting Weibull, or geometric with a positive
+   decay upper bound, drops `l_max - 1` rows; identity-only direct paths drop
+   none; and geometric-only with the effective decay range pinned at `(0, 0)`
+   also drops none, because a zero-decay kernel is an exact identity and every
+   reported week is reproducible from persisted spend. Without burn-in
+   `warmup` is `0`. If `warmup` would consume every reported week the builder
+   raises rather than fitting an empty likelihood. Full-length `contributions`
+   and `sales_mu` deterministics remain
+   available for band comparison (`baseline` too, in sampled mode). The
+   per-channel `saturation_scale` is a
+   parameter-only reference level; it is persisted and supplied by
    `SCM.oracle_model()` so the oracle anchors the nonlinear response exactly
    where generation did.
 6. **Weibull sampler downgrade.** pymc-marketing's `weibull_adstock` performs

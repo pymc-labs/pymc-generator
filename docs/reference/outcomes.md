@@ -46,6 +46,10 @@ direct channels only:
 direct = media.select(media.unit_max > 0.0)
 ```
 
+`quantities=[...]` restricts which quantities are built at all. An empty list
+is rejected at construction — naming nothing is a caller mistake, not a request
+for an empty report — so pass `None` (the default) when you want all of them.
+
 ## The share budget is exact
 
 The quantities in `ADDITIVE_QUANTITIES` — `baseline_intrinsic`, `sales_noise`,
@@ -58,6 +62,12 @@ therefore form a true budget, not a set of loosely related ratios:
 assert np.allclose(dist.additive_share_total(), 1.0)
 ```
 
+The one exception is a world whose sales sum to exactly zero: its share budget
+is genuinely undefined, so every share for that world — and its
+`additive_share_total()` entry — is `NaN` rather than `0.0`. Use
+`np.allclose(..., equal_nan=False)` on a filtered subset, or `np.nanmean`, if
+your corpus can contain one.
+
 ## Conditioning and scale
 
 Conditioning is a world row mask, not a separate API:
@@ -65,7 +75,17 @@ Conditioning is a world row mask, not a separate API:
 ```python
 pg.outcome_distributions(corpus, worlds=corpus["cell_id"] == 3)
 pg.outcome_distributions(corpus, worlds=corpus["n_treatments_active"] > 4)
+pg.outcome_distributions(corpus, worlds=corpus["is_val"] == 1)   # uint8 flag
 ```
+
+A boolean mask, a slice, or a genuine array of positions all work. What does
+**not** work is a 1-D *integer* array whose length equals the number of worlds
+and whose values are all `0` or `1`: only the dtype distinguishes "mask" from
+"positions", so that case raises `ValueError` naming both readings. Persisted
+corpus flags are `uint8`, which means `worlds=corpus["is_val"]` is exactly the
+ambiguous case — always write `corpus["is_val"] == 1` (or
+`corpus["is_val"].astype(bool)`) for a mask, or `np.flatnonzero(...)` for
+positions. `QuantityDistribution.select` applies the same rule to units.
 
 Worlds have arbitrary sales levels, so pooled *raw* values mix scales.
 `normalize="sales_scale"` divides every Y-scale quantity by the world's own
@@ -74,7 +94,14 @@ inputs (`spend`, `controls`, `demand`) are not in sales units and are never
 rescaled. Shares are ratios and never move.
 
 `keep_series=False` drops the raw values (roughly corpus-sized) while keeping
-per-unit stats and pooled quantiles — use it for very large corpora.
+per-unit stats and the pooled quantile report — use it for very large corpora.
+What still works: `summary()` and `table()` at their default levels, and any
+report at the `quantile_levels` the distribution was built with (a list
+spelling of the same numbers is fine). What raises: `.values`, any report at
+*other* levels, and `QuantityDistribution.select(...)` — a subset needs the raw
+values, and serving the full population's pooled stats for a selected subset
+would silently answer a different question. Rebuild with `keep_series=True`
+when you need those.
 
 ## Reports
 

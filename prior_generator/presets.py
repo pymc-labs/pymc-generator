@@ -121,9 +121,15 @@ def make_scm_prior(
         — retune against the :mod:`prior_generator.signal_diagnostics` gate,
         not the raw ranges.
 
+        The burn-in this preset sets is ``l_max`` (following an overridden
+        ``l_max``, and overridable on its own). A raw ``SCMPrior`` instead
+        defaults to ``adstock_burn_in=0`` with ``l_max=8``; both ``0`` (off)
+        and ``>= l_max`` are legal, nothing in between.
+
         Controls get the same two terms, RELATIVE to each control's own walk
         std and with a CENTRED pulse (``amp * (fire - prob)``), so a control's
-        expected level stays ``rw_z_mean`` and the saturation anchors are
+        expected level stays ``rw_z_mean`` EXACTLY (a control applies no
+        activation) and the parameter-only saturation reference levels are
         untouched. This is what makes ``Z`` separable from the baseline: both
         are otherwise smoothed walks over the same function space, which leaves
         ``Z->B`` weakly identified against baseline drift.
@@ -132,15 +138,36 @@ def make_scm_prior(
         structural-pfn was not migrated; reproducing pre-fix corpora requires
         structural-pfn itself.
     **overrides
-        Any other :class:`SCMPrior` field (e.g. ``n_time_steps``, ``n_cells``,
-        ``rw_baseline_std_range`` / ``rw_sales_std_range`` for the default
-        relative outcome-noise axis, or
+        Any other :class:`SCMPrior` field, passed straight to its constructor.
+        The accepted keys are therefore exactly the 57 :class:`SCMPrior`
+        dataclass fields this signature does not already bind by name (64
+        fields, less the seven named above) — e.g. ``n_time_steps``,
+        ``n_cells``, ``seed``,
+        ``l_max``, any ``*_coeff_range``, ``rw_baseline_std_range`` /
+        ``rw_sales_std_range`` for the default relative outcome-noise axis,
         ``outcome_std_mode="absolute"`` with ``rw_sales_std_sigma`` for the
-        legacy absolute scale axis), coefficient ranges, or
-        ``prior_conditioning=True`` to enable the ACE prior-conditioning
-        hyperprior — per-cell narrowed prior intervals recorded in the
-        corpus ``prior_cond`` key). Explicit overrides win over the values
-        set here.
+        legacy absolute scale axis, or ``prior_conditioning=True`` to enable
+        the ACE prior-conditioning hyperprior (per-cell narrowed prior
+        intervals, recorded in the corpus ``prior_cond`` key).
+
+        Precedence, in application order: this function's own defaults (the
+        pinned ``*_active_range`` values and ``edge_budget``), then the
+        ``nonlinearity="linear"`` family probabilities, then the ``texture``
+        preset (:data:`_DIVERSE_TEXTURE`), then ``adstock_burn_in``, then
+        ``**overrides``. So an override wins over every one of them — including
+        the texture ranges (``channel_hf_sigma_range=(0.0, 0.0)`` disables the
+        channel jitter the preset just enabled) and the burn-in
+        (``adstock_burn_in=0`` turns it off even though the preset pinned
+        ``l_max``). ``nonlinearity="linear"`` sets only
+        ``adstock_family_probs`` / ``saturation_family_probs``, so overriding
+        one of those two leaves the OTHER forced to its identity family —
+        pass ``nonlinearity="diverse"`` rather than fighting the flag.
+
+        An unrecognized key is a hard error, not a silent no-op:
+        ``SCMPrior.__init__`` raises ``TypeError: SCMPrior.__init__() got an
+        unexpected keyword argument '<key>'``. A recognized key with an invalid
+        value raises ``ValueError`` from :meth:`SCMPrior.validate`, which this
+        function always calls before returning.
 
     Returns
     -------

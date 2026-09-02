@@ -183,12 +183,24 @@ Y   = B + Σ_j δ_j·D_j + Σ_m ρ_m·Z_m
 Three structural facts do the heavy lifting:
 
 1. **Only the direct `C → Y` path is nonlinear.** `f_k` is that channel's
-   adstock ⊙ saturation response. **Every other edge is linear** — all the
-   input→input interactions (`dc, zc, cc, dz, zz`) and the baseline drivers
-   (`db, zb`) are plain linear loadings. This keeps the interaction structure
-   interpretable while the media response stays realistically curved.
-2. **Every node carries its own random-walk noise term**, and channels and
-   controls additionally carry high-frequency drive. For channels — iid weekly
+   adstock ⊙ saturation response. **Every other loading is additive and linear
+   on the child's pre-activation scale** — all the input→input interactions
+   (`dc, zc, cc, dz, zz`) and the baseline drivers (`db, zb`) are plain linear
+   coefficients inside the parenthesis. For `B`, `Z` and `Y` there is no
+   parenthesis, so those edges are linear on the *observed* scale too. A
+   channel is the exception: `C_k = softplus(...)`, so the observed
+   parent→channel mapping inherits the softplus curvature (and the held-level
+   clamp, when shocks are enabled). With a `dc` loading of `0.308286074`
+   (mid-range for the default `dc_coeff_range=(0.1, 0.5)`) and no other parent,
+   `D_j = −1, 0, +1` gives `C = 0.5508, 0.6931, 0.8591`: the two equal parent
+   steps produce effects of `0.1423` and `0.1660`, not one constant `0.3083`.
+   Interaction *structure* is rich, interaction *shape* is linear — but only
+   before the positivity guard.
+2. **Every node except `Y` carries its own random-walk noise term**, and
+   channels and controls additionally carry high-frequency drive. `Y` is not a
+   walk: `RW_Y = rw_y_std · eps_y` is **iid** Gaussian observation noise, with
+   no cumulative sum, no smoothing and no centring, and it is persisted as the
+   `sales_noise` column. For channels — iid weekly
    execution noise `σ_k·ε` and campaign pulses `a_k·b` (a Bernoulli fire) —
    that variation is what makes spend *sweep* its response curve; without it,
    the contribution targets degenerate to flat lines. For controls the same two
@@ -197,9 +209,16 @@ Three structural facts do the heavy lifting:
    baseline walk, which leaves `Z → B` weakly identified against baseline
    drift. The control pulse is **centred** on its own fire probability, so both
    added terms are mean-zero and a control's expected level stays `rw_z_mean`
-   (i.e. `E[F_m − RW_m] = 0`). Control
+   (i.e. `E[F_m − RW_m] = 0`) — exactly, since a control applies no
+   activation. Control
    magnitudes are drawn relative to the control's own walk std; channel
    magnitudes relative to the channel's level.
+
+   The signed `D` / `Z` / `B` walks are **centred, smoothed Gaussian paths** —
+   cumulative sum, then an edge-padded moving average, then full-path centring,
+   then a fixed scale divisor. A channel's own drive is the *positive-only*
+   version of the same construction: the identical signed path, wrapped in
+   `softplus`.
 3. **The intercept is separate, and may be floored.** `B` carries no parents:
    latent demand and the controls enter `Y` *directly*, so `Y` reads as the
    equation a standard MMM assumes — intercept + linear controls + nonlinear
@@ -277,19 +296,31 @@ the base rates and budgets.
   consumed, byte-identical corpora — and enabled by
   `make_scm_prior(texture="diverse")`.
 
-Persisted `param_rw_*_std` labels declare the walks' **expected standard
+Persisted `param_rw_*_std` labels declare a walk's **expected standard
 deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.
-Because each path is divided by a fixed constant rather than by its own
-realized standard deviation, that scale is realized only in expectation. It is
-therefore neither the realized standard deviation of an individual path nor a
-standard deviation measured only over the reported window. `smoothness`
+The guarantee is precisely
+
+```text
+E[ var_pop(path) ] = std²      i.e.   std = sqrt( E[var_pop(path)] )
+```
+
+and *not* `E[sd(path)] = std`. Those differ: `sqrt` is concave, so the expected
+*sd* sits strictly below the declared `std` even though the expected
+*variance* is exactly right. Measured over 20 000 unit-`std` paths at
+`n_time_steps=60`, `E[var_pop]/std²` was 0.990–1.004 (target 1.0) while
+`E[sd]/std` was 0.9220 at kernel width 1 and 0.8674 at width 26 — the
+second-moment calibration is exact, the first-moment one is not, and it never
+was meant to be. Each path is divided by a fixed constant rather than by its own
+realized sd, so the scale is realized only in expectation: the label is neither
+the realized sd of an individual path nor an sd measured only over the reported
+window. `smoothness`
 likewise maps to an absolute moving-average kernel width in weeks, governed by
 `rw_smoothness_max_weeks` (26 by default) and clamped to that full horizon. For
 positive-only channel walks, `param_rw_c_std` is the pre-softplus amplitude,
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.
 
-Across 40 signed walks from eight worlds at `n_time_steps=52` and
+Across 32 signed walks from eight worlds at `n_time_steps=52` and
 `adstock_burn_in=8`, the reported-window sd / declared `std` was:
 
 | signed group | reported-window sd / declared `std` | median |
@@ -297,14 +328,39 @@ Across 40 signed walks from eight worlds at `n_time_steps=52` and
 | `rw_d` | [0.396, 0.927] | 0.690 |
 | `rw_z` | [0.252, 1.985] | 0.868 |
 | `rw_b` | [0.264, 1.809] | 0.814 |
-| `rw_y` | [0.294, 1.335] | 0.757 |
-| **all signed (n=40)** | **[0.25, 1.99]** | **0.80** |
 
-This is roughly an 8× spread. `param_rw_*_std` is therefore a weak label for
+Combined, those 32 walks span [0.25, 1.99] — roughly an 8× spread.
+`param_rw_*_std` is therefore a weak label for
 anything measured on the reported window; consumers should not score it as if
 it were the realized reported-window standard deviation. See the [corpus
 guide](docs/guide/corpus.md#random-walk-parameter-labels) for the schema
 context.
+
+`param_rw_y_std` is **not** in that table, because `RW_Y` is not a walk. It is
+iid observation noise, so the label is its exact per-week Normal σ:
+`sales_noise == param_rw_y_std * eps_y[adstock_burn_in:]` holds to the last bit
+(max abs difference 0.0 over eight worlds). Its realized window sd still
+scatters — measured [0.838, 1.314] with median 1.001 over the same eight worlds
+— but that scatter is just the sample sd of 52 standard normals under the
+acceptance filter, not a loose label.
+
+**Walk paths are drawn jointly, not sequentially.** Full-path centring plus a
+symmetric moving average makes a walk
+**non-adapted**: week `t` of the path is a function of the *whole* innovation
+vector, including innovations at `t' > t`. Perturbing only the last innovation
+of a 60-week unit path moves week 0 by `−0.0231` at kernel width 26 and by
+`−0.0053` at width 1 (the centring alone), and moves all 60 weeks. That is why
+the paths are drawn jointly, offline, as one multivariate normal — they are not
+a filtration you can simulate forward one week at a time.
+
+This does **not** leak future spend into the media response. Causality in this
+model is a property of the *response*, not of the noise: `f_k` uses a causal
+adstock kernel and a κ scale computed from parameters alone, so the response at
+week `t` reads only spend at `t' ≤ t`. Bumping one late week of observed spend
+and re-running the generator's own response code leaves every earlier week
+bit-identical — 18 of 18 (world, channel) checks at exactly zero change. The
+non-adaptedness is a statement about how `eps → path` is factorized, and `eps`
+is exogenous.
 
 
 Every graph output is registered as a `pm.Deterministic`, so a single **`pm.draw`**
@@ -348,10 +404,23 @@ The identity is exact — **not** a Taylor approximation — because `Y` and the
 decomposition are built from the *same* symbolic quantities: one fixed `f_k`,
 with one pinned anchor, is evaluated on every channel variant. The anchor is
 computed from drawn parameters alone: `softplus(softplus(rw_c_mean) +
-pulse_amp * pulse_prob + weighted expected Z→C / C→C parent terms)`, with
+pulse_amp * pulse_prob + weighted reference Z→C / C→C parent terms)`, with
 parents accumulated in topological order. `D→C` drops out because the latent
 factor is pinned mean-zero. Thus `p(θ)` exists independently of noise, and a response at week
 `t` cannot depend on spend at a future week.
+
+`saturation_scale` is that anchor: a **parameter-only reference level**, and
+deliberately *not* `E[C_k]`. The channel equation applies `softplus`, and the
+channel walk is itself a `softplus`, so the anchor takes `softplus` of a mean
+where the world takes the mean of a `softplus`. Softplus is strictly convex, so
+Jensen puts the true expected spend strictly **above** the anchor: measured
+`E[C_k] / saturation_scale` ran 1.004–1.099 over 36 (θ, channel) cells at 600
+noise draws each — every cell above 1 — and +6.0% to +7.8% for a parentless,
+texture-free channel at relative walk std 0.8. Reading no moment is the whole
+point: the anchor is a function of `θ` alone, independent of the noise and of
+every realized series, which is what keeps `p(θ)` well defined and the week-`t`
+response free of spend at `t' > t`. Use it as the κ scale it is, not as a
+prediction of channel level.
 
 `indirect_effects` is further split, by sequential graph surgery, into a
 **telescoping 3-way attribution** in the locked order `(cc, zc, dc)` —
@@ -422,11 +491,19 @@ filtered. Each quantity carries
 - `unit_share` — `Σ_t value / Σ_t sales`, for every quantity in sales units.
 
 Because the decomposition above is exact, the shares of the additive
-quantities are a true budget: `dist.additive_share_total()` is 1.0 per world.
+quantities are a true budget: `dist.additive_share_total()` is 1.0 for every
+world with nonzero sales. A world whose sales sum to exactly zero has no
+defined budget, so its shares — and its `additive_share_total()` entry — are
+`NaN`.
 
 Conditioning is a row mask, not a new API — `worlds=corpus["cell_id"] == 3`,
-`worlds=corpus["n_treatments_active"] > 4` — and `select` conditions on units,
-e.g. direct channels only: `media.select(media.unit_max > 0)`. Worlds have
+`worlds=corpus["n_treatments_active"] > 4`, `worlds=corpus["is_val"] == 1` —
+and `select` conditions on units,
+e.g. direct channels only: `media.select(media.unit_max > 0)`. Booleans,
+slices, and genuine position arrays all work; a 1-D *integer* array of
+world-length whose values are all `0`/`1` is ambiguous (mask or positions?) and
+raises. Persisted flags are `uint8`, so always write `corpus["is_val"] == 1`
+rather than `corpus["is_val"]`. Worlds have
 arbitrary sales levels, so `normalize="sales_scale"` (or `"sales_mean"`) makes
 pooled magnitudes comparable across worlds; shares are ratios and never move.
 `dist.summary()` is JSON-ready, `dist.to_frame()` is a long-form pandas table,
@@ -441,10 +518,14 @@ and they bound what a model trained on this data can be expected to learn.
 - **Additive sales.** Sales is a *sum* of a baseline and per-channel media
   contributions (plus noise), not a multiplicative model. Media contributions add;
   they do not scale the baseline.
-- **Linear interactions, nonlinear direct response.** All input→input edges and
-  baseline drivers are linear loadings; only the direct `C → Y` media path carries
-  adstock and saturation. Interaction *structure* is rich; interaction *shape* is
-  linear.
+- **Linear interactions, nonlinear direct response.** Every input→input edge and
+  baseline driver is an additive linear loading on the child's *pre-activation*
+  scale; only the direct `C → Y` media path carries adstock and saturation.
+  Interaction *structure* is rich; interaction *shape* is linear. Caveat: a
+  channel's pre-activation is wrapped in `softplus`, so the parent→channel
+  mapping is linear *inside* the guard and curved on the observed spend scale.
+  The baseline, control, and outcome equations apply no activation, so their
+  edges are linear on the observed scale as well.
 - **Spend is non-negative.** Channels pass through `softplus`, so spend stays ≥ 0
   even when signed upstream terms push the pre-activation below zero.
 - **Latent demand is never observed.** `D` is the hidden confounder that drives
@@ -459,23 +540,46 @@ and they bound what a model trained on this data can be expected to learn.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
   triangle (`src < dst`), so the graph is always a DAG.
 - **κ-relative saturation.** Each curve's knee is set relative to a pinned,
-  parameter-only expected channel level:
-  `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted expected
+  parameter-only **reference level** — an anchor, not `E[C_k]`:
+  `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted reference
   Z→C / C→C parent terms)`. `D→C` contributes nothing because latent demand is
-  mean-zero. The same anchor is reused across every response variant, so the decomposition
+  mean-zero. Because the channel equation applies `softplus`, Jensen makes the
+  true expected spend strictly larger than the anchor (measured
+  `E[C_k]/saturation_scale` 1.004–1.099). The same anchor is reused across every
+  response variant, so the decomposition
   identity is exact without making the response depend on realized or future
   spend.
 - **Adstock burn-in.** The adstock convolution left-pads with zeros, which would
   make early weeks ramp up artificially. Worlds simulate
   `n_time_steps + adstock_burn_in` weeks and report the last `n_time_steps`, so
-  the reported window sees real history (`adstock_burn_in ≥ l_max`). With
-  positive burn-in,
-  `diagnostics["signal"]["response_warmup_weeks"]` is `l_max - 1` only when an
-  eligible direct channel has a nonidentity adstock kernel; it is `0` for
-  identity-only direct paths and without burn-in. Weeks before a nonzero count
+  the reported window sees real history. `adstock_burn_in` has exactly two legal
+  states — `0` (off, the raw `SCMPrior` default, alongside `l_max = 8`) or
+  `≥ l_max` (`make_scm_prior` pins it to `l_max`, so the shipped preset is
+  `8`/`8`). Nothing in between: a burn-in shorter than the kernel would leave
+  zero-padding inside the reported window, which is the artifact it exists to
+  remove.
+
+  With positive burn-in,
+  `diagnostics["signal"]["response_warmup_weeks"]` counts the reported weeks
+  whose media response reaches back before the window. It is the **realized**
+  kernel support — the largest positive lag carrying nonzero normalized weight
+  — over the eligible direct channels, so it is `0` for identity-only direct
+  paths, `0` for a geometric kernel drawn at `alpha == 0` or a Weibull kernel
+  whose taps are annihilated, and at most `l_max - 1`. Without the full adstock
+  metadata the summary falls back to the conservative `l_max - 1`, and it is `0`
+  without burn-in. Weeks before a nonzero count
   depend on unpersisted pre-window spend and are not functions of persisted
   inputs. `support_mask` is the temporal train/query split, not this
   response-warmup indicator.
+
+  `SCMPrior.validate()` refuses a burn-in whose query window would overlap that
+  non-reproducible prefix, requiring
+  `min(n_time_steps − n_query, n_time_steps // 2) ≥ admitted support`. The check
+  is **family-aware**: it runs only when burn-in is on *and* the configured
+  `adstock_family_probs` (with `adstock_alpha_range` and `l_max`) admit a
+  positive-lag kernel at all. An identity-only mix, `l_max == 1`, or
+  geometric-only with `adstock_alpha_range=(0, 0)` admit no carryover, so there
+  is no prefix to protect and the check is skipped.
 - **Realism filter.** A drawn world is only accepted if it *looks like data a
   modeller would actually get* — see below.
 - **Learnable signal.** Contribution targets should carry real week-to-week
@@ -647,9 +751,14 @@ An `SCM` object bundles the active-size series (`.data`), the active DAG blocks
 ### 3. An audit bundle — `write_scm_bundle` / `write_scenario_bundles`
 
 A folder a human can inspect: `dataset.csv` (the observable inputs),
-`true_components.csv` (the full per-node decomposition), `true_contribution.csv`,
+`true_components.csv` (the full per-node decomposition, including the
+`sales_noise` observation-noise column, so its additive columns sum to
+`dataset.csv`'s `sales_Y` exactly), `true_contribution.csv`,
 `description.txt` (`describe_scm`), `dag.dot`, and — unless disabled — `dag.png`,
 `timeseries.png`, `decomposition.png`, `channels.png`.
+`write_scenario_bundles` pre-flights every scenario's graph search before
+creating any directory, so an infeasible request fails with one error naming
+all offenders instead of leaving a half-written output tree.
 
 ## Named audit scenarios
 
@@ -669,6 +778,13 @@ sc  = pg.SCENARIOS[3]                              # channel_halo
 scm = pg.sample_scm(sc.prior(n_time_steps=104, seed=0), seed=0,
                     connect_all=sc.connect_all, name=sc.name, purpose=sc.purpose)
 ```
+
+`connect_all=True` rejects draws with isolated nodes, which is infeasible for a
+scenario whose budgets *rely* on them. Each scenario therefore carries a
+connectivity-only `connect_all_edge_budget` that `Scenario.prior` substitutes
+over `edge_budget` only when connectivity is forced (`channel_halo`:
+`{"zb": (2, 2)}`; `kitchen_sink`: `{"cc": (3, 4)}`). Default, unforced worlds
+are bit-identical to before the substitution existed.
 
 ## Public API
 
@@ -704,8 +820,25 @@ channels), **covariates** (`n_covariates`, controls), and **latent** factors
 The [posterior oracle](docs/guide/oracle.md) is the same structure-fixed model
 with a world's observed spend, controls, and sales attached. Use
 `build_oracle_model` or `SCM.oracle_model()` as the structure-known posterior
-baseline rather than re-implementing the generated response. A
-Weibull-adstock channel downgrades `weibull_lam` and `weibull_k` from NUTS to
+baseline rather than re-implementing the generated response.
+
+Its likelihood covers only the weeks it can reproduce. Generation convolved
+real burn-in history; the oracle sees the reported window with a zero-padded
+start, so with burn-in enabled it drops the leading weeks the carryover would
+have reached back into and observes `sales[warmup:]`. That `warmup` is the
+response support **admitted by the oracle's own inference priors** — the direct
+channels' adstock families, `l_max`, and the geometric decay range *after* any
+ACE prior-conditioning narrowing — not a blanket `l_max - 1`. Consequences: a
+family set that admits Weibull, or geometric with a positive decay upper bound,
+drops `l_max - 1` rows exactly as before; identity-only direct paths drop none;
+and geometric-only with the effective decay range pinned at `(0, 0)` now also
+drops none, because a zero-decay kernel is an exact identity and every reported
+week is reproducible. Weibull's box (`weibull_lam_range` / `weibull_k_range`)
+is deliberately not consulted — a Weibull family's admitted reach is `l_max - 1`
+whatever its shape range. Full-length `contributions` / `sales_mu`
+deterministics stay available for band comparison either way.
+
+A Weibull-adstock channel downgrades `weibull_lam` and `weibull_k` from NUTS to
 Metropolis because pymc-marketing's min-max Weibull normalization has an
 upstream `Min` without a PyTensor pullback; identity and geometric adstock
 remain NUTS-differentiable. Metropolis mixing makes those carryover parameters'

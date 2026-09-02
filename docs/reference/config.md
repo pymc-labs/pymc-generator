@@ -49,10 +49,14 @@ $$
   zero-only amplitude is a validation error.
 
 The pulse is **centred**: subtracting `p` makes both added terms mean-zero
-(`E[F_m - RW_m] = 0`), so a control's expected level stays `rw_z_mean` and the
-parameter-only saturation anchors are unchanged. (Channel pulses are
+(`E[F_m - RW_m] = 0`), so a control's expected level stays `rw_z_mean` — and
+that claim is EXACT, because a control's equation applies no activation — which
+is why the parameter-only saturation reference levels are unchanged. (Channel
+pulses are
 deliberately uncentred — a channel is positive
-and its realized level may rise above the walk anchor.) Centring holds in
+and its realized level may rise above the walk anchor; a channel's equation
+also applies `softplus`, so its own expected level sits strictly above its
+parameter-only anchor regardless of pulses.) Centring holds in
 expectation conditional on the drawn parameters, not as the temporal mean of
 every finite path.
 

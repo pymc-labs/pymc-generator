@@ -347,14 +347,28 @@ While the project is on 0.x, minor versions may contain breaking changes.
   reported window. Two costs: the "prior" was a statistic of the noise it
   generates, so no `p(theta)` existed independently of `U`; and because the
   mean spans the whole window, `do(C[t'])` for a late `t'` moved the response
-  at an early `t` — the model was anti-causal in time. The anchor is now the
-  expected channel level built as `softplus(softplus(rw_c_mean) + pulse_amp *
-  pulse_prob + weighted expected Z -> C / C -> C parent terms)`, accumulated
+  at an early `t` — the model was anti-causal in time. The anchor is now a
+  parameter-only REFERENCE level built as `softplus(softplus(rw_c_mean) +
+  pulse_amp * pulse_prob + weighted reference Z -> C / C -> C parent terms)`,
+  accumulated
   in topological order (`D -> C` drops out because the factor is now mean-zero).
   Measured over 36 channels of the supported texture, realized/anchor has
   median 1.11 with a 5-95% range of 0.77-1.54; the operating point is now at
   the knee in expectation rather than pinned per world, which widens the
   spread of channel curvature across the corpus.
+
+  Correction (this release, no numeric change): the anchor was originally
+  described here and across the docs as the "expected channel level". It is
+  not `E[C_k]` and never was. The channel equation applies `softplus` and the
+  channel walk is itself a `softplus`, so the construction takes `softplus` of
+  a mean where the world takes the mean of a `softplus`; softplus is strictly
+  convex, so Jensen makes `E[C_k]` strictly LARGER than the anchor (measured
+  `E[C_k]/anchor` in 1.004-1.099 over 36 (theta, channel) cells at 600 noise
+  draws each, every cell above 1). The label is now "parameter-only reference
+  level" everywhere, and `symbolic_graph._expected_levels` is renamed
+  `_reference_levels`. Control-level claims are untouched because they were
+  already exact: a control applies no activation, so its centred pulse and
+  mean-zero jitter leave `E[Z_m] = rw_z_mean` plus its `Z -> Z` terms exactly.
 - **`indirect_effects_by_source` is documented as a convention**, not an
   estimand: the total `indirect_effects` is order-free, its 3-way split is
   defined by a fixed sequential zeroing order and a different order gives
@@ -409,18 +423,21 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - **Query windows cannot overlap non-reproducible burn-in responses**
   (breaking): `SCMPrior.validate()` now rejects a burn-in configuration whose
   query window overlaps the response prefix that depends on unpersisted spend.
-  It requires `min(T - n_query, T // 2) >= l_max - 1`, covering both the
+  It requires `min(T - n_query, T // 2) >= <admitted response support>`,
+  covering both the
   configured short-horizon query split and the `is_future=1` half-series split.
   This replaces — rather than supplements — the prior `T >= l_max` check and
-  is strictly stronger. `response_warmup_weeks` and the oracle likelihood tail
-  remain kernel-aware: they use `l_max - 1` only with burn-in and an eligible
-  direct nonidentity adstock kernel; otherwise they use the full reported
-  window. Summary calls without `adstock_family` conservatively report
-  `l_max - 1` with burn-in.
-- **Oracle likelihood uses only a kernel-required reproducible tail**
-  (breaking): with burn-in and an eligible direct nonidentity adstock kernel,
-  it observes `sales[l_max - 1:]`; identity-only direct paths retain the full
-  likelihood window, while full-length deterministics remain available.
+  is strictly stronger. The bound is the support the CONFIGURED priors admit
+  (`admitted_response_support_weeks`), not a blanket `l_max - 1`, and the check
+  is skipped entirely when no positive-lag kernel is admissible — see
+  *Burn-in validation is family-aware* under Fixed. `adstock_burn_in` keeps
+  exactly two legal states, `0` (off) or `>= l_max`.
+- **Oracle likelihood uses only a reproducible tail** (breaking): with burn-in
+  it observes `sales[warmup:]`, where `warmup` is the response support admitted
+  by the oracle's own inference priors; identity-only direct paths retain the
+  full likelihood window, while full-length deterministics remain available.
+  See *Oracle likelihood window is sliced by admitted support* under Fixed for
+  the final rule.
 - **Zero confounding is a true no-op** (breaking): setting
   `confounding_strength_range=(0, 0)` now matches disabled confounding at a
   fixed seed. Worlds generated with that configuration change because the
@@ -442,8 +459,186 @@ While the project is on 0.x, minor versions may contain breaking changes.
   if/elif dispatch was removed in favor of `SATURATION_FAMILIES`, the single
   name-to-wrapper mapping used by `symbolic_graph._saturate_col`; unused-local
   rule `F841` is enabled again.
+- **Timing telemetry moved out of the persisted diagnostics** (breaking):
+  `sample_prior_predictive` now reports wall clock under
+  `diagnostics["timing"] = {"elapsed_s": float, "tasks_per_sec": float}`, and
+  the top-level `diagnostics["elapsed_s"]` / `diagnostics["tasks_per_sec"]`
+  keys are **removed** — consumers reading them must move to the nested block.
+  `save_corpus` writes the diagnostics block WITHOUT `timing` (on a deep copy,
+  so the caller's dict is never mutated), and `validate_corpus` accepts
+  diagnostics with or without it. Those two numbers were the only
+  nondeterministic values a generation produced, so removing them from the file
+  is what makes two independent same-seed generations save byte-identical
+  `.npz` shards (verified: identical SHA-256 across a 5 s gap).
+- **The persisted schema version is enforced, not merely stamped** (breaking):
+  `load_corpus` migrates the recognized v1 keys first
+  (`slots.LEGACY_CORPUS_KEYS_V1`) and *then* requires
+  `diagnostics["schema_version"] == CORPUS_SCHEMA_VERSION` (`2`) as a non-bool
+  integer, raising otherwise; `validate_corpus` reports the same condition as
+  an error string and `save_corpus` raises. A missing version, a malformed one
+  (the string `"2"`), and a future one (`99`) are all rejected instead of being
+  half-read as if they were current. Previously the version was written and
+  migrated but never checked, so a foreign or corrupted shard loaded silently.
+- **Configuration ranges must be representable in float32** (breaking):
+  `SCMPrior.validate()` rejects a prior range whose endpoints do not survive
+  the persisted-storage dtype, naming the field and the float32 maximum,
+  instead of letting the storage cast overflow such a value to `inf`.
 
 ### Fixed
+- **`response_warmup_weeks` reports the REALIZED kernel support**: it used
+  `l_max - 1` for every non-identity adstock family, over-reporting the reach
+  of a geometric kernel drawn at `alpha == 0` (an exact identity) and of a
+  min-max Weibull kernel whose trailing taps the normalization annihilates. New
+  `signal_diagnostics.response_support_weeks(family, alpha, lam, k, l_max)`
+  returns the largest positive lag with nonzero normalized weight, and
+  `summarize_signal_metrics` derives the warmup count from it whenever all four
+  adstock metadata arrays are supplied. The family-only and no-metadata
+  fallbacks keep the conservative `l_max - 1`. New
+  `admitted_response_support_weeks(families, l_max, adstock_alpha_range=...)`
+  is the pre-draw counterpart used where a drawn value may not be read
+  (configuration validation, the oracle likelihood window): `0` for the
+  identity family, `l_max - 1` for Weibull, and `l_max - 1` for geometric only
+  when the decay range's upper end is positive.
+- **Burn-in validation is family-aware**: the query-overlap check in
+  `SCMPrior.validate()` now runs only when `adstock_burn_in > 0` AND the
+  configured `adstock_family_probs` (with `adstock_alpha_range` and `l_max`)
+  admit a positive-lag kernel at all. An identity-only mix
+  (`nonlinearity="linear"`), `l_max == 1`, and geometric-only with
+  `adstock_alpha_range=(0, 0)` admit no carryover, so there is no
+  non-reproducible prefix to protect and configurations that were previously
+  rejected for nothing now validate. When the check does fire it reports the
+  admitted support rather than a bare `l_max - 1`, and its remedy list gains
+  "restrict `adstock_family_probs` to the identity family". `adstock_burn_in`
+  keeps both legal states, `0` (off) and `>= l_max`.
+- **Oracle likelihood window is sliced by admitted support**:
+  `build_oracle_model` dropped `l_max - 1` leading weeks for any non-identity
+  direct kernel, discarding reproducible observations whenever the oracle's own
+  priors could not reach that far. The warmup is now
+  `admitted_response_support_weeks` over the DIRECT channels' adstock families,
+  `l_max`, and the geometric decay range *after* ACE prior-conditioning
+  narrowing. Weibull's shape box is deliberately not consulted (a Weibull
+  family's admitted reach is `l_max - 1` whatever its shape range). Geometric-
+  only worlds whose effective decay range is pinned at `(0, 0)` now keep every
+  reported week; Weibull or positive-decay geometric worlds are unchanged. The
+  empty-likelihood guard message now names the admitted support and the decay
+  range that produced it.
+- **Missing gate metrics say why they are missing**: `check_signal_gate` now
+  distinguishes "no direct channels measured", "no valid observations across N
+  direct channels", and "`n_direct_channels` not reported" instead of emitting
+  one indistinguishable missing-metric row.
+- **A one-week random walk raises instead of returning NaN**:
+  `random_walk._kernel_width` requires `n_time_steps >= 2`, so
+  `symbolic_random_walk(n_time_steps=1, ...)` raises `ValueError` ("a one-week
+  random walk has no calibratable amplitude") rather than dividing by a zero
+  scale. A one-week centred path has zero amplitude, which makes the
+  `E[var_pop(path)] = std**2` calibration unsatisfiable.
+- **Retried draws are accounted separately from rejected ones**:
+  `_generate_corpus_additive` retries ONLY numeric node-evaluation failures
+  raised from inside a compiled PyTensor function (a `ValueError` /
+  `ArithmeticError` whose traceback passes through
+  `pytensor.link.utils.raise_with_op`); every other exception propagates with
+  its original traceback instead of being swallowed by a retry loop. Retried
+  batches are counted in the new `diagnostics["n_draw_failures"]` and no longer
+  inflate `n_draws_evaluated` / `rejection_rate`, and the cell-exhaustion
+  `RuntimeError` reports realism-filter rejections and draw failures
+  separately.
+- **Ambiguous world/unit selectors are rejected**: a 1-D integer (non-bool)
+  selector whose length equals the number of worlds/units and whose values are
+  all `0` or `1` is a mask *or* a list of positions, and only the dtype tells
+  them apart — `outcome_distributions(..., worlds=...)` and
+  `QuantityDistribution.select` now raise `ValueError` naming both
+  disambiguations (`arr.astype(bool)` / `arr == 1` for a mask,
+  `np.flatnonzero(arr)` for positions) instead of silently reading it as
+  positions. Persisted corpus flags are `uint8`, so `worlds=corpus["is_val"]`
+  was exactly the ambiguous case; write `corpus["is_val"] == 1`. Boolean masks,
+  slices, and genuine index arrays are unchanged.
+- **`keep_series=False` serves its cached pooled report**:
+  `OutcomeDistributions.table()` / `.summary()` and
+  `QuantityDistribution.quantiles()` / `.summary()` now return the stored
+  pooled stats whenever the requested levels are unset or equal the stored
+  `quantile_levels` (compared as floats, so a list spelling works) — the
+  default `table()` used to raise. Other levels still raise, and `.values`
+  still raises with a message naming the levels that ARE available.
+  `QuantityDistribution.select()` now raises rather than returning the full
+  population's pooled stats for a requested subset, which silently answered a
+  different question.
+- **A zero-sales world has undefined shares, not zero shares**:
+  `QuantityDistribution.unit_share` and
+  `OutcomeDistributions.additive_share_total()` propagate `NaN` for a world
+  whose sales sum to exactly zero instead of `nan_to_num`-ing it to `0.0`. The
+  "budget is 1.0 per world" guarantee holds for every world with nonzero sales.
+- **An empty quantity subset is rejected at construction**:
+  `outcome_distributions(source, quantities=[])` raises `ValueError` naming the
+  available quantities, instead of building an empty report whose `to_frame()`
+  then failed.
+- **Audit bundles export the observation-noise truth column**:
+  `write_scm_bundle` writes `sales_noise` into `true_components.csv` (third
+  column, after `week` and `baseline_intrinsic`). Without it the additive
+  component columns summed to `dataset.csv`'s `sales_Y` MINUS the observation
+  noise, so an auditor adding them up saw a residual of `max|sales_noise|`
+  (0.07-0.18 on the shipped scenarios) while `description.txt` reported a
+  decomposition error near `1e-15`. The contract is now explicit: every column
+  except `week`, `sales_reconstructed` and the `demand_*` / `channel_base_*`
+  diagnostics is an additive term of `sales_Y`, and they sum to it exactly.
+  `dataset.csv` and `true_contribution.csv` are unchanged.
+- **`describe_scm` prints the identity it actually checks**: the decomposition
+  header read `baseline_intrinsic + confounder + control + direct contributions
+  + indirect_by_source == sales`, omitting `sales_noise` — the term
+  `SCM.reconstruction()` and `identity_error()` do include. It now reads
+  `baseline_intrinsic + sales_noise + confounder + control + direct
+  contributions + indirect_by_source == sales, exactly the sum
+  SCM.reconstruction() forms`. The printed numbers are unchanged.
+- **`describe_scm` reports the texture it drew, not a preset name**: the title
+  line hardcoded `texture=diverse` and the section header read
+  `Texture prior (diverse):` even for a raw zero-texture `SCMPrior` world,
+  which is simply false there. The title is now
+  `Dataset: X (additive SCM)` and the header reports the realized enable counts
+  — `Texture prior (drawn: channel hf 6/6, channel pulse 6/6, control hf 4/4,
+  control pulse 4/4):` — from `use_hf` / `use_pulse` / `use_control_hf` /
+  `use_control_pulse`.
+- **Forced connectivity is feasible for every scenario**: `connect_all=True`
+  rejects any draw with an isolated node, which no `channel_halo` draw could
+  satisfy — with `zc = zz = dz = 0` a control's only route to `Y` is its own
+  `Z→B` arrow, and the scenario's `zb=(1, 1)` budget left the second control
+  permanently isolated (per-draw feasible fraction 0.00%). `prior-generator
+  --require-path-to-y` consequently wrote folders `0`, `1`, `2` and then died
+  with `RuntimeError: world 'channel_halo': no DAG satisfying the connectivity
+  rule in 2000 draws`, exiting 1 with partial output on disk. Scenarios now
+  carry a connectivity-only `Scenario.connect_all_edge_budget` that
+  `Scenario.prior(..., connect_all=...)` substitutes over `edge_budget` ONLY
+  when connectivity is forced: `channel_halo` gets `{"zb": (2, 2)}`
+  (0.00% → 17.07%) and `kitchen_sink` gets `{"cc": (3, 4)}`, since `cy = 4` of 6
+  leaves two feeder channels each needing an outgoing halo arrow and a
+  `(1, 2)` budget can draw just one (0.85% → 5.89%). All five scenarios now
+  succeed with every node reporting `connected`. `write_scenario_bundles` is
+  additionally atomic: it pre-flights every scenario's graph search before
+  creating ANY directory and raises one `RuntimeError` naming all infeasible
+  scenarios, leaving `out_root` nonexistent. Default (unforced) worlds are
+  bit-identical to before.
+- **Documented contracts corrected** (no behavior change): the κ
+  `saturation_scale` anchor is described as the parameter-only reference level
+  it is rather than an expected channel level (`E[C_k]` is strictly larger by
+  Jensen; `symbolic_graph._expected_levels` is renamed `_reference_levels`, and
+  the rendered equation text becomes
+  `saturation_scale[k] = max(parameter-only reference level for Ck+1, 1e-8)`).
+  "Every node carries a random-walk" no longer covers `Y`, which carries iid
+  observation noise `RW_Y = rw_y_std * eps_y` and gets its own row; the walk
+  calibration guarantee is stated as `E[var_pop(path)] = std**2` rather than
+  `E[path_sd] = std` (measured `E[path_sd]/std` 0.867-0.926); the signed
+  D/Z/B walks are identified as centred, smoothed Gaussian paths whose
+  positive-only softplus transform is the channel own-drive; and full-path
+  centring is documented as making a path non-adapted (drawn jointly offline)
+  WITHOUT letting future spend into the media response. "Every other edge is
+  linear" is corrected to linear on the child's PRE-ACTIVATION scale — a
+  channel's observed parent mapping inherits the softplus. The burn-in
+  invariant names both legal states (`0` or `>= l_max`) and which default
+  applies where, `make_scm_prior`'s `**overrides` gains an entry/precedence
+  contract, and the posterior-oracle guide is rewritten for the current
+  marginal-vs-sampled contract (default `latent="marginal"` exposes no
+  `baseline` / `demand` and an `MvNormal` likelihood; `latent="sampled"` adds
+  both and uses `Normal`; `rw_y_std_rel` is the free scale RV in the default
+  relative outcome-noise mode, `HalfNormal` only in absolute mode; `RW_Y` is
+  exactly iid in generation, so representing it as such is not a concession).
 - **Rendered random-walk equations match execution**: `SCM.equations["RW"]`
   now names the fixed `centred_walk_scale(T_full, width)` divisor and the
   world's concrete scale values instead of publishing the removed

@@ -530,11 +530,15 @@ def test_outcome_noise_modes_preserve_the_scm_identity(outcome_std_mode):
     assert world.identity_error() < 1e-9
 
 
-def test_saturation_anchor_equals_the_closed_form_expected_level():
+def test_saturation_anchor_equals_the_closed_form_reference_level():
     """Texture-free, upstream-free: the anchor is softplus(softplus(rw_c_mean)).
 
-    The channel walk is already softplus-transformed and the channel equation
-    applies a second softplus, so the expected level nests both.
+    That closed form is the PARAMETER-ONLY reference level, not ``E[C]``: the
+    channel walk is already softplus-transformed and the channel equation
+    applies a second softplus, so the anchor nests ``softplus`` around a MEAN
+    where the realized channel takes the MEAN of a ``softplus``. Softplus is
+    strictly convex, so ``E[C] > anchor`` strictly; this test pins the anchor's
+    closed form, not any moment of the drawn series.
     """
     cfg = _config(channel_hf_sigma_range=(0.0, 0.0), channel_pulse_prob_range=(0.0, 0.0))
     world = sample_scm(cfg, seed=11)
@@ -696,9 +700,10 @@ def test_control_pulse_is_centred_on_its_own_fire_probability():
 def test_control_texture_leaves_the_parameter_only_saturation_anchor_exact():
     """Enabled control texture must not be ADDED to the κ anchor.
 
-    The anchor sums PARAMETER-only expected levels, and a control's expected
-    level is still its walk mean because both texture terms are mean-zero. The
-    live check here is the "do not mirror the uncentred channel pulse" one: a
+    The anchor sums PARAMETER-only reference levels, and a control's level claim
+    is EXACT — a control applies no activation, and both texture terms are
+    mean-zero, so ``E[Z_m]`` is unchanged. The live check here is the "do not
+    mirror the uncentred channel pulse" one: a
     ``+ amp * prob`` correction on the control levels would move the anchor by a
     measurable amount, asserted below. The graph-side centring that justifies
     the omission is pinned by

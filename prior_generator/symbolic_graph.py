@@ -37,13 +37,18 @@ smooth-walk-only control lives in the same function space as the smooth
 baseline walk, which leaves ``Z → B`` weakly identified against baseline
 drift. Its pulse is CENTRED (``h − q``) because a control is signed and its
 level belongs to ``rw_z_mean``: both added terms are then mean-zero, so
-``E[Z_m]`` and the parameter-only expected levels below are unaffected.
+``E[Z_m]`` — which a control's softplus-free equation realizes EXACTLY — and
+the parameter-only reference levels below are unaffected.
 C→C and Z→Z edges
 are restricted to the strict upper triangle (src index < dst index) which
 guarantees acyclicity. The nonlinear transform ``f_k`` (adstock +
 saturation, from ``mechanisms``) applies only on the direct C→Y path;
-all inter-variable effects are linear (plan doc D2), with a softplus
-positivity guard on channels (risk table: spend must be non-negative).
+every inter-variable loading is additive and linear on the CHILD'S
+PRE-ACTIVATION scale (plan doc D2). For a channel that pre-activation is
+wrapped by the softplus positivity guard (risk table: spend must be
+non-negative), so the observed parent→channel mapping inherits the softplus
+curvature; the baseline, control, and outcome equations apply no activation and
+are linear on the observed scale.
 
 Exact intervention-based decomposition (plan doc D3/D7)
 -------------------------------------------------------
@@ -61,11 +66,15 @@ its own random walk. Direct contributions and indirect effects are:
 The identity holds *exactly* (not a Taylor approximation) because both Y
 and the decomposition are built from the same symbolic quantities. Each
 ``f_k`` is one fixed function evaluated on every path. Its κ-relative
-saturation scale comes from :func:`_expected_levels`, a parameter-only expected
-channel level: ``softplus(rw_c_mean)`` plus ``pulse_amp * pulse_prob`` and
-weighted expected Z->C / C->C parent levels in topological order, wrapped by
-the channel softplus. D->C drops out because latent demand has mean zero. It
-reads neither a window nor a realized series, so ``p(theta)`` remains
+saturation scale comes from :func:`_reference_levels`, a parameter-only
+REFERENCE (anchor) level — not ``E[C_k]``: ``softplus(rw_c_mean)`` plus
+``pulse_amp * pulse_prob`` and weighted reference levels of the Z->C / C->C
+parents in topological order, wrapped by the channel softplus. D->C drops out
+because latent demand has mean zero. Because the channel equation applies
+softplus, Jensen makes ``E[C_k]`` strictly LARGER than this anchor (measured
+``E[C_k]/anchor`` in [1.004, 1.099] over 36 (θ, channel) cells; see
+:func:`_reference_levels`). The anchor reads neither a window nor a realized
+series, which is exactly why it is the right κ scale: ``p(theta)`` remains
 well-defined and the week-t response cannot depend on later spend.
 """
 
@@ -272,7 +281,7 @@ def _clamp_channel(c_col: TensorVariable, params: dict, k: int) -> TensorVariabl
     )
 
 
-def _expected_levels(
+def _reference_levels(
     params: dict,
     g_zc: np.ndarray,
     g_cc: np.ndarray,
@@ -285,23 +294,39 @@ def _expected_levels(
 ) -> list[TensorVariable]:
     """Per-channel saturation anchors from parameters alone.
 
-    The κ-relative response uses the channel-level output at a parameter-only
-    operating point. For each channel, it applies the channel softplus to:
+    The κ-relative response needs one fixed operating point per channel. This
+    returns it: a parameter-only REFERENCE level, built by applying the channel
+    softplus to
 
     * its own ``softplus(rw_c_mean)``;
     * ``pulse_amp * pulse_prob`` when pulses are enabled;
-    * weighted expected levels of ``Z -> C`` and earlier ``C -> C`` parents,
-      accumulated in topological order.
+    * the weighted reference levels of the ``Z -> C`` and earlier ``C -> C``
+      parents, accumulated in topological order.
 
-    ``D -> C`` drops out because the latent factor is normalized to mean zero;
-    weekly jitter is mean-zero and contributes nothing to this first-order
-    anchor. The control texture needs no term here either: both of its terms are
-    mean-zero (its pulse is centred on its own fire probability), so a control's
-    expected level stays ``rw_z_mean`` plus its upstream ``Z -> Z`` terms —
-    which is exactly the ``z_levels`` recursion below. The construction reads
-    neither a simulation window nor a realized series, so ``p(theta)`` is
-    defined independently of the noise and the response at week ``t`` cannot
-    depend on spend at later weeks.
+    It is NOT ``E[C_k]``, and the gap has a definite sign. The channel equation
+    is ``C_k = softplus(pre-activation)`` and the channel walk is itself
+    ``softplus(centred path + rw_c_mean)``, so this construction takes
+    ``softplus`` of a MEAN where the world takes the MEAN of a ``softplus``,
+    twice. Softplus is strictly convex, so Jensen gives ``E[C_k] > anchor_k``
+    strictly (measured ``E[C_k]/anchor_k`` in [1.004, 1.099] over 36
+    (θ, channel) cells at 600 noise draws each, every cell above 1; for a
+    parentless, texture-free channel at relative walk std 0.8 the excess is
+    +6.0% to +7.8% across ``rw_c_mean`` in [0.3, 4.0]). Callers that need an
+    expected level must average a realized series; this is a κ scale, not a
+    moment.
+
+    Reading no moment is the POINT. ``D -> C`` drops out because the latent
+    factor is normalized to mean zero, and weekly jitter is mean-zero, so
+    nothing here depends on the innovations: ``p(theta)`` is defined
+    independently of the noise and the response at week ``t`` cannot depend on
+    spend at any ``t' > t``. A window statistic (the historical anchor) had both
+    defects.
+
+    The control texture needs no term here either: both of its terms are
+    mean-zero (its pulse is centred on its own fire probability). A control
+    applies NO activation, so unlike a channel its level claim is exact —
+    ``E[Z_m]`` is ``rw_z_mean`` plus its upstream ``Z -> Z`` terms, which is
+    exactly the ``z_levels`` recursion below.
     """
     dot_kw = {"dynamic_g": dynamic_g}
     z_levels: list[TensorVariable] = []
@@ -439,10 +464,11 @@ def build_symbolic_graph(
         adstock convolution left-pads with zeros, so without burn-in each
         contribution ramps 0 -> level over the first ``l_max`` weeks — an
         artifact that dominates smooth additive targets (measured 3–13x the
-        steady-state std). With ``burn_in >= l_max`` the reported window sees
-        real history instead of zeros. The κ-relative saturation scale comes
-        from ``_expected_levels(...)``, so it uses drawn parameters alone and
-        is independent of this window and every realized series.
+        steady-state std). Legal values are ``0`` (off) or ``>= l_max``; with
+        ``burn_in >= l_max`` the reported window sees real history instead of
+        zeros. The κ-relative saturation scale comes from
+        ``_reference_levels(...)``, so it uses drawn parameters alone and is
+        independent of this window and every realized series.
     active : dict, optional
         Per-node 0/1 activity flags ``active_treatment`` (n_treatments,),
         ``active_covariate`` (n_covariates,), ``active_latent`` (n_latent,).
@@ -557,7 +583,8 @@ def build_symbolic_graph(
     # from concrete magnitudes as a fallback when absent). The pulse enters
     # CENTRED — ``eps_z_pulse - control_pulse_prob`` with ``eps_z_pulse ~
     # Bernoulli(control_pulse_prob)`` — so a control's expected level is still
-    # its walk mean and no expected-level anchor moves.
+    # its walk mean (EXACTLY: a control applies no activation) and no
+    # parameter-only reference level moves.
     control_hf_sigma = _arr(params.get("control_hf_sigma", np.zeros(n_covariates)), (n_covariates,))
     control_pulse_amp = _arr(
         params.get("control_pulse_amp", np.zeros(n_covariates)), (n_covariates,)
@@ -643,7 +670,7 @@ def build_symbolic_graph(
         # smoothed walk over the SAME function space as the baseline walk, so
         # rho_zb trades off against baseline drift and Z->B is only weakly
         # identified. Both terms are mean-zero (the pulse subtracts its own fire
-        # probability), so E[Z_m] is unchanged and _expected_levels stays exact.
+        # probability), so E[Z_m] is unchanged and _reference_levels stays exact.
         own = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
         if use_control_hf[m]:
             own = own + control_hf_sigma[m] * eps_z_hf[:, m]
@@ -811,7 +838,7 @@ def build_symbolic_graph(
     # These telescope exactly to indirect_effects because Y(zero all three) is
     # baseline + the direct (base-channel) contributions.
     ie_cc_cols, ie_zc_cols, ie_dc_cols = [], [], []
-    channel_levels = _expected_levels(
+    channel_levels = _reference_levels(
         params, g_zc, g_cc, g_zz, n_treatments, n_covariates, use_pulse, dynamic_g=dynamic_g
     )
     for k in range(n_treatments):
@@ -821,9 +848,10 @@ def build_symbolic_graph(
         # Held-level shocks clamp the channel BEFORE this convolution and never
         # touch its response state, so the same normalized causal kernel a
         # standard MMM applies reproduces this response exactly.
-        # The κ scale is the channel's PARAMETER-ONLY expected level, never a
-        # statistic of the drawn series: that keeps theta independent of the
-        # noise and keeps the response at week t free of spend at t' > t.
+        # The κ scale is the channel's PARAMETER-ONLY reference level, never a
+        # statistic of the drawn series and never E[C_k] (softplus makes E[C_k]
+        # strictly larger): that keeps theta independent of the noise and keeps
+        # the response at week t free of spend at t' > t.
         ad_obs = _adstock_col(c_cols[k], params, k, **family_kw)[window]
         scale_k = pt.maximum(channel_levels[k], 1e-8).copy(name=f"sat_scale_{k}")
         sat_scale_cols.append(scale_k)

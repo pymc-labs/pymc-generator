@@ -64,6 +64,29 @@ iso = [n for n, s in status.items() if s == "isolated"]
 print("isolated nulls:", iso or "none this draw")
 ```
 
+## Forcing connectivity substitutes an edge budget
+
+`connect_all=True` rejects any draw with an isolated node, and for a scenario
+designed around isolated nulls that can be infeasible: with `zc = zz = dz = 0`,
+`channel_halo`'s only route from a control to `Y` is its own `Z→B` arrow, so its
+`zb=(1, 1)` budget left the second control permanently isolated — 0.00% of draws
+were feasible, and the CLI's `--require-path-to-y` died with
+`RuntimeError: world 'channel_halo': no DAG satisfying the connectivity rule in
+2000 draws` after having already written folders `0`, `1`, `2`.
+
+Scenarios therefore carry a second, connectivity-only budget in
+`Scenario.connect_all_edge_budget`, and `Scenario.prior(..., connect_all=...)`
+substitutes its entries over `edge_budget` **only when connectivity is forced**.
+`channel_halo` supplies `{"zb": (2, 2)}` (feasible fraction 0.00% → 17.07%) and
+`kitchen_sink` supplies `{"cc": (3, 4)}` — with `cy = 4` of 6, the two feeder
+channels each need an outgoing halo arrow and a `(1, 2)` budget can draw just
+one (0.85% → 5.89%). Default, unforced worlds are bit-identical to before.
+
+`write_scenario_bundles` is also atomic: it pre-flights every scenario's graph
+search before creating any directory and raises a single `RuntimeError` naming
+all infeasible scenarios, leaving `out_root` nonexistent rather than
+half-written.
+
 ## The whole set at once
 
 `write_scenario_bundles` (and the CLI) writes every scenario to its own numbered

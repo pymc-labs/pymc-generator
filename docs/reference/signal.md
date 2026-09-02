@@ -45,11 +45,25 @@ invalid when the window is too short.
 
 ## Response warmup and delayed adstock
 
-`response_warmup_weeks` is `l_max - 1` only when `adstock_burn_in > 0` and at
-least one eligible direct channel has a nonidentity kernel
-(`adstock_family != 0`); it is `0` otherwise. If `adstock_family` is
-unavailable to `summarize_signal_metrics`, it conservatively reports
-`l_max - 1` with burn-in. Weeks before a nonzero count have responses that
+`response_warmup_weeks` counts the leading reported weeks whose media response
+reaches back before the window. It is `0` unless `adstock_burn_in > 0`;
+with burn-in it is the **realized** kernel support over the eligible direct
+channels — the largest positive lag carrying nonzero normalized weight, from
+`response_support_weeks(family, alpha, lam, k, l_max)`. So an identity kernel
+contributes `0`, a geometric kernel *drawn* at `alpha == 0` contributes `0`
+(it is an exact identity, not a `l_max - 1` reach), a Weibull kernel whose
+trailing taps the min-max normalization annihilates contributes only its
+surviving reach, and the count never exceeds `l_max - 1`. That realized
+derivation needs all four adstock metadata arrays (`adstock_family`,
+`adstock_alpha`, `weibull_lam`, `weibull_k`); given only `adstock_family`, or
+none of them, `summarize_signal_metrics` keeps the conservative `l_max - 1`
+with burn-in. `admitted_response_support_weeks(families, l_max,
+adstock_alpha_range=...)` is the pre-draw counterpart: the upper bound over
+every value the priors admit (`0` for the identity family, `l_max - 1` for
+Weibull, and `l_max - 1` for geometric only when the decay range's upper end is
+positive) — that is the bound configuration validation and the oracle
+likelihood window use, because neither may look at a drawn value.
+Weeks before a nonzero count have responses that
 depend on unpersisted pre-window spend; it is a machine-readable warning that
 their targets cannot be reconstructed from persisted inputs. It is unrelated to
 `support_mask`, which selects temporal support versus query weeks. Without
@@ -112,6 +126,8 @@ spearman = metrics[..., SIGNAL_METRIC_LAYOUT.index("spearman")]
         - dense_signal_metrics
         - per_channel_signal
         - summarize_signal_metrics
+        - response_support_weeks
+        - admitted_response_support_weeks
         - signal_summary
         - check_signal_gate
         - SIGNAL_METRIC_VERSION

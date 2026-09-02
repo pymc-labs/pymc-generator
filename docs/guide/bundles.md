@@ -35,13 +35,21 @@ for f in sorted(os.listdir(out)):
 | File | What it holds |
 | --- | --- |
 | `dataset.csv` | What a model eats: `week`, `spend_C*`, `control_Z*`, `sales_Y` |
-| `true_components.csv` | The full additive truth — baseline split, per-channel direct contributions, indirect by source, latent demand, base channels |
+| `true_components.csv` | The full additive truth — `baseline_intrinsic`, `sales_noise`, the baseline split, per-channel direct contributions, indirect by source, latent demand, base channels |
 | `true_contribution.csv` | Legacy-compatible view (`contribution_C*`, `baseline_B`) |
 | `description.txt` | DAG + drawn coefficients, mechanisms, decomposition check, signal metrics |
 | `dag.dot` / `dag.png` | The causal graph (matplotlib render — no graphviz needed) |
 | `timeseries.png` | Model-input series |
 | `decomposition.png` | Every true effect on Y + reconstruction check |
 | `channels.png` | Per-channel spend vs true contribution (indexed) |
+
+Every column of `true_components.csv` except `week`, `sales_reconstructed` and
+the `demand_*` / `channel_base_*` diagnostics is an additive term of
+`dataset.csv`'s `sales_Y`, and they sum to it **exactly**. That includes
+`sales_noise`, the iid observation-noise column: without it the additive columns
+summed to sales minus the noise, so an auditor adding them up saw a residual of
+`max|sales_noise|` (0.07–0.18 on the shipped scenarios) while `description.txt`
+reported a decomposition error around `1e-15`.
 
 ## The description
 

@@ -59,11 +59,16 @@ standard deviation of supported sales, with the full-series standard deviation
 and then `1.0` as deterministic fallbacks for degenerate support windows.
 
 `diagnostics["signal"]["response_warmup_weeks"]` identifies a separate
-reproducibility boundary. It is `l_max - 1` when `adstock_burn_in > 0` and at
-least one eligible direct channel uses nonidentity adstock
-(`adstock_family != 0`); otherwise it is `0`. When
-`summarize_signal_metrics` lacks adstock metadata, it conservatively reports
-`l_max - 1` with burn-in. Reported weeks
+reproducibility boundary: the number of leading reported weeks whose media
+response reaches back before the window. It is the **realized** kernel support
+— the largest positive lag that carries nonzero normalized adstock weight —
+taken over the eligible direct channels, and `0` when `adstock_burn_in == 0`.
+So it is `0` for identity-only direct paths, `0` for a geometric kernel drawn at
+`alpha == 0` (an exact identity) or a Weibull kernel whose trailing taps are
+annihilated by the min-max normalization, and at most `l_max - 1`. When
+`summarize_signal_metrics` lacks the full adstock metadata (family, decay,
+Weibull shape) it falls back to the conservative `l_max - 1` with burn-in.
+Reported weeks
 `0 .. response_warmup_weeks - 1` have a media response that depends on
 pre-window spend the corpus does not persist, so their targets are not functions
 of persisted inputs. This is not a train/query mask: `support_mask` remains only
@@ -72,10 +77,22 @@ every reported response reproducible from persisted spend.
 
 ### Random-walk parameter labels
 
-Persisted `param_rw_*_std` labels declare the walk's **expected standard
+Persisted `param_rw_*_std` labels declare a walk's **expected standard
 deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.
-Because each path is divided by a fixed constant rather than by its own
-realized standard deviation, that scale is realized only in expectation. It is
+The guarantee is second-moment, and worth stating precisely:
+
+```text
+E[ var_pop(path) ] = std²      i.e.   std = sqrt( E[var_pop(path)] )
+```
+
+It is *not* `E[sd(path)] = std`. `sqrt` is concave, so the expected *sd* sits
+strictly below the declared `std` even when the expected *variance* is exactly
+right. Measured over 20 000 unit-`std` paths at `n_time_steps=60`,
+`E[var_pop]/std²` was 0.990–1.004 (target 1.0) while `E[sd]/std` was 0.9220 at
+kernel width 1 and 0.8674 at width 26.
+
+Each path is divided by a fixed constant rather than by its own
+realized standard deviation, so that scale is realized only in expectation. It is
 therefore neither the realized standard deviation of an individual path nor a
 standard deviation measured only over the reported window. `smoothness`
 likewise maps to an absolute moving-average kernel width in weeks, governed by
@@ -84,7 +101,13 @@ likewise maps to an absolute moving-average kernel width in weeks, governed by
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.
 
-Across 40 signed walks from eight worlds at `n_time_steps=52` and
+The signed `rw_d` / `rw_z` / `rw_b` walks are centred, smoothed Gaussian paths:
+cumulative sum, edge-padded moving average, full-path centring, then the fixed
+scale divisor. A channel's own drive is the *positive-only* version of the same
+construction — the identical signed path, wrapped in `softplus` — which is why
+its amplitude label is pre-softplus.
+
+Across 32 signed walks from eight worlds at `n_time_steps=52` and
 `adstock_burn_in=8`, the reported-window sd / declared `std` was:
 
 | signed group | reported-window sd / declared `std` | median |
@@ -92,12 +115,38 @@ Across 40 signed walks from eight worlds at `n_time_steps=52` and
 | `rw_d` | [0.396, 0.927] | 0.690 |
 | `rw_z` | [0.252, 1.985] | 0.868 |
 | `rw_b` | [0.264, 1.809] | 0.814 |
-| `rw_y` | [0.294, 1.335] | 0.757 |
-| **all signed (n=40)** | **[0.25, 1.99]** | **0.80** |
 
-This is roughly an 8× spread. `param_rw_*_std` is therefore a weak label for
+Combined, those 32 walks span [0.25, 1.99] — roughly an 8× spread.
+`param_rw_*_std` is therefore a weak label for
 anything measured on the reported window; consumers should not score it as if
 it were the realized reported-window standard deviation.
+
+`param_rw_y_std` is **not** in that table, because `RW_Y` is not a walk. It is
+iid observation noise, `RW_Y = rw_y_std * eps_y`, with no cumulative sum, no
+smoothing and no centring, so its label is the exact per-week Normal σ:
+`sales_noise == param_rw_y_std * eps_y[adstock_burn_in:]` holds to the last bit
+(max absolute difference 0.0 over eight worlds). Its realized window sd still
+scatters — measured [0.838, 1.314], median 1.001, over the same eight worlds —
+but that is the sample sd of 52 standard normals under the acceptance filter,
+not a loose label.
+
+#### Walk paths are drawn jointly, not sequentially
+
+Full-path centring plus a symmetric moving average makes a walk
+**non-adapted**: week `t` of the path depends on the *whole* innovation vector,
+including innovations at `t' > t`. Perturbing only the last innovation of a
+60-week unit path moves week 0 by `-0.0231` at kernel width 26 and by `-0.0053`
+at width 1 (the centring alone), and moves all 60 weeks. The paths are
+consequently drawn jointly, offline, as one multivariate normal; they are not a
+filtration you can simulate forward a week at a time.
+
+This does **not** leak future spend into the media response. Causality here is a
+property of the *response*: `f_k` applies a causal adstock kernel and a κ scale
+computed from parameters alone, so the response at week `t` reads only spend at
+`t' ≤ t`. Bumping one late week of observed spend and re-running the generator's
+own response code leaves every earlier week bit-identical (18 of 18
+(world, channel) checks at exactly zero change). Non-adaptedness describes how
+`eps → path` factorizes; `eps` itself is exogenous.
 
 
 ### Channel, adstock, and intervention audit metadata
@@ -111,7 +160,7 @@ records.
 | --- | --- | --- | --- |
 | `confounding_strength` | `(n_tasks,)` | `float32` | drawn per-world rho (`0` when disabled) |
 | `channel_level` | `(n_tasks, n_treatments)` | `float32` | `softplus(rw_c_mean)` reference level |
-| `saturation_scale` | `(n_tasks, n_treatments)` | `float32` | response anchor: expected channel level from parameters alone (zero-padded for inactive channels) |
+| `saturation_scale` | `(n_tasks, n_treatments)` | `float32` | κ response anchor: a parameter-only **reference level**, not `E[C]` (zero-padded for inactive channels) |
 | `adstock_family` | `(n_tasks, n_treatments)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
 | `adstock_alpha` | `(n_tasks, n_treatments)` | `float32` | geometric decay parameter |
 | `weibull_lam` | `(n_tasks, n_treatments)` | `float32` | Weibull scale parameter |
@@ -129,6 +178,19 @@ full burn-in mask. The realized level equals the multiplier times the selected
 `channel_level`. For an enabled schedule, events occupy globally
 non-overlapping deterministic time slots; channel selection may repeat because
 direct channels are sampled uniformly with replacement.
+
+`saturation_scale` is the κ anchor each channel's response curve is normalized
+by: `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted reference
+Z→C / C→C parent terms)`, accumulated in topological order. It is a
+**parameter-only reference level and deliberately not `E[C]`** — the channel
+equation applies `softplus` and the channel walk is itself a `softplus`, so the
+anchor takes `softplus` of a mean where the world takes the mean of a
+`softplus`. Softplus being strictly convex, Jensen puts realized expected spend
+strictly above it: measured `E[C_k] / saturation_scale` ran 1.004–1.099 over 36
+(θ, channel) cells at 600 noise draws each, every cell above 1. Do not score it
+as a predicted channel level; it exists precisely because it reads no moment,
+which is what keeps `p(θ)` independent of the noise and the week-`t` response
+free of spend at `t' > t`.
 
 Inspect the real arrays:
 
@@ -258,10 +320,14 @@ facade adds batching (`generate_batches`) and generate-and-save
 Every corpus records its persisted-schema version in
 `corpus["diagnostics"]["schema_version"]`, which is `2` for anything generated
 today. Version 1 shards used the old symbolic dimension keys; `load_corpus`
-renames them on read and stamps the version, so a `.npz` written before the
-rename stays loadable with no conversion step. `save_corpus` raises a
-`ValueError` if it is handed a corpus that still carries v1 keys, so new shards
-can only contain the canonical names. The rename map is
+renames them on read **first**, then requires the version to be exactly
+`CORPUS_SCHEMA_VERSION` (`2`) as a non-bool integer — so a `.npz` written
+before the rename stays loadable with no conversion step, while a shard whose
+version is missing, malformed (the string `"2"`), or from the future (`99`) is
+rejected outright rather than half-read. `validate_corpus` reports the same
+condition as an error string, and `save_corpus` raises; `save_corpus` also
+refuses a corpus that still carries v1 keys, so new shards can only contain the
+canonical names. The rename map is
 `prior_generator.slots.LEGACY_CORPUS_KEYS_V1`:
 
 | v1 key | v2 key |
@@ -272,6 +338,18 @@ can only contain the canonical names. The rename map is
 | `active_c_mask` | `treatment_active_mask` |
 | `active_m_mask` | `covariate_active_mask` |
 | `active_j_mask` | `latent_active_mask` |
+
+### Diagnostics that do not go into the file
+
+`diagnostics` is otherwise a faithful record of the run, with one deliberate
+exception: the wall-clock telemetry lives in
+`diagnostics["timing"] = {"elapsed_s": float, "tasks_per_sec": float}`, and
+`save_corpus` writes the diagnostics block **without** it (on a copy — the
+caller's dict is never mutated). Those two numbers are the only nondeterministic
+values a generation produces, so excluding them is what makes two independent
+same-seed generations save byte-identical `.npz` files. Read them off the
+in-memory corpus if you want them; do not expect them back from `load_corpus`,
+and note that `validate_corpus` accepts diagnostics with or without the block.
 
 ## Dialing complexity
 

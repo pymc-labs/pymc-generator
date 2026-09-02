@@ -77,15 +77,47 @@ $$
 Two structural facts do the heavy lifting:
 
 1. **Only the direct `C → Y` path is nonlinear.** $f_k$ is that channel's
-   adstock ⊙ saturation response. **Every other edge is linear** — all the
-   input→input interactions (`dc, zc, cc, dz, zz`) and the baseline drivers
-   (`db, zb`) are plain linear loadings. Interaction *structure* is rich;
-   interaction *shape* is linear.
-2. **Every node carries its own random-walk noise term**, and channels and
-   controls additionally carry high-frequency drive. For channels — iid weekly
+   adstock ⊙ saturation response. **Every other loading is additive and linear
+   on the child's pre-activation scale** — all the input→input interactions
+   (`dc, zc, cc, dz, zz`) and the baseline drivers (`db, zb`) are plain linear
+   coefficients. Interaction *structure* is rich; interaction *shape* is
+   linear.
+
+    For `B`, `Z` and `Y` there is no activation, so those edges are linear on
+    the *observed* scale too. A channel is the exception: $C_k =
+    \mathrm{softplus}(\cdot)$, so the observed parent→channel mapping inherits
+    the softplus curvature (and the held-level clamp, when shocks are enabled).
+    With a `dc` loading of $0.308286074$ — mid-range for the default
+    `dc_coeff_range=(0.1, 0.5)` — and no other parent, $D_j = -1, 0, +1$ gives
+    $C = 0.5508,\ 0.6931,\ 0.8591$: two *equal* parent steps produce effects of
+    $0.1423$ and $0.1660$, not one constant $0.3083$. "Linear interactions"
+    means linear inside the positivity guard.
+2. **Every node except `Y` carries its own random-walk noise term**, and
+   channels and controls additionally carry high-frequency drive. For channels —
+   iid weekly
    execution noise $\sigma_k\varepsilon$ and campaign pulses $a_k b$ (a
    Bernoulli fire) — that variation is what makes spend *sweep* its response
    curve; without it, the contribution targets degenerate to flat lines.
+
+    `Y` is **not** a walk. $\mathrm{RW}_Y = \texttt{rw\_y\_std}\cdot
+    \varepsilon_y$ is iid Gaussian observation noise — no cumulative sum, no
+    smoothing, no centring — persisted as the `sales_noise` column, and
+    `param_rw_y_std` is its exact per-week $\sigma$
+    (`sales_noise == param_rw_y_std * eps_y[adstock_burn_in:]` to the last bit).
+    The signed `D` / `Z` / `B` walks are centred, smoothed Gaussian paths
+    (cumulative sum → edge-padded moving average → full-path centring → a fixed
+    scale divisor); a channel's own drive is the *positive-only* version of the
+    same construction — the identical signed path, wrapped in `softplus`. Their
+    `param_rw_*_std` label calibrates the second moment,
+    $E[\mathrm{var}_{\text{pop}}(\text{path})] = \texttt{std}^2$, i.e.
+    $\texttt{std} = \sqrt{E[\mathrm{var}_{\text{pop}}]}$ — *not*
+    $E[\mathrm{sd}(\text{path})] = \texttt{std}$; measured over 20 000
+    unit-`std` paths, $E[\mathrm{var}_{\text{pop}}]/\texttt{std}^2$ was
+    0.990–1.004 while $E[\mathrm{sd}]/\texttt{std}$ was 0.9220 at kernel width 1
+    and 0.8674 at width 26. See the
+    [corpus guide](corpus.md#random-walk-parameter-labels) for the persisted
+    labels, including why full-path centring makes a path non-adapted without
+    letting future spend into the media response.
 
 ### Why controls carry texture too
 
@@ -105,7 +137,8 @@ holidays, price steps — actually look like. Two properties matter:
   $\texttt{rw\_z\_std}[m]$, which keeps them scale-free.
 - **The pulse is centred** on its own fire probability, so both added terms are
   mean-zero ($E[F_m - \mathrm{RW}_m]=0$): a control's expected level is still
-  its walk mean, and the parameter-only saturation anchors below are untouched.
+  its walk mean — **exactly**, because a control applies no activation — and
+  the parameter-only saturation reference levels below are untouched.
   (The channel pulse is deliberately *not* centred — a channel is positive and
   its level may rise.)
 
@@ -254,21 +287,28 @@ deliberate, and they bound what a model trained on this data can learn.
 - **Additive sales.** Sales is a *sum* of a baseline and per-channel media
   contributions (plus noise), not a multiplicative model.
 - **Linear interactions, nonlinear direct response.** Only the `C → Y` media
-  path carries adstock and saturation.
+  path carries adstock and saturation; every other loading is linear on the
+  child's pre-activation scale (observed-scale linear for `B`, `Z` and `Y`,
+  softplus-curved for a channel).
 - **Spend is non-negative.** Channels pass through `softplus`.
 - **Latent demand is never observed.** `D` drives both spend (`dc`) and the
   baseline (`db`) — getting attribution right despite `D` is the core task.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
   triangle.
 - **κ-relative saturation.** Each curve's knee is set from a parameter-only
-  expected channel level:
-  `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted expected
+  **reference level** — an anchor, not $E[C_k]$:
+  `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted reference
   Z→C / C→C parent terms)`. Latent `D→C` drops out because demand is mean-zero,
   and control texture drops out because both of its terms are mean-zero (its
-  pulse is centred). The same pinned scale is used for every decomposition
-  variant.
+  pulse is centred). The channel softplus makes $E[C_k]$ strictly larger than
+  the anchor (measured $E[C_k]/\texttt{saturation\_scale}$ 1.004–1.099); the
+  anchor's value is that it reads no moment at all. The same pinned scale is
+  used for every decomposition variant.
 - **Adstock burn-in.** Worlds simulate `n_time_steps + adstock_burn_in` weeks and
   report the last `n_time_steps`, so the reported window sees real history.
+  `adstock_burn_in` is either `0` (off — the raw `SCMPrior` default, with
+  `l_max = 8`) or `≥ l_max` (`make_scm_prior` pins it to `l_max`, so the preset
+  ships `8`/`8`); nothing in between.
 
 !!! tip "Next"
     See [The exact decomposition](decomposition.md) for how sales splits into its
