@@ -35,6 +35,8 @@ matters.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 
 __all__ = [
@@ -43,10 +45,12 @@ __all__ = [
     "METRIC_KEYS",
     "SIGNAL_METRIC_LAYOUT",
     "SIGNAL_METRIC_VERSION",
+    "admitted_response_support_weeks",
     "check_signal_gate",
     "contemporaneous_weight",
     "dense_signal_metrics",
     "per_channel_signal",
+    "response_support_weeks",
     "summarize_signal_metrics",
     "signal_summary",
 ]
@@ -303,6 +307,80 @@ def contemporaneous_weight(family: int, alpha: float, lam: float, k: float, l_ma
     return 0.0 if weights is None else float(weights[0])
 
 
+def response_support_weeks(family: int, alpha: float, lam: float, k: float, l_max: int) -> int:
+    """Largest positive lag the REALIZED kernel actually puts weight on.
+
+    This is the response's true temporal reach, not its family label: a
+    geometric kernel with ``alpha == 0`` and a min-max Weibull kernel whose
+    trailing taps are annihilated both reach fewer weeks back than
+    ``l_max - 1``. ``0`` means the response is contemporaneous only — an
+    identity kernel (``family == 0`` or ``l_max == 1``), a kernel confined to
+    the current week, or a degenerate kernel that annihilates the channel.
+
+    Returns
+    -------
+    int
+        Maximum lag index with nonzero normalized weight, in ``[0, l_max - 1]``.
+    """
+    family = _validated_adstock_family(family)
+    l_max = _validated_integer(l_max, "l_max", 1)
+    weights = _adstock_weights(family, alpha, lam, k, l_max)
+    if weights is None:
+        return 0
+    positive = np.flatnonzero(weights > 0.0)
+    return int(positive[-1]) if positive.size else 0
+
+
+def admitted_response_support_weeks(
+    families: Iterable[int],
+    l_max: int,
+    *,
+    adstock_alpha_range: tuple[float, float],
+) -> int:
+    """Largest positive lag ANY kernel these families and priors can produce.
+
+    The pre-draw counterpart of :func:`response_support_weeks`: the shape
+    parameters are still free, so the answer must hold for every value the
+    priors admit. Per family:
+
+    * ``none`` (0) reaches 0 — the transform is the identity.
+    * ``geometric`` (1) reaches ``l_max - 1`` whenever the decay prior admits
+      ``alpha > 0``, because ``alpha ** lag`` is then positive at every lag,
+      and 0 when the prior pins ``alpha == 0``.
+    * ``weibull`` (2) reaches ``l_max - 1``. The min-max rescaling annihilates
+      the kernel's own minimum, but which lag that is depends on ``(lam, k)``,
+      and the usual prior boxes contain kernels whose final tap survives, so
+      this bound is deliberately not refined per box: over-reporting the reach
+      keeps pre-draw validation and oracle slicing conservative.
+
+    Parameters
+    ----------
+    families : iterable of int
+        Adstock family ids that can occur (``0``/``1``/``2``).
+    l_max : int
+        Adstock kernel length.
+    adstock_alpha_range : (float, float)
+        Geometric-decay prior support, ``(lo, hi)`` with ``0 <= lo <= hi <= 1``.
+        Only its upper end is consulted; a Weibull family needs no range
+        because its bound does not depend on one.
+    """
+    l_max = _validated_integer(l_max, "l_max", 1)
+    try:
+        alpha_lo, alpha_hi = (float(value) for value in adstock_alpha_range)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("adstock_alpha_range must be a finite (lo, hi) pair") from exc
+    if not (np.isfinite(alpha_lo) and np.isfinite(alpha_hi)) or not 0.0 <= alpha_lo <= alpha_hi:
+        raise ValueError("adstock_alpha_range must satisfy finite 0 <= lo <= hi")
+    support = 0
+    for value in families:
+        family = _validated_adstock_family(value)
+        if family == 1 and alpha_hi > 0.0:
+            support = max(support, l_max - 1)
+        elif family == 2:
+            support = max(support, l_max - 1)
+    return support
+
+
 def _adstock_numpy(
     x: np.ndarray, family: int, alpha: float, lam: float, shape: float, l_max: int
 ) -> np.ndarray:
@@ -529,13 +607,18 @@ def summarize_signal_metrics(
     can be derived from exactly the float32 arrays written to disk.
 
     ``response_warmup_weeks`` identifies reported weeks whose response depends
-    on unpersisted pre-window spend. With burn-in, reported week ``t`` for a
-    non-identity adstock kernel reaches before the persisted window exactly
-    when ``t < l_max - 1``. The count is therefore ``l_max - 1`` only when
-    burn-in is present and at least one ``cy_mask``-eligible direct channel has
-    a non-identity kernel; otherwise it is zero. If ``adstock_family`` is
-    omitted, the summary conservatively reports ``l_max - 1`` with burn-in
-    because it cannot establish that every eligible direct kernel is identity.
+    on unpersisted pre-window spend. With burn-in, reported week ``t`` reaches
+    before the persisted window exactly when ``t < S``, where ``S`` is the
+    largest positive lag any ``cy_mask``-eligible direct kernel actually
+    weights (:func:`response_support_weeks`). The count is therefore ``S`` —
+    zero without burn-in, and zero when every eligible kernel is
+    contemporaneous, which includes an identity family, a geometric kernel with
+    ``alpha == 0``, and a degenerate annihilated kernel. ``S`` is below
+    ``l_max - 1`` whenever the realized min-max Weibull kernel has no weight on
+    its trailing taps. Establishing ``S`` needs all four adstock metadata
+    arrays; with only ``adstock_family`` the summary reports ``l_max - 1`` for
+    any non-identity eligible kernel, and with no metadata at all it reports
+    ``l_max - 1`` under burn-in because it cannot rule out a full-reach kernel.
     ``support_mask`` is the temporal train/query split, not this
     response-warmup rule.
 
@@ -557,10 +640,10 @@ def summarize_signal_metrics(
         Number of generated leading burn-in weeks.
     adstock_family, adstock_alpha, weibull_lam, weibull_k : np.ndarray, optional
         Per-(task, channel) adstock metadata. All four must be supplied to
-        calculate ``frac_zero_contemporaneous_weight``; omitting any sets that
-        diagnostic to ``None``. ``adstock_family`` also determines whether
-        active kernels require response warmup; when it is omitted, the
-        summary conservatively reports ``l_max - 1`` with burn-in.
+        calculate ``frac_zero_contemporaneous_weight`` and the realized
+        ``response_warmup_weeks``; omitting any sets that fraction to ``None``
+        and falls back to the family-only (or, with no metadata, the
+        ``l_max - 1``) warmup rule described above.
     """
     metrics = np.asarray(metrics)
     valid = np.asarray(valid)
@@ -584,24 +667,36 @@ def summarize_signal_metrics(
     adstock_metadata = (adstock_family, adstock_alpha, weibull_lam, weibull_k)
     fam: np.ndarray | None = None
     frac_zero_contemporaneous_weight: float | None = None
+    realized_support: int | None = None
     if n_pairs and all(value is not None for value in adstock_metadata):
         fam, alpha, wlam, wk = _validated_adstock_metadata(
             adstock_family, adstock_alpha, weibull_lam, weibull_k, mask.shape
         )
+        pairs = list(zip(*np.nonzero(mask)))
         frac_zero_contemporaneous_weight = float(
             sum(
                 contemporaneous_weight(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max) < 1e-9
-                for n, k in zip(*np.nonzero(mask))
+                for n, k in pairs
             )
             / n_pairs
         )
+        realized_support = max(
+            (
+                response_support_weeks(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
+                for n, k in pairs
+            ),
+            default=0,
+        )
     elif n_pairs and adstock_family is not None:
         fam = _validated_adstock_family_array(adstock_family, mask.shape)
-    response_warmup_weeks = (
-        l_max - 1
-        if adstock_burn_in > 0 and n_pairs > 0 and (fam is None or np.any((fam != 0) & mask))
-        else 0
-    )
+    if adstock_burn_in == 0 or n_pairs == 0:
+        response_warmup_weeks = 0
+    elif realized_support is not None:
+        response_warmup_weeks = realized_support
+    elif fam is None or np.any((fam != 0) & mask):
+        response_warmup_weeks = l_max - 1
+    else:
+        response_warmup_weeks = 0
     out: dict = {
         "n_direct_channels": n_pairs,
         "response_warmup_weeks": response_warmup_weeks,
