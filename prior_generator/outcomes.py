@@ -225,6 +225,45 @@ def _stat_dict(values: np.ndarray, levels: tuple[float, ...]) -> dict[str, float
     return out
 
 
+def _resolve_levels(levels: Sequence[float] | None, stored: tuple[float, ...]) -> tuple[float, ...]:
+    """The requested quantile levels as floats; ``stored`` when unset.
+
+    Every report compares the resolved levels against the levels the
+    distribution was built with to decide whether the cached pooled statistics
+    still answer the question, so the normalization to ``float`` is load
+    bearing: ``[0.05, 0.25]`` and ``(0.05, 0.25)`` are the same request and
+    must not look like two different ones.
+    """
+    return tuple(float(level) for level in levels) if levels else stored
+
+
+def _reject_ambiguous_selector(selector: np.ndarray, n_available: int, kind: str) -> None:
+    """Refuse a 0/1 integer selector: mask or positions cannot be inferred.
+
+    NumPy tells a row mask from a list of positions by dtype alone, and this
+    corpus stores its flags as ``uint8`` (``is_val``, the active masks), so
+    ``worlds=corpus["is_val"]`` reads as "world 1, world 1, world 0, ..."
+    rather than "the validation worlds". Both readings produce a plausible,
+    correctly-shaped selection of real rows, so nothing downstream can catch
+    the mistake — the numbers are simply wrong. Whenever both readings are
+    possible (integer dtype, one value per world/unit, every value in
+    ``{0, 1}``) the caller has to spell out which one it means.
+    """
+    if selector.dtype.kind not in "iu" or selector.ndim != 1:
+        return
+    if selector.size != n_available or selector.size == 0:
+        return
+    if not bool(np.all((selector == 0) | (selector == 1))):
+        return
+    raise ValueError(
+        f"ambiguous {kind} selector: a 1-D integer array of length {n_available} "
+        "whose values are all 0 or 1 is either a row mask or a list of positions, "
+        "and only the dtype tells them apart. Say which: arr.astype(bool) (or "
+        f"arr == 1) masks the {kind}s where arr is 1; np.flatnonzero(arr) passes "
+        "those same rows as positions."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
@@ -250,9 +289,11 @@ class QuantityDistribution:
         IS the across-world spread of the quantity.
     unit_share
         ``(n_units,)`` ``unit_total / Σ_t sales`` of the unit's world; all-NaN
-        when the quantity is not on the Y scale.
+        when the quantity is not on the Y scale, and NaN for a world whose
+        sales sum to zero — that share is undefined, not zero.
     pooled
-        mean/std/min/max/quantiles over every individual value.
+        mean/std/min/max/quantiles over every individual value of the units
+        held here; :meth:`select` recomputes it for the retained subset.
     series
         ``(n_units, n_time_steps)`` float32 of all retained values, or None
         when built with ``keep_series=False``.
@@ -286,7 +327,9 @@ class QuantityDistribution:
         if self.series is None:
             raise ValueError(
                 f"{self.name}: raw values were dropped (keep_series=False); "
-                "per-unit stats and pooled quantiles are still available"
+                "per-unit stats and the pooled report at the levels it was built "
+                f"with ({', '.join(_q_key(level) for level in self.quantile_levels)}) "
+                "are still available"
             )
         return self.series.reshape(-1)
 
@@ -330,14 +373,27 @@ class QuantityDistribution:
     def quantiles(
         self, *, of: StatName = "value", levels: tuple[float, ...] | None = None
     ) -> dict[str, float]:
-        """mean/std/min/max/quantiles of the chosen statistic."""
-        if of == "value" and levels is None:
+        """mean/std/min/max/quantiles of the chosen statistic.
+
+        The pooled value report is cached at construction, so asking for the
+        levels this distribution was built with is answered from the cache —
+        that is the only report available under ``keep_series=False``, where
+        the raw values needed to re-quantile them are gone.
+        """
+        levels = _resolve_levels(levels, self.quantile_levels)
+        if of == "value" and levels == self.quantile_levels:
             return dict(self.pooled)
-        return _stat_dict(self.stat(of), levels or self.quantile_levels)
+        return _stat_dict(self.stat(of), levels)
 
     def summary(self, levels: tuple[float, ...] | None = None) -> dict[str, Any]:
-        """JSON-serializable summary of this quantity."""
-        levels = levels or self.quantile_levels
+        """JSON-serializable summary of this quantity.
+
+        ``levels`` other than the ones this distribution was built with force
+        the pooled value report to be recomputed from the raw values, which
+        requires ``keep_series=True``.
+        """
+        levels = _resolve_levels(levels, self.quantile_levels)
+        cached = levels == self.quantile_levels
         out: dict[str, Any] = {
             "n_units": self.n_units,
             "n_worlds": self.n_worlds,
@@ -345,12 +401,10 @@ class QuantityDistribution:
             "additive": self.additive,
             "on_y_scale": self.on_y_scale,
             "zero_unit_fraction": self.zero_unit_fraction,
-            "value": dict(self.pooled) if levels == self.quantile_levels else None,
+            "value": dict(self.pooled) if cached else _stat_dict(self.values, levels),
             "unit_mean": _stat_dict(self.unit_mean, levels),
             "unit_std": _stat_dict(self.unit_std, levels),
         }
-        if out["value"] is None:
-            out["value"] = _stat_dict(self.values, levels)
         out["share"] = _stat_dict(self.unit_share, levels) if self.on_y_scale else None
         return out
 
@@ -362,19 +416,31 @@ class QuantityDistribution:
 
             media = dist["channel_contribution"]
             direct = media.select(media.unit_max > 0)
+
+        A 0/1 integer array as long as ``n_units`` is rejected: it is a mask
+        written as integers as often as it is a list of positions, and the two
+        readings select different units. Requires the raw values
+        (``keep_series=True``) — the pooled report has to be recomputed for
+        the subset, and reporting the full population's one instead would be
+        silently wrong.
         """
+        if self.series is None:
+            raise ValueError(
+                f"{self.name}: cannot select a subset without the raw values "
+                "(keep_series=False); the pooled report would still describe every "
+                "unit, not the selected ones. Rebuild with keep_series=True"
+            )
         idx = np.asarray(mask)
         if idx.dtype == bool:
             if idx.shape != (self.n_units,):
                 raise ValueError(f"boolean mask must have shape ({self.n_units},), got {idx.shape}")
         else:
+            _reject_ambiguous_selector(idx, self.n_units, "unit")
             idx = idx.astype(np.int64, copy=False)
             if idx.size and (idx.min() < 0 or idx.max() >= self.n_units):
                 raise IndexError(f"unit index out of range for n_units={self.n_units}")
-        series = None if self.series is None else self.series[idx]
-        pooled = (
-            self.pooled if series is None else _stat_dict(series.reshape(-1), self.quantile_levels)
-        )
+        series = self.series[idx]
+        pooled = _stat_dict(series.reshape(-1), self.quantile_levels)
         return replace(
             self,
             world_index=self.world_index[idx],
@@ -421,11 +487,12 @@ class OutcomeDistributions:
 
     def summary(self, levels: tuple[float, ...] | None = None) -> dict[str, Any]:
         """JSON-serializable report over every quantity."""
+        levels = _resolve_levels(levels, self.quantile_levels)
         return {
             "n_worlds": self.n_worlds,
             "n_time_steps": self.n_time_steps,
             "normalize": self.normalize,
-            "quantiles": list(levels or self.quantile_levels),
+            "quantiles": list(levels),
             "quantities": {name: dist.summary(levels) for name, dist in self.quantities.items()},
         }
 
@@ -435,6 +502,10 @@ class OutcomeDistributions:
         The generator's decomposition is exact, so this is a float-error check
         on the share budget as much as a diagnostic. Requires the full
         additive set (do not restrict ``quantities`` if you need it).
+
+        A world whose sales sum to zero has no budget to split: every share of
+        it is undefined, and the total comes back as NaN rather than as a 0.0
+        that would read like a catastrophically broken decomposition.
         """
         missing = sorted(ADDITIVE_QUANTITIES - set(self.quantities))
         if missing:
@@ -444,7 +515,7 @@ class OutcomeDistributions:
             if dist.additive:
                 total += np.bincount(
                     dist.world_index,
-                    weights=np.nan_to_num(dist.unit_share),
+                    weights=dist.unit_share,
                     minlength=self.n_worlds,
                 )
         return total
@@ -456,7 +527,7 @@ class OutcomeDistributions:
         ``of="share"`` shows the share-of-sales budget; ``of="mean"`` shows
         the across-world spread of per-world levels.
         """
-        levels = levels or self.quantile_levels
+        levels = _resolve_levels(levels, self.quantile_levels)
         cols = ["mean", *(_q_key(level) for level in levels)]
         rows: list[tuple[str, str, str, list[str]]] = []
         for name, dist in self.quantities.items():
@@ -548,7 +619,12 @@ class _Dense:
 
 
 def _world_index(n_available: int, worlds: Any) -> np.ndarray:
-    """Normalize a world selector into an int64 index array."""
+    """Normalize a world selector into an int64 index array.
+
+    A boolean array is a row mask, anything else integral is a list of
+    positions — except when both readings fit, which
+    :func:`_reject_ambiguous_selector` refuses rather than guesses.
+    """
     if worlds is None:
         return np.arange(n_available, dtype=np.int64)
     if isinstance(worlds, slice):
@@ -560,6 +636,7 @@ def _world_index(n_available: int, worlds: Any) -> np.ndarray:
                 f"boolean world mask must have shape ({n_available},), got {idx.shape}"
             )
         return np.flatnonzero(idx).astype(np.int64)
+    _reject_ambiguous_selector(idx, n_available, "world")
     idx = idx.astype(np.int64, copy=False).reshape(-1)
     if idx.size and (idx.min() < 0 or idx.max() >= n_available):
         raise IndexError(f"world index out of range for {n_available} worlds")
@@ -676,13 +753,18 @@ def outcome_distributions(
         ``DataGenerator.generate`` / ``load_corpus``) or a sequence of
         :class:`~prior_generator.worlds.SCM` worlds sharing one horizon.
     quantities
-        Subset of :data:`OUTCOME_QUANTITIES` to compute; default all. Note
+        Subset of :data:`OUTCOME_QUANTITIES` to compute; default all, and an
+        empty subset is rejected — there is nothing to report. Note
         :meth:`OutcomeDistributions.additive_share_total` needs the full
         additive set.
     worlds
         World selector — boolean mask over corpus rows, integer index array,
         or slice. Use it to condition on anything you can express as a row
-        mask (a ``cell_id``, ``is_val``, an active-channel count).
+        mask (``corpus["cell_id"] == 3``, ``corpus["is_val"] == 1``, an
+        active-channel count). Corpus flags are stored as ``uint8``, so
+        compare or cast them (``== 1`` / ``.astype(bool)``) instead of passing
+        them raw: a 0/1 integer array as long as the corpus reads equally well
+        as a list of positions and is rejected as ambiguous.
     normalize
         ``"none"`` keeps raw units. ``"sales_scale"`` divides every Y-scale
         quantity by the world's ``sales_scale`` (std of supported sales);
@@ -694,7 +776,9 @@ def outcome_distributions(
     keep_series
         Retain all raw values (float32, roughly the size of the corpus
         arrays). Set False for very large corpora: per-unit stats and the
-        pooled quantiles are still computed, ``.values`` then raises.
+        pooled quantiles at ``quantiles`` are still computed, while
+        ``.values``, :meth:`QuantityDistribution.select` and reports at other
+        quantile levels then raise.
 
     Returns
     -------
@@ -711,6 +795,11 @@ def outcome_distributions(
     unknown = sorted(set(names) - set(OUTCOME_QUANTITIES))
     if unknown:
         raise ValueError(f"unknown quantities {unknown}; expected {list(OUTCOME_QUANTITIES)}")
+    if not names:
+        raise ValueError(
+            f"quantities is empty; name at least one of {list(OUTCOME_QUANTITIES)} "
+            "or pass None for all of them"
+        )
 
     if isinstance(source, Mapping):
         dense = _dense_from_corpus(source, worlds)

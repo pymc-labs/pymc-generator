@@ -131,6 +131,42 @@ def test_share_equals_total_over_sales_total(corpus, dist):
     assert np.allclose(d.unit_share, expected, rtol=1e-6, atol=1e-9)
 
 
+def test_zero_sales_world_reports_an_undefined_share_not_zero():
+    """A world with no sales has no budget to split, so every share is NaN.
+
+    Reporting 0.0 would read as a decomposition that lost all of Y, which is
+    exactly the alarm this diagnostic exists to raise; the ratio is genuinely
+    undefined and NaN is the only honest answer. The config below zeroes every
+    driver of Y — no baseline walk, no observation noise, a single channel
+    whose only shock has level 0 — so sales are identically 0.
+    """
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=4,
+        l_max=1,
+        adstock_burn_in=0,
+        nonlinearity="linear",
+        edge_budget=dict.fromkeys(("dc", "dz", "zc", "cc", "zz", "db", "zb"), (0, 0))
+        | {"cy": (1, 1)},
+        rw_baseline_mean_range=(0.0, 0.0),
+        rw_baseline_std_range=(0.0, 0.0),
+        rw_sales_std_range=(0.0, 0.0),
+        n_channel_shocks=1,
+        channel_shock_length_range=(4, 4),
+        channel_shock_level_range=(0.0, 0.0),
+        seed=13,
+    )
+    world = pg.sample_scm(cfg, seed=13)
+    assert not np.any(world.data["sales"])
+
+    zero = outcome_distributions([world])
+    assert np.isnan(zero["sales"].unit_share).all()
+    assert np.isnan(zero["channel_contribution"].unit_share).all()
+    assert np.isnan(zero.additive_share_total()).all()
+
+
 def test_exogenous_quantities_have_no_share(dist):
     for name in ("spend", "controls", "demand"):
         assert not dist[name].on_y_scale
@@ -208,6 +244,67 @@ def test_select_validates_shape(dist):
         dist["sales"].select(np.ones(dist["sales"].n_units + 1, dtype=bool))
 
 
+def test_uint8_flag_is_not_silently_read_as_world_positions(corpus):
+    """The corpus stores its flags as uint8, so a raw flag is ambiguous.
+
+    ``worlds=corpus["is_val"]`` reads as the positions "world 1, world 1,
+    world 0, ..." — the right length, made of real rows, and wrong. Nothing
+    downstream can catch that, so the caller has to say which reading it meant.
+    """
+    is_val = corpus["is_val"]
+    assert is_val.dtype == np.uint8
+    with pytest.raises(ValueError, match="ambiguous world selector") as excinfo:
+        outcome_distributions(corpus, worlds=is_val)
+    message = str(excinfo.value)
+    assert "astype(bool)" in message
+    assert "np.flatnonzero" in message
+
+    expected = np.flatnonzero(is_val)
+    assert 0 < expected.size < is_val.size
+    for selector in (is_val == 1, is_val.astype(bool)):
+        subset = outcome_distributions(corpus, worlds=selector)
+        assert np.array_equal(subset.world_ids, expected)
+    # the rule is narrow: integers that cannot be a mask stay positional
+    positions = outcome_distributions(corpus, worlds=np.array([0, 2, 4]))
+    assert np.array_equal(positions.world_ids, [0, 2, 4])
+
+
+def test_uint8_unit_mask_is_not_silently_read_as_unit_positions(dist):
+    media = dist["channel_contribution"]
+    flag = (media.unit_max > 0.0).astype(np.uint8)
+    with pytest.raises(ValueError, match="ambiguous unit selector"):
+        media.select(flag)
+
+    kept = media.select(flag.astype(bool))
+    assert kept.n_units == int(flag.sum())
+    assert kept.n_units < media.n_units
+    assert np.array_equal(media.select(flag == 1).world_index, kept.world_index)
+    assert media.select(np.array([0, 2])).n_units == 2
+
+
+def test_select_recomputes_pooled_and_refuses_without_raw_series(corpus, dist):
+    """A subset's pooled report describes the subset, or it does not exist.
+
+    Without the raw values there is nothing to re-pool, and handing back the
+    full population's statistics under a subset's ``n_units`` is silently
+    wrong — so that combination raises instead.
+    """
+    media = dist["channel_contribution"]
+    keep = media.unit_max > 0.0
+    assert media.series is not None
+    subset_values = media.series[keep].reshape(-1).astype(np.float64)
+
+    subset = media.select(keep)
+    assert subset.pooled["n"] == subset_values.size
+    assert subset.pooled["n"] < media.pooled["n"]
+    assert subset.pooled["mean"] == pytest.approx(subset_values.mean(), rel=1e-6)
+    assert subset.pooled["mean"] != pytest.approx(media.pooled["mean"], rel=1e-6)
+
+    lean = outcome_distributions(corpus, keep_series=False)["channel_contribution"]
+    with pytest.raises(ValueError, match="keep_series=True"):
+        lean.select(keep)
+
+
 def test_empty_world_selection_raises(corpus):
     with pytest.raises(ValueError, match="empty"):
         outcome_distributions(corpus, worlds=np.zeros(corpus["sales_raw"].shape[0], bool))
@@ -263,6 +360,24 @@ def test_keep_series_false_keeps_stats_but_drops_values(corpus):
     assert np.allclose(lean.additive_share_total(), 1.0, atol=1e-4)
 
 
+def test_keep_series_false_still_reports_at_the_stored_levels(corpus, dist):
+    """Dropping the raw values must not change the default reports.
+
+    ``table`` substitutes the stored levels and passes them explicitly, so it
+    has to recognize them as the levels the pooled report already holds —
+    otherwise the default table asks for values that were deliberately freed.
+    """
+    lean = outcome_distributions(corpus, keep_series=False)
+    assert lean.table() == dist.table()
+    assert lean.table(levels=lean.quantile_levels) == lean.table()
+    assert json.dumps(lean.summary(list(lean.quantile_levels))) == json.dumps(lean.summary())
+    # other levels genuinely need the values that were dropped
+    with pytest.raises(ValueError, match="keep_series"):
+        lean.table(levels=(0.1, 0.9))
+    with pytest.raises(ValueError, match="keep_series"):
+        lean["sales"].quantiles(levels=(0.1, 0.9))
+
+
 # -- validation + SCM adapter ------------------------------------------------
 
 
@@ -273,6 +388,12 @@ def test_unknown_quantity_and_bad_normalize_raise(corpus):
         outcome_distributions(corpus, normalize="zscore")
     with pytest.raises(ValueError, match="quantile levels"):
         outcome_distributions(corpus, quantiles=[1.5])
+
+
+def test_empty_quantity_subset_is_rejected(corpus):
+    """An empty selection reports nothing and cannot even build a frame."""
+    with pytest.raises(ValueError, match="quantities is empty"):
+        outcome_distributions(corpus, quantities=[])
 
 
 def test_missing_corpus_key_names_it():
