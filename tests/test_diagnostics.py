@@ -153,7 +153,9 @@ def test_junk_inactive_padding_is_rejected_before_the_companion(toy, monkeypatch
         raise AssertionError("outcome_distributions was called before preflight finished")
 
     monkeypatch.setattr(dg, "outcome_distributions", explode)
-    with pytest.raises(ValueError, match="non-zero inactive padding|non-finite"):
+    # every poison — junk, NaN or inf — is localised to its world and column,
+    # not reported as "this whole array is unusable"
+    with pytest.raises(ValueError, match=r"non-zero inactive padding at world 0, column 2"):
         data_diagnostics(corpus)
     # rejection, never sanitation
     assert corpus["spend_raw"][0, 3, 2] == poison or math.isnan(corpus["spend_raw"][0, 3, 2])
@@ -201,6 +203,10 @@ def test_single_time_step_gives_empty_differences():
     levels = report["levels"].series
     assert levels.slot_valid[:, :, SERIES_SLOTS.index("mean")].all()
     assert not levels.slot_valid[:, :, SERIES_SLOTS.index("roughness")].any()
+    # a one-step window has no lags at all: every report must SAY so rather
+    # than crash on an empty column axis
+    assert "no columns to report" in report["levels"].temporal.table()
+    assert report["levels"].temporal.matrix("acf").shape == (len(report.keys), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +235,7 @@ def test_world_selector_forms_agree(toy):
         (np.array([True, False]), ValueError),
         ([5], IndexError),
         (slice(3, None), ValueError),
+        (np.ma.array([0, 1, 2], mask=[1, 0, 0]), TypeError),
     ],
 )
 def test_lossy_world_selectors_are_rejected(toy, selector, error):
@@ -328,18 +335,21 @@ def test_companion_is_called_once_without_series(toy, monkeypatch):
     assert report.outcomes["sales"].series is None
 
 
-def test_companion_agrees_on_totals(toy):
-    report = data_diagnostics(toy, scopes=("nodes", "decomposition"))
-    sales = report.outcomes["sales"]
-    order = np.argsort(report.outcomes.world_ids)
-    expected = report.contributions.sales_total[order]
-    assert np.allclose(sales.unit_total, expected, rtol=1e-9, atol=1e-9)
+@pytest.mark.parametrize("selector", [None, [1, 2], [2, 0], [2, 1, 0], [0]])
+def test_companion_rows_line_up_with_the_report(toy, selector):
+    """A row-wise comparison must not silently pair different worlds.
 
-
-def test_single_world_corpus_uses_an_unambiguous_companion_selector():
-    corpus = toy_corpus(n_worlds=1, inactive_last_channel=False)
-    report = data_diagnostics(corpus)
-    assert report.outcomes.n_worlds == 1
+    The companion takes a selector of its own, so a permuted selection could
+    come back in corpus order while the report stays in caller order.
+    """
+    report = data_diagnostics(toy, worlds=selector, scopes=("nodes", "decomposition"))
+    assert np.array_equal(report.outcomes.world_ids, report.world_ids)
+    assert np.allclose(
+        report.outcomes["sales"].unit_total,
+        report.contributions.sales_total,
+        rtol=1e-9,
+        atol=1e-9,
+    )
 
 
 def test_raw_values_are_the_eligible_rows(toy):
@@ -489,6 +499,39 @@ def test_constant_series_and_diagonal_are_not_available():
     assert not dep.valid["xi_max"][0, i, j]
     assert np.isnan(dep.matrices["pearson"][0, i, i])
     assert not dep.valid["xi"][0, i, i]
+
+
+def test_eligible_but_undefined_is_invalid_not_absent():
+    """A constant active series was ASKED and had no answer; say that."""
+    corpus = toy_corpus(inactive_last_channel=False)
+    corpus["spend_raw"][:, :, 0] = 3.0
+    report = data_diagnostics(corpus, views=("levels",))
+    levels = report["levels"]
+    _, dependence = levels.dependence.pair("C1", "C2", "pearson")
+    _, temporal = levels.temporal.stats("C1", 1, "acf")
+    _, vif = levels.vif["observed"].stats("C1")
+    for ledger in (dependence, temporal, vif):
+        assert ledger.eligible == 3, ledger
+        assert ledger.valid == 0 and ledger.invalid == 3, ledger
+        assert ledger.selected >= ledger.eligible
+    # and a pair whose partner never exists reports no observations at all
+    padded = data_diagnostics(toy_corpus(), views=("levels",))
+    _, absent = padded["levels"].dependence.pair("C1", "C3", "pearson")
+    assert absent.eligible == 0 and absent.observations == 0
+
+
+def test_correlations_stay_inside_their_range_and_near_constants_are_flagged():
+    exact = np.arange(8.0)
+    dep, keys = _dependence_for(np.stack([exact, 2.0 * exact + 1.0]))
+    value = dep.matrices["pearson"][0, keys.index("C1"), keys.index("C2")]
+    assert value <= 1.0 and value == pytest.approx(1.0)
+
+    # a column that is constant up to one ULP is noise, not a predictor
+    near_constant = np.full(8, 1.0)
+    near_constant[3] += 1e-17
+    _, valid, constant, rank, condition = dg._vif_world(np.stack([near_constant, exact]))
+    assert constant[0] and not valid[0]
+    assert rank == 1 and np.isposinf(condition)
 
 
 def test_pearson_is_signed_and_spearman_uses_average_ranks():
@@ -973,6 +1016,27 @@ def test_projection_is_partial_and_suppresses_closure(toy):
         budget.select("C1_direct_y")
     with pytest.raises(ValueError, match="alternative reading"):
         budget.select(("C1_direct_y",), basis="observed_path_media")
+
+
+def test_reprojection_keeps_saying_it_is_partial():
+    """Projecting a projection omits nothing NEW — the old omissions remain."""
+    corpus = toy_corpus(inactive_last_channel=False)
+    budget = data_diagnostics(corpus).contributions
+    kept = ("channels_direct_y_total", "C1_direct_y", "C2_direct_y")
+    once = budget.select(kept)
+    twice = once.select(kept)
+    assert twice.is_partial_projection
+    assert set(once.omitted_keys) <= set(twice.omitted_keys)
+
+    dropped = twice.closure("channel_direct_children")
+    assert not dropped.complete
+    # the dropped TRAILING channel is still named, and the residual is real
+    assert "C3_direct_y" in dropped.omitted_keys
+    residual = dropped.residuals["net_total"]
+    assert residual is not None
+    assert np.allclose(residual, budget.values("C3_direct_y", measure="total"))
+    assert dropped.max_abs_residual("net_total") > 0.0
+    assert "partial projection" in twice.table(sibling_set="channel_direct_children")
 
 
 def test_zero_sales_invalidates_shares_only():

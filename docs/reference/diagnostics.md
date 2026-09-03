@@ -111,17 +111,25 @@ numerical rank as the nuisance design" is wrong: a target can sit far outside a
 numerically rank-deficient span and still have a perfectly finite VIF.
 
 Design rank and condition number are reported separately, and the condition
-number can be infinite while individual target VIFs stay finite. Exact OLS says
-adding regressors cannot decrease a common target's VIF — but per-scope SVD
-truncation is not nested, so no numerical `oracle ≥ observed` invariant is
-claimed and each scope is verified on its own.
+number can be infinite while individual target VIFs stay finite. `condition`
+is the condition number of the centred, unit-column-normalised design over its
+**varying** columns, and it is `+inf` whenever any predictor is constant or the
+design is rank deficient — a constant column carries no direction, so the
+design it belongs to is degenerate even when every other target is fine. A
+column whose variation sits at or below the rounding floor of its own scale is
+treated as constant rather than unit-normalised into a noise direction.
+
+Exact OLS says adding regressors cannot decrease a common target's VIF — but
+per-scope SVD truncation is not nested, so no numerical `oracle ≥ observed`
+invariant is claimed and each scope is verified on its own.
 
 ## Report-validity policies (not mathematical limits)
 
 * Pairwise dependence needs `n ≥ 3` observations and a non-constant target.
+* A VIF needs `n ≥ 3` observations and a non-constant target column.
 * An ACF or lag-xi value needs at least three usable pairs (`T_view − h ≥ 3`).
 
-Both are conservative reporting choices, not statements that the formulas
+All three are conservative reporting choices, not statements that the formulas
 cannot be evaluated with fewer points.
 
 ## Coverage, infinities and closure
