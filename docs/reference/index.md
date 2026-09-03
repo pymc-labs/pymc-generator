@@ -19,6 +19,7 @@ it.
 | [`write_scm_bundle`](bundles.md) / [`write_scenario_bundles`](bundles.md) | [Audit bundles](bundles.md) | Write auditable folders. |
 | [`SCENARIOS`](scenarios.md) | [Named scenarios](scenarios.md) | Five named audit scenarios. |
 | [`outcome_distributions`](outcomes.md#prior_generator.outcomes.outcome_distributions) | [Outcome distributions](outcomes.md) | Pool worlds along the quantity axis: outcome and contribution magnitudes. |
+| [`data_diagnostics`](diagnostics.md#prior_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
 
 ## Import surface
 
@@ -41,6 +42,7 @@ pg.sample_prior_predictive   # a corpus (dict of numpy arrays)
 pg.DataGenerator             # a facade over corpus generation + validation
 pg.save_corpus, pg.load_corpus
 pg.outcome_distributions     # outcome/contribution magnitudes across worlds
+pg.data_diagnostics          # dependence / VIF / dynamics / contribution hierarchy
 ```
 
 Public symbols are lazy-loaded, so `import prior_generator` stays light — the

@@ -1193,10 +1193,11 @@ def _xi_batch(x_rows: np.ndarray, y_rows: np.ndarray) -> np.ndarray:
     steps = np.abs(np.diff(np.take_along_axis(below, order, axis=1), axis=1)).sum(axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):
         out = np.where(denominator > 0.0, 1.0 - n * steps / (2.0 * denominator), np.nan)
-    for row in np.flatnonzero(tied):
-        out[row] = (
-            _chatterjee_xi_tie_average(x_rows[row], y_rows[row])
-            if denominator[row] > 0.0
+    for tied_row in np.flatnonzero(tied):
+        index = int(tied_row)
+        out[index] = (
+            _chatterjee_xi_tie_average(x_rows[index], y_rows[index])
+            if denominator[index] > 0.0
             else np.nan
         )
     return np.asarray(out, dtype=np.float64)
@@ -2659,7 +2660,7 @@ class DataDiagnostics:
         lines = [
             f"data diagnostics — {self.source_kind} — {self.n_worlds} worlds x "
             f"{self.n_time_steps} steps",
-            f"scopes: {list(self.scopes)}   views: {sorted(self.views)}   "
+            f"scopes: {list(self.scopes)}   views: {list(self.views)}   "
             f"series: {len(self.descriptors)}   lags: {len(self.lags)}",
             f"contribution basis: {self.contributions.basis} "
             f"({len(self.contributions.descriptors)} rows)",
@@ -2670,7 +2671,7 @@ class DataDiagnostics:
 
     def summary(self) -> dict[str, Any]:
         """Strictly JSON-safe report (``json.dumps(..., allow_nan=False)``)."""
-        payload = {
+        payload: dict[str, Any] = {
             "source_kind": self.source_kind,
             "world_ids": self.world_ids,
             "n_worlds": self.n_worlds,
@@ -2685,7 +2686,8 @@ class DataDiagnostics:
             "contribution_bases": list(self.contribution_bases),
             "by_view": {name: view.summary() for name, view in self.views.items()},
         }
-        return _strict_json_value(payload)
+        sanitized: dict[str, Any] = _strict_json_value(payload)
+        return sanitized
 
     def to_frame(self) -> pd.DataFrame:
         """Per-(view, world, series) descriptive slots for every view."""

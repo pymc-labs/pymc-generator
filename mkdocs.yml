@@ -156,6 +156,7 @@ nav:
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
       - The posterior oracle: guide/oracle.md
+      - Interrogating the data: guide/data-diagnostics.md
   - Examples:
       - End-to-end tour: examples/index.ipynb
       - Simple configurable corpus: examples/simple-model.ipynb
@@ -171,3 +172,4 @@ nav:
       - Visualization: reference/viz.md
       - Signal diagnostics: reference/signal.md
       - Outcome distributions: reference/outcomes.md
+      - Data diagnostics: reference/diagnostics.md
