@@ -527,6 +527,14 @@ def _validate_world_selector(worlds: Any, n_available: int) -> np.ndarray:
             "worlds must be None, a slice, an integer position, an integer "
             "sequence or a boolean mask; a bare bool selects nothing"
         )
+    elif np.ma.isMaskedArray(worlds):
+        # np.asarray hands back .data, so the mask — the whole point of the
+        # array — would silently select the worlds it excludes.
+        raise TypeError(
+            "masked world selectors are rejected because the mask is lost on "
+            "conversion; pass worlds=selector.compressed() or "
+            "np.flatnonzero(~selector.mask & selector.data.astype(bool))"
+        )
     else:
         arr = np.asarray(worlds)
         if arr.dtype == bool:
@@ -648,14 +656,21 @@ class _DiagnosticSource:
     available: frozenset[str]
 
 
-def _as_float64(value: Any, name: str) -> np.ndarray:
+def _numeric_float64(value: Any, name: str) -> np.ndarray:
     arr = np.asarray(value)
     if arr.dtype.kind not in "fiu":
         raise TypeError(f"{name} must be numeric, got dtype {arr.dtype}")
-    out = arr.astype(np.float64, copy=False)
-    if not np.isfinite(out).all():
+    return arr.astype(np.float64, copy=False)
+
+
+def _require_finite(arr: np.ndarray, name: str) -> np.ndarray:
+    if not np.isfinite(arr).all():
         raise ValueError(f"{name} holds non-finite values; diagnostics refuse to guess their scale")
-    return out
+    return arr
+
+
+def _as_float64(value: Any, name: str) -> np.ndarray:
+    return _require_finite(_numeric_float64(value, name), name)
 
 
 def _check_zero_padding(arr: np.ndarray, mask: np.ndarray, name: str) -> None:
@@ -720,7 +735,9 @@ def _corpus_source(
 
     arrays: dict[str, np.ndarray] = {}
     for name, key in _CORPUS_ARRAYS.items():
-        arr = _as_float64(corpus[key], key)
+        # Padding is checked BEFORE finiteness so a NaN parked in an inactive
+        # slot is named by world and column, not by the whole array.
+        arr = _numeric_float64(corpus[key], key)
         kind = _ARRAY_KIND[name]
         if kind == "":
             expected: tuple[int, ...] = (n_total, n_time_steps)
@@ -732,6 +749,7 @@ def _corpus_source(
             raise ValueError(f"{key} must have shape {expected}, got {arr.shape}")
         if kind in _WIDTH_KINDS:
             _check_zero_padding(arr, masks[kind], key)
+        _require_finite(arr, key)
         arrays[name] = arr[idx]
 
     return _DiagnosticSource(
@@ -856,19 +874,23 @@ def _extract_diagnostic_source(
 
 
 def _companion_selector(world_ids: np.ndarray, n_total: int) -> Any:
-    """A selector ``outcome_distributions`` reads the same way we do.
+    """A selector ``outcome_distributions`` reads exactly as we do.
 
-    Positions and row masks are told apart by dtype alone, so a 0/1-valued
-    integer position array is rejected as ambiguous there (a one-world corpus
-    selected as ``[0]`` is exactly that case). An ascending boolean mask says
-    the same thing without the ambiguity; the companion's rows are then
-    ordered by corpus row, which ``OutcomeDistributions.world_ids`` states.
+    The companion must land on the same worlds IN THE SAME ORDER, or every
+    row-wise comparison against the report silently pairs the wrong worlds.
+    Positions carry the order, but a 0/1-valued integer position array is
+    rejected there as ambiguous (mask or positions?) — and that case is
+    precisely a permutation of ``{0}`` or ``{0, 1}``, because duplicates are
+    already rejected and the selection is in range. Both permutations are
+    expressible as slices, which carry order without the ambiguity, so the
+    two branches below cover every input positions cannot.
     """
-    if world_ids.size == n_total and np.array_equal(world_ids, np.arange(n_total)):
+    order = np.arange(n_total, dtype=np.int64)
+    if np.array_equal(world_ids, order):
         return slice(None)
-    mask = np.zeros(n_total, dtype=bool)
-    mask[world_ids] = True
-    return mask
+    if np.array_equal(world_ids, order[::-1]):
+        return slice(None, None, -1)
+    return world_ids.astype(np.int64, copy=True)
 
 
 def _series_block(source: _DiagnosticSource, descriptors: Sequence[SeriesDescriptor]) -> np.ndarray:
@@ -962,7 +984,7 @@ def _ledger(
     n_eligible = int(np.count_nonzero(eligible_mask))
     n_eligible = max(n_eligible, n_valid)
     return CoverageLedger(
-        selected=int(valid.size if selected is None else selected),
+        selected=max(int(valid.size if selected is None else selected), n_eligible),
         eligible=n_eligible,
         valid=n_valid,
         finite=finite,
@@ -1082,14 +1104,29 @@ def _compute_slots(block: np.ndarray, eligible: np.ndarray) -> tuple[np.ndarray,
 # ---------------------------------------------------------------------------
 
 
+def _constant_rows(block: np.ndarray, centred: np.ndarray, norms: np.ndarray) -> np.ndarray:
+    """Rows whose variation is at or below the rounding floor of their scale.
+
+    Exact-zero variance is not the only degenerate case: a series that is
+    constant up to one ULP unit-normalizes into an arbitrary rounding-noise
+    direction, which would then be correlated and regressed against as if it
+    were signal.
+    """
+    eps = float(np.finfo(np.float64).eps)
+    scale = np.abs(block).max(axis=1) if block.size else np.zeros(block.shape[0])
+    return np.asarray(norms <= eps * np.sqrt(centred.shape[1]) * scale, dtype=bool)
+
+
 def _pearson_matrix(block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Signed Pearson correlation between every pair of rows."""
     n_series = block.shape[0]
     centred = block - block.mean(axis=1, keepdims=True)
     norms = np.sqrt((centred**2).sum(axis=1))
-    nonconstant = norms > 0.0
+    nonconstant = ~_constant_rows(block, centred, norms)
     scaled = centred / np.where(nonconstant, norms, 1.0)[:, None]
-    corr = scaled @ scaled.T
+    # Unit vectors: a projection outside [-1, 1] is rounding, so clipping is
+    # exact repair rather than the suppression of a real out-of-range value.
+    corr = np.clip(scaled @ scaled.T, -1.0, 1.0)
     corr[~nonconstant, :] = np.nan
     corr[:, ~nonconstant] = np.nan
     if n_series:
@@ -1297,7 +1334,7 @@ def _vif_world(block: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, i
     design = block.T
     centred = design - design.mean(axis=0, keepdims=True)
     norms = np.linalg.norm(centred, axis=0)
-    constant = norms <= 0.0
+    constant = _constant_rows(block, centred.T, norms)
     unit = centred / np.where(constant, 1.0, norms)[None, :]
 
     varying = np.flatnonzero(~constant)
@@ -1686,6 +1723,9 @@ class ContributionBudget:
     active: np.ndarray
     denominator_valid: np.ndarray
     quantile_levels: tuple[float, ...]
+    #: Column widths of the SOURCE, so a projection that drops a trailing
+    #: column still knows the sibling cut it came from is incomplete.
+    source_widths: dict[str, int]
     is_partial_projection: bool = False
     omitted_keys: tuple[str, ...] = ()
 
@@ -1817,13 +1857,18 @@ class ContributionBudget:
             return self
         chosen = _validate_keys(keys, self.keys, "contribution keys")
         index = [self._index(key) for key in chosen]
-        omitted = tuple(k for k in self.keys if k not in set(chosen))
+        # Accumulate: projecting an already-partial budget onto everything it
+        # still holds omits nothing NEW, but the earlier omissions are still
+        # missing, and the result must not claim a complete cut.
+        omitted = tuple(
+            dict.fromkeys((*self.omitted_keys, *(k for k in self.keys if k not in set(chosen))))
+        )
         return replace(
             self,
             descriptors=tuple(self.descriptors[i] for i in index),
             measures={field: values[:, index] for field, values in self.measures.items()},
             active=self.active[:, index],
-            is_partial_projection=bool(omitted),
+            is_partial_projection=self.is_partial_projection or len(chosen) < len(self.keys),
             omitted_keys=omitted,
         )
 
@@ -1843,7 +1888,7 @@ class ContributionBudget:
         present = tuple(d.key for d in self.descriptors if d.sibling_set == sibling_set)
         complete_children = tuple(
             d.key
-            for d in _contribution_descriptors(self._widths(), self.basis)
+            for d in _contribution_descriptors(self.source_widths, self.basis)
             if d.sibling_set == sibling_set
         )
         omitted = tuple(k for k in complete_children if k not in set(present))
@@ -1868,13 +1913,6 @@ class ContributionBudget:
             omitted_keys=omitted,
             residuals=residuals,
         )
-
-    def _widths(self) -> dict[str, int]:
-        widths = {"channel": 0, "control": 0, "latent": 0}
-        for desc in self.descriptors:
-            if desc.column_kind in widths:
-                widths[desc.column_kind] = max(widths[desc.column_kind], desc.column_index + 1)
-        return widths
 
     def _parent_values(self, parent: str, field: str) -> np.ndarray | None:
         if parent != "Y":
@@ -2066,6 +2104,7 @@ def _contribution_budget(
         active=active,
         denominator_valid=denominator_valid,
         quantile_levels=levels,
+        source_widths=dict(source.widths),
     )
 
 
@@ -2089,9 +2128,13 @@ def _render_table(
 ) -> str:
     if not rows:
         return f"{title}\n(no rows)"
+    if not columns:
+        # A legitimately empty axis (a one-step window has no lags at all):
+        # say so instead of rendering a table with no cells in it.
+        return f"{title}\n(no columns to report)"
     name_w = max(len("key"), *(len(r[0]) for r in rows))
     count_w = max(len(count_header), *(len(r[1]) for r in rows))
-    value_w = max(8, *(len(v) for r in rows for v in r[2]), *(len(c) for c in columns))
+    value_w = max([8, *(len(v) for r in rows for v in r[2]), *(len(c) for c in columns)])
     header = f"{'key':<{name_w}}  {count_header:>{count_w}}  " + "  ".join(
         f"{c:>{value_w}}" for c in columns
     )
@@ -2236,6 +2279,7 @@ class DependenceDiagnostics:
     n_time_steps: int
     matrices: dict[str, np.ndarray]
     valid: dict[str, np.ndarray]
+    eligible: np.ndarray
     quantile_levels: tuple[float, ...]
 
     @property
@@ -2279,11 +2323,16 @@ class DependenceDiagnostics:
         j = _key_index(self.descriptors, y_key)
         values = self.matrices[metric][:, i, j]
         valid = self.valid[metric][:, i, j]
+        # A pair is eligible where BOTH series exist in the world; a world
+        # where both exist but the statistic is undefined (a constant target)
+        # is eligible-but-invalid, not "never asked".
+        eligible = self.eligible[:, i] & self.eligible[:, j]
         ledger = _ledger(
             values,
             valid,
+            eligible=eligible,
             selected=self.n_worlds,
-            observations=self.n_worlds * self.n_time_steps,
+            observations=int(eligible.sum()) * self.n_time_steps,
             pairs=int(valid.sum()),
         )
         return _finite_stats(values, valid, self.quantile_levels), ledger
@@ -2329,7 +2378,12 @@ class DependenceDiagnostics:
         for metric in DEPENDENCE_METRICS:
             values = self.matrices[metric]
             valid = self.valid[metric]
-            ledger = _ledger(values, valid, selected=int(values.size))
+            pair_eligible = (
+                self.eligible[:, :, None]
+                & self.eligible[:, None, :]
+                & ~np.eye(len(self.descriptors), dtype=bool)[None, :, :]
+            )
+            ledger = _ledger(values, valid, eligible=pair_eligible, selected=int(values.size))
             out["metrics"][metric] = {
                 "keys": list(self.keys),
                 "median_matrix": self.matrix(metric, quantile=0.5),
@@ -2476,6 +2530,7 @@ class TemporalDiagnostics:
     acf_valid: np.ndarray
     lag_xi: np.ndarray
     lag_xi_valid: np.ndarray
+    eligible: np.ndarray
     quantile_levels: tuple[float, ...]
 
     @property
@@ -2514,8 +2569,9 @@ class TemporalDiagnostics:
         ledger = _ledger(
             values[:, i, j],
             valid[:, i, j],
+            eligible=self.eligible[:, i],
             selected=self.n_worlds,
-            observations=self.n_worlds * self.n_time_steps,
+            observations=int(self.eligible[:, i].sum()) * self.n_time_steps,
             pairs=usable,
         )
         return _finite_stats(values[:, i, j], valid[:, i, j], self.quantile_levels), ledger
@@ -2560,7 +2616,10 @@ class TemporalDiagnostics:
                         for j in range(len(self.lags))
                     ],
                     "coverage": _ledger(
-                        values[:, i, :], valid[:, i, :], selected=int(valid[:, i, :].size)
+                        values[:, i, :],
+                        valid[:, i, :],
+                        eligible=np.repeat(self.eligible[:, i, None], len(self.lags), axis=1),
+                        selected=int(valid[:, i, :].size),
                     ).as_dict(),
                 }
             out["series"][desc.key] = entry
@@ -2884,6 +2943,7 @@ def data_diagnostics(
                 n_time_steps=n_view,
                 matrices=matrices,
                 valid=matrix_valid,
+                eligible=eligible,
                 quantile_levels=levels,
             ),
             temporal=TemporalDiagnostics(
@@ -2896,6 +2956,7 @@ def data_diagnostics(
                 acf_valid=acf_valid,
                 lag_xi=lag_xi,
                 lag_xi_valid=lag_xi_valid,
+                eligible=eligible,
                 quantile_levels=levels,
             ),
             vif=vif_results,
