@@ -10,6 +10,48 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ### Added
 
+- **Generated-data diagnostics** (`data_diagnostics`). `outcome_distributions`
+  answers how LARGE each quantity is; this answers the questions that need the
+  series themselves and the relations between them. One call over a corpus (or
+  a list of `SCM` worlds) returns, for every diagnosable node — observed
+  `C`/`Z`/`Y`, retained latent truth `D`/`B`, and on request the decomposition
+  and the SCM-only counterfactual paths — four facets in both a levels and a
+  first-differences view: per-world shape and spread (mean, std, median, IQR,
+  min, max, roughness, spike) plus the exact retained values; pairwise
+  dependence (signed Pearson, average-rank Spearman, directional Chatterjee xi
+  and its symmetric xi-max); per-predictor VIF over the `observed` design
+  (active C+Z) and the `oracle` design (C+Z+D), with design rank and condition
+  number; and dynamics (ACF and forward lag-xi on a contiguous
+  `1..min(52, T//2)` axis). A sales contribution hierarchy is always reported:
+  five non-overlapping top groups down to per-channel/control/latent rows, in
+  six measures (net/gross x total/mean-per-period/share), macro or micro
+  weighted, conditional on activity or not, with per-world closure residuals.
+  Every statistic is computed INSIDE one world and only then summarized across
+  worlds — pooling rows across worlds manufactures dependence out of
+  between-world level differences (an exact two-world fixture with zero
+  within-world correlation pools to r = 0.95). Chatterjee xi is implemented
+  in-package with an exact analytic average over predictor-tie orderings, so a
+  tie cannot make the answer depend on sort order, and it never consults an
+  RNG. VIF projects each target onto the SVD-truncated nuisance span and reads
+  RSS/TSS directly; it is never inferred from nuisance-versus-augmented rank
+  equality, which wrongly reports an infinite VIF for a target sitting outside
+  a numerically rank-deficient span. Parents in the contribution tree roll up
+  their atomic descendants' GROSS totals, so two children of `+10` and `-10`
+  report 20 units of activity rather than 0. Every aggregate carries a coverage
+  ledger (`selected / eligible / valid / finite / positive_infinite /
+  negative_infinite / invalid`), finite summaries exclude infinities instead of
+  returning the NaN `np.quantile` gives for `[1.0, inf]`, and `summary()` is
+  strictly JSON-safe (`allow_nan=False`). Reports: `table()` methods (text),
+  `summary()`, `to_frame()`, and five bounded Matplotlib figures
+  (`viz.plot_dependence_matrices`, `plot_series_distributions`,
+  `plot_temporal_diagnostics`, `plot_vif_diagnostics`,
+  `plot_contribution_diagnostics`) that pair the two views by default. No
+  p-values, error bands, significance marks or causal claims anywhere: worlds
+  are correlated and lag pairs overlap. Purely an analysis API — generation,
+  RNG streams, the schema and persisted bytes are untouched, and
+  diagnostic-relevant inactive padding that is not exact zero is rejected
+  rather than silently sanitized.
+
 - **Outcome-space distributions** (`outcome_distributions`). Every existing
   diagnostic describes a corpus in PARAMETER space (edge marginals, drawn
   coefficients) or SIGNAL space (per-channel CV, Spearman, warmup ratio).

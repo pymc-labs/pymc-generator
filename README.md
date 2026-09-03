@@ -41,6 +41,7 @@ it locally.
 - [How a world is created](#how-a-world-is-created)
 - [The exact decomposition](#the-exact-decomposition)
 - [Outcome distributions: how large is everything?](#outcome-distributions-how-large-is-everything)
+- [Data diagnostics: what depends on what?](#data-diagnostics-what-depends-on-what)
 - [Assumptions and design choices](#assumptions-and-design-choices)
 - [Dialing complexity](#dialing-complexity)
 - [Outputs](#outputs)
@@ -510,6 +511,64 @@ pooled magnitudes comparable across worlds; shares are ratios and never move.
 and `viz.plot_outcome_distributions(dist, "outcomes.png", of="share")` renders
 the histogram grid.
 
+## Data diagnostics: what depends on what?
+
+Magnitudes are one half of "is this corpus any good". The other half needs the
+series themselves: **is anything collinear, does anything predict anything
+else, and how do the series move week to week?** `data_diagnostics` answers
+that over every node — observed `C`/`Z`/`Y`, retained latent truth `D`/`B`,
+and, on request, the decomposition and the single-world counterfactual paths.
+
+```python
+rep = pg.data_diagnostics(corpus, scopes=("nodes", "decomposition"))
+
+print(rep.table())                                    # overview + the top cut
+print(rep["levels"].dependence.table("xi_max"))       # strongest pairs
+print(rep["differences"].vif["oracle"].table())       # collinearity incl. latent D
+print(rep["levels"].temporal.table("acf"))            # persistence by lag
+print(rep["differences"].series.table("roughness"))   # week-to-week texture
+
+rep.contributions.table(sibling_set="top")            # % and units of sales
+rep.contributions.select(("C1_direct_y",)).table(measure="total")
+```
+
+Three rules shape every number. **World first**: each statistic is computed
+inside one world and then summarized across worlds, because pooling rows from
+different worlds manufactures dependence out of between-world level
+differences. **Levels and differences**: weekly series are random-walk-like,
+so level dependence is large even between independent series, and both views
+are always reported. **Description, not inference**: no p-values, no bands, no
+significance, no causal claims — the causal answer is the exact decomposition
+above, not a correlation.
+
+What it reports, per world and then across worlds:
+
+- **dependence** — signed Pearson and Spearman, directional Chatterjee `xi`
+  (row = predictor, column = target: general dependence of any shape, so
+  `Y = X²` scores ≈0.8 where Pearson scores ≈0) and its symmetric `xi_max`.
+  Ties in the predictor are averaged analytically over every ordering they
+  admit, so the answer is deterministic instead of an artifact of sort order;
+- **collinearity** — per-predictor VIF for the `observed` design (active
+  `C+Z`) and the `oracle` design (`C+Z+D`), by projection onto the
+  SVD-truncated nuisance span, plus design rank and condition number;
+- **dynamics** — ACF and forward lag-`xi` on a contiguous `1..min(52, T/2)`
+  axis, `roughness` (1 = white noise, → 0 = smooth drift) and a robust
+  `spike` ratio;
+- **distributions** — the exact retained values of every series, in levels and
+  in first differences, plus eight per-world descriptive slots;
+- **contributions** — a hierarchy of sales, in six measures (net/gross ×
+  total/mean-per-period/share), macro or micro weighted, conditional on
+  activity or not, with per-world closure residuals. A complete top cut sums
+  to sales exactly; parents roll up their atomic children's *gross* so
+  cancellation stays visible.
+
+Every aggregate carries a coverage ledger (`selected / eligible / valid /
+finite / ±infinite / invalid`), finite summaries exclude infinities instead of
+silently NaN-ing the quantile, and `rep.summary()` is strictly JSON-safe.
+`viz.plot_dependence_matrices`, `plot_series_distributions`,
+`plot_temporal_diagnostics`, `plot_vif_diagnostics` and
+`plot_contribution_diagnostics` render the figures.
+
 ## Assumptions and design choices
 
 These are the modeling commitments baked into the generator. They are deliberate,
@@ -811,6 +870,8 @@ are bit-identical to before the substitution existed.
 | `outcome_distributions` | Pool worlds along the quantity axis: outcome/contribution magnitudes and the share-of-sales budget. |
 | `OutcomeDistributions` / `QuantityDistribution` | The returned report and one quantity's distribution. |
 | `OUTCOME_QUANTITIES` | The reported quantity names, in report order. |
+| `data_diagnostics` | Post-hoc report over the generated series: dependence (Pearson/Spearman/xi), observed and oracle VIF, ACF/lag-xi/roughness/spike, and the sales contribution hierarchy. |
+| `DataDiagnostics` | The returned report: `.views["levels"/"differences"]`, `.contributions`, `.outcomes`. |
 
 The public surface reads mathematically: **treatments** (`n_treatments`, media
 channels), **covariates** (`n_covariates`, controls), and **latent** factors
