@@ -189,6 +189,36 @@ def test_a_genuine_v1_shard_still_migrates_and_is_stamped(tmp_path, tiny_corpus)
     assert DataGenerator.validate_corpus(loaded) == []
 
 
+def test_persistence_requires_diagnostics(tmp_path):
+    path = tmp_path / "unstamped.npz"
+    payload = {"sales_raw": np.zeros((1, 4))}
+    with pytest.raises(ValueError, match="diagnostics"):
+        pg.save_corpus(payload, path)
+    assert not path.exists()
+    np.savez(path, **payload)
+    with pytest.raises(ValueError, match="diagnostics"):
+        pg.load_corpus(path)
+
+
+@pytest.mark.parametrize("version", [99, True, "2"])
+def test_legacy_keys_cannot_override_an_explicit_version(tmp_path, tiny_corpus, version):
+    path = tmp_path / "explicit-version.npz"
+    payload = {
+        old: tiny_corpus[new] for old, new in LEGACY_CORPUS_KEYS_V1.items()
+    }
+    payload["diagnostics"] = np.array(json.dumps({"schema_version": version}))
+    np.savez(path, **payload)
+    with pytest.raises(ValueError, match="stamped corpora"):
+        pg.load_corpus(path)
+
+
+def test_partial_legacy_vocabulary_is_not_a_migration(tmp_path):
+    path = tmp_path / "partial-legacy.npz"
+    np.savez(path, K_active=np.array([1]), diagnostics=np.array("{}"))
+    with pytest.raises(ValueError, match="incomplete legacy"):
+        pg.load_corpus(path)
+
+
 # ---------------------------------------------------------------------------
 # M5 — the burn-in query-overlap boundary follows the ADMITTED response reach
 # ---------------------------------------------------------------------------

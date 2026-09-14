@@ -8,6 +8,11 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Release readiness
+
+- Require schema metadata at corpus persistence boundaries; reject partial legacy
+  vocabularies and prevent legacy keys from overriding an explicit version.
+
 ### Added
 
 - **Generated-data diagnostics** (`data_diagnostics`). `outcome_distributions`

@@ -1220,9 +1220,6 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
         if k == "diagnostics":
             if not isinstance(v, dict):
                 raise TypeError("diagnostics must be a mapping")
-            version_problem = _schema_version_error(v)
-            if version_problem is not None:
-                raise ValueError(version_problem)
             import json
 
             def _json_default(value):
@@ -1265,6 +1262,10 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
             if not _is_real_numeric(v):
                 raise ValueError(f"{k} must have a real numeric dtype")
             save_dict[k] = v
+
+    version_problem = _schema_version_error(corpus.get("diagnostics"))
+    if version_problem is not None:
+        raise ValueError(version_problem)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(path, **save_dict)
@@ -1313,28 +1314,25 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
             raise ValueError(f"corpus {path} diagnostics JSON must contain an object")
         corpus["diagnostics"] = diagnostics
 
-    # Schema v1 -> v2: the symbolic dimension keys were renamed to the canonical
-    # descriptive vocabulary. A v1 shard carries the old names and no
-    # schema_version, so migrate on read and stamp the version the in-memory
-    # dict now satisfies. Nothing else about a v1 shard changed.
+    # Only versionless shards with the complete v1 vocabulary may migrate.
     outdated = {old: new for old, new in LEGACY_CORPUS_KEYS_V1.items() if old in corpus}
     if outdated:
         clashes = sorted(new for new in outdated.values() if new in corpus)
         if clashes:
             raise ValueError(f"corpus {path} mixes v1 and v2 dimension keys: {clashes}")
+        diagnostics = corpus.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            raise ValueError(f"corpus {path}: diagnostics must carry the schema version")
+        if "schema_version" in diagnostics:
+            raise ValueError(f"corpus {path}: stamped corpora may not use legacy dimension keys")
+        if set(outdated) != set(LEGACY_CORPUS_KEYS_V1):
+            raise ValueError(f"corpus {path}: incomplete legacy dimension keys")
         for old, new in outdated.items():
             corpus[new] = corpus.pop(old)
-        diagnostics = corpus.get("diagnostics")
-        if isinstance(diagnostics, dict):
-            diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
+        diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
 
-    # Only NOW is the stamp meaningful: a genuine v1 shard legitimately arrives
-    # without one and was just migrated and stamped above. Anything still
-    # unstamped, or stamped with a version this build does not read, would be
-    # reinterpreted through the current vocabulary — refuse it instead.
-    if "diagnostics" in corpus:
-        version_problem = _schema_version_error(corpus["diagnostics"])
-        if version_problem is not None:
-            raise ValueError(f"corpus {path}: {version_problem}")
+    version_problem = _schema_version_error(corpus.get("diagnostics"))
+    if version_problem is not None:
+        raise ValueError(f"corpus {path}: {version_problem}")
 
     return corpus
