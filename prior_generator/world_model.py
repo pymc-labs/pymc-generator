@@ -1483,38 +1483,3 @@ def draw_worlds(
     }
 
 
-def draw_worlds_with_inputs(
-    model: pm.Model,
-    out_names: tuple[str, ...],
-    input_names: tuple[str, ...],
-    structure: dict[str, np.ndarray],
-    seed: int,
-    draws: int = 1,
-    mode: str = "FAST_COMPILE",
-    *,
-    rng_reference_names: tuple[str, ...] | None = None,
-) -> dict[str, np.ndarray]:
-    """Draw worlds with structure passed as compiled-function arguments.
-
-    Same semantics as :func:`draw_worlds` after ``pm.set_data(structure)``, but
-    structure arrays are explicit positional inputs to the compiled function.
-    """
-    with model:
-        out_vars = [model[name] for name in out_names]
-        input_vars = [model[name] for name in input_names]
-        reference_vars = (
-            [model[name] for name in rng_reference_names] if rng_reference_names else None
-        )
-    draw_fn, ordered_rngs = _get_cached_draw_fn(
-        model,
-        out_vars,
-        mode=mode,
-        reference_vars=reference_vars,
-        input_vars=input_vars,
-    )
-    input_args = tuple(np.asarray(structure[name]) for name in input_names)
-    vals = _execute_draws(draw_fn, ordered_rngs, seed=seed, draws=draws, input_args=input_args)
-    return {
-        name: (np.asarray(value)[None] if draws == 1 else np.asarray(value))
-        for name, value in zip(out_names, vals)
-    }
