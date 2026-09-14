@@ -1,5 +1,5 @@
 # Local enforcement of the same gates CI runs. Install once with:
-#   pip install pre-commit && pre-commit install
+#   uv sync --locked --extra dev && uv run --no-sync pre-commit install
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -12,8 +12,7 @@ repos:
         args: ["--maxkb=1024"]
       - id: check-merge-conflict
 
-  # Keep rev in sync with RUFF_VERSION in .github/workflows/ci.yml and the
-  # ruff pin in pyproject [dev].
+  # Keep rev in sync with the Ruff pin in pyproject.toml and uv.lock.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.18
     hooks:
@@ -21,10 +20,12 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.1.0
+  # Type-check against the real locked modeling environment, not stub-only deps.
+  - repo: local
     hooks:
       - id: mypy
-        files: ^prior_generator/
-        additional_dependencies: [numpy]
-        args: [--ignore-missing-imports]
+        name: mypy
+        entry: uv run --no-sync mypy prior_generator
+        language: system
+        files: ^prior_generator/|^pyproject.toml$|^uv.lock$
+        pass_filenames: false

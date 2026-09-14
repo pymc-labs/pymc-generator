@@ -4,29 +4,39 @@ This page takes you from an installed package to an audited world. Run the Pytho
 snippets in order in one session. World summaries and inline figures are generated
 during site builds; shell commands and file-writing snippets run locally.
 
-## Install
+## Install with uv
 
-The modeling stack is pinned to a validated combination — `pymc-marketing` is
-not yet on PyPI and is pinned to an exact commit so installs stay reproducible —
-so install from source:
-
-```bash
-pip install "git+https://github.com/pymc-labs/prior-generator.git"
-```
-
-Or, for development:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then clone
+the repository and use its checked-in dependency lock:
 
 ```bash
 git clone https://github.com/pymc-labs/prior-generator.git
 cd prior-generator
-pip install -e ".[dev]"      # or: uv pip install -e ".[dev]"
+uv sync --frozen
+uv run --no-sync python
 ```
 
-!!! info "Requirements"
-    Python **≥ 3.12** (the pinned `pymc` needs it). Core dependencies:
-    `pytensor`, `pymc`, `pymc-marketing`, `numpy`, `scipy`, `pandas`,
-    `matplotlib`. Public symbols are lazy-loaded, so `import prior_generator`
-    stays light until you touch something that needs the heavy stack.
+For a released source archive, unpack it and run the same `uv sync` command
+inside its project directory. Access to the repository is required while it
+remains private. The supported workflow does not depend on a PyPI publication.
+
+The lock retains PyMC **6.0.1**, PyTensor **3.0.7**, and pymc-marketing at the exact
+tested commit **ff70aae62dea1933b758a55885c24a76a3e7a9a5**. Replacing that Git
+dependency with a newer release changes the validated stack. Use `uv lock --check`
+to check lock freshness; do not run a blanket dependency upgrade to fix an
+installation problem.
+
+!!! info "Environment requirements"
+    Python **3.12 or newer** and uv **0.9.10 or newer**. CI selects Python 3.12
+    and 3.13 explicitly. Core packages include NumPy, SciPy, pandas, Matplotlib,
+    and the pinned modeling stack. PyTensor may compile native code; install
+    your platform's C/C++ toolchain when needed. Graphviz's `dot` executable is
+    needed for DAG image export and full documentation builds, not basic draws.
+
+Development and documentation profiles are described in
+[Contributing](https://github.com/pymc-labs/prior-generator/blob/main/CONTRIBUTING.md).
+After selecting a profile with `uv sync`, use `uv run --no-sync` so running a
+command does not silently remove optional tools from that environment.
 
 ## 1 · Sample one world
 

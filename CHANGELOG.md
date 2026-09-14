@@ -71,6 +71,11 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- Use locked uv environments for development, CI, documentation, and build
+  tooling, with a tested Python 3.13 default and a 3.12/3.13 CI matrix.
+  Keep all 153 previously locked dependency versions and sources unchanged.
+  Exercise installed wheels through real generation and persistence, and block
+  Pages publication while the repository is private.
 - Preserve the original 2024 Carlos Trujillo copyright from the upstream
   extraction alongside the 2026 PyMC Labs notice.
 - Enforce persistence versions before legacy migration. Reject partial legacy

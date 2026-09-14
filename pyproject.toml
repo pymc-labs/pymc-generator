@@ -26,15 +26,9 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
-    # Validated modeling stack (matches pymc-labs/structural-pfn's canonical
-    # env). The generator builds the SCM as a pytensor/pymc graph and draws
-    # from it, using pymc-marketing's adstock/saturation transformers.
-    # pymc-marketing 1.0 is not on PyPI yet, so it is installed by git URL,
-    # pinned to the exact tested COMMIT (the `v1.0.0` ref is a mutable branch,
-    # not a tag — pinning it would make installs non-reproducible and could
-    # break CI when the branch advances). Bump this SHA deliberately, and swap
-    # to "pymc-marketing>=1.0.0" once a PyPI release exists. (A git-URL dep also
-    # blocks PyPI upload of this package until then — fine, we install from git.)
+    # Preserve the validated numerical stack. The exact pymc-marketing commit
+    # is intentional even when newer releases exist; changes require generation
+    # and recovery evidence, not an opportunistic dependency upgrade.
     "pytensor==3.0.7",
     "pymc==6.0.1",
     "pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@ff70aae62dea1933b758a55885c24a76a3e7a9a5",
@@ -70,6 +64,12 @@ docs = [
     "nbformat>=5.10.4",
     "ipykernel>=7.3.0",
 ]
+
+[dependency-groups]
+build = ["build", "twine", "setuptools>=77", "wheel"]
+
+[tool.uv]
+required-version = ">=0.9.10"
 
 [project.scripts]
 prior-generator = "prior_generator.cli:main"
