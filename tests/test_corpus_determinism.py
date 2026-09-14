@@ -11,9 +11,7 @@ draw failures from realism rejections, and the float32 storage bound.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
-import time
 
 import numpy as np
 import pytest
@@ -56,27 +54,23 @@ def tiny_corpus():
 
 
 def test_same_seed_generations_save_byte_identical_shards(tmp_path):
-    """Two independent generations at one seed must persist identical bytes.
-
-    The sleep is the whole point: it forces the two runs' wall clocks apart, so
-    a shard that still carried elapsed_s / tasks_per_sec would differ even
-    though every array matches.
-    """
+    """Independent same-seed generations persist identically despite different timings."""
     cfg = _tiny_config()
     first = pg.sample_prior_predictive(cfg)
-    time.sleep(1.0)
     second = pg.sample_prior_predictive(cfg)
 
-    assert first["diagnostics"]["timing"] != second["diagnostics"]["timing"]
 
     paths = []
     for name, corpus in (("first.npz", first), ("second.npz", second)):
+        elapsed = float(len(paths) + 1)
+        corpus["diagnostics"]["timing"] = {
+            "elapsed_s": elapsed,
+            "tasks_per_sec": len(corpus["sales_raw"]) / elapsed,
+        }
         path = tmp_path / name
         pg.save_corpus(corpus, path)
         paths.append(path)
-    digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
     assert paths[0].read_bytes() == paths[1].read_bytes()
-    assert digests[0] == digests[1]
 
 
 def test_timing_is_in_memory_only_and_never_persisted(tmp_path):
