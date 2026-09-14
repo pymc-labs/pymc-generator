@@ -36,6 +36,7 @@ from .signal_diagnostics import (
     summarize_signal_metrics,
 )
 from .slots import (
+    CORPUS_ARRAY_FIELDS,
     CORPUS_SCHEMA_VERSION,
     EDGE_BASE_RATES,
     EDGE_TYPES_EXTENDED,
@@ -1765,9 +1766,51 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     )
     n_time_steps = cfg.n_time_steps
 
-    tasks: list[dict] = []
-    cell_gs: list[dict[str, np.ndarray]] = []
-    cell_prior_rows: list[np.ndarray] = []
+    n_tasks = cfg.n_cells * cfg.draws_per_cell
+    dimensions = {
+        "task": n_tasks,
+        "time": n_time_steps,
+        "treatment": n_treatments_max,
+        "covariate": n_covariates_max,
+        "latent": n_latent_max,
+        "edge": layout.n_slots,
+        "shock": cfg.n_channel_shocks,
+        "indirect_source": 3,
+    }
+    corpus = {
+        key: np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
+        for key, (axes, dtype) in CORPUS_ARRAY_FIELDS.items()
+    }
+    if cfg.prior_conditioning:
+        corpus["prior_cond"] = np.empty((n_tasks, len(PRIOR_COND_LAYOUT)), dtype=np.float32)
+    # Spend normalization retains the original float64 reduction order.
+    # Other accepted outputs can be cast directly into their final storage.
+    spend_raw = np.zeros((n_tasks, n_time_steps, n_treatments_max), dtype=np.float64)
+    draw_fields = {
+        "controls": "controls",
+        "sales_raw": "sales",
+        "contributions_raw": "contributions",
+        "baseline_raw": "baseline",
+        "demand": "demand",
+        "indirect_effects": "indirect_effects",
+        "baseline_intrinsic": "baseline_intrinsic",
+        "sales_noise": "sales_noise",
+        "control_contribution": "control_contribution",
+        "confounder_contribution": "confounder_contribution",
+        "indirect_effects_by_source": "indirect_effects_by_source",
+        "confounding_strength": "confounding_strength",
+        "channel_shock_mask": "channel_shock_mask",
+        "channel_shock_channel": "channel_shock_channel",
+        "channel_shock_start": "channel_shock_start",
+        "channel_shock_length": "channel_shock_length",
+        "channel_shock_level_multiplier": "channel_shock_level_multiplier",
+        "channel_shock_level": "channel_shock_level",
+        "channel_level": "param_channel_level",
+        "saturation_scale": "saturation_scale",
+        "adstock_alpha": "param_adstock_alpha",
+        "weibull_lam": "param_weibull_lam",
+        "weibull_k": "param_weibull_k",
+    }
     n_evaluated = 0
     n_rejected = 0
     n_draw_failures = 0
@@ -1787,7 +1830,22 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             n_covariates_active=n_covariates_active,
             n_latent_active=n_latent_active,
         )
-        cell_gs.append(g)
+        rows = slice(cell * cfg.draws_per_cell, (cell + 1) * cfg.draws_per_cell)
+        corpus["cell_id"][rows] = cell
+        corpus["g"][rows] = layout.pack(
+            g_cy=g["g_cy"], g_dc=g["g_dc"], g_db=g["g_db"], g_zb=g["g_zb"],
+            g_dz=g["g_dz"], g_zc=g["g_zc"], g_cc=g["g_cc"], g_zz=g["g_zz"],
+        )
+        for key, source in (
+            ("treatment_active_mask", "active_treatment"),
+            ("covariate_active_mask", "active_covariate"),
+            ("latent_active_mask", "active_latent"),
+            ("channel_active", "channel_active"),
+            ("n_treatments_active", "n_treatments_active"),
+            ("n_covariates_active", "n_covariates_active"),
+            ("n_latent_active", "n_latent_active"),
+        ):
+            corpus[key][rows] = g[source]
         g_act = _slice_g_active(g, n_treatments_active, n_covariates_active, n_latent_active)
 
         # One pm.Model per cell (fixed structure: DAG + families + smoothness);
@@ -1802,19 +1860,19 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         # disabled path reproduces unconditioned corpora bit-for-bit.
         prior_cond = sample_prior_cond(cfg, rng)
         if prior_cond is not None:
-            cell_prior_rows.append(_pack_prior_cond(prior_cond))
+            corpus["prior_cond"][rows] = _pack_prior_cond(prior_cond)
         model, out_names, _param_names = build_world_model(
             g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
         )
-        accepted: list[dict] = []
+        accepted = 0
         cell_evaluated = 0
         cell_rejected = 0
         cell_draw_failures = 0
         last_draw_error: str | None = None
         for _round in range(MAX_TOPUPS_PER_CELL):
-            if len(accepted) == cfg.draws_per_cell:
+            if accepted == cfg.draws_per_cell:
                 break
-            n_missing = cfg.draws_per_cell - len(accepted)
+            n_missing = cfg.draws_per_cell - accepted
             n_req = n_missing + max(2, int(np.ceil(0.5 * n_missing)))
             draw_seed = int(rng.integers(2**31 - 1))
             try:
@@ -1852,7 +1910,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 continue
 
             for b in range(n_req):
-                if len(accepted) == cfg.draws_per_cell:
+                if accepted == cfg.draws_per_cell:
                     break
                 drawn = {name: drawn_b[name][b] for name in draw_names}
                 n_evaluated += 1
@@ -1880,138 +1938,35 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     cell_rejected += 1
                     continue
 
-                # Zero-pad active-size outputs to max sizes
-                spend_pad = np.zeros((n_time_steps, n_treatments_max))
-                spend_pad[:, :n_treatments_active] = drawn["channels"]
-                controls_pad = np.zeros((n_time_steps, n_covariates_max))
-                controls_pad[:, :n_covariates_active] = drawn["controls"]
-                demand_pad = np.zeros((n_time_steps, n_latent_max))
-                demand_pad[:, :n_latent_active] = drawn["demand"]
-                contrib_pad = np.zeros((n_time_steps, n_treatments_max))
-                contrib_pad[:, :n_treatments_active] = drawn["contributions"]
-                shock_mask_pad = np.zeros((n_time_steps, n_treatments_max), dtype=np.uint8)
-                shock_mask_pad[:, :n_treatments_active] = drawn["channel_shock_mask"]
-                channel_level_pad = np.zeros(n_treatments_max)
-                channel_level_pad[:n_treatments_active] = drawn["param_channel_level"]
-                saturation_scale_pad = np.zeros(n_treatments_max)
-                saturation_scale_pad[:n_treatments_active] = drawn["saturation_scale"]
-                adstock_family_pad = np.zeros(n_treatments_max, dtype=np.uint8)
-                adstock_family_pad[:n_treatments_active] = structural["adstock_family"]
-                adstock_alpha_pad = np.zeros(n_treatments_max)
-                adstock_alpha_pad[:n_treatments_active] = drawn["param_adstock_alpha"]
-                weibull_lam_pad = np.zeros(n_treatments_max)
-                weibull_lam_pad[:n_treatments_active] = drawn["param_weibull_lam"]
-                weibull_k_pad = np.zeros(n_treatments_max)
-                weibull_k_pad[:n_treatments_active] = drawn["param_weibull_k"]
-                # Phase 5 decomposition targets (zero-padded to max sizes)
-                control_contrib_pad = np.zeros((n_time_steps, n_covariates_max))
-                control_contrib_pad[:, :n_covariates_active] = drawn["control_contribution"]
-                confounder_contrib_pad = np.zeros((n_time_steps, n_latent_max))
-                confounder_contrib_pad[:, :n_latent_active] = drawn["confounder_contribution"]
-
-                accepted.append(
-                    {
-                        "spend": spend_pad,
-                        "controls": controls_pad,
-                        "sales": drawn["sales"],
-                        "contribution": contrib_pad,
-                        "baseline": drawn["baseline"],
-                        "demand": demand_pad,
-                        "indirect_effects": drawn["indirect_effects"],
-                        "baseline_intrinsic": drawn["baseline_intrinsic"],
-                        "sales_noise": drawn["sales_noise"],
-                        "control_contribution": control_contrib_pad,
-                        "confounder_contribution": confounder_contrib_pad,
-                        "indirect_effects_by_source": drawn["indirect_effects_by_source"],
-                        "support": support,
-                        "split_type": split_type,
-                        "confounding_strength": drawn["confounding_strength"],
-                        "channel_shock_mask": shock_mask_pad,
-                        "channel_shock_channel": drawn["channel_shock_channel"],
-                        "channel_shock_start": drawn["channel_shock_start"],
-                        "channel_shock_length": drawn["channel_shock_length"],
-                        "channel_shock_level_multiplier": drawn["channel_shock_level_multiplier"],
-                        "channel_shock_level": drawn["channel_shock_level"],
-                        "channel_level": channel_level_pad,
-                        "saturation_scale": saturation_scale_pad,
-                        "adstock_family": adstock_family_pad,
-                        "adstock_alpha": adstock_alpha_pad,
-                        "weibull_lam": weibull_lam_pad,
-                        "weibull_k": weibull_k_pad,
-                        "cell": cell,
-                    }
-                )
-        if len(accepted) < cfg.draws_per_cell:
+                row = cell * cfg.draws_per_cell + accepted
+                spend_raw[row, :, :n_treatments_active] = drawn["channels"]
+                for key, source in draw_fields.items():
+                    value = drawn[source]
+                    prefix = (row, *(slice(size) for size in np.shape(value)))
+                    corpus[key][prefix] = value
+                corpus["adstock_family"][row, :n_treatments_active] = structural["adstock_family"]
+                corpus["support_mask"][row] = support
+                corpus["is_future"][row] = split_type
+                accepted += 1
+            del drawn_b, drawn
+        if accepted < cfg.draws_per_cell:
             # Name the actual culprit: a strict realism gate and a draw that
             # keeps blowing up look identical from the accepted count alone, and
             # they call for opposite remedies (loosen the prior vs fix the
             # graph). Report both tallies so the reader can tell which happened.
             raise RuntimeError(
-                f"cell {cell}: only {len(accepted)}/{cfg.draws_per_cell} tasks "
+                f"cell {cell}: only {accepted}/{cfg.draws_per_cell} tasks "
                 f"accepted after {MAX_TOPUPS_PER_CELL} rounds — the realism filter "
                 f"rejected {cell_rejected}/{cell_evaluated} evaluated candidates, and "
                 f"{cell_draw_failures}/{MAX_TOPUPS_PER_CELL} rounds produced no "
                 f"candidates at all because the draw itself failed"
                 + (f"; last draw error: {last_draw_error}" if last_draw_error else "")
             )
-        tasks.extend(accepted)
 
-    # -- assemble arrays (float64 math, float32 storage) --------------------
-    n_tasks = len(tasks)
-    spend_raw = np.stack([tk["spend"] for tk in tasks])  # (n_tasks, n_time_steps, n_treatments)
-    controls = np.stack([tk["controls"] for tk in tasks])  # (n_tasks, n_time_steps, n_covariates)
-    sales_raw = np.stack([tk["sales"] for tk in tasks])  # (n_tasks, n_time_steps)
-    contributions_raw = np.stack([tk["contribution"] for tk in tasks])
-    baseline_raw = np.stack([tk["baseline"] for tk in tasks])  # (n_tasks, n_time_steps)
-    demand = np.stack([tk["demand"] for tk in tasks])  # (n_tasks, n_time_steps, n_latent)
-    indirect_effects = np.stack([tk["indirect_effects"] for tk in tasks])  # (n_tasks, n_time_steps)
-    # (n_tasks, n_time_steps)
-    baseline_intrinsic = np.stack([tk["baseline_intrinsic"] for tk in tasks])
-    sales_noise = np.stack([tk["sales_noise"] for tk in tasks])  # (n_tasks, n_time_steps)
-    # (n_tasks, n_time_steps, n_covariates)
-    control_contribution = np.stack([tk["control_contribution"] for tk in tasks])
-    # (n_tasks, n_time_steps, n_latent)
-    confounder_contribution = np.stack([tk["confounder_contribution"] for tk in tasks])
-    indirect_effects_by_source = np.stack(
-        [tk["indirect_effects_by_source"] for tk in tasks]
-    )  # (n_tasks, n_time_steps, 3)
-    support_mask = np.stack([tk["support"] for tk in tasks]).astype(np.uint8)
-    split_type = np.array([tk["split_type"] for tk in tasks], dtype=np.uint8)
-    cell_id = np.array([tk["cell"] for tk in tasks], dtype=np.int32)
-    confounding_strength = np.asarray(
-        [tk["confounding_strength"] for tk in tasks], dtype=np.float64
-    )
-    channel_shock_mask = np.stack([tk["channel_shock_mask"] for tk in tasks])
-    channel_shock_channel = np.stack([tk["channel_shock_channel"] for tk in tasks])
-    channel_shock_start = np.stack([tk["channel_shock_start"] for tk in tasks])
-    channel_shock_length = np.stack([tk["channel_shock_length"] for tk in tasks])
-    channel_shock_level_multiplier = np.stack(
-        [tk["channel_shock_level_multiplier"] for tk in tasks]
-    )
-    channel_shock_level = np.stack([tk["channel_shock_level"] for tk in tasks])
-    channel_level = np.stack([tk["channel_level"] for tk in tasks])
-    saturation_scale = np.stack([tk["saturation_scale"] for tk in tasks])
-    adstock_family = np.stack([tk["adstock_family"] for tk in tasks])
-    adstock_alpha = np.stack([tk["adstock_alpha"] for tk in tasks])
-    weibull_lam = np.stack([tk["weibull_lam"] for tk in tasks])
-    weibull_k = np.stack([tk["weibull_k"] for tk in tasks])
-
-    treatment_active_mask = np.stack([cell_gs[c]["active_treatment"] for c in cell_id])
-    covariate_active_mask = np.stack([cell_gs[c]["active_covariate"] for c in cell_id])
-    latent_active_mask = np.stack([cell_gs[c]["active_latent"] for c in cell_id])
-    channel_active = np.stack([cell_gs[c]["channel_active"] for c in cell_id])
-    n_treatments_active_arr = np.array(
-        [cell_gs[c]["n_treatments_active"] for c in cell_id], dtype=np.int32
-    )
-    n_covariates_active_arr = np.array(
-        [cell_gs[c]["n_covariates_active"] for c in cell_id], dtype=np.int32
-    )
-    n_latent_active_arr = np.array([cell_gs[c]["n_latent_active"] for c in cell_id], dtype=np.int32)
-    # Per-world prior-conditioning rows, broadcast from the cell draw
-    # (n_tasks, len(PRIOR_COND_LAYOUT)).
-    prior_cond_arr = (
-        np.stack([cell_prior_rows[c] for c in cell_id]) if cfg.prior_conditioning else None
-    )
+    support_mask = corpus["support_mask"]
+    split_type = corpus["is_future"]
+    cell_id = corpus["cell_id"]
+    treatment_active_mask = corpus["treatment_active_mask"]
 
     spend_means = spend_raw.mean(axis=1)  # (n_tasks, n_treatments)
     spend_norm = np.divide(
@@ -2031,29 +1986,19 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         * treatment_active_mask[:, None, :]
     )
 
-    g_cells = np.stack(
-        [
-            layout.pack(
-                g_cy=g["g_cy"],
-                g_dc=g["g_dc"],
-                g_db=g["g_db"],
-                g_zb=g["g_zb"],
-                g_dz=g["g_dz"],
-                g_zc=g["g_zc"],
-                g_cc=g["g_cc"],
-                g_zz=g["g_zz"],
-            )
-            for g in cell_gs
-        ]
-    )  # (n_cells, n_slots)
-    g_tasks = g_cells[cell_id].astype(np.uint8)  # (n_tasks, n_slots)
+    corpus["spend_raw"][:] = spend_raw
+    corpus["spend_norm"][:] = spend_norm
+    corpus["spend_share"][:] = spend_share
+    corpus["spend_means"][:] = spend_means
+    del spend_raw, spend_norm, spend_share, spend_means
 
     # -- cell-level validation split (same logic as the legacy path) --------
     n_val_cells = max(1, int(round(cfg.val_cell_frac * cfg.n_cells)))
     if n_val_cells >= cfg.n_cells:
         n_val_cells = cfg.n_cells - 1
     val_cells = rng.permutation(cfg.n_cells)[:n_val_cells]
-    is_val = np.isin(cell_id, val_cells).astype(np.uint8)
+    corpus["is_val"][:] = np.isin(cell_id, val_cells)
+    is_val = corpus["is_val"]
 
     val_mask = is_val == 1
     val_split_types = split_type[val_mask]
@@ -2077,7 +2022,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     # over a very smooth walk gives a near-constant slice, where the writer and a
     # float32 recomputation disagreed by 2.5e-5 relative — past the validator's
     # 1e-5 tolerance.
-    sales_stored = sales_raw.astype(np.float32)
+    sales_stored = corpus["sales_raw"]
     sales_scale = np.array(
         [
             float(np.std(sales_stored[i][support_mask[i] == 1].astype(np.float64)))
@@ -2144,56 +2089,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             "width_ranges": {q: list(s["width_range"]) for q, s in spec.items()},
         }
 
-    corpus = {
-        "spend_raw": spend_raw.astype(np.float32),
-        "spend_norm": spend_norm.astype(np.float32),
-        "spend_share": spend_share.astype(np.float32),
-        "controls": controls.astype(np.float32),
-        "sales_raw": sales_raw.astype(np.float32),
-        "sales_norm": sales_norm.astype(np.float32),
-        "support_mask": support_mask,
-        "is_future": split_type,
-        "g": g_tasks,
-        "contributions_raw": contributions_raw.astype(np.float32),
-        "baseline_raw": baseline_raw.astype(np.float32),
-        "demand": demand.astype(np.float32),
-        "spend_means": spend_means.astype(np.float32),
-        "sales_scale": sales_scale.astype(np.float32),
-        "is_val": is_val,
-        "cell_id": cell_id,
-        "treatment_active_mask": treatment_active_mask.astype(np.uint8),
-        "covariate_active_mask": covariate_active_mask.astype(np.uint8),
-        "latent_active_mask": latent_active_mask.astype(np.uint8),
-        "n_treatments_active": n_treatments_active_arr,
-        "n_covariates_active": n_covariates_active_arr,
-        "n_latent_active": n_latent_active_arr,
-        # Phase 4 additions
-        "indirect_effects": indirect_effects.astype(np.float32),
-        "channel_active": channel_active.astype(np.uint8),
-        # Phase 5 decomposition targets
-        "control_contribution": control_contribution.astype(np.float32),
-        "confounder_contribution": confounder_contribution.astype(np.float32),
-        "baseline_intrinsic": baseline_intrinsic.astype(np.float32),
-        "sales_noise": sales_noise.astype(np.float32),
-        "indirect_effects_by_source": indirect_effects_by_source.astype(np.float32),
-        "confounding_strength": confounding_strength.astype(np.float32),
-        "channel_shock_mask": channel_shock_mask.astype(np.uint8),
-        "channel_shock_channel": channel_shock_channel.astype(np.int32),
-        "channel_shock_start": channel_shock_start.astype(np.int32),
-        "channel_shock_length": channel_shock_length.astype(np.int32),
-        "channel_shock_level_multiplier": channel_shock_level_multiplier.astype(np.float32),
-        "channel_shock_level": channel_shock_level.astype(np.float32),
-        "channel_level": channel_level.astype(np.float32),
-        "saturation_scale": saturation_scale.astype(np.float32),
-        "adstock_family": adstock_family.astype(np.uint8),
-        "adstock_alpha": adstock_alpha.astype(np.float32),
-        "weibull_lam": weibull_lam.astype(np.float32),
-        "weibull_k": weibull_k.astype(np.float32),
-        "diagnostics": diagnostics,
-    }
-    if prior_cond_arr is not None:
-        # Present IFF prior_conditioning=True — an unconditioned corpus stays
-        # byte-identical to the pre-feature format (consumers treat absence
-        # as "no conditioning features").
-        corpus["prior_cond"] = prior_cond_arr.astype(np.float32)
+    corpus["sales_norm"][:] = sales_norm
+    corpus["sales_scale"][:] = sales_scale
+    corpus["diagnostics"] = diagnostics
     return corpus

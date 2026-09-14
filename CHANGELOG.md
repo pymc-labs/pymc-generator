@@ -37,6 +37,9 @@ While the project is on 0.x, minor versions may contain breaking changes.
   explicit range overrides are unchanged.
 - Replace eager `DataGenerator.generate_batches` with lazy `iter_batches`;
   omitted batch seeds now use `config.seed`, consistently with `generate`.
+- Preallocate final corpus arrays instead of retaining padded per-world
+  dictionaries. Preserve the float64 spend reductions and RNG schedule;
+  all 353 captured numerical arrays remain exactly unchanged.
 
 ### Added
 
