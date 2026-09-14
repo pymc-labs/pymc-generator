@@ -8,7 +8,7 @@ so one model / eval harness serves every complexity level:
 
 * **graph size**    — treatment/covariate/latent active-count ranges (``*_active_range``)
 * **interactions**  — per-edge-type arrow budgets (``edge_budget``), the "pot",
-  plus the dead-channel floor (``min_dead_channels``)
+  plus the direct-null floor (``min_no_direct_effect_channels``)
 * **nonlinearity**  — media response family mix (``nonlinearity``)
 * **signal / noise** — coefficient and noise ranges (via ``**overrides``)
 
@@ -93,12 +93,11 @@ def make_scm_prior(
         is independent — budgeting ``zc`` leaves ``zb`` (controls' effect on the
         outcome) alone. Types omitted from the dict keep their Bernoulli base
         rate. See :class:`SCMPrior.edge_budget`.
-        A ``cy`` budget alone cannot guarantee a *dead* channel — an active
-        channel with no ``C->Y`` arrow, the negative class for a direct-effect
-        signal — because the count is clamped to the active channels: a cell
-        drawing 2 active channels under ``{"cy": (2, 10)}`` has both of them
-        live. Pass ``min_dead_channels=1`` (via ``**overrides``) to cap the live
-        count at ``n_treatments_active - 1``; see :class:`SCMPrior.min_dead_channels`.
+        A ``cy`` budget alone cannot reserve an active channel without a direct
+        edge: its count is clamped to eligible slots. Pass
+        ``min_no_direct_effect_channels=1`` to cap the direct count at
+        ``n_treatments_active - 1``. A reserved channel can still affect sales
+        indirectly through another channel.
     n_treatments_active_range, n_covariates_active_range, n_latent_active_range : tuple, optional
         Per-cell active-count ranges (the graph-size axis). Default to
         ``(size, size)`` (every node always active) so size is fixed unless you

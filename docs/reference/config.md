@@ -246,11 +246,11 @@ function class a standard MMM adstock can represent from the same observed
 spend. It is a known held-level intervention design, **not** a conventional
 spend-only lift test.
 
-## Dead channels
+## Direct-null channels
 
-`min_dead_channels: int = 0` is the minimum number of **active** channels each
-cell must leave without a direct `C→Y` arrow — spend observed, true contribution
-exactly zero. It exists because `edge_budget["cy"]` cannot express it: a budget is
+`min_no_direct_effect_channels: int = 0` is the minimum number of **active**
+channels each cell leaves without a direct `C→Y` edge. Their **direct**
+contribution is zero; their total causal effect need not be. A `cy` budget is
 an absolute arrow count clamped to the eligible slots, so a cell drawing
 `n_treatments_active = 2` under `cy=(2, 10)` has both channels live and no
 negative class at all.
@@ -262,26 +262,26 @@ cfg = make_scm_prior(
     n_treatments=10, n_covariates=6, n_latent=3,
     n_treatments_active_range=(2, 10),
     edge_budget={"cy": (1, 10)},
-    min_dead_channels=1,
+    min_no_direct_effect_channels=1,
 )
 ```
 
-- The per-cell live count becomes `min(cy draw, max(1, n_treatments_active −
-  min_dead_channels))`; the degenerate `cy ≥ 1` guard always wins, so a cell is
-  never left without a direct channel. The example spans 1–9 live channels over
-  2–10 active ones.
+- The maximum direct-channel count is
+  `max(1, n_treatments_active - min_no_direct_effect_channels)`. The existing
+  budget or Bernoulli sampler operates subject to this cap, and the mandatory
+  `cy ≥ 1` guard still applies.
 - It applies to the Bernoulli path too: without a `cy` budget, surplus live
   channels are demoted uniformly at random after the per-slot draw.
 - Live channels are scattered over **all** active slots, so slot index carries no
   information about the label.
-- `min_dead_channels` must be `< n_treatments_active_range[0]`; a floor the
+- `min_no_direct_effect_channels` must be `< n_treatments_active_range[0]`; a floor the
   smallest drawable cell could not honour is a validation error, not a silently
   dropped constraint.
-- "Dead" means no **direct** arrow. Under a `cc` budget a dead channel can still
+- A direct-null channel can still
   reach `Y` through another channel (`worlds.channel_role` reports that as a
   `feeder`); pin `edge_budget={"cc": 0}` for "no path to `Y`".
 - `0` (the default) is inert: identical draws, no extra RNG, and
-  `diagnostics["min_dead_channels"]` echoes the resolved value in every corpus.
+  `diagnostics["min_no_direct_effect_channels"]` records the resolved value.
 
 ## Identifiability labels
 

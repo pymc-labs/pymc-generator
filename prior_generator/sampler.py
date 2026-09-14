@@ -402,28 +402,11 @@ class SCMPrior:
     # budget that draws 0 still yields exactly one C->Y edge.
     edge_budget: dict[str, int | tuple[int, int]] | None = None
 
-    # Negative-class floor for the direct-effect (C->Y) support signal: the
-    # minimum number of ACTIVE channels a cell must leave *dead* — spend
-    # observed, no direct C->Y arrow, true contribution exactly zero.
-    # 0 (default) => byte-identical legacy draws.
-    #
-    # This is not expressible through ``edge_budget["cy"]``: a cy budget is an
-    # absolute arrow count clamped to the eligible slots, so a cell that draws
-    # few active channels can have every one of them live — cy=(2, 10) with
-    # n_treatments_active=2 gives 2 live, 0 dead. Measured on a (2, 10)-active /
-    # (2, 10)-cy recipe: 18 of 40 cells carried no dead channel at all, i.e. no
-    # negative class to learn from. The floor caps the live count at
-    # ``n_treatments_active - min_dead_channels`` (never below 1 — the degenerate C->Y
-    # guard wins) while still scattering the live channels over ALL active
-    # slots, so slot index carries no information about the label. One config
-    # with ``n_treatments_active_range=(2, 10)`` and ``min_dead_channels=1``
-    # then spans 1..9 live channels and always leaves >= 1 dead channel.
-    #
-    # "Dead" means no DIRECT arrow. Under a ``cc`` budget a dead channel can
-    # still reach Y through another channel (``worlds.channel_role`` calls that
-    # a feeder); pin ``edge_budget={"cc": 0}`` if the floor must also mean "no
-    # path to Y".
-    min_dead_channels: int = 0
+    # Reserve active channels with no direct C->Y edge and zero direct
+    # contribution. Unlike a fixed cy budget, the cap follows each cell's
+    # active count. Such channels can still affect Y through C->C paths.
+    # Zero leaves the graph-sampling RNG schedule unchanged.
+    min_no_direct_effect_channels: int = 0
 
     @property
     def layout(self) -> SlotLayout:
@@ -529,7 +512,7 @@ class SCMPrior:
             ("draws_per_cell", 1),
             ("n_time_steps", 4),
             ("seed", 0),
-            ("min_dead_channels", 0),
+            ("min_no_direct_effect_channels", 0),
         ):
             _integer(name, getattr(self, name), minimum=minimum)
         _finite_real("query_frac", self.query_frac, positive=True)
@@ -959,19 +942,15 @@ class SCMPrior:
             size = getattr(self, size_name)
             if lo > size:
                 raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
-        # The dead-channel floor must be satisfiable in the SMALLEST cell a
-        # config can draw: that cell has n_treatments_active_range[0] active
-        # channels and the degenerate guard keeps one of them live, so the floor
-        # needs one slot more than itself. Rejecting this here is what makes
-        # "every cell has a negative class" a config-level guarantee instead of
-        # a per-cell accident.
-        if self.min_dead_channels:
+        # The smallest cell must accommodate both the direct-null floor and
+        # the mandatory direct channel.
+        if self.min_no_direct_effect_channels:
             active_lo = self.n_treatments_active_range[0]
-            if active_lo <= self.min_dead_channels:
+            if active_lo <= self.min_no_direct_effect_channels:
                 raise ValueError(
-                    f"min_dead_channels ({self.min_dead_channels}) must be < "
+                    f"min_no_direct_effect_channels ({self.min_no_direct_effect_channels}) must be < "
                     f"n_treatments_active_range[0] ({active_lo}) so every cell can keep at "
-                    "least one live channel besides the dead ones"
+                    "least one direct channel besides the direct-null ones"
                 )
 
 
@@ -1028,7 +1007,7 @@ def _sample_g(
     n_latent_active: int | None = None,
     rates: dict[str, float] | None = None,
     budget: dict[str, int | tuple[int, int]] | None = None,
-    min_dead: int = 0,
+    min_no_direct: int = 0,
 ) -> dict[str, np.ndarray]:
     """Draw one DAG cell from the slot base rates (0/1 numpy arrays).
 
@@ -1056,10 +1035,10 @@ def _sample_g(
         Bernoulli (see ``_resolve_budget`` / ``_scatter``). Types absent from
         the dict keep their Bernoulli rate; with ``budget=None`` (or ``{}``)
         the RNG stream is byte-identical to the legacy path.
-    min_dead : int
-        Minimum number of active channels left with no direct C->Y edge (see
-        ``SCMPrior.min_dead_channels``). Caps the live count at
-        ``max(1, n_treatments_active - min_dead)``; 0 (default) is inert and
+    min_no_direct : int
+        Minimum active channels without a direct C->Y edge (see
+        ``SCMPrior.min_no_direct_effect_channels``). Caps the direct count at
+        ``max(1, n_treatments_active - min_no_direct)``; 0 is inert and
         consumes no extra RNG.
 
     Returns
@@ -1088,18 +1067,18 @@ def _sample_g(
     # Generate edges only for active nodes; pad rest with zeros
     g_cy = np.zeros(n_treatments_max)
     if n_treatments_active > 0:
-        # Cap the live count so the cell keeps `min_dead` active channels with
-        # no direct C->Y edge (the negative class). Live channels are still
+        # Reserve `min_no_direct` active channels without a direct C->Y edge.
+        # Direct channels are still
         # scattered over ALL active slots — reserving the tail slots instead
         # would make slot index predict the label.
-        n_live_max = max(1, n_treatments_active - max(0, min_dead))
+        n_live_max = max(1, n_treatments_active - max(0, min_no_direct))
         if _budget.get("cy") is not None:
             n = _resolve_budget(rng, _budget["cy"], n_live_max)
             g_cy[:n_treatments_active] = _scatter(rng, n, n_treatments_active)
         else:
             g_cy[:n_treatments_active] = rng.binomial(1, _rates["cy"], size=n_treatments_active)
             live = np.flatnonzero(g_cy[:n_treatments_active])
-            if live.size > n_live_max:  # unreachable when min_dead == 0
+            if live.size > n_live_max:  # unreachable when min_no_direct == 0
                 g_cy[rng.choice(live, size=live.size - n_live_max, replace=False)] = 0.0
         # Degenerate guard: ensure at least one C->Y edge in active range
         if not g_cy[:n_treatments_active].any():
@@ -1178,7 +1157,7 @@ def sample_g_additive(
     reported in ``channel_active`` (all channels remain observed; the
     degenerate guard only forces at least one C->Y edge).
 
-    ``cfg.min_dead_channels`` caps how many active channels may be live, so a
+    ``cfg.min_no_direct_effect_channels`` caps the direct-channel count, so a
     cell can be made to always carry both classes of the direct-effect signal.
 
     Returns
@@ -1195,7 +1174,7 @@ def sample_g_additive(
         n_latent_active=n_latent_active,
         rates=cfg.edge_rate_overrides,
         budget=cfg.edge_budget,
-        min_dead=cfg.min_dead_channels,
+        min_no_direct=cfg.min_no_direct_effect_channels,
     )
     n_treatments_max, n_covariates_max, n_latent_max = (
         layout.n_treatments,
@@ -2071,7 +2050,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             if cfg.edge_budget
             else None
         ),
-        "min_dead_channels": int(cfg.min_dead_channels),
+        "min_no_direct_effect_channels": int(cfg.min_no_direct_effect_channels),
         "schema_version": CORPUS_SCHEMA_VERSION,
         # Wall clock lives under its own key so the rest of the block stays a
         # pure function of (config, seed); _finalize_corpus adds tasks_per_sec

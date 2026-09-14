@@ -94,7 +94,7 @@ def dea_prior(*, n_cells: int, draws_per_cell: int = 5, seed: int = 999000):
             "zz": 0,
         },
         confounding_strength_range=(0.0, 0.0),
-        min_dead_channels=1,
+        min_no_direct_effect_channels=1,
         adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
         saturation_family_probs={
             "linear": 0.0,

@@ -372,7 +372,7 @@ serves every level.
 | Axis | How | Knobs |
 | --- | --- | --- |
 | **Graph size** | how many nodes are live | `n_treatments`, `n_covariates`, `n_latent`, and their `*_active_range`s |
-| **Interactions** | how many arrows of each type | `edge_budget` (per-type "pot"), `min_dead_channels` |
+| **Interactions** | how many arrows of each type | `edge_budget`, `min_no_direct_effect_channels` |
 | **Nonlinearity** | media-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` |
 | **Texture** | channels' and controls' high-frequency drive | explicit noise, pulse, and walk ranges |
@@ -400,30 +400,25 @@ cfg = pg.make_scm_prior(
 - Types **omitted** keep their per-pair Bernoulli base rate; `cy` keeps its `≥ 1`
   floor.
 
-### The dead-channel floor
+### Direct-null channels
 
-A **dead** channel is an *active* channel with no direct `C→Y` arrow: spend
-observed, true contribution exactly zero — the negative class for "which channels
-move sales". A `cy` budget cannot guarantee one, because it is an absolute arrow
-count clamped to the eligible slots: a task drawing 2 active channels under
-`cy=(2, 10)` has both of them live. `min_dead_channels` caps the live count at
-`n_treatments_active − min_dead_channels` instead (never below `1`):
+`min_no_direct_effect_channels` reserves active channels without a direct
+`C→Y` edge. Their direct contribution is zero. A `cy` budget alone cannot
+guarantee this because its arrow count is clamped to the active slots.
 
 ```python
 cfg = pg.make_scm_prior(
     n_treatments=10, n_covariates=6, n_latent=3,
     n_treatments_active_range=(2, 10),   # 2–10 active channels per task
     edge_budget={"cy": (1, 10)},
-    min_dead_channels=1,                 # ≥ 1 active channel never reaches Y
+    min_no_direct_effect_channels=1,   # at least one active channel has no direct effect
 )
 ```
 
-One recipe then spans 1–9 live channels over 2–10 active ones and always carries a
-dead one; the live channels stay scattered over all active slots, so slot index
-says nothing about the label. The floor must be `< n_treatments_active_range[0]`
-or `make_scm_prior` rejects the config. Under a `cc` budget a dead channel can
-still reach `Y` as a *feeder* — pin `edge_budget={"cc": 0}` if the floor must mean
-"no path to `Y`".
+The floor must be smaller than `n_treatments_active_range[0]` so the smallest
+cell still has a direct channel. Direct channels remain scattered over active
+slots. A direct-null channel can still reach `Y` as a **feeder** through `C→C`;
+set `edge_budget["cc"] = 0` as well if it must have no path to `Y`.
 
 See the full configuration surface in the
 [API reference](../reference/config.md).
