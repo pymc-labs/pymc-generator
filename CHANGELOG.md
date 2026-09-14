@@ -71,6 +71,8 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- Preserve the original 2024 Carlos Trujillo copyright from the upstream
+  extraction alongside the 2026 PyMC Labs notice.
 - Enforce persistence versions before legacy migration. Reject partial legacy
   vocabularies, malformed scalar metadata, unsupported versions, inconsistent
   layouts, and every nonfinite or nonnumeric nested identifiability array.

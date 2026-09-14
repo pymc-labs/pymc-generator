@@ -122,3 +122,7 @@ MIT; see [LICENSE](LICENSE). The project builds on
 [PyTensor](https://github.com/pymc-devs/pytensor), and
 [pymc-marketing](https://github.com/pymc-labs/pymc-marketing), which retain their
 own licenses and attribution.
+
+The MIT notice preserves Carlos Trujillo's 2024 copyright from the
+`structural-pfn` extraction at commit `d5fd09f`, alongside PyMC Labs' 2026
+copyright for this project.
