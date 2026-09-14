@@ -330,8 +330,8 @@ class DataGenerator:
         for key in ("spend_raw", "controls", "demand", "g", "channel_shock_channel"):
             ndim = len(CORPUS_ARRAY_FIELDS[key][0])
             value = corpus[key]
-            if not isinstance(value, np.ndarray) or value.ndim != ndim:
-                actual = getattr(value, "ndim", type(value).__name__)
+            if value.ndim != ndim:
+                actual = value.ndim
                 errors.append(f"{key} must have ndim={ndim}, got {actual}")
         if errors:
             return errors
@@ -366,15 +366,8 @@ class DataGenerator:
         }
         if "prior_cond" in corpus:
             field_specs["prior_cond"] = ((n_tasks, len(PRIOR_COND_LAYOUT)), np.float32)
-            if not isinstance(corpus["prior_cond"], np.ndarray):
-                errors.append("prior_cond must be an ndarray")
-
-        if errors:
-            return errors
 
         for key, (expected, _) in field_specs.items():
-            if key not in corpus:
-                continue
             actual = corpus[key].shape
             if len(actual) != len(expected):
                 errors.append(
@@ -382,8 +375,6 @@ class DataGenerator:
                 )
                 continue
             for i, (e, a) in enumerate(zip(expected, actual)):
-                if e == -1:
-                    continue
                 if e != a:
                     errors.append(f"Shape mismatch for {key}: expected dim {i} = {e}, got {a}")
                     break
@@ -394,16 +385,16 @@ class DataGenerator:
             expected_label_shape = (n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT))
             for key in signal_label_keys:
                 value = identifiability[key]
-                if not isinstance(value, np.ndarray) or value.shape != expected_label_shape:
+                if value.shape != expected_label_shape:
                     errors.append(
                         f"Shape mismatch for identifiability {key}: "
-                        f"expected {expected_label_shape}, got {getattr(value, 'shape', None)}"
+                        f"expected {expected_label_shape}, got {value.shape}"
                     )
             if errors:
                 return errors
 
         for key, (_, dtype) in field_specs.items():
-            if key in corpus and corpus[key].dtype != dtype:
+            if corpus[key].dtype != dtype:
                 errors.append(f"{key} has dtype {corpus[key].dtype}, expected {np.dtype(dtype)}")
         if has_signal_labels:
             for key, dtype in (
@@ -445,10 +436,10 @@ class DataGenerator:
         positive_sales_scale = (corpus["sales_scale"] > 0.0).all()
         if not positive_sales_scale:
             errors.append("sales_scale must be positive")
-        expected_spend_means = corpus["spend_raw"].astype(np.float64).mean(axis=1)
+        spend_raw = corpus["spend_raw"].astype(np.float64)
+        expected_spend_means = spend_raw.mean(axis=1)
         if not np.allclose(corpus["spend_means"], expected_spend_means, rtol=1e-6, atol=1e-7):
             errors.append("spend_means != mean(spend_raw, axis=1)")
-        spend_raw = corpus["spend_raw"].astype(np.float64)
         spend_means = corpus["spend_means"].astype(np.float64)
         expected_spend_norm = np.divide(
             spend_raw,
@@ -459,7 +450,7 @@ class DataGenerator:
         if not np.allclose(corpus["spend_norm"], expected_spend_norm, rtol=1e-5, atol=1e-7):
             errors.append("spend_norm does not match spend_raw / spend_means")
         active_spend_sum = (
-            spend_raw * corpus["treatment_active_mask"].astype(np.float64)[:, None, :]
+            spend_raw * corpus["treatment_active_mask"][:, None, :]
         ).sum(axis=-1, keepdims=True)
         expected_spend_share = (
             np.divide(
@@ -468,35 +459,21 @@ class DataGenerator:
                 out=np.zeros_like(spend_raw),
                 where=active_spend_sum != 0.0,
             )
-            * corpus["treatment_active_mask"].astype(np.float64)[:, None, :]
+            * corpus["treatment_active_mask"][:, None, :]
         )
         if not np.allclose(corpus["spend_share"], expected_spend_share, rtol=1e-5, atol=1e-7):
             errors.append("spend_share does not match active-channel spend shares")
 
+        sales = corpus["sales_raw"].astype(np.float64)
         if positive_sales_scale:
-            expected_norm = (
-                corpus["sales_raw"].astype(np.float64)
-                / corpus["sales_scale"].astype(np.float64)[:, None]
-            )
+            expected_norm = sales / corpus["sales_scale"].astype(np.float64)[:, None]
             if not np.allclose(corpus["sales_norm"], expected_norm, rtol=1e-5):
                 errors.append("sales_norm != sales_raw / sales_scale")
 
-        # Check support_mask is binary
-        if "support_mask" in corpus:
-            support = corpus["support_mask"]
-            if not np.all(
-                (np.abs(support.astype(float)) < 1e-9) | (np.abs(support.astype(float) - 1) < 1e-9)
-            ):
-                errors.append("support_mask is not binary")
-
-        # Check is_future is binary
-        if "is_future" in corpus:
-            is_future = corpus["is_future"]
-            if not np.all(
-                (np.abs(is_future.astype(float)) < 1e-9)
-                | (np.abs(is_future.astype(float) - 1) < 1e-9)
-            ):
-                errors.append("is_future is not binary")
+        # These arrays have already been validated as uint8.
+        for key in ("support_mask", "is_future", "g"):
+            if (corpus[key] > 1).any():
+                errors.append(f"{key} is not binary")
 
         short_n_query = None
         diagnostics = corpus.get("diagnostics")
@@ -524,7 +501,6 @@ class DataGenerator:
             if not np.array_equal(corpus["support_mask"], expected_support):
                 errors.append("support_mask does not match the recorded temporal split")
 
-            sales = corpus["sales_raw"].astype(np.float64)
             expected_sales_scale = np.asarray(
                 [sales[i, expected_support[i] == 1].std() for i in range(n_tasks)],
                 dtype=np.float64,
@@ -538,21 +514,11 @@ class DataGenerator:
             if not np.allclose(corpus["sales_scale"], expected_sales_scale, rtol=1e-5, atol=1e-7):
                 errors.append("sales_scale does not match supported sales observations")
 
-        # Check is_val is binary and contains both sides of the corpus split.
-        if "is_val" in corpus:
-            is_val = corpus["is_val"]
-            if not np.all(
-                (np.abs(is_val.astype(float)) < 1e-9) | (np.abs(is_val.astype(float) - 1) < 1e-9)
-            ):
-                errors.append("is_val is not binary")
-            elif not 0 < is_val.sum() < n_tasks:
-                errors.append("is_val must contain at least one training and one validation world")
-
-        # Check g is binary
-        if "g" in corpus:
-            g = corpus["g"]
-            if not np.all((np.abs(g.astype(float)) < 1e-9) | (np.abs(g.astype(float) - 1) < 1e-9)):
-                errors.append("g is not binary")
+        is_val = corpus["is_val"]
+        if (is_val > 1).any():
+            errors.append("is_val is not binary")
+        elif not 0 < is_val.sum() < n_tasks:
+            errors.append("is_val must contain at least one training and one validation world")
         # Top-level shock audit metadata is intentionally sufficient to
         # reconstruct every held-spend intervention without persisting the
         # full burn-in mask or natural (unshocked) paths.
@@ -804,7 +770,7 @@ class DataGenerator:
             ("latent_active_mask", active_latent),
             ("channel_active", corpus["channel_active"]),
         ):
-            if not np.isin(mask, (0, 1)).all():
+            if (mask > 1).any():
                 errors.append(f"{key} is not binary")
         for key, count, width, mask in (
             ("n_treatments_active", corpus["n_treatments_active"], n_treatments, active_treatment),
@@ -853,20 +819,18 @@ class DataGenerator:
             errors.append("saturation_scale must be positive for active channels")
 
         graph = layout.unpack(corpus["g"])
+        treatment_present = ~inactive_c
+        covariate_present = ~inactive_m
+        latent_present = ~inactive_j
         graph_masks = {
-            "cy": active_treatment.astype(bool),
-            "dc": active_latent.astype(bool)[:, :, None]
-            & active_treatment.astype(bool)[:, None, :],
-            "dz": active_latent.astype(bool)[:, :, None]
-            & active_covariate.astype(bool)[:, None, :],
-            "db": active_latent.astype(bool),
-            "zb": active_covariate.astype(bool),
-            "zc": active_covariate.astype(bool)[:, :, None]
-            & active_treatment.astype(bool)[:, None, :],
-            "cc": active_treatment.astype(bool)[:, :, None]
-            & active_treatment.astype(bool)[:, None, :],
-            "zz": active_covariate.astype(bool)[:, :, None]
-            & active_covariate.astype(bool)[:, None, :],
+            "cy": treatment_present,
+            "dc": latent_present[:, :, None] & treatment_present[:, None, :],
+            "dz": latent_present[:, :, None] & covariate_present[:, None, :],
+            "db": latent_present,
+            "zb": covariate_present,
+            "zc": covariate_present[:, :, None] & treatment_present[:, None, :],
+            "cc": treatment_present[:, :, None] & treatment_present[:, None, :],
+            "zz": covariate_present[:, :, None] & covariate_present[:, None, :],
         }
         for edge_type, edge_mask in graph_masks.items():
             if (graph[edge_type][~edge_mask] != 0).any():
@@ -876,7 +840,7 @@ class DataGenerator:
                 errors.append(f"g_{edge_type} must be strictly upper triangular")
         direct = graph["cy"] == 1
         expected_channel_active = (
-            (direct | (graph["cc"].sum(axis=2) > 0)) & active_treatment.astype(bool)
+            (direct | (graph["cc"].sum(axis=2) > 0)) & treatment_present
         ).astype(np.uint8)
         if not np.array_equal(corpus["channel_active"], expected_channel_active):
             errors.append("channel_active does not match graph reachability rule")
@@ -909,51 +873,40 @@ class DataGenerator:
         levels = corpus["channel_shock_level"]
         multipliers = corpus["channel_shock_level_multiplier"]
         channel_level = corpus["channel_level"]
-        audit_shapes_ok = (
-            shock_mask.shape == (n_tasks, n_time_steps, n_treatments)
-            and corpus["g"].shape == (n_tasks, layout.n_slots)
-            and channels.shape
-            == starts.shape
-            == lengths.shape
-            == levels.shape
-            == (n_tasks, n_channel_shocks)
-        )
-        if audit_shapes_ok:
-            for n in range(n_tasks):
-                rebuilt = np.zeros((n_time_steps, n_treatments), dtype=np.uint8)
-                occupied = np.zeros(n_time_steps, dtype=bool)
-                for s_idx in range(n_channel_shocks):
-                    channel, start, length = (
-                        int(channels[n, s_idx]),
-                        int(starts[n, s_idx]),
-                        int(lengths[n, s_idx]),
+        for n in range(n_tasks):
+            rebuilt = np.zeros((n_time_steps, n_treatments), dtype=np.uint8)
+            occupied = np.zeros(n_time_steps, dtype=bool)
+            for s_idx in range(n_channel_shocks):
+                channel, start, length = (
+                    int(channels[n, s_idx]),
+                    int(starts[n, s_idx]),
+                    int(lengths[n, s_idx]),
+                )
+                slot_lo = s_idx * n_time_steps // n_channel_shocks
+                slot_hi = (s_idx + 1) * n_time_steps // n_channel_shocks
+                if not (0 <= channel < n_treatments and direct[n, channel]):
+                    errors.append("channel_shock_channel is not an active direct channel")
+                    continue
+                if not (length > 0 and slot_lo <= start and start + length <= slot_hi):
+                    errors.append("channel shock start/length is outside its schedule slot")
+                    continue
+                if occupied[start : start + length].any():
+                    errors.append("channel shocks overlap globally")
+                occupied[start : start + length] = True
+                rebuilt[start : start + length, channel] = 1
+                expected_level = multipliers[n, s_idx] * channel_level[n, channel]
+                if not np.isclose(levels[n, s_idx], expected_level, rtol=1e-6, atol=1e-7):
+                    errors.append(
+                        "channel_shock_level does not match multiplier * channel_level"
                     )
-                    slot_lo = s_idx * n_time_steps // max(n_channel_shocks, 1)
-                    slot_hi = (s_idx + 1) * n_time_steps // max(n_channel_shocks, 1)
-                    if not (0 <= channel < n_treatments and direct[n, channel]):
-                        errors.append("channel_shock_channel is not an active direct channel")
-                        continue
-                    if not (length > 0 and slot_lo <= start and start + length <= slot_hi):
-                        errors.append("channel shock start/length is outside its schedule slot")
-                        continue
-                    if occupied[start : start + length].any():
-                        errors.append("channel shocks overlap globally")
-                    occupied[start : start + length] = True
-                    rebuilt[start : start + length, channel] = 1
-                    expected_level = multipliers[n, s_idx] * channel_level[n, channel]
-                    if not np.isclose(levels[n, s_idx], expected_level, rtol=1e-6, atol=1e-7):
-                        errors.append(
-                            "channel_shock_level does not match multiplier * channel_level"
-                        )
-                    if not np.array_equal(
-                        corpus["spend_raw"][n, start : start + length, channel],
-                        np.full(length, levels[n, s_idx], dtype=np.float32),
-                    ):
-                        errors.append("held spend does not equal channel_shock_level")
-                if not np.array_equal(rebuilt, shock_mask[n]):
-                    errors.append("channel_shock_mask does not match the schedule")
+                if not np.array_equal(
+                    corpus["spend_raw"][n, start : start + length, channel],
+                    np.full(length, levels[n, s_idx], dtype=np.float32),
+                ):
+                    errors.append("held spend does not equal channel_shock_level")
+            if not np.array_equal(rebuilt, shock_mask[n]):
+                errors.append("channel_shock_mask does not match the schedule")
 
-        sales = corpus["sales_raw"].astype(np.float64)
         baseline = corpus["baseline_raw"].astype(np.float64)
         contributions = corpus["contributions_raw"].astype(np.float64)
         indirect = corpus["indirect_effects"].astype(np.float64)
