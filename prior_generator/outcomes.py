@@ -98,79 +98,22 @@ class _Spec:
     columns: str  # "" | "channel" | "control" | "latent" | "source"
     on_y_scale: bool
     additive: bool
-    doc: str
 
 
 _SPECS: tuple[_Spec, ...] = (
-    _Spec("sales", "sales_raw", "sales", "", True, False, "observed Y"),
-    _Spec("baseline", "baseline_raw", "baseline", "", True, False, "all non-media effects on Y"),
-    _Spec(
-        "baseline_intrinsic",
-        "baseline_intrinsic",
-        "baseline_intrinsic",
-        "",
-        True,
-        True,
-        "intercept random walk",
-    ),
-    _Spec("sales_noise", "sales_noise", "sales_noise", "", True, True, "observation noise"),
-    _Spec(
-        "control_contribution",
-        "control_contribution",
-        "control_contribution",
-        "control",
-        True,
-        True,
-        "per-control Z->B effect",
-    ),
-    _Spec(
-        "confounder_contribution",
-        "confounder_contribution",
-        "confounder_contribution",
-        "latent",
-        True,
-        True,
-        "per-latent D->B effect",
-    ),
-    _Spec(
-        "channel_contribution",
-        "contributions_raw",
-        "contributions",
-        "channel",
-        True,
-        True,
-        "per-channel direct C->Y contribution",
-    ),
-    _Spec(
-        "indirect_by_source",
-        "indirect_effects_by_source",
-        "indirect_effects_by_source",
-        "source",
-        True,
-        True,
-        "indirect media effect split by input edge type",
-    ),
-    _Spec(
-        "media_contribution",
-        "",
-        "",
-        "",
-        True,
-        False,
-        "total media effect: Σ_k direct + indirect",
-    ),
-    _Spec(
-        "indirect_effects",
-        "indirect_effects",
-        "indirect_effects",
-        "",
-        True,
-        False,
-        "total indirect media effect",
-    ),
-    _Spec("spend", "spend_raw", "channels", "channel", False, False, "observed channel spend"),
-    _Spec("controls", "controls", "controls", "control", False, False, "observed control series"),
-    _Spec("demand", "demand", "demand", "latent", False, False, "latent demand series"),
+    _Spec("sales", "sales_raw", "sales", "", True, False),
+    _Spec("baseline", "baseline_raw", "baseline", "", True, False),
+    _Spec("baseline_intrinsic", "baseline_intrinsic", "baseline_intrinsic", "", True, True),
+    _Spec("sales_noise", "sales_noise", "sales_noise", "", True, True),
+    _Spec("control_contribution", "control_contribution", "control_contribution", "control", True, True),
+    _Spec("confounder_contribution", "confounder_contribution", "confounder_contribution", "latent", True, True),
+    _Spec("channel_contribution", "contributions_raw", "contributions", "channel", True, True),
+    _Spec("indirect_by_source", "indirect_effects_by_source", "indirect_effects_by_source", "source", True, True),
+    _Spec("media_contribution", "", "", "", True, False),
+    _Spec("indirect_effects", "indirect_effects", "indirect_effects", "", True, False),
+    _Spec("spend", "spend_raw", "channels", "channel", False, False),
+    _Spec("controls", "controls", "controls", "control", False, False),
+    _Spec("demand", "demand", "demand", "latent", False, False),
 )
 
 _BY_NAME: dict[str, _Spec] = {spec.name: spec for spec in _SPECS}

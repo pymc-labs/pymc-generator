@@ -35,7 +35,7 @@ matters.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 
@@ -76,16 +76,18 @@ METRIC_KEYS: tuple[str, ...] = (
 # This is a persisted feature layout: append only.
 SIGNAL_METRIC_LAYOUT: tuple[str, ...] = METRIC_KEYS
 
+_FRACTION_SPECS: dict[str, tuple[str, Callable[[np.ndarray], np.ndarray]]] = {
+    "frac_contrib_cv_lt_005": ("contrib_cv", lambda x: x < 0.05),
+    "frac_contrib_cv_lt_010": ("contrib_cv", lambda x: x < 0.10),
+    "frac_contrib_hf_lt_015": ("contrib_hf", lambda x: x < 0.15),
+    "frac_contrib_rel_std_lt_001": ("contrib_rel_std", lambda x: x < 0.01),
+    "frac_contrib_r2_gt_095": ("contrib_r2_explained_by_rest", lambda x: x > 0.95),
+    "frac_spearman_lt_03": ("spearman", lambda x: x < 0.3),
+    "frac_warmup_gt_3": ("warmup_ratio", lambda x: x > 3.0),
+}
+
 #: Degenerate-target fractions emitted by :func:`signal_summary`.
-FRAC_KEYS: tuple[str, ...] = (
-    "frac_contrib_cv_lt_005",
-    "frac_contrib_cv_lt_010",
-    "frac_contrib_hf_lt_015",
-    "frac_contrib_rel_std_lt_001",
-    "frac_contrib_r2_gt_095",
-    "frac_spearman_lt_03",
-    "frac_warmup_gt_3",
-)
+FRAC_KEYS: tuple[str, ...] = tuple(_FRACTION_SPECS)
 
 #: Minimum-signal thresholds (fraction <= value) for a healthy training
 #: corpus; see :func:`check_signal_gate`. Tuned on the plan-06 pool sizes
@@ -715,16 +717,7 @@ def summarize_signal_metrics(
             f"q{int(q * 100)}": (float(np.quantile(vals, q)) if vals.size else None) for q in _QS
         }
 
-    fraction_specs = {
-        "frac_contrib_cv_lt_005": ("contrib_cv", lambda x: x < 0.05),
-        "frac_contrib_cv_lt_010": ("contrib_cv", lambda x: x < 0.10),
-        "frac_contrib_hf_lt_015": ("contrib_hf", lambda x: x < 0.15),
-        "frac_contrib_rel_std_lt_001": ("contrib_rel_std", lambda x: x < 0.01),
-        "frac_contrib_r2_gt_095": ("contrib_r2_explained_by_rest", lambda x: x > 0.95),
-        "frac_spearman_lt_03": ("spearman", lambda x: x < 0.3),
-        "frac_warmup_gt_3": ("warmup_ratio", lambda x: x > 3.0),
-    }
-    for key, (metric, predicate) in fraction_specs.items():
+    for key, (metric, predicate) in _FRACTION_SPECS.items():
         i = metric_index[metric]
         vals = metrics[..., i][mask & valid[..., i].astype(bool)]
         # A full burn-in makes warmup explicitly N/A, rather than absent due
