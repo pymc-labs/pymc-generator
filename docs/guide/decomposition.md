@@ -11,6 +11,8 @@ $$
 \text{sales} = \text{baseline} + \sum_k \text{contributions}_k + \text{indirect\_effects}
 $$
 
+- **`baseline`** — the non-media aggregate: intrinsic intercept `B`, attributed
+  `D→Y` and `Z→Y` terms, and iid `sales_noise`. It is not the structural node `B`.
 - **`contributions`** — each channel's *direct* effect, $g^{cy}_k\,\beta_k\,f_k(C^{\text{base}}_k)$,
   where $C^{\text{base}}$ is the channel system under the intervention *"zero all
   incoming channel interactions"* (`D→C`, `Z→C`, `C→C` removed). So it is what
@@ -99,7 +101,8 @@ The baseline itself splits per node, so a world also satisfies the
 completely-unrolled identity — every term a named series:
 
 $$
-\text{sales} = \underbrace{\text{baseline\_intrinsic}}_{\text{organic}}
+\text{sales} = \underbrace{\text{baseline\_intrinsic}}_{\text{intercept }B}
+ + \text{sales\_noise}
  + \sum_j \text{confounder\_contribution}_j
  + \sum_m \text{control\_contribution}_m
  + \sum_k \text{contributions}_k

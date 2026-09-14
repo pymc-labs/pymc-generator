@@ -81,13 +81,13 @@ weekly horizons.
 
 What is comparable, in both modes: `contributions` against
 `world.data["contributions_observed"]` (exactly), and `sales_mu` against
-`world.data["sales"]` for total mean fit. Sampled mode's `baseline` is `B`
-including its `D→Y` and `Z→Y` parent terms but *excluding* `RW_Y`, while the
-persisted `world.data["baseline"]` is `B + RW_Y` — so subtract the persisted
-`world.data["sales_noise"]` column (`RW_Y` is stored in its own right) before
-comparing, or compare against `world.data["baseline_intrinsic"]` plus the
-parent terms. Without that adjustment, baseline recovery carries an irreducible
-floor of one observation-noise draw.
+`world.data["sales"]` for total mean fit. Sampled mode's `baseline` is the
+**non-media aggregate without observation noise**: intrinsic intercept `B`
+plus attributed `D→Y` and `Z→Y` effects. These edges terminate at `Y`, not `B`.
+Persisted `world.data["baseline"]` also includes `sales_noise`, so subtract that
+column before comparing, or sum `baseline_intrinsic`, `confounder_contribution`,
+and `control_contribution`. Comparing the two baseline labels without this
+adjustment includes the realized observation noise in the recovery error.
 
 Because the oracle runs under the same prior the world was drawn from, the
 comparison is apples-to-apples for a PFN trained on corpora from the same
@@ -130,10 +130,10 @@ same order, as the API reference):
 
 4. **Posterior-series labels.** Marginal mode has no `demand` and no
    `baseline` deterministic; its full-length `sales_mu` is `E[sales | θ]` and
-   excludes every latent walk realization. Sampled mode's `baseline` is `B`
-   (including its `D→Y` and `Z→Y` parent terms) without `RW_Y`, whereas the
-   persisted `data["baseline"]` is `B + RW_Y` — subtract the persisted
-   `sales_noise` column to compare them. `contributions` is exactly comparable
+   excludes every latent walk realization. Sampled mode's `baseline` aggregates
+   the intrinsic intercept and attributed `D→Y` / `Z→Y` effects without `RW_Y`.
+   The persisted `data["baseline"]` additionally includes `RW_Y` — subtract
+   `sales_noise` to compare them. `contributions` is exactly comparable
    with `world.data["contributions_observed"]` in both modes; compare
    `sales_mu` with observed `sales` for total fit.
 5. **Reproducible likelihood window.** The adstock convolution sees only the

@@ -1189,10 +1189,10 @@ def build_oracle_model(
     4. **Posterior-series labels**: marginal mode has no ``demand`` or
        ``baseline`` deterministic. Its full-length ``sales_mu`` is
        ``E[sales | theta]`` and excludes every latent walk realization.
-       Sampled mode's ``baseline`` is ``B`` (including its ``D -> Y`` and
-       ``Z -> Y`` parent terms) without ``RW_Y``, while persisted
-       ``data["baseline"]`` is ``B + RW_Y``; it is therefore not directly
-       comparable. ``contributions`` is exactly comparable with
+       Sampled mode's ``baseline`` aggregates the intrinsic intercept ``B``
+       and attributed ``D -> Y`` / ``Z -> Y`` effects, excluding ``RW_Y``.
+       Persisted ``data["baseline"]`` additionally includes ``sales_noise``;
+       subtract it before comparing. ``contributions`` is exactly comparable with
        ``world.data["contributions_observed"]`` in both modes; compare
        ``sales_mu`` with observed ``sales`` for total fit.
     5. **Reproducible likelihood window**: the oracle convolves only reported
