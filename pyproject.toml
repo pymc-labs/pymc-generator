@@ -104,10 +104,6 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
-    # Docs notebooks: cell-scoped conventions intentionally trip ruff's
-    # cross-cell import rules. Their docs_gen/build_*_nb.py builders are linted.
-    "docs/examples/index.ipynb",
-    "docs/examples/simple-model.ipynb",
 ]
 
 [tool.ruff.lint]
@@ -130,6 +126,10 @@ ignore = [
     "B904",   # raise from err (acceptable for optional-dependency re-raise)
     "B905",   # zip strict (not a correctness bug)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook narratives introduce imports at the point where they are explained.
+"docs/examples/*.ipynb" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["prior_generator"]

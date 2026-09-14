@@ -26,9 +26,9 @@ not add new modules to that list.
 
 The docs are a MkDocs Material site under `docs/`. The API pages are generated
 from docstrings (mkdocstrings), the guide pages execute real Python and render
-plots inline at build time (markdown-exec), and `docs/examples/index.ipynb` is executed
-by mkdocs-jupyter — so the docs need the full modeling stack **and** a Jupyter
-kernel named `prior-generator`:
+plots inline at build time (markdown-exec), and both notebooks under
+`docs/examples/` are executed by mkdocs-jupyter. The docs require the full
+modeling stack and a Jupyter kernel named `prior-generator`:
 
 ```bash
 pip install -e ".[docs]"                              # or: uv pip install -e ".[docs]"
@@ -37,12 +37,22 @@ mkdocs serve            # live preview at http://127.0.0.1:8000
 mkdocs build --strict   # what CI runs (fails on any warning)
 ```
 
-Because the pages run code, a build samples several worlds and a small corpus
-(cached across pages via `docs_gen/scm_docs.py`), so expect a build to take a
-minute or two. To edit the examples notebook, change `docs_gen/build_examples_nb.py`
-and regenerate it with `python docs_gen/build_examples_nb.py` (keeping it in sync
-rather than hand-editing the `.ipynb`). The site auto-deploys to GitHub Pages from
-`main` via `.github/workflows/docs.yml`.
+Edit the `.ipynb` files directly: they are the canonical sources, not generated
+copies of Python string literals. Commit source cells without outputs, execution
+counters, or widget state. Clear them before committing:
+
+```bash
+uv run --frozen --extra docs jupyter nbconvert --to notebook --inplace \
+  --ClearOutputPreprocessor.enabled=True \
+  --ClearMetadataPreprocessor.enabled=True \
+  --ClearMetadataPreprocessor.preserve_nb_metadata_mask='{("language_info", "name"), "kernelspec"}' \
+  docs/examples/*.ipynb
+```
+
+A full build samples worlds and executes the recovery case study's three
+four-chain MCMC fits. Allow for their runtime and inspect their actual warnings
+and diagnostics; successful execution does not imply successful statistical
+recovery. Site deployment is controlled by `.github/workflows/docs.yml`.
 
 ## Reproducibility contract
 
