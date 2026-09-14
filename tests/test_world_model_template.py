@@ -35,9 +35,8 @@ from prior_generator.sampler import (
 )
 from prior_generator.symbolic_graph import build_symbolic_graph
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
-from prior_generator.world_model_batched import (
+from prior_generator.world_model_template import (
     TEMPLATE_STRUCTURE_INPUT_NAMES,
-    build_cell_inputs,
     build_world_model_template,
     check_template_supported,
     compile_template_draw_fn,

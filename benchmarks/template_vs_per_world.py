@@ -37,7 +37,7 @@ from prior_generator.world_model import (
     sample_structure,
     set_compile_cache_enabled,
 )
-from prior_generator.world_model_batched import (
+from prior_generator.world_model_template import (
     build_world_model_template,
     compile_template_draw_fn,
     build_cell_inputs,

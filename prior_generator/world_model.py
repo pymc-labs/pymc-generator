@@ -612,7 +612,7 @@ def _scm_params(
     """Every continuous SCM parameter, in the LOCKED RV creation order.
 
     Shared by :func:`build_world_model` and
-    :func:`prior_generator.world_model_batched.build_world_model_template` so the
+    :func:`prior_generator.world_model_template.build_world_model_template` so the
     per-world and one-compile-per-shard paths cannot drift apart.
 
     The order is load-bearing: ``reseed_rngs`` hands out random streams by

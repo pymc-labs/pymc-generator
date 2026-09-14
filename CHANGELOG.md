@@ -51,6 +51,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   guarantees zero direct contribution, not absence of indirect causal influence.
 - Rename `rw_mean_range` to `rw_control_mean_range`; the range affects the
   control drive, not the separately anchored latent demand.
+- Rename the experimental `world_model_batched` module to
+  `world_model_template`: it reuses compilation, rather than batching cells.
 
 ### Added
 
