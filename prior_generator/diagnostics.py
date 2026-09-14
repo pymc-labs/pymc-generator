@@ -48,7 +48,7 @@ from .outcomes import (
     DEFAULT_QUANTILES,
     _fmt,
     _q_key,
-    _reject_ambiguous_selector,
+    _position_indices,
     outcome_distributions,
 )
 from .signal_diagnostics import _hf_ratio
@@ -536,32 +536,14 @@ def _validate_world_selector(worlds: Any, n_available: int) -> np.ndarray:
             "np.flatnonzero(~selector.mask & selector.data.astype(bool))"
         )
     else:
-        arr = np.asarray(worlds)
-        if arr.dtype == bool:
-            if arr.shape != (n_available,):
-                raise ValueError(
-                    f"boolean world mask must have shape ({n_available},), got {arr.shape}"
-                )
-            idx = np.flatnonzero(arr).astype(np.int64)
-        else:
-            if arr.dtype.kind not in "iu":
-                raise TypeError(
-                    "world positions must be integers; floating, string and object "
-                    f"selectors are rejected (got dtype {arr.dtype})"
-                )
-            if arr.ndim > 1:
-                raise ValueError(f"world positions must be 0-D or 1-D, got shape {arr.shape}")
-            _reject_ambiguous_selector(np.atleast_1d(arr), n_available, "world")
-            idx = np.atleast_1d(arr).astype(np.int64, copy=False)
-            if idx.size and (idx.min() < 0 or idx.max() >= n_available):
-                raise IndexError(f"world index out of range for {n_available} worlds")
-            unique, counts = np.unique(idx, return_counts=True)
-            if unique.size != idx.size:
-                repeated = sorted(int(v) for v in unique[counts > 1])
-                raise ValueError(
-                    f"world selection repeats {repeated}; a repeated world would be "
-                    "counted twice in every across-world summary"
-                )
+        idx = _position_indices(worlds, n_available, "world")
+        unique, counts = np.unique(idx, return_counts=True)
+        if unique.size != idx.size:
+            repeated = sorted(int(v) for v in unique[counts > 1])
+            raise ValueError(
+                f"world selection repeats {repeated}; a repeated world would be "
+                "counted twice in every across-world summary"
+            )
     if idx.size == 0:
         raise ValueError("world selection is empty")
     return np.asarray(idx, dtype=np.int64)

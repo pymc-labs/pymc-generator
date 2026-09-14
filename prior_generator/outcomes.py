@@ -264,6 +264,26 @@ def _reject_ambiguous_selector(selector: np.ndarray, n_available: int, kind: str
     )
 
 
+def _position_indices(selector: Any, n_available: int, kind: str) -> np.ndarray:
+    """Normalize lossless scalar/1-D positions or a complete boolean mask."""
+    if np.ma.isMaskedArray(selector):
+        raise TypeError(f"masked {kind} selectors must be compressed explicitly")
+    arr = np.asarray(selector)
+    if arr.dtype == bool:
+        if arr.shape != (n_available,):
+            raise ValueError(f"boolean mask must have shape ({n_available},), got {arr.shape}")
+        return np.flatnonzero(arr).astype(np.int64)
+    if arr.dtype.kind not in "iu":
+        raise TypeError(f"{kind} positions must be integers, got dtype {arr.dtype}")
+    if arr.ndim > 1:
+        raise ValueError(f"{kind} positions must be 0-D or 1-D, got shape {arr.shape}")
+    idx = np.atleast_1d(arr)
+    _reject_ambiguous_selector(idx, n_available, kind)
+    if idx.size and (idx.min() < 0 or idx.max() >= n_available):
+        raise IndexError(f"{kind} index out of range for {n_available} {kind}s")
+    return idx.astype(np.int64, copy=False)
+
+
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
@@ -411,8 +431,8 @@ class QuantityDistribution:
     def select(self, mask: np.ndarray) -> QuantityDistribution:
         """A new distribution keeping only the units where ``mask`` is true.
 
-        Boolean ``(n_units,)`` or an integer index array. Use it to answer
-        conditional magnitude questions, e.g. direct channels only::
+        Boolean ``(n_units,)`` mask or scalar/1-D integer positions. Scalars
+        retain a one-unit axis. For positive realized contributions::
 
             media = dist["channel_contribution"]
             direct = media.select(media.unit_max > 0)
@@ -430,15 +450,7 @@ class QuantityDistribution:
                 "(keep_series=False); the pooled report would still describe every "
                 "unit, not the selected ones. Rebuild with keep_series=True"
             )
-        idx = np.asarray(mask)
-        if idx.dtype == bool:
-            if idx.shape != (self.n_units,):
-                raise ValueError(f"boolean mask must have shape ({self.n_units},), got {idx.shape}")
-        else:
-            _reject_ambiguous_selector(idx, self.n_units, "unit")
-            idx = idx.astype(np.int64, copy=False)
-            if idx.size and (idx.min() < 0 or idx.max() >= self.n_units):
-                raise IndexError(f"unit index out of range for n_units={self.n_units}")
+        idx = _position_indices(mask, self.n_units, "unit")
         series = self.series[idx]
         pooled = _stat_dict(series.reshape(-1), self.quantile_levels)
         return replace(
@@ -629,18 +641,7 @@ def _world_index(n_available: int, worlds: Any) -> np.ndarray:
         return np.arange(n_available, dtype=np.int64)
     if isinstance(worlds, slice):
         return np.arange(n_available, dtype=np.int64)[worlds]
-    idx = np.asarray(worlds)
-    if idx.dtype == bool:
-        if idx.shape != (n_available,):
-            raise ValueError(
-                f"boolean world mask must have shape ({n_available},), got {idx.shape}"
-            )
-        return np.flatnonzero(idx).astype(np.int64)
-    _reject_ambiguous_selector(idx, n_available, "world")
-    idx = idx.astype(np.int64, copy=False).reshape(-1)
-    if idx.size and (idx.min() < 0 or idx.max() >= n_available):
-        raise IndexError(f"world index out of range for {n_available} worlds")
-    return idx
+    return _position_indices(worlds, n_available, "world")
 
 
 _CORPUS_KEYS: dict[str, str] = {spec.name: spec.corpus_key for spec in _SPECS if spec.corpus_key}

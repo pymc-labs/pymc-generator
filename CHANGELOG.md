@@ -24,6 +24,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   or scenarios from being paired with newly generated data.
 - Record effective scenario priors, seeds, connectivity, environment versions,
   and replay instructions in bundles; text-only output no longer advertises PNGs.
+- Reject lossy, multidimensional, masked, and out-of-range outcome selectors;
+  scalar positions retain their unit axis and share diagnostics normalization.
 
 ### Added
 
