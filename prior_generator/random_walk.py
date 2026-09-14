@@ -1,7 +1,7 @@
-"""Symbolic random-walk noise for the Phase-4 additive causal graph.
+"""Symbolic random-walk noise for the additive causal graph.
 
 Every non-outcome node in the additive SCM (D, Z, C, B) carries a random-walk
-noise term rather than flat Gaussian noise (plan doc 03, D1a). The outcome
+noise term rather than flat Gaussian noise. The outcome
 node ``Y`` instead carries iid observation noise. A walk is always
 autocorrelated — a smoothed Brownian motion — and its ``smoothness`` parameter
 controls texture:
@@ -163,7 +163,7 @@ def symbolic_random_walk(
     rw_smoothness_max_weeks: int,
     eps=None,
 ):
-    """Create a PyTensor symbolic random walk (plan doc 4.0c).
+    """Create a PyTensor symbolic random walk.
 
     The expression is part of the causal graph. Concrete values (``eps``,
     ``mean``, ``std``) are supplied at ``.eval()`` time.

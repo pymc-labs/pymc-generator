@@ -92,7 +92,7 @@ def test_family_is_strictly_monotone_in_x(name):
 def test_family_is_scale_free_in_its_anchor(name, scale):
     """Scaling ``x`` and ``reference_level`` together leaves the response unchanged.
 
-    This is the whole point of the κ-relative parameterization (FINDINGS D7):
+    Under reference-relative parameterization,
     the shape parameters are dimensionless, so the same prior ranges are
     meaningful for a channel spending 10 and one spending 10 million. A wrapper
     that forgot to rescale its input would fail here while still passing every

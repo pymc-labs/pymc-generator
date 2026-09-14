@@ -96,7 +96,7 @@ def root_saturation(x: TensorVariable, alpha: TensorVariable) -> TensorVariable:
 
 
 # --------------------------------------------------------------------------
-# Saturation families — κ-relative wrappers (FINDINGS D7)
+# Saturation families — dimensionless, reference-relative wrappers
 # --------------------------------------------------------------------------
 
 

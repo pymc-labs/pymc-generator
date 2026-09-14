@@ -1,12 +1,10 @@
-"""Signal-strength diagnostics for generated corpora (plan doc 05 fix).
+"""Signal-strength diagnostics for generated corpora.
 
-A corpus can satisfy every schema contract and still be unlearnable: if the
-true per-channel contribution barely varies over the task window, there is no
-signal for the model to attribute, and R²/interval metrics on those channels
-measure noise. This module quantifies, per direct (C->Y) channel, how much
-signal the generator actually produced — so a weak-signal prior is caught at
-GENERATION time (the summary is embedded in every corpus' ``diagnostics``)
-instead of after a training run.
+A valid corpus can still contain weak or redundant signals. These metrics
+quantify variation, relative amplitude, and dependence for direct C->Y
+channels, before a consumer trains on the corpus. Summaries are embedded in
+``diagnostics``; screening with :func:`check_signal_gate` is optional.
+Neither the summaries nor a passing gate establish causal identification.
 
 Metrics per (task, direct channel) pair
 ---------------------------------------
@@ -89,9 +87,8 @@ _FRACTION_SPECS: dict[str, tuple[str, Callable[[np.ndarray], np.ndarray]]] = {
 #: Degenerate-target fractions emitted by :func:`signal_summary`.
 FRAC_KEYS: tuple[str, ...] = tuple(_FRACTION_SPECS)
 
-#: Minimum-signal thresholds (fraction <= value) for a healthy training
-#: corpus; see :func:`check_signal_gate`. Tuned on the plan-06 pool sizes
-#: (L1 reference ~3%/1.5% on the cv/hf checks).
+#: Default opt-in screening thresholds (fraction <= value).
+#: See :func:`check_signal_gate`; these are not universal learnability bounds.
 DEFAULT_GATE: dict[str, float] = {
     "frac_contrib_cv_lt_010": 0.15,  # at most 15% near-flat targets
     "frac_contrib_hf_lt_015": 0.15,  # at most 15% targets without weekly variation

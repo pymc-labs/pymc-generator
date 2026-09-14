@@ -1,81 +1,43 @@
-"""PyTensor symbolic causal-graph builder for the additive causal SCM.
+"""PyTensor causal graph and exact additive decomposition.
 
-Builds a Pearlian additive SCM (plan doc 03, D1/D5) with inter-variable
-interactions as one symbolic PyTensor graph:
+Latent demand D and observed controls Z are signed. Channels C apply softplus
+to their own exogenous drive plus additive parent loadings. C->C and Z->Z
+edges run from lower to higher indices, so the graph is acyclic. Adstock and
+saturation apply on direct C->Y paths; other loadings are linear on the
+child's pre-activation scale.
 
-.. code-block:: text
+The intercept B has no parents. Demand and controls enter sales Y directly,
+alongside media response and iid observation noise. The default floor scope
+clips B alone. Optional non-media flooring clips the aggregate incrementally,
+so its reported demand/control columns are clipped increments rather than
+unmodified linear loadings. Sales itself is not clamped.
 
-    D_j = RW_j                                        (confounder, signed)
-    F_m = RW_m + s_m·η_tm + c_m·(h_tm − q_m),  h_tm ~ Bernoulli(q_m)  (control own drive)
-    Z_m = Σ_j u_jm·D_j + Σ_{m'<m} γ_{m'm}·Z_{m'} + F_m    (control, signed)
-    E_k = RW_k + σ_k·ε_tk + a_k·b_tk,  b_tk ~ Bernoulli(p_k)  (channel own drive)
-    C_k = softplus( Σ_j w_jk·D_j + Σ_m v_mk·Z_m
-                    + Σ_{k'<k} α_{k'k}·C_{k'} + E_k )     (channel, positive)
-    B   = max(RW_B, floor)                                (intercept, floored)
-    Y   = B + Σ_j δ_j·D_j + Σ_m ρ_m·Z_m
-              + Σ_k g_cy·β_k·f_k(C_k) + RW_Y              (sales)
+Each non-outcome node has a random-walk own drive. Channels can additionally
+have iid execution noise and campaign pulses; controls can have iid shocks
+and centered pulses. These terms add higher-frequency variation but do not
+guarantee informative response curves or identification. Supplied innovations
+may be correlated by the configured baseline/channel confounding mechanism.
 
-The intercept ``B`` carries no parents: latent demand and the controls enter
-``Y`` DIRECTLY through ``δ_j`` / ``ρ_m``, so ``Y`` reads as the equation a
-standard MMM assumes and ``B`` is a level that can be reported on its own.
-``baseline_floor`` censors that level (``None`` leaves the signed walk), which
-is safe precisely because the parents sit outside it: the floor clips one
-additive term and leaves every other decomposition column exact. Sales itself
-is never clamped — that would censor the OBSERVATION and leave the additive
-function class a standard MMM can represent.
-
-Every node except ``Y`` carries an independent random-walk noise term
-(``random_walk`` module); node means are folded into those walks. ``Y`` instead
-has iid observation noise ``RW_Y = rw_y_std * eps_y``. The channel own drive
-``E_k`` additionally carries iid weekly execution noise (σ_k) and campaign
-pulses (amplitude a_k, per-week fire probability p_k) — the high-frequency
-exogenous variation that lets spend sweep its response
-curve (without it, contribution targets degenerate to flat lines; the
-neutral defaults σ_k = 0, p_k = 0 disable both). The control own drive ``F_m``
-carries the same two terms (s_m, c_m, q_m), for a different reason: a
-smooth-walk-only control lives in the same function space as the smooth
-baseline walk, which leaves ``Z → Y`` weakly identified against baseline
-drift. Its pulse is CENTRED (``h − q``) because a control is signed and its
-level belongs to ``rw_z_mean``: both added terms are then mean-zero, so
-``E[Z_m]`` — which a control's softplus-free equation realizes EXACTLY — and
-the parameter-only reference levels below are unaffected.
-C→C and Z→Z edges
-are restricted to the strict upper triangle (src index < dst index) which
-guarantees acyclicity. The nonlinear transform ``f_k`` (adstock +
-saturation, from ``mechanisms``) applies only on the direct C→Y path;
-every inter-variable loading is additive and linear on the CHILD'S
-PRE-ACTIVATION scale (plan doc D2). For a channel that pre-activation is
-wrapped by the softplus positivity guard (risk table: spend must be
-non-negative), so the observed parent→channel mapping inherits the softplus
-curvature; the baseline, control, and outcome equations apply no activation and
-are linear on the observed scale.
-
-Exact intervention-based decomposition (plan doc D3/D7)
--------------------------------------------------------
-``C_base`` is the channel system under the intervention *zero all incoming
-channel interactions* (D→C, Z→C, C→C) — i.e. each channel driven only by
-its own random walk. Direct contributions and indirect effects are:
+``C_base`` removes all incoming channel interactions while retaining the same
+own-drive realizations, including any execution noise and pulses. With each
+response function fixed across counterfactual paths:
 
 .. code-block:: text
 
-    contributions_k  = g_cy·β_k·f_k(C_base_k)                (direct)
-    indirect_effects = Σ_k g_cy·β_k·(f_k(C_k) - f_k(C_base_k))
-    baseline_out     = B + RW_Y
-    sales           == baseline_out + Σ_k contributions_k + indirect_effects
+    contributions_k = g_cy[k] * beta[k] * f_k(C_base_k)
+    indirect_effects = sum_k g_cy[k] * beta[k] * (f_k(C_k) - f_k(C_base_k))
+    baseline_out = baseline_intrinsic + sales_noise
+                   + sum(confounder_contribution) + sum(control_contribution)
+    sales = baseline_out + sum(contributions) + indirect_effects
 
-The identity holds *exactly* (not a Taylor approximation) because both Y
-and the decomposition are built from the same symbolic quantities. Each
-``f_k`` is one fixed function evaluated on every path. Its κ-relative
-saturation scale comes from :func:`_reference_levels`, a parameter-only
-REFERENCE (anchor) level — not ``E[C_k]``: ``softplus(rw_c_mean)`` plus
-``pulse_amp * pulse_prob`` and weighted reference levels of the Z->C / C->C
-parents in topological order, wrapped by the channel softplus. D->C drops out
-because latent demand has mean zero. Because the channel equation applies
-softplus, Jensen makes ``E[C_k]`` strictly LARGER than this anchor (measured
-``E[C_k]/anchor`` in [1.004, 1.099] over 36 (θ, channel) cells; see
-:func:`_reference_levels`). The anchor reads neither a window nor a realized
-series, which is exactly why it is the right κ scale: ``p(theta)`` remains
-well-defined and the week-t response cannot depend on later spend.
+The identity uses shared symbolic quantities, not a Taylor approximation,
+and holds up to floating-point error. The ordered telescoping indirect split
+attributes incoming channel interactions in ``(cc, zc, dc)`` order.
+
+Saturation scales come from :func:`_reference_levels`. These parameter-only
+anchors are not expected or realized mean spend: nonlinear positivity
+transforms and stochastic variation generally separate those quantities.
+Anchors do not read realized series or future time windows.
 """
 
 from __future__ import annotations
@@ -700,11 +662,9 @@ def build_symbolic_graph(
     c_no_cc_zc_cols: list[TensorVariable] = []
     for k in range(n_treatments):
         walk = _walk_column(eps_c[:, k], params["rw_c"], k, n_time_steps_full)
-        # Own exogenous drive = slow walk + iid weekly execution noise +
-        # campaign pulses (plan doc 05 fix: without the high-frequency terms
-        # the channel never sweeps its response curve and the contribution
-        # target degenerates to a flat line). eps_c_pulse[:, k] is a 0/1 fire
-        # indicator (Bernoulli(pulse_prob[k])); magnitudes may be symbolic.
+        # Own drive includes the same walk, execution noise, and pulses in
+        # every intervention. eps_c_pulse[:, k] is a Bernoulli fire indicator;
+        # pulse magnitudes may be symbolic.
         own = walk
         if use_hf[k]:
             own = own + hf_sigma[k] * eps_c_hf[:, k]

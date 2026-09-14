@@ -13,10 +13,6 @@ telescoping 3-source indirect split ``(cc, zc, dc)``.
 The corpus schema is the dict-of-ndarrays documented in
 :func:`sample_prior_predictive` — the same format the structural-pfn training
 pipeline consumes (persist with ``prior_generator.save_corpus``).
-
-Extraction note: the legacy L0/L1 PyMC-model rungs from structural-pfn were
-deprecated there (plan-05) and deliberately NOT migrated; the one supported
-world prior is the default ``make_scm_prior`` configuration.
 """
 
 from __future__ import annotations
@@ -289,7 +285,7 @@ class SCMPrior:
     # innovations without changing either marginal innovation variance.
     confounding_strength_range: tuple[float, float] | None = None
 
-    # -- Channel texture (plan doc 05 signal fix) --------------------------
+    # -- Channel own-drive variation --------------------------------------
     # ``rw_channel_std_range`` is the channel random-walk standard-deviation
     # prior, relative to each channel's own level (softplus of its walk mean).
     # That keeps channel variation scale-free across small and large channels.
@@ -368,7 +364,7 @@ class SCMPrior:
     # Disable them for feature-only shards without changing generated worlds.
     include_identifiability_labels: bool = True
 
-    # -- Prior-conditioning hyperprior (ACE, plan doc to-do/01) -------------
+    # -- Prior-conditioning hyperprior ------------------------------------
     # When enabled, each CELL draws a narrowed prior interval per conditioned
     # quantity (stage-1 concrete numpy, like the rest of the structure):
     #   w  ~ U(w_lo, w_hi);  lo ~ U(S_lo, S_hi - w);  I_q = [lo, lo + w]
@@ -385,7 +381,7 @@ class SCMPrior:
     # Prior-shift eval support: optional overrides for the LEGACY edge base
     # rates ("cy", "dc", "dy", "zy") which otherwise come from the slots.py
     # module constants. None (default) => byte-identical legacy behaviour.
-    # The Phase-4 rates (dz/zc/cc/zz) have their own config fields above.
+    # The dz/zc/cc/zz rates have their own config fields above.
     edge_rate_overrides: dict[str, float] | None = None
 
     # Per-edge-type arrow budget ("pot"). Maps edge type ->
@@ -1142,20 +1138,20 @@ def sample_g_additive(
     n_covariates_active: int | None = None,
     n_latent_active: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Draw one extended DAG cell for the additive SCM (Phase 4).
+    """Draw one DAG cell for the additive SCM.
 
     Extends :func:`_sample_g` with the four new edge types. C->C and Z->Z
     edges are restricted to the strict upper triangle (src index < dst
-    index) which guarantees acyclicity. Base rates for the new types come
-    from ``cfg`` (dz/zc/cc/zz_base_rate); legacy types keep the slots.py
-    base rates. When ``cfg.edge_budget`` names a type, that type's arrows are
+    index) which guarantees acyclicity. Base rates for dz/zc/cc/zz come
+    from ``cfg``; the remaining types use the slots.py base rates.
+    When ``cfg.edge_budget`` names a type, that type's arrows are
     placed by budget (uniform scatter over eligible pairs) instead of by
     Bernoulli rate — see :func:`_resolve_budget` and :func:`_scatter`.
 
-    Channel-activation rule (plan doc D1b): a channel is *causally active*
-    iff it has a direct C->Y edge OR an outgoing C->C edge. The rule is
-    reported in ``channel_active`` (all channels remain observed; the
-    degenerate guard only forces at least one C->Y edge).
+    ``channel_active`` marks a direct C->Y edge OR an outgoing C->C edge.
+    This local structural flag does not guarantee a path to Y through a
+    downstream channel. All channels remain observed; the degenerate guard
+    only forces at least one C->Y edge.
 
     ``cfg.min_no_direct_effect_channels`` caps the direct-channel count, so a
     cell can be made to always carry both classes of the direct-effect signal.
@@ -1238,7 +1234,7 @@ def sample_g_additive(
             )
             g_zz[:n_covariates_active, :n_covariates_active] = np.triu(draws, k=1)
 
-    # Channel-activation rule (D1b): direct C->Y OR outgoing C->C
+    # Local structural activity: direct C->Y OR outgoing C->C.
     channel_active = ((base["g_cy"] == 1) | (g_cc.sum(axis=1) > 0)).astype("float64")
     channel_active *= base["active_treatment"]  # padding nodes are never active
 
@@ -1676,61 +1672,13 @@ def _additive_task_ok(
 
 
 def _generate_corpus_additive(cfg: SCMPrior) -> dict:
-    """Generate the Phase-4 additive-SCM corpus (plan doc 03, task 4.4).
+    """Generate a padded additive-SCM corpus.
 
-    Same schema as :func:`sample_prior_predictive` (CONTRACTS §1) with the extended
-    g-vector layout plus two new keys:
-
-    * ``indirect_effects`` (n_tasks, n_time_steps) float32 — total indirect
-      effect on sales from all upstream influences flowing through channels.
-    * ``channel_active`` (n_tasks, n_treatments) uint8 — the D1b activation rule
-      (C->Y or outgoing C->C).
-    * ``confounding_strength`` (n_tasks,) float32 — the effective per-world shared
-      baseline/channel innovation strength (all zeros when disabled).
-    * ``saturation_scale`` (n_tasks, n_treatments) float32 — the per-channel
-      nonlinear response anchor, a function of the drawn parameters alone
-      (never of the realized series), zero-padded for inactive channels.
-    * ``prior_cond`` (n_tasks, len(PRIOR_COND_LAYOUT)) float32 — present IFF
-      ``cfg.prior_conditioning``: the per-cell narrowed prior intervals as
-      packed ``(low, width)`` pairs in ``PRIOR_COND_LAYOUT`` order, broadcast
-      to worlds; ``diagnostics["prior_cond"]`` echoes layout, supports and
-      width ranges.
-
-    Phase-5 per-node decomposition targets (float32, zero-padded to max sizes),
-    emitted unconditionally. They are deterministic given the same eps inputs,
-    so no extra randomness is consumed; note the acceptance filter now also
-    checks finiteness of these arrays, so a task whose new targets were
-    non-finite while the old outputs were finite would be rejected where it
-    was previously accepted (not observed in practice — a non-finite variant
-    implies a non-finite observed path):
-
-    * ``control_contribution`` (n_tasks, n_time_steps, n_covariates) — direct
-      Z->Y effect per control (``g_zy[m]·ρ[m]·Z[:, m]``). Name matches the
-      legacy Phase-2 opt-in key so the existing per-control batch plumbing
-      picks it up unchanged.
-    * ``confounder_contribution`` (n_tasks, n_time_steps, n_latent) — direct
-      D->Y effect per confounder (``g_dy[j]·δ[j]·D[:, j]``).
-    * ``baseline_intrinsic`` (n_tasks, n_time_steps) — the intercept ``B``
-      alone (``max(RW_B, baseline_floor)``; the plain signed walk when no floor
-      is configured). Parents and observation noise are NOT folded in.
-    * ``sales_noise`` (n_tasks, n_time_steps) — ``RW_Y``, the iid observation
-      noise, reported as its own decomposition column.
-    * ``indirect_effects_by_source`` (n_tasks, n_time_steps, 3) — telescoping
-      3-way indirect split in the LOCKED order ``(cc, zc, dc)``; the three
-      columns sum exactly to ``indirect_effects``.
-
-    The full additive invariant holds exactly (float64 pre-storage):
-    ``baseline_intrinsic + sales_noise + Σ_j confounder_contribution
-    + Σ_m control_contribution + Σ_k contributions
-    + indirect_effects_by_source.sum(-1) == sales``.
-
-    The additive decomposition invariant holds exactly:
-    ``baseline_raw + contributions_raw.sum(-1) + indirect_effects == sales_raw``
-    (up to float32 storage rounding).
-
-    Each task samples fresh SCM parameters (matching the legacy θ-per-draw
-    semantics) and builds/evaluates its own PyTensor graph at the cell's
-    active sizes; outputs are zero-padded to max sizes.
+    The public schema is documented by :func:`sample_prior_predictive`.
+    Each cell shares a discrete structure; each task draws fresh continuous
+    parameters and innovations. Evaluate at active sizes, then copy accepted
+    values into the preallocated maximum-size arrays. Float32 storage follows
+    the float64 generation and acceptance checks.
     """
     from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
