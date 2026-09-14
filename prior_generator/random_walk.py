@@ -60,6 +60,16 @@ def _kernel_width(smoothness: float, n_time_steps: int, rw_smoothness_max_weeks:
     return min(width, int(n_time_steps))
 
 
+def _centred_walk_operator(n_time_steps: int, width: int) -> np.ndarray:
+    steps = np.tril(np.ones((n_time_steps, n_time_steps)))
+    columns = _smooth_columns_numpy(steps, width)
+    return columns - columns.mean(axis=0, keepdims=True)
+
+
+def _walk_operator_scale(columns: np.ndarray) -> float:
+    return float(np.sqrt((columns**2).sum() / columns.shape[0]))
+
+
 @lru_cache(maxsize=64)
 def _centred_walk_scale(n_time_steps: int, width: int) -> float:
     """RMS amplitude of the centred, smoothed Brownian path for unit innovations.
@@ -121,12 +131,7 @@ def _centred_walk_scale(n_time_steps: int, width: int) -> float:
     Column ``j`` of ``A`` is the smoothed, centred step function ``1[t >= j]``,
     so the whole operator is built in one ``(n_time_steps, n_time_steps)`` pass.
     """
-    steps = np.tril(
-        np.ones((n_time_steps, n_time_steps))
-    )  # steps[t, j] = 1 if t >= j (the cumsum operator)
-    columns = _smooth_columns_numpy(steps, width)
-    columns = columns - columns.mean(axis=0, keepdims=True)
-    return float(np.sqrt((columns**2).sum() / n_time_steps))
+    return _walk_operator_scale(_centred_walk_operator(n_time_steps, width))
 
 
 def _smooth_columns_numpy(raw: np.ndarray, width: int) -> np.ndarray:
@@ -153,10 +158,8 @@ def _walk_basis(n_time_steps: int, width: int) -> np.ndarray:
     :func:`_centred_walk_scale` normalization. Its zero-mean walk is therefore
     exactly ``std * B @ eps`` for the plain float64 matrix returned here.
     """
-    steps = np.tril(np.ones((n_time_steps, n_time_steps)))
-    columns = _smooth_columns_numpy(steps, width)
-    columns = columns - columns.mean(axis=0, keepdims=True)
-    return np.asarray(columns / _centred_walk_scale(n_time_steps, width))
+    columns = _centred_walk_operator(n_time_steps, width)
+    return columns / _walk_operator_scale(columns)
 
 
 @lru_cache(maxsize=8)
