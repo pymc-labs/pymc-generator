@@ -89,7 +89,7 @@ print("decomposition error:", scm.identity_error())   # ~1e-15
 
 ```python
 pg.write_scm_bundle(scm, "my_world/")
-# dataset.csv, true_components.csv, true_contribution.csv, description.txt,
+# dataset.csv, true_components.csv, description.txt,
 # dag.dot, dag.png, timeseries.png, decomposition.png, channels.png
 ```
 
@@ -812,7 +812,7 @@ An `SCM` object bundles the active-size series (`.data`), the active DAG blocks
 A folder a human can inspect: `dataset.csv` (the observable inputs),
 `true_components.csv` (the full per-node decomposition, including the
 `sales_noise` observation-noise column, so its additive columns sum to
-`dataset.csv`'s `sales_Y` exactly), `true_contribution.csv`,
+`dataset.csv`'s `sales_Y` exactly),
 `description.txt` (`describe_scm`), `dag.dot`, and — unless disabled — `dag.png`,
 `timeseries.png`, `decomposition.png`, `channels.png`.
 `write_scenario_bundles` pre-flights every scenario's graph search before

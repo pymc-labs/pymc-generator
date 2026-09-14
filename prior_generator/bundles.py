@@ -10,7 +10,6 @@ Each bundle contains:
   ``sales_reconstructed`` and the ``demand_*``/``channel_base_*`` diagnostics
   is an ADDITIVE term of ``sales_Y``: they sum to it exactly (this is
   ``SCM.reconstruction()``, the quantity ``SCM.identity_error()`` scores).
-* ``true_contribution.csv`` — legacy-compatible view (contribution_C*, baseline_B)
 * ``description.txt``       — DAG edges with drawn coefficients, per-channel
   mechanism/texture parameters, decomposition identity check, signal metrics
 * ``dag.dot`` / ``dag.png`` — the causal graph (matplotlib render; no graphviz)
@@ -124,10 +123,6 @@ def write_scm_bundle(
     )
     pd.DataFrame(truth_cols).to_csv(out / "true_components.csv", index=False)
 
-    legacy = {"week": weeks}
-    legacy.update({f"contribution_C{k + 1}": d["contributions"][:, k] for k in range(n_treatments)})
-    legacy["baseline_B"] = d["baseline"]
-    pd.DataFrame(legacy).to_csv(out / "true_contribution.csv", index=False)
 
     (out / "description.txt").write_text(describe_scm(world))
     (out / "dag.dot").write_text(world_to_dot(world))
@@ -293,7 +288,7 @@ def write_scenario_bundles(
         "|---|---|---|",
         *[f"| {idx} | {sc.name} | {sc.purpose} |" for idx, sc in enumerate(scenarios)],
         "",
-        "Per folder: `dataset.csv`, `true_components.csv`, `true_contribution.csv`,",
+        "Per folder: `dataset.csv`, `true_components.csv`,",
         "`description.txt`, and `dag.dot`.",
     ])
     if plots:

@@ -48,7 +48,6 @@ for f in sorted(os.listdir(out)):
 | --- | --- |
 | `dataset.csv` | What a model eats: `week`, `spend_C*`, `control_Z*`, `sales_Y` |
 | `true_components.csv` | The full additive truth — `baseline_intrinsic`, `sales_noise`, the baseline split, per-channel direct contributions, indirect by source, latent demand, base channels |
-| `true_contribution.csv` | Legacy-compatible view (`contribution_C*`, `baseline_B`) |
 | `description.txt` | DAG + drawn coefficients, mechanisms, decomposition check, signal metrics |
 | `dag.dot` / `dag.png` | The causal graph (matplotlib render — no graphviz needed) |
 | `timeseries.png` | Model-input series |

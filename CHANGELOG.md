@@ -43,6 +43,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - Reuse diagnostic standard deviations, centered predictors, and adstock kernels.
   Residual degrees of freedom now use the fitted least-squares solver's rank;
   captured metrics remain unchanged and rank-deficient boundary checks pass.
+- Remove the partial `true_contribution.csv` export. Bundle consumers should use
+  `true_components.csv`, which includes the full additive decomposition.
 
 ### Added
 
@@ -658,7 +660,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   decomposition error near `1e-15`. The contract is now explicit: every column
   except `week`, `sales_reconstructed` and the `demand_*` / `channel_base_*`
   diagnostics is an additive term of `sales_Y`, and they sum to it exactly.
-  `dataset.csv` and `true_contribution.csv` are unchanged.
+  `dataset.csv` remains the observation table; `true_components.csv` carries the full truth.
 - **`describe_scm` prints the identity it actually checks**: the decomposition
   header read `baseline_intrinsic + confounder + control + direct contributions
   + indirect_by_source == sales`, omitting `sales_noise` — the term

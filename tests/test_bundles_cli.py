@@ -37,7 +37,6 @@ TEXT_FILES = frozenset(
     {
         "dataset.csv",
         "true_components.csv",
-        "true_contribution.csv",
         "description.txt",
         "dag.dot",
     }

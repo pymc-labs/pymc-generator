@@ -107,7 +107,6 @@ pg.write_scm_bundle(scm, "my_world/")
 # my_world/
 #   dataset.csv            model inputs (week, spend_C*, control_Z*, sales_Y)
 #   true_components.csv    the full additive decomposition truth
-#   true_contribution.csv  legacy view (contribution_C*, baseline_B)
 #   description.txt        the world's story
 #   dag.dot / dag.png      the causal graph
 #   timeseries.png  decomposition.png  channels.png
