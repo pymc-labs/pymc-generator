@@ -40,8 +40,6 @@ def built():
     return model, out_names
 
 
-
-
 def test_pm_draw_preserves_additive_identity(built):
     model, out_names = built
     d = {k: v[0] for k, v in draw_worlds(model, out_names, seed=123, draws=1).items()}
@@ -391,5 +389,3 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
     )
     with pytest.raises(ValueError, match="collides with a different model variable"):
         build_world_model(g_act, cfg, structural, cfg.n_time_steps)
-
-

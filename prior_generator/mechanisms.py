@@ -87,7 +87,9 @@ def michaelis_menten(
     return _pmm.michaelis_menten(_as_time(x), alpha=alpha, lam=lam).values
 
 
-def tanh_saturation(x: TensorVariable, b: TensorVariable | float, c: TensorVariable) -> TensorVariable:
+def tanh_saturation(
+    x: TensorVariable, b: TensorVariable | float, c: TensorVariable
+) -> TensorVariable:
     """Tanh saturation: b * tanh(x / (b * c)); ``pymc_marketing`` ``tanh_saturation``."""
     return _pmm.tanh_saturation(_as_time(x), b=b, c=c).values
 

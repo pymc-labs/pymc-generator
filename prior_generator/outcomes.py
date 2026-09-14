@@ -105,10 +105,31 @@ _SPECS: tuple[_Spec, ...] = (
     _Spec("baseline", "baseline_raw", "baseline", "", True, False),
     _Spec("baseline_intrinsic", "baseline_intrinsic", "baseline_intrinsic", "", True, True),
     _Spec("sales_noise", "sales_noise", "sales_noise", "", True, True),
-    _Spec("control_contribution", "control_contribution", "control_contribution", "control", True, True),
-    _Spec("confounder_contribution", "confounder_contribution", "confounder_contribution", "latent", True, True),
+    _Spec(
+        "control_contribution",
+        "control_contribution",
+        "control_contribution",
+        "control",
+        True,
+        True,
+    ),
+    _Spec(
+        "confounder_contribution",
+        "confounder_contribution",
+        "confounder_contribution",
+        "latent",
+        True,
+        True,
+    ),
     _Spec("channel_contribution", "contributions_raw", "contributions", "channel", True, True),
-    _Spec("indirect_by_source", "indirect_effects_by_source", "indirect_effects_by_source", "source", True, True),
+    _Spec(
+        "indirect_by_source",
+        "indirect_effects_by_source",
+        "indirect_effects_by_source",
+        "source",
+        True,
+        True,
+    ),
     _Spec("media_contribution", "", "", "", True, False),
     _Spec("indirect_effects", "indirect_effects", "indirect_effects", "", True, False),
     _Spec("spend", "spend_raw", "channels", "channel", False, False),
@@ -601,8 +622,11 @@ _CORPUS_KEYS: dict[str, str] = {spec.name: spec.corpus_key for spec in _SPECS if
 
 
 def _dense_from_corpus(
-    corpus: Mapping[str, Any], worlds: Any, needed: set[str],
-    mask_kinds: set[str], need_scale: bool,
+    corpus: Mapping[str, Any],
+    worlds: Any,
+    needed: set[str],
+    mask_kinds: set[str],
+    need_scale: bool,
 ) -> _Dense:
     keys = {name: _CORPUS_KEYS[name] for name in needed}
     mask_keys = {kind: _MASK_KEYS[kind] for kind in mask_kinds if kind != "source"}
@@ -619,8 +643,7 @@ def _dense_from_corpus(
     selection = slice(None) if worlds is None else worlds if isinstance(worlds, slice) else idx
     arrays = {name: np.asarray(corpus[key])[selection] for name, key in keys.items()}
     masks = {
-        kind: np.asarray(corpus[key])[selection].astype(bool)
-        for kind, key in mask_keys.items()
+        kind: np.asarray(corpus[key])[selection].astype(bool) for kind, key in mask_keys.items()
     }
     if "source" in mask_kinds:
         masks["source"] = np.ones((idx.size, 3), dtype=bool)
@@ -630,8 +653,7 @@ def _dense_from_corpus(
         n_worlds=int(idx.size),
         n_time_steps=int(sales.shape[1]),
         sales_scale=(
-            np.asarray(corpus["sales_scale"])[selection].astype(np.float64)
-            if need_scale else None
+            np.asarray(corpus["sales_scale"])[selection].astype(np.float64) if need_scale else None
         ),
         world_ids=idx,
     )
@@ -641,8 +663,11 @@ _WORLD_KEYS: dict[str, str] = {spec.name: spec.world_key for spec in _SPECS if s
 
 
 def _dense_from_worlds(
-    scms: Sequence[SCM], worlds: Any, needed: set[str],
-    mask_kinds: set[str], need_scale: bool,
+    scms: Sequence[SCM],
+    worlds: Any,
+    needed: set[str],
+    mask_kinds: set[str],
+    need_scale: bool,
 ) -> _Dense:
     idx = _world_index(len(scms), worlds)
     if idx.size == 0:
@@ -653,12 +678,13 @@ def _dense_from_worlds(
         raise ValueError(f"worlds must share n_time_steps to be pooled; got {sorted(horizons)}")
     n_time_steps = horizons.pop()
     width_attributes = {
-        "channel": "n_treatments", "control": "n_covariates", "latent": "n_latent",
+        "channel": "n_treatments",
+        "control": "n_covariates",
+        "latent": "n_latent",
     }
     needed_kinds = {_BY_NAME[name].columns for name in needed} - {"", "source"}
     per_world = {
-        kind: [getattr(world, width_attributes[kind]) for world in chosen]
-        for kind in needed_kinds
+        kind: [getattr(world, width_attributes[kind]) for world in chosen] for kind in needed_kinds
     }
     widths = {kind: max(counts) for kind, counts in per_world.items()}
     n_worlds = int(idx.size)
@@ -677,7 +703,8 @@ def _dense_from_worlds(
         arrays[name] = dense
     masks = {
         kind: (np.arange(widths[kind])[None, :] < np.asarray(per_world[kind])[:, None])
-        for kind in mask_kinds if kind != "source"
+        for kind in mask_kinds
+        if kind != "source"
     }
     if "source" in mask_kinds:
         masks["source"] = np.ones((n_worlds, 3), dtype=bool)
@@ -685,7 +712,8 @@ def _dense_from_worlds(
     # SCM has no train/query split, so the full-window std is the analogue.
     sales_scale = (
         np.asarray([np.asarray(w.data["sales"]).std() for w in chosen], dtype=np.float64)
-        if need_scale else None
+        if need_scale
+        else None
     )
     return _Dense(
         arrays=arrays,

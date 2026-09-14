@@ -126,7 +126,6 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
-    "N802",   # function name should be lowercase (allow K_max_effective etc.)
     "N803",   # argument name should be lowercase (allow X, Y for data)
     "N806",   # variable in function should be lowercase (allow X, Y)
     "B007",   # loop control variable not used (common in graph setup)

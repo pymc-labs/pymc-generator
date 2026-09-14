@@ -396,7 +396,8 @@ def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
     import json
 
     diagnostics = {
-        key: value for key, value in corpus["diagnostics"].items()
+        key: value
+        for key, value in corpus["diagnostics"].items()
         if key not in {"schema_version", "timing"}
     }
     diagnostics["edge_types"] = ["cy", "dc", "dz", "db", "zb", "zc", "cc", "zz"]
@@ -404,8 +405,7 @@ def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
         values = diagnostics.get(field)
         if values is not None:
             diagnostics[field] = {
-                {"dy": "db", "zy": "zb"}.get(key, key): value
-                for key, value in values.items()
+                {"dy": "db", "zy": "zb"}.get(key, key): value for key, value in values.items()
             }
     diagnostics["min_dead_channels"] = diagnostics.pop("min_no_direct_effect_channels")
     if version == 2:
@@ -444,15 +444,18 @@ def test_load_corpus_migrates_legacy_metadata_without_changing_arrays(tmp_path, 
     assert DataGenerator.validate_corpus(loaded) == []
 
 
-@pytest.mark.parametrize(("field", "value", "reason"), (
-    ("edge_types", ["cy", "dc", "dz", "zb", "db", "zc", "cc", "zz"], "edge order"),
-    ("edge_types", list(EDGE_TYPES_EXTENDED), "edge order"),
-    ("edge_base_rates", {"db": 0.5, "dy": 0.2}, "mixes"),
-    ("edge_marginals", {"zb": 0.5, "zy": 0.2}, "mixes"),
-    ("edge_budget", {"db": 1, "dy": 1}, "mixes"),
-    ("edge_budget", [], "mapping"),
-    ("min_no_direct_effect_channels", 7, "conflicting"),
-))
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    (
+        ("edge_types", ["cy", "dc", "dz", "zb", "db", "zc", "cc", "zz"], "edge order"),
+        ("edge_types", list(EDGE_TYPES_EXTENDED), "edge order"),
+        ("edge_base_rates", {"db": 0.5, "dy": 0.2}, "mixes"),
+        ("edge_marginals", {"zb": 0.5, "zy": 0.2}, "mixes"),
+        ("edge_budget", {"db": 1, "dy": 1}, "mixes"),
+        ("edge_budget", [], "mapping"),
+        ("min_no_direct_effect_channels", 7, "conflicting"),
+    ),
+)
 def test_v2_migration_rejects_ambiguous_metadata(tmp_path, corpus, field, value, reason):
     path = tmp_path / "ambiguous-v2.npz"
     _write_legacy_shard(path, corpus, 2, diagnostics_overrides={field: value})
@@ -460,7 +463,9 @@ def test_v2_migration_rejects_ambiguous_metadata(tmp_path, corpus, field, value,
         pg.load_corpus(path)
 
 
-@pytest.mark.parametrize("field", ("edge_types", "edge_base_rates", "edge_marginals", "edge_budget"))
+@pytest.mark.parametrize(
+    "field", ("edge_types", "edge_base_rates", "edge_marginals", "edge_budget")
+)
 def test_current_schema_rejects_legacy_edge_names_at_every_boundary(tmp_path, corpus, field):
     import json
 
@@ -702,7 +707,12 @@ def test_numeric_nested_extension_roundtrips(tmp_path, corpus):
 
 @pytest.mark.parametrize(
     "key",
-    ("adstock_kernel_version", "adstock_kernel_semantics", "outcome_noise_version", "outcome_noise_semantics"),
+    (
+        "adstock_kernel_version",
+        "adstock_kernel_semantics",
+        "outcome_noise_version",
+        "outcome_noise_semantics",
+    ),
 )
 def test_array_valued_semantics_return_validation_errors(corpus, key):
     broken = dict(corpus)
@@ -1058,8 +1068,14 @@ def test_batch_iterator_releases_yielded_arrays_and_uses_config_seed():
     import weakref
 
     cfg = pg.make_scm_prior(
-        n_treatments=1, n_covariates=1, n_latent=1, n_time_steps=8,
-        l_max=1, adstock_burn_in=0, nonlinearity="linear", seed=91,
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=8,
+        l_max=1,
+        adstock_burn_in=0,
+        nonlinearity="linear",
+        seed=91,
     )
     generator = DataGenerator(cfg)
     batches = generator.iter_batches(n_tasks=4, batch_size=2)

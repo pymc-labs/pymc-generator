@@ -195,10 +195,22 @@ def test_direct_null_floor_does_not_exclude_indirect_influence():
     from prior_generator.worlds import channel_role
 
     cfg = make_scm_prior(
-        n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=24,
-        nonlinearity="linear", min_no_direct_effect_channels=1,
-        edge_budget={"cy": (1, 1), "cc": (1, 1), "dy": (1, 1), "zy": (1, 1),
-                     "dc": 0, "zc": 0, "dz": 0, "zz": 0},
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=24,
+        nonlinearity="linear",
+        min_no_direct_effect_channels=1,
+        edge_budget={
+            "cy": (1, 1),
+            "cc": (1, 1),
+            "dy": (1, 1),
+            "zy": (1, 1),
+            "dc": 0,
+            "zc": 0,
+            "dz": 0,
+            "zz": 0,
+        },
     )
     world = sample_scm(cfg, seed=3, connect_all=True)
     assert channel_role(world.g, 0) == "feeder"

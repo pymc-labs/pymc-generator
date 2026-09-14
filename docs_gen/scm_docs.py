@@ -91,8 +91,6 @@ def _wrap(inner: str, caption: str | None = None) -> str:
     return f'<figure class="scm-plot">{inner}{cap}</figure>'
 
 
-
-
 def viz_html(plot_fn, w: pg.SCM, *, title: str | None = None, caption: str | None = None) -> str:
     """Return one of the package's ``viz.plot_*`` figures as inline-PNG HTML.
 
@@ -110,5 +108,3 @@ def viz_html(plot_fn, w: pg.SCM, *, title: str | None = None, caption: str | Non
         os.unlink(path)
     img = f'<img src="data:image/png;base64,{b64}" alt="{title or w.name}">'
     return _wrap(img, caption)
-
-

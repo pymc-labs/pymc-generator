@@ -161,7 +161,6 @@ def test_saturate_col_routes_every_family_id_to_its_own_wrapper(family_id, dynam
     np.testing.assert_allclose(routed, _expected_family_column(name, x), rtol=1e-12, atol=1e-12)
 
 
-
 @pytest.mark.parametrize(
     ("n_time_steps", "width"),
     [

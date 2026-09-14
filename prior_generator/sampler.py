@@ -654,7 +654,9 @@ class SCMPrior:
                 "channel-walk amplitude produces flat channel paths"
             )
         _finite_range("channel_hf_sigma_range", minimum=0.0)
-        _, channel_pulse_prob_hi = _finite_range("channel_pulse_prob_range", minimum=0.0, maximum=0.5)
+        _, channel_pulse_prob_hi = _finite_range(
+            "channel_pulse_prob_range", minimum=0.0, maximum=0.5
+        )
         _finite_range("channel_pulse_amp_range", minimum=0.0)
         _finite_range("control_hf_sigma_range", minimum=0.0)
         _finite_range("control_pulse_prob_range", minimum=0.0, maximum=0.5)
@@ -1764,8 +1766,14 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         rows = slice(cell * cfg.draws_per_cell, (cell + 1) * cfg.draws_per_cell)
         corpus["cell_id"][rows] = cell
         corpus["g"][rows] = layout.pack(
-            g_cy=g["g_cy"], g_dc=g["g_dc"], g_dy=g["g_dy"], g_zy=g["g_zy"],
-            g_dz=g["g_dz"], g_zc=g["g_zc"], g_cc=g["g_cc"], g_zz=g["g_zz"],
+            g_cy=g["g_cy"],
+            g_dc=g["g_dc"],
+            g_dy=g["g_dy"],
+            g_zy=g["g_zy"],
+            g_dz=g["g_dz"],
+            g_zc=g["g_zc"],
+            g_cc=g["g_cc"],
+            g_zz=g["g_zz"],
         )
         for key, source in (
             ("treatment_active_mask", "active_treatment"),
@@ -1874,7 +1882,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 spend_raw[row, :, :n_treatments_active] = drawn["channels"]
                 for key, source in draw_fields.items():
                     value = drawn[source]
-                    prefix: tuple[int | slice, ...] = (row, *(slice(size) for size in np.shape(value)))
+                    prefix: tuple[int | slice, ...] = (
+                        row,
+                        *(slice(size) for size in np.shape(value)),
+                    )
                     corpus[key][prefix] = value
                 corpus["adstock_family"][row, :n_treatments_active] = structural["adstock_family"]
                 corpus["support_mask"][row] = support

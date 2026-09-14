@@ -469,8 +469,7 @@ def dense_signal_metrics(
         if n_time_steps >= 2:
             centered_b = baseline[n] - baseline[n].mean()
             centered_contributions = {
-                k: contributions[n, :, k] - contributions[n, :, k].mean()
-                for k in active_channels
+                k: contributions[n, :, k] - contributions[n, :, k].mean() for k in active_channels
             }
         for k in active_channels:
             x, y = spend[n, :, k], contributions[n, :, k]
@@ -504,10 +503,12 @@ def dense_signal_metrics(
                     valid[n, k, metric_index["warmup_ratio"]] = 1
             if n_time_steps >= 2:
                 centered_y = centered_contributions[k]
-                design = np.column_stack([
-                    centered_b,
-                    *(centered_contributions[j] for j in active_channels if j != k),
-                ])
+                design = np.column_stack(
+                    [
+                        centered_b,
+                        *(centered_contributions[j] for j in active_channels if j != k),
+                    ]
+                )
                 sst = float(centered_y @ centered_y)
                 if sst == 0.0:
                     # Persisted constants are exactly reproducible by the intercept.

@@ -168,14 +168,18 @@ def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
 
     ax = axes[0]
     for k in range(n_treatments):
-        ax.plot(weeks, d["channels"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}")
+        ax.plot(
+            weeks, d["channels"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}"
+        )
     ax.set_title(f"{title} — model inputs", fontsize=11, color=INK, loc="left")
     ax.set_ylabel("spend", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
     ax = axes[1]
     for m in range(n_covariates):
-        ax.plot(weeks, d["controls"][:, m], color=PALETTE[m % len(PALETTE)], lw=1.3, label=f"Z{m + 1}")
+        ax.plot(
+            weeks, d["controls"][:, m], color=PALETTE[m % len(PALETTE)], lw=1.3, label=f"Z{m + 1}"
+        )
     for j in range(n_latent):
         ax.plot(
             weeks,
@@ -229,7 +233,13 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     ax = axes[1]
     for k in range(n_treatments):
         if g["g_cy"][k]:  # only channels with a direct edge have a nonzero target
-            ax.plot(weeks, d["contributions"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}")
+            ax.plot(
+                weeks,
+                d["contributions"][:, k],
+                color=PALETTE[k % len(PALETTE)],
+                lw=1.3,
+                label=f"C{k + 1}",
+            )
     ax.set_ylabel("direct contributions", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
@@ -321,9 +331,7 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
         _style_ax(ax)
     for ax in axes[n_treatments:]:
         ax.axis("off")
-    fig.suptitle(
-        f"{title} — per-channel spend vs true contribution", fontsize=11, color=INK
-    )
+    fig.suptitle(f"{title} — per-channel spend vs true contribution", fontsize=11, color=INK)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)

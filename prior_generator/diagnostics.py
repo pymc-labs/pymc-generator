@@ -47,8 +47,8 @@ import numpy as np
 from .outcomes import (
     DEFAULT_QUANTILES,
     _fmt,
-    _q_key,
     _position_indices,
+    _q_key,
     _validate_quantiles,
     outcome_distributions,
 )
@@ -567,8 +567,6 @@ def _validate_names(
     if missing:
         raise ValueError(f"{what} must include {missing}")
     return names
-
-
 
 
 def _validate_lags(lags: Any, n_time_steps: int) -> tuple[int, ...]:

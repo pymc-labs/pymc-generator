@@ -282,7 +282,9 @@ def test_uint8_unit_mask_is_not_silently_read_as_unit_positions(dist):
     assert media.select(np.array([0, 2])).n_units == 2
 
 
-@pytest.mark.parametrize("selector", [[1.9], ["2"], [[0, 2]], np.array([2**64 - 1], dtype=np.uint64)])
+@pytest.mark.parametrize(
+    "selector", [[1.9], ["2"], [[0, 2]], np.array([2**64 - 1], dtype=np.uint64)]
+)
 def test_selectors_reject_lossy_or_malformed_positions(corpus, dist, selector):
     with pytest.raises((TypeError, ValueError, IndexError)):
         outcome_distributions(corpus, worlds=selector)

@@ -273,7 +273,6 @@ class DataGenerator:
 
         return corpus
 
-
     @staticmethod
     def validate_corpus(corpus: dict[str, Any]) -> list[str]:
         """Validate a generated corpus.
@@ -445,9 +444,9 @@ class DataGenerator:
         )
         if not np.allclose(corpus["spend_norm"], expected_spend_norm, rtol=1e-5, atol=1e-7):
             errors.append("spend_norm does not match spend_raw / spend_means")
-        active_spend_sum = (
-            spend_raw * corpus["treatment_active_mask"][:, None, :]
-        ).sum(axis=-1, keepdims=True)
+        active_spend_sum = (spend_raw * corpus["treatment_active_mask"][:, None, :]).sum(
+            axis=-1, keepdims=True
+        )
         expected_spend_share = (
             np.divide(
                 spend_raw,
@@ -893,9 +892,7 @@ class DataGenerator:
                 rebuilt[start : start + length, channel] = 1
                 expected_level = multipliers[n, s_idx] * channel_level[n, channel]
                 if not np.isclose(levels[n, s_idx], expected_level, rtol=1e-6, atol=1e-7):
-                    errors.append(
-                        "channel_shock_level does not match multiplier * channel_level"
-                    )
+                    errors.append("channel_shock_level does not match multiplier * channel_level")
                 if not np.array_equal(
                     corpus["spend_raw"][n, start : start + length, channel],
                     np.full(length, levels[n, s_idx], dtype=np.float32),

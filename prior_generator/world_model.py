@@ -1480,5 +1480,3 @@ def draw_worlds(
         name: (np.asarray(value)[None] if draws == 1 else np.asarray(value))
         for name, value in zip(out_names, vals)
     }
-
-

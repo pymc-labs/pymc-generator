@@ -90,9 +90,11 @@ def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only
     n_widths = min(rw_max, n_time_steps)
     for width in range(1, n_widths + 1):
         smoothness = 0.0 if width == 1 else 1.0 if width == n_widths else width / rw_max
-        index = int(walk_width_index(
-            np.array([smoothness]), n_time_steps, rw_smoothness_max_weeks=rw_max
-        )[0])
+        index = int(
+            walk_width_index(np.array([smoothness]), n_time_steps, rw_smoothness_max_weeks=rw_max)[
+                0
+            ]
+        )
 
         baked = symbolic_random_walk(
             n_time_steps,
@@ -113,8 +115,6 @@ def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only
             eps=pt.as_tensor_variable(eps),
         ).eval()
         np.testing.assert_allclose(by_width, baked, rtol=0, atol=1e-12)
-
-
 
 
 # -- the dynamic graph computes the same function as the static one --------------
@@ -387,8 +387,6 @@ def test_unused_response_priors_do_not_change_concrete_worlds():
 # -- the template as a whole ----------------------------------------------------
 
 
-
-
 def test_template_satisfies_the_additive_identity_on_every_world(template):
     """The exact decomposition must survive the denser dynamic graph."""
     cfg, cells, draw = template
@@ -436,8 +434,6 @@ def test_template_zeroes_inactive_node_slots(template):
                 assert np.abs(arr[:, node]).max() == 0.0, f"{key}[:, {node}] not zeroed"
     unproven = [key for key, seen in seen_inactive.items() if not seen]
     assert not unproven, f"fixture never produced an inactive node for {unproven}"
-
-
 
 
 def test_template_smoothness_changes_the_drawn_world(template):
@@ -492,8 +488,6 @@ def test_template_channels_are_non_negative(template):
         assert np.asarray(drawn["channels"]).min() >= 0.0
 
 
-
-
 @pytest.mark.parametrize(
     "overrides, match",
     (
@@ -533,8 +527,6 @@ def test_compile_cache_is_transparent_to_draws():
             world_model.set_compile_cache_enabled(True)
     for name in ("sales", "channels"):
         np.testing.assert_array_equal(results[True][name], results[False][name])
-
-
 
 
 def test_template_cache_respects_different_outcome_priors():

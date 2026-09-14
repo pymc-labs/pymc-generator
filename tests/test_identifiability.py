@@ -24,7 +24,6 @@ from prior_generator.signal_diagnostics import (
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
-
 def _corpus_arrays(**overrides) -> dict[str, np.ndarray]:
     cfg = pg.make_scm_prior(
         n_treatments=2,
@@ -79,8 +78,6 @@ def test_nonbinding_floor_preserves_generated_arrays(scope, default_arrays):
     assert floored.keys() == default_arrays.keys()
     for key in floored:
         np.testing.assert_array_equal(floored[key], default_arrays[key], err_msg=key)
-
-
 
 
 def test_identifiability_labels_are_optional_metadata_not_features():

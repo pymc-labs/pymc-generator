@@ -38,9 +38,9 @@ from prior_generator.world_model import (
     set_compile_cache_enabled,
 )
 from prior_generator.world_model_template import (
+    build_cell_inputs,
     build_world_model_template,
     compile_template_draw_fn,
-    build_cell_inputs,
 )
 
 CORPUS_NAMES = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
@@ -151,10 +151,14 @@ def make_workload(cfg) -> list[CellWorkload]:
         g = sample_g_additive(rng, cfg, cfg.layout, *counts)
         g_active = _slice_g_active(g, *counts)
         structure = sample_structure(g_active, cfg, rng)
-        cells.append(CellWorkload(
-            g_active, structure, build_cell_inputs(cfg, g, g, structure),
-            int(rng.integers(2**31 - 1)),
-        ))
+        cells.append(
+            CellWorkload(
+                g_active,
+                structure,
+                build_cell_inputs(cfg, g, g, structure),
+                int(rng.integers(2**31 - 1)),
+            )
+        )
     return cells
 
 
@@ -193,7 +197,9 @@ def run_template(cfg, cells: list[CellWorkload], *, draw_names: tuple[str, ...])
     set_compile_cache_enabled(True)
 
     t0 = time.perf_counter()
-    model, _out, _param = build_world_model_template(cfg, cells[0].template_inputs, cfg.n_time_steps)
+    model, _out, _param = build_world_model_template(
+        cfg, cells[0].template_inputs, cfg.n_time_steps
+    )
     t_build = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -263,7 +269,6 @@ def main() -> None:
         print_timing(templ)
         speedup = prod.total_s / templ.total_s if templ.total_s else 0.0
         print(f"  → speedup: {speedup:.2f}x\n")
-
 
 
 if __name__ == "__main__":

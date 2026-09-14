@@ -326,8 +326,6 @@ def test_empty_signal_summary_has_none_quantiles():
     assert all(value is None for value in summary["sales_level_ratio_quantiles"].values())
 
 
-
-
 def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
     from prior_generator import make_scm_prior, sample_prior_predictive
     from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
@@ -852,5 +850,3 @@ def test_default_gate_rejects_low_amplitude_and_collinear_targets():
     assert not ok
     assert any("[FAIL] frac_contrib_rel_std_lt_001" in line for line in lines)
     assert any("[FAIL] frac_contrib_r2_gt_095" in line for line in lines)
-
-

@@ -136,8 +136,6 @@ def test_true_components_columns_reconstruct_sales(kitchen_sink_bundle):
     assert world.identity_error() < 1e-9
 
 
-
-
 def test_bundle_writes_the_text_file_set(kitchen_sink_bundle):
     _world_, out = kitchen_sink_bundle
     assert {path.name for path in out.iterdir()} == set(TEXT_FILES)
@@ -193,8 +191,6 @@ def test_forced_connectivity_connects_every_node_in_every_scenario(tmp_path):
         status = _node_statuses((out / "description.txt").read_text())
         assert len(status) == sc.n_treatments + sc.n_covariates + sc.n_latent
         assert set(status.values()) == {"connected"}, (sc.name, status)
-
-
 
 
 def test_infeasible_forced_scenario_raises_before_writing_anything(tmp_path):
@@ -337,13 +333,21 @@ def test_recorded_custom_recipe_reproduces_bundle(tmp_path):
     custom = replace(SCENARIOS[0], name="custom-direct")
     out = tmp_path / "recorded"
     write_scenario_bundles(
-        out, scenarios=[custom], n_time_steps=24, seed=3,
-        require_path_to_y=True, plots=False, verbose=False,
+        out,
+        scenarios=[custom],
+        n_time_steps=24,
+        seed=3,
+        require_path_to_y=True,
+        plots=False,
+        verbose=False,
     )
     readme = (out / "README.md").read_text()
     code = readme.split("```python\n", 1)[1].split("```", 1)[0]
     result = subprocess.run(
-        [sys.executable, "-c", code], cwd=out, capture_output=True, text=True,
+        [sys.executable, "-c", code],
+        cwd=out,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
     for filename in TEXT_FILES - {"description.txt"}:

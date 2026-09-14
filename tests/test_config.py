@@ -48,8 +48,6 @@ def _one_hot_family_probs(family_keys: tuple[str, ...], selected: str) -> dict[s
     return {key: 1.0 if key == selected else 0.0 for key in family_keys}
 
 
-
-
 @pytest.mark.parametrize(
     ("name", "value"),
     (
@@ -82,14 +80,10 @@ def test_control_pulses_require_a_nonzero_amplitude():
         SCMPrior(control_pulse_prob_range=(0.1, 0.2), control_pulse_amp_range=(0.0, 0.0)).validate()
 
 
-
-
 @pytest.mark.parametrize("value", (np.nan, np.inf, -np.inf, True, "0", [0.0]))
 def test_baseline_floor_must_be_none_or_finite(value):
     with pytest.raises(ValueError, match="baseline_floor must be None or a finite number"):
         SCMPrior(baseline_floor=value).validate()
-
-
 
 
 def test_baseline_floor_scope_rejects_anything_else():
@@ -113,8 +107,12 @@ def test_family_probability_mutation_does_not_affect_another_config():
 
 def test_linear_preset_produces_an_instantaneous_linear_response():
     cfg = pg.make_scm_prior(
-        n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=24,
-        nonlinearity="linear", beta_additive_range=(2.0, 2.0),
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=24,
+        nonlinearity="linear",
+        beta_additive_range=(2.0, 2.0),
         edge_budget={"cy": 2, "cc": 0, "dc": 0, "dz": 0, "dy": 0, "zy": 0, "zc": 0, "zz": 0},
     )
     world = pg.sample_scm(cfg, seed=7)
@@ -194,10 +192,6 @@ def test_sample_structure_ignores_family_probability_mapping_order(
     )
 
 
-
-
-
-
 def test_bad_nonlinearity_rejected():
     with pytest.raises(ValueError, match="nonlinearity"):
         pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="quadratic")
@@ -224,8 +218,6 @@ def test_lmax_must_be_a_positive_integer(l_max):
 def test_rw_smoothness_max_weeks_must_be_a_positive_integer(value):
     with pytest.raises(ValueError, match="rw_smoothness_max_weeks"):
         SCMPrior(rw_smoothness_max_weeks=value).validate()
-
-
 
 
 @pytest.mark.parametrize("name", ("rw_std_sigma", "rw_sales_std_sigma"))
@@ -313,7 +305,6 @@ def test_burn_in_rejects_reproduced_query_overlap():
         )
 
 
-
 def test_burn_in_query_window_boundary_is_exact():
     SCMPrior(n_time_steps=14, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
 
@@ -354,8 +345,6 @@ def test_burn_in_overlap_suggestion_is_an_accepted_horizon(n_time_steps, query_f
     prefix = "raise n_time_steps to at least "
     suggested_horizon = int(message.split(prefix, 1)[1].split(",", 1)[0])
     SCMPrior(**{**kwargs, "n_time_steps": suggested_horizon}).validate()
-
-
 
 
 def test_burn_in_query_window_guard_is_exempt_when_disabled():

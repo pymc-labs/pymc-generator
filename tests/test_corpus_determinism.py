@@ -59,7 +59,6 @@ def test_same_seed_generations_save_byte_identical_shards(tmp_path):
     first = pg.sample_prior_predictive(cfg)
     second = pg.sample_prior_predictive(cfg)
 
-
     paths = []
     for name, corpus in (("first.npz", first), ("second.npz", second)):
         elapsed = float(len(paths) + 1)
@@ -160,8 +159,6 @@ def test_unsupported_schema_versions_are_refused_everywhere(
         pg.load_corpus(good)
 
 
-
-
 def test_persistence_requires_diagnostics(tmp_path):
     path = tmp_path / "unstamped.npz"
     payload = {"sales_raw": np.zeros((1, 4))}
@@ -176,9 +173,7 @@ def test_persistence_requires_diagnostics(tmp_path):
 @pytest.mark.parametrize("version", [99, True, "2"])
 def test_legacy_keys_cannot_override_an_explicit_version(tmp_path, tiny_corpus, version):
     path = tmp_path / "explicit-version.npz"
-    payload = {
-        old: tiny_corpus[new] for old, new in LEGACY_CORPUS_KEYS_V1.items()
-    }
+    payload = {old: tiny_corpus[new] for old, new in LEGACY_CORPUS_KEYS_V1.items()}
     payload["diagnostics"] = np.array(json.dumps({"schema_version": version}))
     np.savez(path, **payload)
     with pytest.raises(ValueError, match="stamped corpora"):

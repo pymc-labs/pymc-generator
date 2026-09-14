@@ -39,10 +39,10 @@ from .sampler import SCMPrior
 from .scenarios import SCENARIOS, Scenario
 from .worlds import SCM, draw_feasible_graph, sample_scm
 
+
 def _require_empty_destination(path: Path) -> None:
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         raise FileExistsError(f"bundle destination must be absent or empty: {path}")
-
 
 
 def write_scm_bundle(
@@ -122,7 +122,6 @@ def write_scm_bundle(
         {f"channel_base_C{k + 1}": d["channels_base"][:, k] for k in range(n_treatments)}
     )
     pd.DataFrame(truth_cols).to_csv(out / "true_components.csv", index=False)
-
 
     (out / "description.txt").write_text(describe_scm(world))
     (out / "dag.dot").write_text(world_to_dot(world))
@@ -230,7 +229,10 @@ def write_scenario_bundles(
         "package_version": __version__,
         "environment": {
             "python": platform.python_version(),
-            **{name: version(name) for name in ("numpy", "scipy", "pymc", "pytensor", "pymc-marketing")},
+            **{
+                name: version(name)
+                for name in ("numpy", "scipy", "pymc", "pytensor", "pymc-marketing")
+            },
         },
         "generation": {
             "seed": seed,
@@ -260,38 +262,44 @@ def write_scenario_bundles(
         "",
     ]
     if tuple(scenarios) == SCENARIOS:
-        command = f"prior-generator --out reproduced-inspection-datasets --seed {seed} --t {n_time_steps}"
+        command = (
+            f"prior-generator --out reproduced-inspection-datasets --seed {seed} --t {n_time_steps}"
+        )
         if require_path_to_y:
             command += " --require-path-to-y"
         if not plots:
             command += " --no-plots"
         lines.extend(["```bash", command, "```", ""])
-    lines.extend([
-        "For any recipe, including custom scenarios, run from this directory:",
-        "",
-        "```python",
-        "import json",
-        "from pathlib import Path",
-        "import prior_generator as pg",
-        "",
-        'recipe = json.loads(Path("recipe.json").read_text())',
-        'for entry in recipe["scenarios"]:',
-        '    world = pg.sample_scm(pg.SCMPrior(**entry["prior"]), seed=entry["seed"],',
-        '                          connect_all=entry["connect_all"],',
-        '                          name=entry["name"], purpose=entry["purpose"])',
-        '    pg.write_scm_bundle(world, Path("reproduced") / entry["folder"],',
-        '                        title=entry["folder"] + ": " + entry["name"],',
-        '                        plots=recipe["generation"]["plots"])',
-        "```",
-        "",
-        "| # | scenario | isolates |",
-        "|---|---|---|",
-        *[f"| {idx} | {sc.name} | {sc.purpose} |" for idx, sc in enumerate(scenarios)],
-        "",
-        "Per folder: `dataset.csv`, `true_components.csv`,",
-        "`description.txt`, and `dag.dot`.",
-    ])
+    lines.extend(
+        [
+            "For any recipe, including custom scenarios, run from this directory:",
+            "",
+            "```python",
+            "import json",
+            "from pathlib import Path",
+            "import prior_generator as pg",
+            "",
+            'recipe = json.loads(Path("recipe.json").read_text())',
+            'for entry in recipe["scenarios"]:',
+            '    world = pg.sample_scm(pg.SCMPrior(**entry["prior"]), seed=entry["seed"],',
+            '                          connect_all=entry["connect_all"],',
+            '                          name=entry["name"], purpose=entry["purpose"])',
+            '    pg.write_scm_bundle(world, Path("reproduced") / entry["folder"],',
+            '                        title=entry["folder"] + ": " + entry["name"],',
+            '                        plots=recipe["generation"]["plots"])',
+            "```",
+            "",
+            "| # | scenario | isolates |",
+            "|---|---|---|",
+            *[f"| {idx} | {sc.name} | {sc.purpose} |" for idx, sc in enumerate(scenarios)],
+            "",
+            "Per folder: `dataset.csv`, `true_components.csv`,",
+            "`description.txt`, and `dag.dot`.",
+        ]
+    )
     if plots:
-        lines.append("Figures: `dag.png`, `timeseries.png`, `decomposition.png`, and `channels.png`.")
+        lines.append(
+            "Figures: `dag.png`, `timeseries.png`, `decomposition.png`, and `channels.png`."
+        )
     (out_root / "README.md").write_text("\n".join(lines) + "\n")
     return written
