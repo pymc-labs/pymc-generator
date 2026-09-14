@@ -9,7 +9,7 @@ facade.
 
 ## Generate one
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(n_treatments=5, n_covariates=3, n_latent=2,
@@ -194,7 +194,7 @@ free of spend at `t' > t`.
 
 Inspect the real arrays:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import corpus
 c = corpus()
 
@@ -210,7 +210,7 @@ finiteness, binary masks, and normalization identities — and returns a list of
 errors (empty means valid). `DataGenerator.generate` runs it for you unless you
 pass `validate=False`.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import corpus
 from prior_generator.data_generator import DataGenerator
 
@@ -223,7 +223,7 @@ print("validation errors:", errors or "none — schema OK ✅")
 The generator records the four invariants in `diagnostics`. You can also check
 the additive identity directly on the stacked arrays:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import corpus
 import numpy as np
 
@@ -266,7 +266,7 @@ sum normalization. `frac_zero_contemporaneous_weight` reports the eligible direc
 channel share whose current-week normalized adstock weight is effectively zero.
 It is reported for inspection, not used to gate a corpus.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import corpus
 from prior_generator.signal_diagnostics import check_signal_gate
 
@@ -295,7 +295,7 @@ PASS alone did not certify either property.
 `save_corpus` writes a compressed, self-describing `.npz` (the `diagnostics` dict
 round-trips as JSON); `load_corpus` reads it back.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import corpus
 import prior_generator as pg
 import tempfile, os, numpy as np
@@ -430,7 +430,7 @@ global support. The v1 conditioned set is `adstock_alpha` (geometric decay) and
 The draws are recorded in the corpus so consumers can expose them as
 conditioning features:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import numpy as np
 import prior_generator as pg
 from prior_generator.slots import PRIOR_COND_LAYOUT

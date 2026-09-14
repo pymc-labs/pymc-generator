@@ -60,7 +60,7 @@ metadata is observable in the corpus; see
 
 ## Verify it yourself
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 import numpy as np
 
@@ -80,7 +80,7 @@ print("  max |lhs − rhs| =", f"{np.abs(lhs - rhs).max():.2e}")
 channel→channel, control→channel, demand→channel. The three columns sum exactly
 to `indirect_effects`.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 import numpy as np
 
@@ -111,7 +111,7 @@ $$
 
 That full sum is exactly what `SCM.reconstruction()` computes:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 import numpy as np
 
@@ -136,7 +136,7 @@ print("reconstruction == sales?     max err =", f"{scm.identity_error():.2e}")
 `plot_decomposition` overlays sales against Σ-components (the identity check),
 then the direct contributions, the baseline components, and the indirect sources.
 
-```python exec="1" source="material-block" html="1"
+```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
 import prior_generator as pg
 

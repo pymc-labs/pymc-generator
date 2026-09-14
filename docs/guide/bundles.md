@@ -29,7 +29,7 @@ pg.write_scm_bundle(scm, "my_world/")
 Here is that call run live against a temporary directory, listing exactly what it
 produced:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import tempfile, os
 from scm_docs import world
 import prior_generator as pg
@@ -66,7 +66,7 @@ reported a decomposition error around `1e-15`.
 
 `description.txt` is the world's story as plain text. The first lines:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 import prior_generator as pg
 
@@ -80,7 +80,7 @@ print("\n".join(text.splitlines()[:28]))
 on other pages; here are the per-channel and decomposition views a bundle
 contains:
 
-```python exec="1" source="material-block" html="1"
+```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
 import prior_generator as pg
 

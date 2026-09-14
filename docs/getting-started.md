@@ -80,7 +80,7 @@ cross-environment bitwise equality is not a supported guarantee.
 A world is drawn from a **prior**. The quickest way to get a well-formed prior is
 a named audit scenario, each of which isolates one causal pathway.
 
-```python exec="1" session="quickstart" source="material-block" result="text"
+```python exec="1" session="quickstart" source="block" result="text"
 import prior_generator as pg
 
 scenario = pg.SCENARIOS[1]                       # "confounded_spend"
@@ -100,7 +100,7 @@ print(f"drew world {scm.name!r}: {scm.n_treatments} channels, "
 DAG with drawn coefficients, node connectivity, per-channel mechanisms, the
 decomposition-identity check, and signal metrics.
 
-```python exec="1" session="quickstart" source="material-block" result="text"
+```python exec="1" session="quickstart" source="block" result="text"
 text = pg.describe_scm(scm)
 print("\n".join(text.splitlines()[:22]))          # first 22 lines
 ```
@@ -132,7 +132,7 @@ print(viz_html(plot_timeseries, scm,
 The reason to *simulate* rather than collect data is that you get the answer —
 and it is exact. Sales equals the sum of its true components to float precision:
 
-```python exec="1" session="quickstart" source="material-block" result="text"
+```python exec="1" session="quickstart" source="block" result="text"
 print("max |Σ components − sales| =", f"{scm.identity_error():.2e}")
 ```
 

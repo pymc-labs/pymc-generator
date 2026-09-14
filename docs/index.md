@@ -61,7 +61,7 @@ PFN pipelines consume — with the decomposition targets baked in.
 Here is one world sampled live during this docs build — its causal graph, its
 observable series, and a machine-checked proof that the decomposition adds up.
 
-```python exec="1" source="material-block" html="1"
+```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
 import prior_generator as pg
 
@@ -69,7 +69,7 @@ w = world(scenario=1, seed=0)          # "confounded_spend"
 print(viz_html(pg.viz.plot_dag, w, caption="The drawn causal graph (D confounds spend)."))
 ```
 
-```python exec="1" source="material-block" html="1"
+```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
 import prior_generator as pg
 
@@ -77,7 +77,7 @@ w = world(scenario=1, seed=0)
 print(viz_html(pg.viz.plot_timeseries, w, caption="What a modeller observes: spend, controls & demand, sales."))
 ```
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 w = world(scenario=1, seed=0)
 print("decomposition identity error:", f"{w.identity_error():.2e}")

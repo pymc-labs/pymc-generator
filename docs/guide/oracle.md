@@ -18,7 +18,7 @@ Draw a world, build its oracle from the world object itself, fit it with
 `pm.sample`, and compare posterior contribution bands against the world's
 decomposition truth:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=28)

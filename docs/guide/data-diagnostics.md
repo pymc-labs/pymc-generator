@@ -28,7 +28,7 @@ corpus | [SCM, ...]
 
 ## A worked pass
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(
@@ -47,7 +47,7 @@ training a model to find something that is barely there; if `Y_noise` sits at
 
 ### Is anything collinear?
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(
@@ -66,7 +66,7 @@ routinely produce a level VIF above 10 with no shared structure at all.
 
 ### What depends on what?
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(
@@ -94,7 +94,7 @@ dependence between innovations; dependence that collapses was shared trend.
 
 ### How do the series move?
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(
@@ -121,7 +121,7 @@ observations.
 
 ### Drill into one world or one node
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(

@@ -14,7 +14,7 @@ mechanism that broke. Each fixes graph sizes and per-edge-type arrow budgets.
 
 ## Build a scenario's prior
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 sc = pg.SCENARIOS[3]                               # channel_halo
@@ -35,7 +35,7 @@ print("→ drew:", f"n_treatments={scm.n_treatments}, "
 One graph drawn from each scenario (seed 0). Notice how the live edge types shift
 from scenario to scenario — that is the pathway each one isolates.
 
-```python exec="1" source="material-block" html="1"
+```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
 import prior_generator as pg
 
@@ -53,7 +53,7 @@ for idx in range(len(pg.SCENARIOS)):
 model must credit them exactly nothing. Dead-end nodes (edges that never reach Y)
 are *never* generated.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 from prior_generator.worlds import node_status
 

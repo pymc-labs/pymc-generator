@@ -8,7 +8,7 @@ it and how to reach every piece.
 
 ## Draw one
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 import prior_generator as pg
 
 # Build a prior directly (or use a named scenario — see the Scenarios guide).
@@ -33,7 +33,7 @@ controls, and demand are 2-D — `(n_time_steps, n_treatments)`,
 `(n_time_steps, n_covariates)`, `(n_time_steps, n_latent)` — while
 scalar-per-week series are 1-D `(n_time_steps,)`.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 scm = world(scenario=4, seed=0)          # kitchen_sink
 
@@ -56,7 +56,7 @@ the realism filter. They are not public top-level arrays in generated corpora.
 
 `.g` holds the active-size DAG blocks — one array per edge type.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 scm = world(4, 0)
 
@@ -69,7 +69,7 @@ for name, block in scm.g.items():
 `.params` holds the drawn coefficients, per-channel mechanism families, random-walk
 parameters, and texture.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 scm = world(4, 0)
 
@@ -84,7 +84,7 @@ print("sat_family:    ", scm.params["sat_family"])
 A handful of pure functions turn `.g` / `.params` into human-readable facts —
 these are exactly what the description and DAG figure use.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 from prior_generator.worlds import (
     node_status, path_to_y, channel_role, mechanism_label, edges_with_coeffs,
@@ -103,7 +103,7 @@ print("active edges:", len(edges_with_coeffs(scm.g, scm.params)))
 The `SCM` object carries three methods for validation and signal — no external
 code needed.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 scm = world(4, 0)
 
@@ -127,7 +127,7 @@ print("spearman       :", sig["spearman"].round(2).tolist())
 assemble the *model-input* table — precisely what `dataset.csv` in a bundle
 contains.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 import numpy as np, pandas as pd
 

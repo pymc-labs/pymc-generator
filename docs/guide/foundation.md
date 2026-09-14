@@ -215,7 +215,7 @@ Here is one graph, drawn live. Latent `D` confounds spend through `D→C` (red)
 while also affecting sales through `D→Y` — the exact mechanism that biases
 naive attribution.
 
-```python exec="1" source="material-block" html="1"
+```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
 import prior_generator as pg
 
@@ -224,7 +224,7 @@ print(viz_html(pg.viz.plot_dag, world(scenario=1, seed=0)))
 
 The same structure, listed as edges with their drawn coefficients:
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" source="block" result="text"
 from scm_docs import world
 from prior_generator.worlds import edges_with_coeffs, node_status
 
