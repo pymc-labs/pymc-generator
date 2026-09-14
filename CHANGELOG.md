@@ -22,6 +22,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   intercept; DOT and plotted DAGs now agree with the executed equations.
 - Refuse nonempty bundle destinations before writing, preventing stale figures
   or scenarios from being paired with newly generated data.
+- Record effective scenario priors, seeds, connectivity, environment versions,
+  and replay instructions in bundles; text-only output no longer advertises PNGs.
 
 ### Added
 

@@ -4,6 +4,18 @@ A **bundle** is a folder a human can audit end-to-end. It is the artifact the
 `prior-generator` CLI writes, and the most direct way to hand a world to someone
 who wants to *read* it rather than load it.
 
+Destinations must be absent or empty; existing artifacts are never overwritten.
+Scenario sets also include `recipe.json`: effective priors, per-scenario seeds,
+connectivity decisions, generation options, and numerical-library versions.
+The generated README provides replay instructions, including custom scenarios.
+Use the same package revision and environment when reproducing a dataset.
+JSON represents tuple-valued ranges as lists, so equivalent descriptions may
+format ranges differently while the generated arrays and graph stay identical.
+
+Graph-search preflight catches exhausted searches before writing. It is not a
+transaction: subsequent sampling, plotting, or filesystem errors can leave a
+partial set. Use a new destination after investigating such a failure.
+
 ## Write one
 
 ```python

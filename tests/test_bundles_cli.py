@@ -357,8 +357,30 @@ def test_cli_writes_the_full_inspection_set(tmp_path):
     result = _cli("--out", str(out_root), "--seed", "3", "--t", "24", "--no-plots")
     assert result.returncode == 0, result.stderr
     assert (out_root / "README.md").is_file()
-    assert {path.name for path in out_root.iterdir()} == {"README.md"} | {
+    assert {path.name for path in out_root.iterdir()} == {"README.md", "recipe.json"} | {
         str(idx) for idx in range(len(SCENARIOS))
     }
     for idx in range(len(SCENARIOS)):
         assert {path.name for path in (out_root / str(idx)).iterdir()} == set(TEXT_FILES)
+
+
+def test_recorded_custom_recipe_reproduces_bundle(tmp_path):
+    from dataclasses import replace
+
+    custom = replace(SCENARIOS[0], name="custom-direct")
+    out = tmp_path / "recorded"
+    write_scenario_bundles(
+        out, scenarios=[custom], n_time_steps=24, seed=3,
+        require_path_to_y=True, plots=False, verbose=False,
+    )
+    readme = (out / "README.md").read_text()
+    code = readme.split("```python\n", 1)[1].split("```", 1)[0]
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=out, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    for filename in TEXT_FILES - {"description.txt"}:
+        assert (out / "0" / filename).read_bytes() == (
+            out / "reproduced" / "0" / filename
+        ).read_bytes()
+    assert "dag.png" not in readme
