@@ -26,6 +26,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   and replay instructions in bundles; text-only output no longer advertises PNGs.
 - Reject lossy, multidimensional, masked, and out-of-range outcome selectors;
   scalar positions retain their unit axis and share diagnostics normalization.
+- Validate quantile levels uniformly in construction and reports, including
+  cached reports with NumPy arrays; reject empty, nonfinite, or repeated levels.
 
 ### Added
 

@@ -225,16 +225,26 @@ def _stat_dict(values: np.ndarray, levels: tuple[float, ...]) -> dict[str, float
     return out
 
 
-def _resolve_levels(levels: Sequence[float] | None, stored: tuple[float, ...]) -> tuple[float, ...]:
-    """The requested quantile levels as floats; ``stored`` when unset.
+def _validate_quantiles(quantiles: Any) -> tuple[float, ...]:
+    """Validate the common nonempty, finite, one-dimensional quantile contract."""
+    values = np.asarray(quantiles)
+    if values.ndim != 1:
+        raise ValueError("quantile levels must be one-dimensional")
+    if values.size == 0:
+        raise ValueError("quantiles is empty")
+    if values.dtype.kind not in "fiu":
+        raise TypeError("quantile levels must be real numbers")
+    if not np.all(np.isfinite(values)) or values.min() < 0.0 or values.max() > 1.0:
+        raise ValueError("quantile levels must be finite and within [0, 1]")
+    levels = tuple(float(q) for q in values)
+    if len(set(levels)) != len(levels):
+        raise ValueError("quantiles repeats a level")
+    return levels
 
-    Every report compares the resolved levels against the levels the
-    distribution was built with to decide whether the cached pooled statistics
-    still answer the question, so the normalization to ``float`` is load
-    bearing: ``[0.05, 0.25]`` and ``(0.05, 0.25)`` are the same request and
-    must not look like two different ones.
-    """
-    return tuple(float(level) for level in levels) if levels else stored
+
+def _resolve_levels(levels: Sequence[float] | None, stored: tuple[float, ...]) -> tuple[float, ...]:
+    """Use stored quantiles only for None; normalize explicit levels for cache lookup."""
+    return stored if levels is None else _validate_quantiles(levels)
 
 
 def _reject_ambiguous_selector(selector: np.ndarray, n_available: int, kind: str) -> None:
@@ -785,9 +795,7 @@ def outcome_distributions(
     -------
     OutcomeDistributions
     """
-    levels = tuple(float(q) for q in quantiles)
-    if not levels or min(levels) < 0.0 or max(levels) > 1.0:
-        raise ValueError(f"quantile levels must be a non-empty subset of [0, 1], got {levels}")
+    levels = _validate_quantiles(quantiles)
     if normalize not in ("none", "sales_scale", "sales_mean"):
         raise ValueError(
             f"normalize must be 'none', 'sales_scale' or 'sales_mean', got {normalize!r}"

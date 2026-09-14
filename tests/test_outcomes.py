@@ -406,6 +406,22 @@ def test_unknown_quantity_and_bad_normalize_raise(corpus):
         outcome_distributions(corpus, quantiles=[1.5])
 
 
+@pytest.mark.parametrize("levels", [[], [np.nan], [np.inf], [[0.5]], 0.5, [-0.1], [0.5, 0.5]])
+def test_invalid_quantiles_fail_consistently(corpus, dist, levels):
+    with pytest.raises(ValueError):
+        outcome_distributions(corpus, quantiles=levels)
+    for report in (dist.summary, dist.table, dist["sales"].summary, dist["sales"].quantiles):
+        with pytest.raises(ValueError):
+            report(levels=levels)
+
+
+def test_numpy_quantiles_can_use_cached_reports_without_series(corpus):
+    lean = outcome_distributions(corpus, quantiles=np.array([0.0, 0.5, 1.0]), keep_series=False)
+    levels = np.asarray(lean.quantile_levels)
+    assert json.dumps(lean.summary(levels)) == json.dumps(lean.summary())
+    assert lean.table(levels=levels) == lean.table()
+
+
 def test_empty_quantity_subset_is_rejected(corpus):
     """An empty selection reports nothing and cannot even build a frame."""
     with pytest.raises(ValueError, match="quantities is empty"):

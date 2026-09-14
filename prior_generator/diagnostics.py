@@ -49,6 +49,7 @@ from .outcomes import (
     _fmt,
     _q_key,
     _position_indices,
+    _validate_quantiles,
     outcome_distributions,
 )
 from .signal_diagnostics import _hf_ratio
@@ -568,17 +569,6 @@ def _validate_names(
     return names
 
 
-def _validate_quantiles(quantiles: Any) -> tuple[float, ...]:
-    if isinstance(quantiles, str) or not isinstance(quantiles, Sequence):
-        raise TypeError("quantiles must be a non-string sequence of levels")
-    levels = tuple(float(q) for q in quantiles)
-    if not levels:
-        raise ValueError("quantiles is empty")
-    if len(set(levels)) != len(levels):
-        raise ValueError(f"quantiles repeats a level: {list(levels)}")
-    if not all(np.isfinite(levels)) or min(levels) < 0.0 or max(levels) > 1.0:
-        raise ValueError(f"quantile levels must be finite and within [0, 1], got {list(levels)}")
-    return levels
 
 
 def _validate_lags(lags: Any, n_time_steps: int) -> tuple[int, ...]:
