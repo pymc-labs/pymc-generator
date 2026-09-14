@@ -558,14 +558,6 @@ class SCMPrior:
         _finite_real("p_long_horizon", self.p_long_horizon, nonnegative=True)
         if self.p_long_horizon > 1.0:
             raise ValueError(f"p_long_horizon must be in [0, 1], got {self.p_long_horizon}")
-        n_val_cells = max(1, int(round(self.val_cell_frac * self.n_cells)))
-        if n_val_cells >= self.n_cells:
-            n_val_cells = self.n_cells - 1
-        if n_val_cells < 1:
-            raise ValueError(
-                f"val_cell_frac={self.val_cell_frac} gives {n_val_cells} val cells "
-                f"out of {self.n_cells}; need at least 1 train and 1 val cell"
-            )
 
         # Validate mechanism diversity probabilities.
         def _family_probabilities(name: str, probabilities, family_keys: tuple[str, ...]) -> None:
@@ -682,7 +674,7 @@ class SCMPrior:
                 "channel-walk amplitude produces flat channel paths"
             )
         _finite_range("channel_hf_sigma_range", minimum=0.0)
-        _finite_range("channel_pulse_prob_range", minimum=0.0, maximum=0.5)
+        _, channel_pulse_prob_hi = _finite_range("channel_pulse_prob_range", minimum=0.0, maximum=0.5)
         _finite_range("channel_pulse_amp_range", minimum=0.0)
         _finite_range("control_hf_sigma_range", minimum=0.0)
         _finite_range("control_pulse_prob_range", minimum=0.0, maximum=0.5)
@@ -868,16 +860,7 @@ class SCMPrior:
                     f"adstock_family_probs to the identity family, {horizon_remedy}or lower "
                     "query_frac / l_max."
                 )
-        for name in ("channel_hf_sigma_range", "channel_pulse_amp_range"):
-            lo, hi = getattr(self, name)
-            if not 0.0 <= lo <= hi:
-                raise ValueError(f"{name} must satisfy 0 <= lo <= hi, got {(lo, hi)}")
-        p_lo, p_hi = self.channel_pulse_prob_range
-        if not 0.0 <= p_lo <= p_hi <= 0.5:
-            raise ValueError(
-                f"channel_pulse_prob_range must satisfy 0 <= lo <= hi <= 0.5, got {(p_lo, p_hi)}"
-            )
-        if float(p_hi) > 0.0 and float(self.channel_pulse_amp_range[1]) <= 0.0:
+        if channel_pulse_prob_hi > 0.0 and float(self.channel_pulse_amp_range[1]) <= 0.0:
             raise ValueError(
                 "channel_pulse_prob_range enables pulses but channel_pulse_amp_range "
                 "has zero amplitude — disable pulses via the prob range instead"
