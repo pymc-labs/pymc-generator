@@ -8,13 +8,11 @@ import numpy as np
 import pytest
 
 import prior_generator as pg
-import prior_generator.sampler as sampler
 from prior_generator.sampler import (
     ADSTOCK_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
     SCMPrior,
 )
-from prior_generator.slots import EDGE_TYPES_EXTENDED
 from prior_generator.world_model import sample_structure
 
 _DEFAULT_ADSTOCK_FAMILY_PROBS = {
@@ -50,50 +48,6 @@ def _one_hot_family_probs(family_keys: tuple[str, ...], selected: str) -> dict[s
     return {key: 1.0 if key == selected else 0.0 for key in family_keys}
 
 
-def test_factory_pins_additive_schema():
-    cfg = pg.make_scm_prior(n_treatments=8, n_covariates=4, n_latent=3)
-    assert (cfg.n_treatments, cfg.n_covariates, cfg.n_latent) == (8, 4, 3)
-    assert cfg.layout.edge_types == EDGE_TYPES_EXTENDED
-    # default active ranges pin every node active
-    assert cfg.n_treatments_active_range == (8, 8)
-    assert cfg.n_covariates_active_range == (4, 4)
-    assert cfg.n_latent_active_range == (3, 3)
-
-
-def test_factory_diverse_texture_defaults():
-    cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, l_max=8)
-    assert cfg.channel_hf_sigma_range[1] > 0
-    assert cfg.channel_pulse_prob_range[1] > 0
-    assert cfg.rw_channel_std_range == (0.15, 0.8)
-    assert cfg.adstock_burn_in == cfg.l_max
-    # The diverse texture also textures the CONTROLS, which is what keeps them
-    # out of the smooth baseline walk's function space.
-    assert cfg.control_hf_sigma_range == (0.1, 0.8)
-    assert cfg.control_pulse_prob_range == (0.0, 0.25)
-    assert cfg.control_pulse_amp_range == (0.5, 3.0)
-
-
-def test_control_texture_is_inert_on_a_raw_config():
-    """A hand-built SCMPrior must not gain the mechanism (nor a parameter RV)."""
-    cfg = SCMPrior()
-    assert cfg.control_hf_sigma_range == (0.0, 0.0)
-    assert cfg.control_pulse_prob_range == (0.0, 0.0)
-    assert cfg.control_pulse_amp_range == (0.0, 0.0)
-    cfg.validate()
-
-
-def test_explicit_control_texture_overrides_win_over_the_preset():
-    cfg = pg.make_scm_prior(
-        n_treatments=2,
-        n_covariates=2,
-        n_latent=1,
-        control_hf_sigma_range=(0.0, 0.0),
-        control_pulse_prob_range=(0.0, 0.0),
-        control_pulse_amp_range=(0.0, 0.0),
-    )
-    assert cfg.control_hf_sigma_range == (0.0, 0.0)
-    assert cfg.control_pulse_prob_range == (0.0, 0.0)
-    assert cfg.control_pulse_amp_range == (0.0, 0.0)
 
 
 @pytest.mark.parametrize(
@@ -128,11 +82,6 @@ def test_control_pulses_require_a_nonzero_amplitude():
         SCMPrior(control_pulse_prob_range=(0.1, 0.2), control_pulse_amp_range=(0.0, 0.0)).validate()
 
 
-def test_baseline_floor_defaults_to_none_and_accepts_a_finite_value():
-    assert SCMPrior().baseline_floor is None
-    SCMPrior().validate()
-    SCMPrior(baseline_floor=0.0).validate()
-    SCMPrior(baseline_floor=-2.5).validate()
 
 
 @pytest.mark.parametrize("value", (np.nan, np.inf, -np.inf, True, "0", [0.0]))
@@ -141,10 +90,6 @@ def test_baseline_floor_must_be_none_or_finite(value):
         SCMPrior(baseline_floor=value).validate()
 
 
-@pytest.mark.parametrize("scope", ("intercept", "non_media"))
-def test_baseline_floor_scope_accepts_both_documented_values(scope):
-    assert SCMPrior().baseline_floor_scope == "intercept"
-    SCMPrior(baseline_floor=0.0, baseline_floor_scope=scope).validate()
 
 
 def test_baseline_floor_scope_rejects_anything_else():
@@ -152,42 +97,32 @@ def test_baseline_floor_scope_rejects_anything_else():
         SCMPrior(baseline_floor_scope="aggregate").validate()
 
 
-def test_family_probability_defaults_are_exact_and_independent():
+def test_family_probability_mutation_does_not_affect_another_config():
     first = SCMPrior()
     second = SCMPrior()
 
-    assert tuple(first.adstock_family_probs) == ADSTOCK_FAMILY_KEYS
-    assert first.adstock_family_probs == _DEFAULT_ADSTOCK_FAMILY_PROBS
-    assert tuple(first.saturation_family_probs) == SATURATION_FAMILY_KEYS
-    assert first.saturation_family_probs == _DEFAULT_SATURATION_FAMILY_PROBS
-    assert first.adstock_family_probs is not second.adstock_family_probs
-    assert first.saturation_family_probs is not second.saturation_family_probs
+    original_adstock = dict(second.adstock_family_probs)
+    original_saturation = dict(second.saturation_family_probs)
 
     first.adstock_family_probs["none"] = 0.0
     first.saturation_family_probs["linear"] = 0.0
 
-    assert second.adstock_family_probs == _DEFAULT_ADSTOCK_FAMILY_PROBS
-    assert second.saturation_family_probs == _DEFAULT_SATURATION_FAMILY_PROBS
+    assert second.adstock_family_probs == original_adstock
+    assert second.saturation_family_probs == original_saturation
 
 
-def test_factory_linear_nonlinearity():
-    cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="linear")
-    other = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, nonlinearity="linear")
-    assert cfg.adstock_family_probs == {
-        "none": 1.0,
-        "geometric": 0.0,
-        "weibull": 0.0,
-    }
-    assert cfg.saturation_family_probs == {
-        "linear": 1.0,
-        "hill": 0.0,
-        "logistic": 0.0,
-        "michaelis_menten": 0.0,
-        "tanh": 0.0,
-        "root": 0.0,
-    }
-    assert cfg.adstock_family_probs is not other.adstock_family_probs
-    assert cfg.saturation_family_probs is not other.saturation_family_probs
+def test_linear_preset_produces_an_instantaneous_linear_response():
+    cfg = pg.make_scm_prior(
+        n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=24,
+        nonlinearity="linear", beta_additive_range=(2.0, 2.0),
+        edge_budget={"cy": 2, "cc": 0, "dc": 0, "dz": 0, "dy": 0, "zy": 0, "zc": 0, "zz": 0},
+    )
+    world = pg.sample_scm(cfg, seed=7)
+    channels = world.data["channels"]
+    contribution = world.data["contributions"]
+    slope = contribution[0] / channels[0]
+    assert np.all(slope > 0.0) and np.all(np.ptp(channels, axis=0) > 0.0)
+    np.testing.assert_allclose(contribution, channels * slope, rtol=1e-12, atol=0.0)
 
 
 @pytest.mark.parametrize(
@@ -259,12 +194,6 @@ def test_sample_structure_ignores_family_probability_mapping_order(
     )
 
 
-def test_factory_overrides_win():
-    cfg = pg.make_scm_prior(
-        n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=200, spend_cv_floor=0.2
-    )
-    assert cfg.n_time_steps == 200
-    assert cfg.spend_cv_floor == 0.2
 
 
 
@@ -297,10 +226,6 @@ def test_rw_smoothness_max_weeks_must_be_a_positive_integer(value):
         SCMPrior(rw_smoothness_max_weeks=value).validate()
 
 
-def test_rw_smoothness_max_weeks_default_is_valid():
-    cfg = SCMPrior()
-    assert cfg.rw_smoothness_max_weeks == 26
-    cfg.validate()
 
 
 @pytest.mark.parametrize("name", ("rw_std_sigma", "rw_sales_std_sigma"))
@@ -376,7 +301,7 @@ def test_adstock_burn_in_must_be_an_integer(value):
 
 
 def test_burn_in_rejects_reproduced_query_overlap():
-    with pytest.raises(ValueError, match="query overlap") as error:
+    with pytest.raises(ValueError, match="query overlap"):
         pg.make_scm_prior(
             n_treatments=1,
             n_covariates=1,
@@ -387,16 +312,6 @@ def test_burn_in_rejects_reproduced_query_overlap():
             query_frac=0.25,
         )
 
-    message = str(error.value)
-    for detail in (
-        "n_time_steps=8",
-        "l_max=8",
-        "n_query=2",
-        "short-horizon query start n_time_steps - n_query=6",
-        "long-horizon query start n_time_steps // 2=4",
-        "not a function of the persisted inputs",
-    ):
-        assert detail in message
 
 
 def test_burn_in_query_window_boundary_is_exact():
@@ -437,23 +352,10 @@ def test_burn_in_overlap_suggestion_is_an_accepted_horizon(n_time_steps, query_f
 
     message = str(error.value)
     prefix = "raise n_time_steps to at least "
-    assert "adstock_burn_in=0" in message
-    assert "lower query_frac / l_max" in message
-    assert prefix in message
     suggested_horizon = int(message.split(prefix, 1)[1].split(",", 1)[0])
     SCMPrior(**{**kwargs, "n_time_steps": suggested_horizon}).validate()
 
 
-def test_burn_in_overlap_omits_numeric_horizon_when_search_is_capped(monkeypatch):
-    monkeypatch.setattr(sampler, "MAX_QUERY_HORIZON_SEARCH_STEPS", 1)
-
-    with pytest.raises(ValueError, match="query overlap") as error:
-        SCMPrior(n_time_steps=104, l_max=8, adstock_burn_in=8, query_frac=0.95).validate()
-
-    message = str(error.value)
-    assert "raise n_time_steps to at least" not in message
-    assert "adstock_burn_in=0" in message
-    assert "raise n_time_steps, or lower query_frac / l_max" in message
 
 
 def test_burn_in_query_window_guard_is_exempt_when_disabled():

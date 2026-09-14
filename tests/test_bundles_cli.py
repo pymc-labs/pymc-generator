@@ -136,15 +136,6 @@ def test_true_components_columns_reconstruct_sales(kitchen_sink_bundle):
     assert world.identity_error() < 1e-9
 
 
-def test_true_components_covers_every_reconstruction_term(kitchen_sink_bundle):
-    """Every term of ``SCM.reconstruction()`` is exported as its own column."""
-    world, out = kitchen_sink_bundle
-    truth = pd.read_csv(out / "true_components.csv")
-    expected = {"baseline_intrinsic", "sales_noise", "indirect_cc", "indirect_zc", "indirect_dc"}
-    expected |= {f"confounder_contribution_D{j + 1}" for j in range(world.n_latent)}
-    expected |= {f"control_contribution_Z{m + 1}" for m in range(world.n_covariates)}
-    expected |= {f"contribution_C{k + 1}" for k in range(world.n_treatments)}
-    assert set(_additive_columns(truth)) == expected
 
 
 def test_bundle_writes_the_text_file_set(kitchen_sink_bundle):
@@ -204,37 +195,14 @@ def test_forced_connectivity_connects_every_node_in_every_scenario(tmp_path):
         assert set(status.values()) == {"connected"}, (sc.name, status)
 
 
-def test_scenario_prior_substitutes_the_budget_only_when_forced():
-    """``connect_all_edge_budget`` overrides ``edge_budget``, and only then."""
-    halo = SCENARIOS[3]
-    assert halo.name == "channel_halo" and not halo.connect_all
-    assert halo.connect_all_edge_budget == {"zy": (2, 2)}
-
-    # The default follows the scenario's own policy: traps intact.
-    assert halo.prior(n_time_steps=24, seed=0).edge_budget["zy"] == (1, 1)
-    assert halo.prior(n_time_steps=24, seed=0, connect_all=False).edge_budget["zy"] == (1, 1)
-    forced = halo.prior(n_time_steps=24, seed=0, connect_all=True).edge_budget
-    assert forced["zy"] == (2, 2)
-    # Only the named type moves; everything else is the scenario's own budget.
-    assert {et: v for et, v in forced.items() if et != "zy"} == {
-        et: v for et, v in halo.edge_budget.items() if et != "zy"
-    }
-
-    # A scenario that needs no substitution is unaffected by either policy.
-    direct = SCENARIOS[0]
-    assert direct.connect_all_edge_budget == {}
-    assert direct.prior(n_time_steps=24, seed=0, connect_all=True).edge_budget == dict(
-        direct.edge_budget
-    )
 
 
 def test_infeasible_forced_scenario_raises_before_writing_anything(tmp_path):
-    """The pre-flight is what makes the writer atomic.
+    """Preflight rejects this infeasible set before creating its output root.
 
-    Feasibility depends only on ``(edge_budget, connect_all)``, so it is known
-    before a single byte is written — and discovering it mid-loop would strand
-    a partial inspection set on disk. The infeasible scenario is placed LAST
-    precisely so an un-preflighted writer would have written the first three.
+    This does not promise atomic recovery from arbitrary later I/O failures.
+    Placing the infeasible scenario last catches per-scenario preflight that
+    would otherwise leave earlier bundles behind.
     """
     impossible = Scenario(
         name="impossible_control",

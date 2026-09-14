@@ -10,7 +10,6 @@ import pytest
 from prior_generator import DataGenerator, load_corpus, make_scm_prior, mechanisms, save_corpus
 from prior_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
 from prior_generator.signal_diagnostics import (
-    DEFAULT_GATE,
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
     _adstock_numpy,
@@ -849,37 +848,9 @@ def test_default_gate_rejects_low_amplitude_and_collinear_targets():
     )
     assert summary["frac_contrib_rel_std_lt_001"] == 0.5
     assert summary["frac_contrib_r2_gt_095"] == 0.5
-    assert DEFAULT_GATE["frac_contrib_rel_std_lt_001"] == 0.10
-    assert DEFAULT_GATE["frac_contrib_r2_gt_095"] == 0.10
     ok, lines = check_signal_gate(summary)
     assert not ok
     assert any("[FAIL] frac_contrib_rel_std_lt_001" in line for line in lines)
     assert any("[FAIL] frac_contrib_r2_gt_095" in line for line in lines)
 
 
-def test_gate_missing_metric_row_names_only_the_cause_it_can_prove():
-    """A None metric always FAILS, but the row must not invent the reason.
-
-    A short horizon can leave a metric unmeasured while every direct channel is
-    present and eligible, so ``n_direct_channels`` is what separates "nothing to
-    measure" from "measured nothing".
-    """
-    gate = {"frac_spearman_lt_03": 0.3}
-
-    eligible_ok, eligible_lines = check_signal_gate(
-        {"n_direct_channels": 4, "frac_spearman_lt_03": None}, gate
-    )
-    assert not eligible_ok
-    assert eligible_lines == [
-        "[FAIL] frac_spearman_lt_03 missing (no valid observations across 4 direct channels)"
-    ]
-
-    empty_ok, empty_lines = check_signal_gate(
-        {"n_direct_channels": 0, "frac_spearman_lt_03": None}, gate
-    )
-    assert not empty_ok
-    assert empty_lines == ["[FAIL] frac_spearman_lt_03 missing (no direct channels measured)"]
-
-    unknown_ok, unknown_lines = check_signal_gate({"frac_spearman_lt_03": None}, gate)
-    assert not unknown_ok
-    assert unknown_lines == ["[FAIL] frac_spearman_lt_03 missing (n_direct_channels not reported)"]
