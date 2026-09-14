@@ -240,10 +240,10 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
 
 def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
     cfg = _config(
-        confounding_strength_range=(0.6, 0.6),
+        confounding_strength_range=(0.2, 0.4),
         n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=(0.5, 0.5),
+        channel_shock_length_range=(2, 3),
+        channel_shock_level_range=(0.5, 1.0),
     )
     world = sample_scm(cfg, seed=43, max_eps_draws=40)
     n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in

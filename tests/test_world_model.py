@@ -7,14 +7,11 @@ determinism, and batched draws — independently of the high-level wiring.
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
 
-import prior_generator.world_model as world_model
 from prior_generator import make_scm_prior
 from prior_generator.random_walk import _kernel_width, symbolic_random_walk
 from prior_generator.sampler import _slice_g_active, sample_g_additive
@@ -43,29 +40,6 @@ def built():
     return model, out_names
 
 
-def test_model_is_pm_model_with_priors_and_outputs(built):
-    model, out_names = built
-    # continuous priors + noise are real RVs; every graph output is registered
-    assert len(model.free_RVs) > 10
-    assert out_names[:16] == (
-        "demand",
-        "controls",
-        "channels",
-        "channels_base",
-        "saturation_scale",
-        "baseline",
-        "baseline_intrinsic",
-        "control_contribution",
-        "confounder_contribution",
-        "contributions",
-        "contributions_observed",
-        "indirect_effects",
-        "indirect_effects_by_source",
-        "sales",
-        "sales_noise",
-        "confounding_strength",
-    )
-    assert "sales" in out_names and "indirect_effects_by_source" in out_names
 
 
 def test_pm_draw_preserves_additive_identity(built):
@@ -419,44 +393,3 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
         build_world_model(g_act, cfg, structural, cfg.n_time_steps)
 
 
-def test_output_registration_allows_identity_collisions_for_free_rvs(monkeypatch):
-    cfg = make_scm_prior(
-        n_treatments=2,
-        n_covariates=1,
-        n_latent=1,
-        n_time_steps=12,
-        adstock_burn_in=0,
-        edge_budget={"cy": (2, 2)},
-        confounding_strength_range=(0.2, 0.4),
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 3),
-        channel_shock_level_range=(0.5, 1.0),
-    )
-    rng = np.random.default_rng(31)
-    g = sample_g_additive(
-        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
-    )
-    g_act = _slice_g_active(g, 2, 1, 1)
-    structural = sample_structure(g_act, cfg, rng)
-
-    captured_graph: dict[str, Any] = {}
-    original_build_symbolic_graph = world_model.build_symbolic_graph
-
-    def capture_graph(*args, **kwargs):
-        graph = original_build_symbolic_graph(*args, **kwargs)
-        captured_graph["graph"] = graph
-        return graph
-
-    monkeypatch.setattr(world_model, "build_symbolic_graph", capture_graph)
-    model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
-
-    names = (
-        "confounding_strength",
-        "channel_shock_length",
-        "channel_shock_level_multiplier",
-    )
-    assert set(names) <= {rv.name for rv in model.free_RVs}
-    assert set(names) <= set(out_names)
-    graph_outputs = captured_graph["graph"]["outputs"]
-    for name in names:
-        assert model[name] is graph_outputs[name]

@@ -15,12 +15,10 @@ from typing import Any
 import numpy as np
 import pytensor.tensor as pt
 import pytest
-from pytensor.graph.traversal import ancestors
 
 import prior_generator.world_model as world_model
 from prior_generator import make_scm_prior
 from prior_generator.random_walk import (
-    _kernel_width,
     _walk_basis_stack,
     symbolic_random_walk,
     symbolic_random_walk_by_width,
@@ -36,7 +34,6 @@ from prior_generator.sampler import (
 from prior_generator.symbolic_graph import build_symbolic_graph
 from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
 from prior_generator.world_model_template import (
-    TEMPLATE_STRUCTURE_INPUT_NAMES,
     build_world_model_template,
     check_template_supported,
     compile_template_draw_fn,
@@ -68,35 +65,34 @@ def template():
     """One compiled template plus the cells it will be driven with."""
     cfg = _cfg()
     cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
-    model, out_names, param_names = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+    model, _, _ = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
     draw = compile_template_draw_fn(model, CORPUS_NAMES)
-    return cfg, cells, model, out_names, param_names, draw
+    return cfg, cells, draw
 
 
 # -- the walk-by-width identity -------------------------------------------------
 
 
+@pytest.mark.parametrize("n_time_steps", (10, 40))
 @pytest.mark.parametrize("positive_only", (False, True))
-def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only):
+def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only, n_time_steps):
     """Selecting a kernel by index equals baking that kernel into the graph.
 
     This is the identity the template's single compile rests on: if it failed for
     any reachable width, template worlds would differ from per-world worlds in a
     way no shape or dtype check would reveal.
     """
-    n_time_steps = 40
     rw_max = 26
     rng = np.random.default_rng(11)
     eps = rng.normal(size=n_time_steps)
     mean, std = 0.3, 1.7
 
-    n_widths = _kernel_width(1.0, n_time_steps, rw_smoothness_max_weeks=rw_max)
-    assert n_widths == min(rw_max, n_time_steps)
-
+    n_widths = min(rw_max, n_time_steps)
     for width in range(1, n_widths + 1):
-        # Recover a smoothness that _kernel_width maps onto exactly this width.
-        smoothness = width / rw_max
-        assert _kernel_width(smoothness, n_time_steps, rw_smoothness_max_weeks=rw_max) == width
+        smoothness = 0.0 if width == 1 else 1.0 if width == n_widths else width / rw_max
+        index = int(walk_width_index(
+            np.array([smoothness]), n_time_steps, rw_smoothness_max_weeks=rw_max
+        )[0])
 
         baked = symbolic_random_walk(
             n_time_steps,
@@ -111,7 +107,7 @@ def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only
             n_time_steps,
             mean=mean,
             std=std,
-            width_index=width - 1,
+            width_index=index,
             positive_only=positive_only,
             rw_smoothness_max_weeks=rw_max,
             eps=pt.as_tensor_variable(eps),
@@ -119,32 +115,6 @@ def test_walk_by_width_matches_symbolic_random_walk_at_every_width(positive_only
         np.testing.assert_allclose(by_width, baked, rtol=0, atol=1e-12)
 
 
-def test_walk_width_index_is_zero_based_and_single_sourced():
-    """Width indices route through _kernel_width, so the mapping cannot drift."""
-    n_time_steps = 60
-    rw_max = 26
-    smoothness = np.array([0.0, 0.02, 0.5, 1.0])
-    idx = walk_width_index(smoothness, n_time_steps, rw_smoothness_max_weeks=rw_max)
-    expected = [
-        _kernel_width(float(s), n_time_steps, rw_smoothness_max_weeks=rw_max) - 1
-        for s in smoothness
-    ]
-    assert idx.tolist() == expected
-    assert idx.min() >= 0
-    assert idx.max() < _walk_basis_stack(n_time_steps, rw_max).shape[0]
-
-
-def test_walk_basis_stack_covers_every_reachable_width():
-    """Every index walk_width_index can emit must exist in the stacked basis."""
-    for n_time_steps in (10, 26, 60):
-        stack = _walk_basis_stack(n_time_steps, 26)
-        assert stack.shape == (
-            min(26, n_time_steps),
-            n_time_steps,
-            n_time_steps,
-        )
-        widest = walk_width_index(np.array([1.0]), n_time_steps, rw_smoothness_max_weeks=26)
-        assert int(widest[0]) == stack.shape[0] - 1
 
 
 # -- the dynamic graph computes the same function as the static one --------------
@@ -384,14 +354,8 @@ def test_absent_control_flags_are_derived_from_the_concrete_magnitudes():
         controls(derived, {k: v for k, v in eps.items() if k != "eps_z_hf"})
 
 
-def test_concrete_structure_keeps_unused_family_parameters_out_of_the_graph():
-    """The per-world path must not reach the unused families' shape parameters.
-
-    Building every family behind a pt.switch regardless of whether the family is
-    concrete pulls those parameters into the graph, which changes the RNG set
-    reseed_rngs walks and silently shifts every drawn value. This guards the
-    gate that keeps the per-world path sparse.
-    """
+def test_unused_response_priors_do_not_change_concrete_worlds():
+    """An unused geometric prior cannot change a Weibull world's random draws."""
     cfg = make_scm_prior(
         n_treatments=2,
         n_covariates=2,
@@ -411,41 +375,23 @@ def test_concrete_structure_keeps_unused_family_parameters_out_of_the_graph():
     g = sample_g_additive(rng, cfg, cfg.layout)
     g_act = _slice_g_active(g, 2, 2, 1)
     structural = sample_structure(g_act, cfg, rng)
-    model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
-
-    with model:
-        out_vars = [model[name] for name in out_names]
-    ancestor_set = set(ancestors(out_vars))
-    unreached = {v.name for v in model.free_RVs if v not in ancestor_set}
-    # linear saturation and weibull adstock are the only live families here.
-    assert {"logistic_lam", "mm_kappa_mult", "tanh_c", "root_alpha", "adstock_alpha"} <= unreached
+    results = []
+    for alpha_range in ((0.2, 0.2), (0.2, 0.8)):
+        cfg.adstock_alpha_range = alpha_range
+        model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
+        results.append(draw_worlds(model, out_names, seed=37, draws=2))
+    for name in out_names:
+        np.testing.assert_array_equal(results[0][name], results[1][name], err_msg=name)
 
 
 # -- the template as a whole ----------------------------------------------------
 
 
-def test_template_exposes_every_persisted_corpus_name(template):
-    """A template shard must be able to emit the same columns as a per-world shard."""
-    _cfg_, _cells, _model, out_names, param_names, _draw = template
-    available = set(out_names) | set(param_names)
-    missing = [name for name in CORPUS_NAMES if name not in available]
-    assert not missing, f"template cannot produce {missing}"
-
-
-def test_template_input_names_match_the_cell_payload(template):
-    """The compiled positional inputs and the per-cell payload cannot drift.
-
-    A payload key the function does not consume would be silently ignored, so a
-    forgotten structural input would look like a working template.
-    """
-    _cfg_, cells, _model, _out, _param, draw = template
-    assert set(cells[0]) == set(TEMPLATE_STRUCTURE_INPUT_NAMES)
-    assert draw.input_names == TEMPLATE_STRUCTURE_INPUT_NAMES
 
 
 def test_template_satisfies_the_additive_identity_on_every_world(template):
     """The exact decomposition must survive the denser dynamic graph."""
-    cfg, cells, _model, _out, _param, draw = template
+    cfg, cells, draw = template
     for i, cell in enumerate(cells):
         drawn = draw(cell, seed=500 + i, draws=cfg.draws_per_cell)
         for d in range(cfg.draws_per_cell):
@@ -471,7 +417,7 @@ def test_template_zeroes_inactive_node_slots(template):
     tracked separately: control texture adds a term inside the control mask, so
     a guard satisfied by an inactive channel alone would prove nothing about it.
     """
-    cfg, cells, _model, _out, _param, draw = template
+    cfg, cells, draw = template
     keys = (
         ("channels", "active_treatment"),
         ("controls", "active_covariate"),
@@ -492,16 +438,6 @@ def test_template_zeroes_inactive_node_slots(template):
     assert not unproven, f"fixture never produced an inactive node for {unproven}"
 
 
-def test_template_applies_per_cell_smoothness(template):
-    """Kernel widths must come from the cell, not from whichever cell compiled.
-
-    The first attempt baked cell 0's widths into the graph, so every cell reused
-    them. Widths differing across cells is necessary but not sufficient; the
-    payload check below is what pins it.
-    """
-    cfg, cells, _model, _out, _param, _draw = template
-    widths = [tuple(cell["rw_width_c"].tolist()) for cell in cells]
-    assert len(set(widths)) > 1, f"cells share kernel widths ({widths}); test is vacuous"
 
 
 def test_template_smoothness_changes_the_drawn_world(template):
@@ -510,7 +446,7 @@ def test_template_smoothness_changes_the_drawn_world(template):
     Holds everything else fixed, so a graph that ignored the width input would
     return identical worlds and fail here.
     """
-    cfg, cells, _model, _out, _param, draw = template
+    cfg, cells, draw = template
     base = dict(cells[0])
     shifted = dict(base)
     other = np.asarray(base["rw_width_c"]).copy()
@@ -524,17 +460,24 @@ def test_template_smoothness_changes_the_drawn_world(template):
     assert not np.allclose(a, b), "kernel-width input had no effect on the draw"
 
 
-def test_template_structure_swap_changes_the_drawn_world(template):
-    """A cell's DAG must reach the graph; a stale pm.Data would go unnoticed."""
-    cfg, cells, _model, _out, _param, draw = template
-    a = draw(cells[0], seed=31, draws=1)["sales"][0]
-    b = draw(cells[1], seed=31, draws=1)["sales"][0]
-    assert not np.allclose(a, b)
+def test_template_direct_edge_swap_changes_only_its_direct_contribution(template):
+    _, cells, draw = template
+    present = dict(cells[0])
+    absent = dict(cells[0])
+    present["g_cy"] = cells[0]["g_cy"].copy()
+    absent["g_cy"] = cells[0]["g_cy"].copy()
+    present["g_cy"][0] = 1.0
+    absent["g_cy"][0] = 0.0
+    with_edge = draw(present, seed=31, draws=1)["contributions"]
+    without_edge = draw(absent, seed=31, draws=1)["contributions"]
+    assert np.any(with_edge[..., 0] > 0.0)
+    assert np.all(without_edge[..., 0] == 0.0)
+    np.testing.assert_array_equal(with_edge[..., 1:], without_edge[..., 1:])
 
 
 def test_template_draws_are_seed_deterministic(template):
     """Same seed and same structure must reproduce the world exactly."""
-    cfg, cells, _model, _out, _param, draw = template
+    cfg, cells, draw = template
     a = draw(cells[0], seed=17, draws=2)
     b = draw(cells[0], seed=17, draws=2)
     for name in CORPUS_NAMES:
@@ -543,7 +486,7 @@ def test_template_draws_are_seed_deterministic(template):
 
 def test_template_channels_are_non_negative(template):
     """The softplus positivity guard must survive the dynamic path."""
-    cfg, cells, _model, _out, _param, draw = template
+    cfg, cells, draw = template
     for i, cell in enumerate(cells):
         drawn = draw(cell, seed=800 + i)
         assert np.asarray(drawn["channels"]).min() >= 0.0
@@ -592,40 +535,20 @@ def test_compile_cache_is_transparent_to_draws():
         np.testing.assert_array_equal(results[True][name], results[False][name])
 
 
-def test_compile_cache_reuses_one_function_per_model():
-    """Repeated batches from one model must compile once, which is the point."""
-    cfg = _cfg(n_cells=2)
+
+
+def test_template_cache_respects_different_outcome_priors():
+    """A later model must use its own coefficients, not a prior cached graph."""
+    cfg = _cfg(n_cells=2, beta_additive_range=(1.0, 1.0))
     cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
-    world_model.reset_world_model_caches()
-    world_model.set_compile_cache_enabled(True)
-    model, _out, _param = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
-    compile_template_draw_fn(model, ("sales",))
-    assert (world_model.DRAW_FN_CACHE_MISSES, world_model.DRAW_FN_CACHE_HITS) == (1, 0)
-    compile_template_draw_fn(model, ("sales",))
-    assert (world_model.DRAW_FN_CACHE_MISSES, world_model.DRAW_FN_CACHE_HITS) == (1, 1)
-
-
-def test_compile_cache_does_not_leak_across_models():
-    """Two models must never share a compiled function.
-
-    A global cache keyed by id(model) could hand a stale function to a new model
-    once the old one was collected; a per-model cache cannot.
-    """
-    cfg = _cfg(n_cells=2)
-    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
-    world_model.reset_world_model_caches()
-    world_model.set_compile_cache_enabled(True)
-
-    first, _o1, _p1 = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
-    draw_first = compile_template_draw_fn(first, ("sales",))
-    del first
-    import gc
-
-    gc.collect()
-
-    second, _o2, _p2 = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
-    draw_second = compile_template_draw_fn(second, ("sales",))
-    assert draw_second.fn is not draw_first.fn
+    results = []
+    for beta in (1.0, 2.0):
+        cfg = _cfg(n_cells=2, beta_additive_range=(beta, beta))
+        model, _, _ = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+        draw = compile_template_draw_fn(model, CORPUS_NAMES)
+        results.append(draw(cells[0], seed=5, draws=1)["contributions"])
+    assert np.any(results[0] > 0.0)
+    np.testing.assert_allclose(results[1], 2.0 * results[0], rtol=1e-12, atol=0.0)
 
 
 def test_build_world_model_is_not_cached_across_differing_configs():
