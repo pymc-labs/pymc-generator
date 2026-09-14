@@ -23,33 +23,35 @@ from prior_generator.symbolic_graph import build_symbolic_graph
 
 
 def _float32_storage_budget(*terms: np.ndarray) -> np.ndarray:
-    """Elementwise worst-case residual of an identity over float32-persisted terms.
+    """Bound float32 rounding plus float64 reconstruction summation error.
 
-    ``sample_prior_predictive`` evaluates every decomposition component in
-    float64 and stores it as float32, so reading one back gives
-    ``stored = exact + delta`` with ``|delta| <= ulp32(exact) / 2``. A
-    reconstruction identity re-adds several such terms, nothing forces their
-    roundings to cancel, and the float64 re-addition itself contributes ~1e-16
-    relative — eight orders below the float32 term — so the residual is bounded
-    ELEMENTWISE by the sum of the individual half-ulps returned here.
-
-    This is a derivation, not a fitted constant: it cannot be tightened without
-    assuming the roundings cancel, and it leaves no room for a real decomposition
-    error to hide. Measured over five corpus seeds the worst element used
-    61-82% of the budget, while the ``1e-3 * max|sales|`` magic numbers this
-    replaced were 12756x / 17496x / 8948x the observed residual — loose enough
-    that a +0.05% corruption of ``contributions_raw`` still passed.
-
-    ``np.spacing`` IS the float32 ulp at each magnitude, so exact zeros and
-    subnormals need no special case. Terms carrying a trailing component axis
-    (``contributions_raw``, ``*_contribution``, ``indirect_effects_by_source``)
-    are reduced over it, matching the ``.sum(-1)`` in the identity itself.
+    Promote each float32 spacing before halving: half of the smallest float32
+    subnormal is representable in float64, but would underflow in float32.
+    Component axes contribute one rounding allowance per stored scalar.
+    The standard gamma bound covers at most ``n_terms - 1`` additions.
     """
     budget = np.zeros(())
+    magnitude = np.zeros(())
+    n_terms = 0
     for term in terms:
-        half_ulp = 0.5 * np.spacing(np.abs(np.asarray(term, dtype=np.float32)))
-        budget = budget + half_ulp.reshape(*term.shape[:2], -1).sum(-1, dtype=np.float64)
-    return budget
+        values = np.asarray(term, dtype=np.float32).reshape(*term.shape[:2], -1)
+        half_ulp = np.spacing(np.abs(values)).astype(np.float64) * 0.5
+        budget = budget + half_ulp.sum(-1)
+        magnitude = magnitude + np.abs(values.astype(np.float64)).sum(-1)
+        n_terms += values.shape[-1]
+    roundoff = max(n_terms - 1, 0) * (np.finfo(np.float64).eps / 2)
+    return np.nextafter(budget + roundoff / (1.0 - roundoff) * magnitude, np.inf)
+
+
+def test_storage_budget_covers_values_rounded_to_zero():
+    smallest = np.float64(np.finfo(np.float32).smallest_subnormal)
+    exact = np.array([[smallest / 4]])
+    stored = exact.astype(np.float32)
+    residual = np.abs(exact - stored.astype(np.float64))
+    budget = _float32_storage_budget(stored)
+    assert np.all(residual > 0.0)
+    assert np.all(residual <= budget)
+    assert np.all(budget < smallest)
 
 
 @pytest.fixture(scope="module")

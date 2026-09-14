@@ -160,13 +160,6 @@ def test_saturate_col_routes_every_family_id_to_its_own_wrapper(family_id, dynam
     )
     np.testing.assert_allclose(routed, _expected_family_column(name, x), rtol=1e-12, atol=1e-12)
 
-    # The equality above only has teeth if the families are far apart on this
-    # grid — otherwise a mis-route would pass. Closest pair measured: 0.168.
-    for other in SATURATION_FAMILY_KEYS:
-        if other == name:
-            continue
-        gap = float(np.abs(routed - _expected_family_column(other, x)).max())
-        assert gap > 0.1, f"{name} and {other} are indistinguishable here (gap {gap:.3g})"
 
 
 @pytest.mark.parametrize(

@@ -222,8 +222,6 @@ def test_shocked_world_preserves_every_decomposition_identity():
     )
     for error in (additive_error, telescoping_error, baseline_error, full_error):
         assert error.max() < 1e-9
-        assert error[inside].max() < 1e-9
-        assert error[~inside].max() < 1e-9
 
 
 @pytest.mark.parametrize("level_multiplier", (0.0, 0.5))
@@ -283,8 +281,6 @@ def test_persisted_shocked_corpus_preserves_float32_decomposition_inside_and_out
     )
     for error in errors:
         assert error.max() <= tolerance
-        assert error[inside].max() <= tolerance
-        assert error[~inside].max() <= tolerance
     shocked_contributions = persisted["contributions_raw"][
         persisted["channel_shock_mask"].astype(bool)
     ]
