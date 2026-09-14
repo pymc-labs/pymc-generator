@@ -643,6 +643,19 @@ def test_numeric_nested_extension_roundtrips(tmp_path, corpus):
 
 
 @pytest.mark.parametrize(
+    "key",
+    ("adstock_kernel_version", "adstock_kernel_semantics", "outcome_noise_version", "outcome_noise_semantics"),
+)
+def test_array_valued_semantics_return_validation_errors(corpus, key):
+    broken = dict(corpus)
+    signal = dict(corpus["diagnostics"]["signal"])
+    signal[key] = np.array([signal[key], signal[key]])
+    broken["diagnostics"] = dict(corpus["diagnostics"], signal=signal)
+    errors = DataGenerator.validate_corpus(broken)
+    assert any("semantics are not supported" in error for error in errors)
+
+
+@pytest.mark.parametrize(
     "diagnostics",
     (np.array(["{}"]), np.array("{not json"), np.array("[]")),
 )

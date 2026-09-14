@@ -14,6 +14,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   vocabularies and prevent legacy keys from overriding an explicit version.
 - Validate every identifiability extension as a finite real numeric array before
   accepting or saving it; valid numeric extensions remain supported.
+- Report malformed scalar kernel/noise metadata as validation errors instead of
+  raising ambiguous NumPy truth-value exceptions.
 
 ### Added
 

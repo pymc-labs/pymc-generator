@@ -807,17 +807,19 @@ class DataGenerator:
                     "diagnostics signal frac_zero_contemporaneous_weight must be None or a float "
                     "in [0, 1]"
                 )
-            if (
-                signal_diagnostics.get("adstock_kernel_semantics")
-                != "normalized-causal-minmax-weibull-density"
-                or signal_diagnostics.get("adstock_kernel_version") != 3
+            for prefix, label, semantics, version in (
+                ("adstock_kernel", "adstock kernel", "normalized-causal-minmax-weibull-density", 3),
+                ("outcome_noise", "outcome noise", OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION),
             ):
-                errors.append("diagnostics signal adstock kernel semantics are not supported")
-            if (
-                signal_diagnostics.get("outcome_noise_semantics") != OUTCOME_NOISE_SEMANTICS
-                or signal_diagnostics.get("outcome_noise_version") != OUTCOME_NOISE_VERSION
-            ):
-                errors.append("diagnostics signal outcome noise semantics are not supported")
+                actual_semantics = signal_diagnostics.get(f"{prefix}_semantics")
+                actual_version = signal_diagnostics.get(f"{prefix}_version")
+                if (
+                    not isinstance(actual_semantics, str)
+                    or actual_semantics != semantics
+                    or not _is_integer(actual_version)
+                    or actual_version != version
+                ):
+                    errors.append(f"diagnostics signal {label} semantics are not supported")
             outcome_std_mode = signal_diagnostics.get("outcome_std_mode")
             if not isinstance(outcome_std_mode, str) or outcome_std_mode not in (
                 "relative",
