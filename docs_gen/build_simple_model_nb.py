@@ -41,8 +41,6 @@ cells = [
     ),
     code(
         "%matplotlib inline\n"
-        "import warnings\n"
-        "warnings.filterwarnings('ignore')\n"
         "\n"
         "import os\n"
         "import tempfile\n"
@@ -180,13 +178,10 @@ cells = [
         "    return pd.DataFrame(rows)\n"
         "\n"
         "def geometry(idata, label, seconds):\n"
-        '    """Sampler-side facts over EVERY posterior variable, unrounded.\n'
+        '    """Raw R-hat and bulk ESS over posterior variables, including deterministics.\n'
         "\n"
-        "    Deterministics included on purpose: it keeps this table exactly as\n"
-        "    conservative as pymc's own convergence warning, so the two can never\n"
-        "    disagree about how healthy a fit looks. `az.rhat` / `az.ess` are used\n"
-        "    directly because `az.summary` rounds r-hat to 2 significant figures,\n"
-        "    which hides exactly the 1.01-1.05 band this notebook cares about.\n"
+        "    Round only the displayed table, never the values used for decisions.\n"
+        "    Library warnings remain visible and may cover additional diagnostics.\n"
         '    """\n'
         "    stats = idata['sample_stats'] if 'sample_stats' in idata else idata.sample_stats\n"
         "    rhat = az.rhat(idata)\n"
@@ -194,9 +189,9 @@ cells = [
         "    return {\n"
         "        'model': label,\n"
         "        'divergences': int(np.asarray(stats['diverging']).sum()),\n"
-        "        'max_rhat': round(max(float(np.nanmax(rhat[v])) for v in rhat.data_vars), 4),\n"
-        "        'min_ess_bulk': round(min(float(np.nanmin(ess[v])) for v in ess.data_vars)),\n"
-        "        'seconds': round(seconds),\n"
+        "        'max_rhat': max(float(np.nanmax(rhat[v])) for v in rhat.data_vars),\n"
+        "        'min_ess_bulk': min(float(np.nanmin(ess[v])) for v in ess.data_vars),\n"
+        "        'seconds': float(seconds),\n"
         "    }\n"
         "\n"
         "print('scored weeks:', world.n_time_steps - START, 'of', world.n_time_steps)"

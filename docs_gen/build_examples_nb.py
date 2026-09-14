@@ -47,8 +47,6 @@ cells = [
     ),
     code(
         "%matplotlib inline\n"
-        "import warnings\n"
-        "warnings.filterwarnings('ignore')      # hide harmless tqdm/ipywidgets notices\n"
         "\n"
         "import os\n"
         "import tempfile\n"
