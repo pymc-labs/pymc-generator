@@ -16,6 +16,8 @@ read the migration notes before upgrading.
 - Tag releases reuse CI's locked verification and native package build, then
   prepare draft GitHub Releases with wheel, source archive, conda channel, and
   SHA-256 checksums. PyPI/TestPyPI publishing and its unused permissions are removed.
+- Source archives now include the complete test suite and developer/documentation
+  support files. CI exercises the unpacked archive independently of the checkout.
 - Outcome distributions and generated-data diagnostics, with selectable quantities,
   pooled or per-world summaries, explicit validity masks, and optional signal gates.
 - Auditable world equations, realized parameters, and exogenous innovations;

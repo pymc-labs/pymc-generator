@@ -1,10 +1,8 @@
 """MkDocs build hook.
 
-Puts the repo-root ``docs_gen`` directory on ``sys.path`` so the executable code
-blocks (``markdown-exec``) can ``from scm_docs import ...`` a shared, cached
-world sampler — the SCM draw is a few seconds of PyTensor work, so caching it
-across pages keeps the whole build to a minute or two. Also forces the headless
-matplotlib backend before any figure is drawn.
+Adds the repo-root ``docs_gen`` directory to ``sys.path`` so executable Markdown
+blocks can share its cached world sampler. Selects the headless Matplotlib
+backend before any figure is drawn.
 
 The path is (re)asserted in ``on_page_markdown`` — right before each page's
 markdown is converted (which is when markdown-exec runs the code blocks) —

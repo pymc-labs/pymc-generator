@@ -86,6 +86,11 @@ The smoke command exercises generation, reconstruction, and persisted-corpus
 validation. CI also runs it against a wheel installed into a clean environment
 with runtime dependencies taken from `uv.lock`.
 
+Source archives also include the complete tests, benchmarks, documentation and
+its hooks/helpers, lockfile, and developer configuration. CI installs the archive
+into a fresh locked environment, collects the full suite (including slow cases),
+and executes both the installed-package smoke and a real documentation example.
+
 ## Conda artifacts
 
 The native build has its own conda environment; it does not change your base

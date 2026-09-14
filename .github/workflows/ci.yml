@@ -87,6 +87,30 @@ jobs:
           uv pip install --python "${RUNNER_TEMP}/wheel-smoke/bin/python" --no-deps dist/*.whl
           "${RUNNER_TEMP}/wheel-smoke/bin/python" -I scripts/smoke_install.py
           "${RUNNER_TEMP}/wheel-smoke/bin/prior-generator" --help
+      - name: Exercise the self-contained source archive
+        run: |
+          mkdir "$RUNNER_TEMP/source-smoke"
+          tar -xf dist/prior_generator-*.tar.gz -C "$RUNNER_TEMP/source-smoke"
+          cd "$RUNNER_TEMP/source-smoke"/prior_generator-*
+          export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/source-environment"
+          uv sync --locked --extra dev --extra docs
+          uv run --no-sync pytest tests/ --collect-only --runslow -q
+          uv run --no-sync python -I scripts/smoke_install.py
+          uv run --no-sync python - <<'PY'
+          import runpy
+          import prior_generator as pg
+          from mkdocs.config import load_config
+
+          load_config("mkdocs.yml")
+          hooks = runpy.run_path("mkdocs_hooks.py")
+          hooks["on_page_markdown"]("")
+          import scm_docs
+
+          errors = pg.DataGenerator.validate_corpus(scm_docs.corpus())
+          if errors:
+              raise SystemExit("\n".join(errors))
+          print("Source documentation example passes")
+          PY
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
