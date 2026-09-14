@@ -6,8 +6,8 @@ Imported by ``markdown-exec`` code blocks (``docs_gen`` is on ``sys.path`` via
 * ``world`` / ``corpus`` — sample ONE world (or a small corpus) and memoize it,
   so a page can plot, describe, and validate the *same* draw across many blocks
   and the build only pays for the (few-second) PyTensor work once.
-* ``fig_html`` / ``viz_html`` — turn a matplotlib figure into inline SVG / PNG
-  HTML. A block does ``print(viz_html(...))``: returning the string (rather than
+* ``viz_html`` — turn a package plot into inline PNG HTML.
+  A block does ``print(viz_html(...))``: returning the string (rather than
   printing here) is what lets markdown-exec capture it into the page instead of
   onto stdout. The figure is wrapped in a light card that reads in both the
   light and dark site themes.
@@ -17,14 +17,12 @@ from __future__ import annotations
 
 import base64
 import functools
-import io
 import os
 import tempfile
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 import prior_generator as pg  # noqa: E402
 
@@ -36,7 +34,7 @@ import prior_generator.viz  # noqa: E402,F401
 
 INK, MUTED, GRID = "#1f2937", "#64748b", "#e2e8f0"
 
-plt.rcParams.update(
+matplotlib.rcParams.update(
     {
         "figure.dpi": 130,
         "savefig.dpi": 130,
@@ -93,20 +91,6 @@ def _wrap(inner: str, caption: str | None = None) -> str:
     return f'<figure class="scm-plot">{inner}{cap}</figure>'
 
 
-def fig_html(fig=None, *, caption: str | None = None) -> str:
-    """Return the current (or given) matplotlib figure as inline-SVG HTML.
-
-    Use as ``print(fig_html())`` inside a ``markdown-exec`` block — returning the
-    string (rather than printing here) is what lets markdown-exec capture it, so
-    the figure lands in the page instead of on stdout.
-    """
-    fig = fig or plt.gcf()
-    buf = io.StringIO()
-    fig.savefig(buf, format="svg", bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    svg = buf.getvalue()
-    svg = svg[svg.index("<svg") :]  # drop the XML/DOCTYPE preamble
-    return _wrap(svg, caption)
 
 
 def viz_html(plot_fn, w: pg.SCM, *, title: str | None = None, caption: str | None = None) -> str:
@@ -128,8 +112,3 @@ def viz_html(plot_fn, w: pg.SCM, *, title: str | None = None, caption: str | Non
     return _wrap(img, caption)
 
 
-def weeks(w: pg.SCM):
-    """Convenience: ``0..n_time_steps-1`` week index for a world."""
-    import numpy as np
-
-    return np.arange(w.n_time_steps)

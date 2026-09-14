@@ -3,10 +3,6 @@
    ========================================================================== */
 
 :root {
-  --pg-teal: #0ea5e9;
-  --pg-emerald: #10b981;
-  --pg-indigo: #6366f1;
-  --pg-amber: #f59e0b;
   --pg-grad: linear-gradient(100deg, #0ea5e9 0%, #14b8a6 45%, #6366f1 100%);
 
   --md-primary-fg-color: #0d9488;
