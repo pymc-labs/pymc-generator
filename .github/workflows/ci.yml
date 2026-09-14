@@ -140,7 +140,8 @@ jobs:
           persist-credentials: false
       - uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4
         with:
-          miniforge-version: "26.1.1-0"
+          # 26.1.1-0 and -1 have no installer assets; retain conda 26.1.1.
+          miniforge-version: "26.1.1-3"
           environment-file: conda/build-environment.yml
           activate-environment: prior-generator-build
           auto-activate: false
