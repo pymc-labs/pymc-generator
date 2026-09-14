@@ -159,7 +159,7 @@ nav:
       - Interrogating the data: guide/data-diagnostics.md
   - Examples:
       - End-to-end tour: examples/index.ipynb
-      - Simple configurable corpus: examples/simple-model.ipynb
+      - MMM recovery case study: examples/simple-model.ipynb
   - API reference:
       - Overview: reference/index.md
       - Configuration: reference/config.md
