@@ -1,20 +1,16 @@
 # The posterior oracle
 
-Ground truth answers *what happened*; the exact posterior on the observed data
-answers *what is knowable* — the identification floor. An amortized model
-(e.g. a PFN) is judged against the second: "PFN at oracle parity" is only a
-meaningful claim if the oracle runs on **the same generative model, priors and
-all**, that produced the data.
+The oracle is a **structure-known, plug-in reference model**, not the exact
+posterior of the complete data-generating process and not a universal recovery
+bound. It shares the generator's outcome-side prior definitions and response
+functions, while treating observed channels and controls as fixed inputs.
+Their likelihoods given latent demand or baseline innovations are omitted.
 
-prior-generator owns that model — every world is one drawable `pm.Model`
-([`build_world_model`](../reference/world-model.md#prior_generator.world_model.build_world_model))
-— and exposes its observed-data variant
-([`build_oracle_model`](../reference/world-model.md#prior_generator.world_model.build_oracle_model)):
-the same structure and the *same prior definitions* with the world's dataset
-attached, so `pm.sample` yields the posterior a NUTS fit can usually reach.
-Weibull-adstock worlds are the exception: their two carryover parameters use
-Metropolis rather than NUTS. Consumers should use it for oracle baselines,
-never re-implement it.
+Use [`build_oracle_model`](../reference/world-model.md#prior_generator.world_model.build_oracle_model)
+to compare a fitted reference posterior with known simulation truth. Interpret
+that comparison under the conditioning assumptions below and report convergence
+diagnostics. `pm.sample` generally uses NUTS; Weibull carryover parameters require
+Metropolis with the pinned upstream stack.
 
 ## The recipe
 
@@ -33,7 +29,7 @@ print("free RVs:", sorted(rv.name for rv in oracle.free_RVs))
 print("posterior series:", sorted(d.name for d in oracle.deterministics))
 ```
 
-Then fit and compare (a short fit on this small world takes ~half a minute):
+Then fit and compare; runtime and mixing depend on the realized mechanisms:
 
 ```python
 import pymc as pm
@@ -54,17 +50,18 @@ print("90% band coverage:", float(covered.mean()))
 Compare the oracle's `contributions` against the world's
 **`contributions_observed`** (the response evaluated on the observed spend) —
 that is the quantity an MMM fit on observables estimates. The do()-style
-`contributions` truth additionally removes upstream influence from spend and is
-not identifiable from the observables alone.
+`contributions` truth additionally removes upstream influence from spend.
+Recovering that causal target requires assumptions beyond an observational fit.
 
-### Two latent modes, two different posteriors
+### Two latent representations
 
 `oracle_model()` takes `latent="marginal"` (the **default**) or
-`latent="sampled"`, and they expose different variables. Marginal mode
-integrates the outcome-side Gaussian latents analytically — no latent-walk
-dimensions, an exact multivariate-normal likelihood — which is why it samples
-far better; sampled mode keeps the walks as explicit RVs so you can look at
-them.
+`latent="sampled"`. For unfloored Gaussian walks, marginal mode analytically
+integrates the outcome-side latents in the sampled specification, with the
+numerical covariance guard described below. The parameter marginals therefore
+represent the same plug-in model, apart from that guard, but the exposed latent
+variables differ. Marginalization reduces dimension; actual mixing and runtime
+still need measurement.
 
 | | `latent="marginal"` (default) | `latent="sampled"` |
 | --- | --- | --- |
@@ -75,9 +72,9 @@ them.
 
 So the default oracle has **no `baseline` and no `demand` deterministic**: its
 `sales_mu` is `E[sales | θ]` and excludes every latent walk realization. Ask for
-`latent="sampled"` when you need posterior baseline or demand paths, and expect
-the `O(n³)` Cholesky per gradient in marginal mode to be the cheaper trade at
-weekly horizons.
+`latent="sampled"` when you need posterior baseline or demand paths. Marginal
+mode trades fewer sampled dimensions for an `O(n³)` Cholesky factorization per
+likelihood evaluation; neither representation is uniformly cheaper.
 
 What is comparable, in both modes: `contributions` against
 `world.data["contributions_observed"]` (exactly), and `sales_mu` against
@@ -89,21 +86,20 @@ column before comparing, or sum `baseline_intrinsic`, `confounder_contribution`,
 and `control_contribution`. Comparing the two baseline labels without this
 adjustment includes the realized observation noise in the recovery error.
 
-Because the oracle runs under the same prior the world was drawn from, the
-comparison is apples-to-apples for a PFN trained on corpora from the same
-config — including [ACE prior-conditioning](corpus.md#prior-conditioning-ace)
-intervals, which `SCM.oracle_model()` picks up automatically when enabled.
+The shared prior definitions make this a useful reference for PFNs trained with
+the same configuration, including [ACE prior-conditioning](corpus.md#prior-conditioning-ace)
+intervals that `SCM.oracle_model()` picks up automatically. Shared priors alone do
+not remove the plug-in conditioning qualification.
 
 ## What the oracle is — and is not
 
-`build_oracle_model` keeps everything upstream of the observation exact and
-documents six explicit, **mode-dependent** qualifications (the same six, in the
-same order, as the API reference):
+The outcome-side response functions and priors are shared with generation.
+The API reference documents these mode-dependent qualifications:
 
 1. **Structure-known.** The true DAG, mechanism families, and walk smoothness
-   are given. This is the *structure-known* oracle — an **upper bound** for any
-   method that must also infer structure. A structure-unknown oracle would
-   marginalize over graphs and is out of scope.
+   are given. Extra structural information is useful, but does not establish
+   a universal upper bound when this fit omits information from the inputs.
+   A structure-unknown reference would marginalize over graphs.
 2. **Plug-in conditioning on the observed inputs.** Spend and controls enter as
     data. The information they carry about latent demand through `p(C | D)` /
     `p(Z | D)` is not modeled. This also deliberately does **not** model
@@ -124,9 +120,9 @@ same order, as the API reference):
    Marginal mode integrates `RW_D` and `RW_B` with their exact observed-window
    covariances and adds the iid `RW_Y` variance to the diagonal; sampled mode
    keeps the full-horizon walk transforms and the same exact iid `RW_Y`
-   likelihood. The `1e-12 I` covariance floor in marginal mode is a
-   factorization guard only — its implied `1e-6` standard deviation is ~`1e-6`
-   of any realistic sales sd and cannot carry inference.
+   likelihood. Marginal mode also adds `1e-12 I` as a numerical factorization
+   guard. Its `1e-6` standard-deviation scale should be assessed against the
+   chosen sales units, rather than assumed negligible at every scale.
 
 4. **Posterior-series labels.** Marginal mode has no `demand` and no
    `baseline` deterministic; its full-length `sales_mu` is `E[sales | θ]` and

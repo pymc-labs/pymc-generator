@@ -72,64 +72,27 @@ def _walk_operator_scale(columns: np.ndarray) -> float:
 
 @lru_cache(maxsize=64)
 def _centred_walk_scale(n_time_steps: int, width: int) -> float:
-    """RMS amplitude of the centred, smoothed Brownian path for unit innovations.
+    """RMS amplitude of a centred, smoothed path with unit Gaussian innovations.
 
-    The walk is ``mean + std * (A @ eps) / c`` where ``A = centre . movavg .
-    cumsum`` is a FIXED linear operator and ``c`` is the constant returned
-    here, ``sqrt(tr(A A^T) / n_time_steps)``. Dividing by this constant instead
-    of by the path's own realized standard deviation is what keeps the map
-    injective: normalizing by ``walk.std()`` makes ``eps -> walk`` invariant to
-    ``eps -> k * eps``, leaving the likelihood exactly flat along the radial
-    direction of an ``n_time_steps``-dimensional latent, which no amount of
-    step-size tuning can fix.
+    For the fixed operator ``A = centre @ movavg @ cumsum``, return
+    ``c = sqrt(tr(A @ A.T) / n_time_steps)``. The signed walk
+    ``mean + std * A @ eps / c`` then satisfies ``E[var_pop(walk)] = std**2``.
+    This is an expected variance, not the realized variance of each draw.
 
-    The price is that ``std`` becomes the walk's EXPECTED amplitude
-    (``E[var(walk)] == std ** 2``) rather than its exact realized one. The gain
-    is that the walk is now an ordinary multivariate normal with covariance
-    ``(std / c) ** 2 * A A^T`` -- a distribution with a density, which the
-    normalized version did not have.
+    Constant calibration removes the radial scale invariance introduced by
+    dividing each path by its own standard deviation. It does not make the
+    map injective: centring gives rank at most ``n_time_steps - 1``, and
+    smoothing can reduce it further. The signed walk is a degenerate Gaussian
+    on an affine subspace, without a full-dimensional Lebesgue density.
+    Independent observation noise with positive variance makes the sales
+    covariance full rank; it does not make the latent walk full rank.
 
-    That calibration is unsatisfiable at ``n_time_steps == 1``: centring a
-    one-week path subtracts its only value, so ``A`` is the zero operator,
-    ``c`` is 0, and no finite ``std`` scaling can give the path the population
-    variance ``std ** 2`` a single point cannot have. Rescaling by ``c`` would
-    divide by zero, and defining the path as its ``mean`` instead would quietly
-    return a walk with no amplitude and no injectivity — ``eps -> walk`` would
-    map every innovation vector to the same constant, the exact flat-likelihood
-    failure this normalization exists to avoid. A single-week walk is therefore
-    not defined at all: :func:`_kernel_width` rejects the horizon for every
-    entry point in this module (the top-level config separately requires
-    ``n_time_steps >= 4``).
-
-    In generation, this function's ``n_time_steps`` argument is the FULL horizon
-    ``n_time_steps_full`` — the reported ``n_time_steps`` plus ``adstock_burn_in``. Persisted
-    ``param_rw_*_std`` labels declare each random walk's expected standard
-    deviation over ``n_time_steps_full``. ``param_rw_y_std`` is different: ``RW_Y`` is iid
-    observation noise, so its label is its exact per-week Normal standard
-    deviation and carries no smoothness or walk operator. Because each random
-    walk path is divided by a fixed constant rather than by its own realized
-    standard deviation, random-walk scale is realized only in expectation. It
-    is therefore neither the realized standard deviation of an individual path
-    nor a standard deviation measured only over the reported window.
-    ``smoothness`` maps to an absolute kernel width in weeks, governed by
-    ``rw_smoothness_max_weeks`` and capped at ``n_time_steps_full``. For positive-only
-    walks, ``std`` is the pre-softplus amplitude, so ``rw_c`` is excluded from
-    the signed-walk table below rather than reported with a misleadingly wide
-    range.
-
-    Across 32 signed random walks from eight worlds at ``n_time_steps=52`` and
-    ``adstock_burn_in=8``, reported-window sd / declared ``std`` was:
-
-    * ``rw_d``: [0.396, 0.927], median 0.690
-    * ``rw_z``: [0.252, 1.985], median 0.868
-    * ``rw_b``: [0.264, 1.809], median 0.814
-
-    This is roughly an 8x spread. Random-walk ``param_rw_*_std`` is therefore
-    a weak label for anything measured on the reported window; consumers should
-    not score it as if it were the realized reported-window standard deviation.
-
-    Column ``j`` of ``A`` is the smoothed, centred step function ``1[t >= j]``,
-    so the whole operator is built in one ``(n_time_steps, n_time_steps)`` pass.
+    A one-week path has ``A = 0`` and no calibratable amplitude, so
+    :func:`_kernel_width` rejects it. In generation the operator spans the
+    reported window plus burn-in. Labels describe this full-path calibration,
+    not the realized reported-window standard deviation. For positive walks,
+    ``std`` is the amplitude before softplus. Unlike these walks, ``RW_Y`` is
+    iid observation noise with an exact per-week Normal standard deviation.
     """
     return _walk_operator_scale(_centred_walk_operator(n_time_steps, width))
 

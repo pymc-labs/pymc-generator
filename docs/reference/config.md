@@ -215,8 +215,8 @@ cfg = make_scm_prior(
 The posterior oracle is a plug-in model for observed channels and controls. It
 does **not** model their likelihood conditional on latent demand or
 `epsilon_b`; consequently, it does not use channel information about this
-rho-induced baseline correlation to infer demand. It remains a
-structure-known upper-bound oracle, not exact joint conditioning.
+rho-induced baseline correlation to infer demand. It is a structure-known
+plug-in reference, not exact joint conditioning or a universal recovery bound.
 
 ## Channel shocks
 

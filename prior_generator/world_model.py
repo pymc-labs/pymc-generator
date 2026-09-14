@@ -1158,15 +1158,14 @@ def build_oracle_model(
 
     Notes
     -----
-    **What is exact, and what is not.** The oracle keeps everything *upstream*
-    of the observation exact and documents six explicit, mode-dependent
-    qualifications:
+    **Reference model, not exact joint conditioning.** Outcome-side priors
+    and response functions are shared with generation, subject to these
+    mode-dependent qualifications:
 
     1. **Structure-known**: the true DAG, mechanism families and walk
-       smoothness are given. This is the structure-known oracle — an upper
-       bound for any method that must also infer structure; a
-       structure-unknown oracle would marginalize over graphs and is out of
-       scope.
+       smoothness are supplied. This is a useful reference fit, not a
+       universal upper bound on recovery: it omits input-likelihood information
+       that another method may use. Marginalizing over graphs is out of scope.
     2. **Plug-in conditioning on the observed inputs**: ``channels`` and
        ``controls`` enter as data (constants). The information they carry
        about latent demand through ``p(C | D)`` / ``p(Z | D)`` is not modeled
@@ -1183,9 +1182,9 @@ def build_oracle_model(
        their exact observed-window covariances and the iid ``RW_Y`` variance is
        added to the diagonal. ``latent="sampled"`` retains the exact
        full-horizon demand/baseline walk transforms and the same exact iid
-       ``RW_Y`` likelihood. The ``1e-12 I`` covariance floor in marginal mode
-       is only a factorization guard: its implied ``1e-6`` standard deviation
-       is roughly ``1e-6`` of any realistic sales sd and cannot carry inference.
+       ``RW_Y`` likelihood. Marginal mode adds ``1e-12 I`` as a numerical
+       factorization guard. Its ``1e-6`` standard-deviation scale must be
+       assessed relative to the chosen sales units; it is not always negligible.
     4. **Posterior-series labels**: marginal mode has no ``demand`` or
        ``baseline`` deterministic. Its full-length ``sales_mu`` is
        ``E[sales | theta]`` and excludes every latent walk realization.
