@@ -35,6 +35,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   extrapolated production-speed claims.
 - Remove the single-choice `texture` factory argument. Default ranges and
   explicit range overrides are unchanged.
+- Replace eager `DataGenerator.generate_batches` with lazy `iter_batches`;
+  omitted batch seeds now use `config.seed`, consistently with `generate`.
 
 ### Added
 

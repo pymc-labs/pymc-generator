@@ -944,7 +944,7 @@ def test_datagenerator_rejects_one_task_cell_split():
     with pytest.raises(ValueError, match="n must be >= 2"):
         DataGenerator(cfg).generate(n_tasks=1, validate=True)
     with pytest.raises(ValueError, match="n must be >= 2"):
-        DataGenerator(cfg).generate_batches(n_tasks=1)
+        DataGenerator(cfg).iter_batches(n_tasks=1)
 
 
 @pytest.mark.parametrize(
@@ -973,7 +973,7 @@ def test_datagenerator_batches_preserve_tasks_without_one_world_batch(
         seed=91,
     )
 
-    batches = DataGenerator(cfg).generate_batches(n_tasks=n_tasks, batch_size=batch_size)
+    batches = DataGenerator(cfg).iter_batches(n_tasks=n_tasks, batch_size=batch_size)
     sizes = tuple(batch["spend_raw"].shape[0] for batch in batches)
 
     assert sizes == expected_sizes
@@ -993,7 +993,29 @@ def test_datagenerator_rejects_one_world_batch_size():
     )
 
     with pytest.raises(ValueError, match="batch_size must be at least 2"):
-        DataGenerator(cfg).generate_batches(n_tasks=2, batch_size=1)
+        DataGenerator(cfg).iter_batches(n_tasks=2, batch_size=1)
+
+
+def test_batch_iterator_releases_yielded_arrays_and_uses_config_seed():
+    import weakref
+
+    cfg = pg.make_scm_prior(
+        n_treatments=1, n_covariates=1, n_latent=1, n_time_steps=8,
+        l_max=1, adstock_burn_in=0, nonlinearity="linear", seed=91,
+    )
+    generator = DataGenerator(cfg)
+    batches = generator.iter_batches(n_tasks=4, batch_size=2)
+    first = next(batches)
+    expected = generator.generate(n_tasks=2, seed=cfg.seed)
+    np.testing.assert_array_equal(first["sales_raw"], expected["sales_raw"])
+    array_ref = weakref.ref(first["spend_raw"])
+    del first
+    assert array_ref() is None
+    second = next(batches)
+    expected = generator.generate(n_tasks=2, seed=cfg.seed + 1)
+    np.testing.assert_array_equal(second["sales_raw"], expected["sales_raw"])
+    with pytest.raises(StopIteration):
+        next(batches)
 
 
 def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):

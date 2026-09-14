@@ -312,8 +312,20 @@ print("diagnostics restored as dict:", isinstance(loaded["diagnostics"], dict))
 ```
 
 The [`DataGenerator`](../reference/corpus.md#prior_generator.data_generator.DataGenerator)
-facade adds batching (`generate_batches`) and generate-and-save
+facade adds lazy batching (`iter_batches`) and generate-and-save
 (`generate_and_save`) on top of the same machinery.
+
+```python
+generator = pg.DataGenerator(cfg)
+for index, batch in enumerate(generator.iter_batches(n_tasks=1000, batch_size=100)):
+    pg.save_corpus(batch, f"corpus-{index:03d}.npz")
+```
+
+Each batch has its own cell-level train/validation split. A one-world remainder
+joins the previous batch. Seeds start at `cfg.seed` unless explicitly supplied
+and increment per batch; batching is reproducible but is not equivalent to one
+larger generation call. Consume the iterator as shown to bound retained data,
+or explicitly call `list(...)` if retaining all batches is intentional.
 
 ### Schema version and the v1 migration
 

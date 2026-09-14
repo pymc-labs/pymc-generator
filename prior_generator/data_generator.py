@@ -18,13 +18,14 @@ Usage:
     corpus = generator.generate(n_tasks=100, seed=42)
 
     # Or generate in batches
-    for batch in generator.generate_batches(n_tasks=1000, batch_size=100, seed=42):
+    for batch in generator.iter_batches(n_tasks=1000, batch_size=100, seed=42):
         process(batch)
 """
 
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,7 +157,7 @@ class DataGenerator:
         if n_tasks is not None and n_tasks <= 0:
             raise ValueError(f"n_tasks must be positive, got {n_tasks}")
 
-        cfg = self._make_config(seed=seed)
+        cfg = dataclasses.replace(self.config, seed=self.config.seed if seed is None else seed)
 
         # sample_prior_predictive truncates before deriving retained-corpus
         # diagnostics and signal labels. Do not independently slice a finalized
@@ -173,14 +174,14 @@ class DataGenerator:
 
         return corpus
 
-    def generate_batches(
+    def iter_batches(
         self,
         n_tasks: int,
         batch_size: int = 100,
-        seed: int = 0,
+        seed: int | None = None,
         validate: bool = True,
-    ) -> list[dict[str, np.ndarray]]:
-        """Generate data in batches of at least two worlds.
+    ) -> Iterator[dict[str, np.ndarray]]:
+        """Yield batches of at least two worlds without retaining earlier batches.
 
         Every corpus carries its own cell-level train/validation split, so a
         batch cannot be a single world.
@@ -190,16 +191,16 @@ class DataGenerator:
         n_tasks : int
             Total number of tasks to generate.
         batch_size : int
-            Number of tasks per batch.
-        seed : int
-            Base random seed.
+            Target tasks per batch; a final single world joins the previous batch.
+        seed : int, optional
+            Base seed, defaulting to config.seed. Batch i uses base_seed + i.
         validate : bool
             Whether to validate each batch.
 
         Returns
         -------
-        list of dict
-            List of corpus dictionaries, one per batch.
+        Iterator of dict
+            Lazy corpus iterator. Retain batches explicitly only when needed.
         """
         if n_tasks <= 0:
             raise ValueError(f"n_tasks must be positive, got {n_tasks}")
@@ -212,23 +213,18 @@ class DataGenerator:
                 "batch_size must be at least 2 for a cell-level train/validation split"
             )
 
-        n_full_batches, remainder = divmod(n_tasks, batch_size)
-        batch_sizes = [batch_size] * n_full_batches
-        if remainder == 1 and batch_sizes:
-            batch_sizes[-1] += 1
-        elif remainder:
-            batch_sizes.append(remainder)
-
-        batches = []
-        for i, batch_tasks in enumerate(batch_sizes):
-            corpus = self.generate(
-                n_tasks=batch_tasks,
-                seed=seed + i,
+        n_batches = (n_tasks + batch_size - 1) // batch_size
+        if n_tasks % batch_size == 1 and n_batches > 1:
+            n_batches -= 1
+        base_seed = self.config.seed if seed is None else seed
+        return (
+            self.generate(
+                n_tasks=batch_size if i < n_batches - 1 else n_tasks - i * batch_size,
+                seed=base_seed + i,
                 validate=validate,
             )
-            batches.append(corpus)
-
-        return batches
+            for i in range(n_batches)
+        )
 
     def generate_and_save(
         self,
@@ -265,18 +261,6 @@ class DataGenerator:
 
         return corpus
 
-    def _make_config(
-        self,
-        seed: int | None = None,
-    ) -> SCMPrior:
-        """Create a SCMPrior with overrides."""
-        cfg = self.config
-        overrides = {}
-
-        if seed is not None:
-            overrides["seed"] = seed
-
-        return dataclasses.replace(cfg, **overrides)
 
     @staticmethod
     def validate_corpus(corpus: dict[str, np.ndarray]) -> list[str]:
