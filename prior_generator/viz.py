@@ -43,8 +43,8 @@ EDGE_STYLE: dict[str, tuple[str, str]] = {
     "dc": ("#e34948", "D→C (confounding)"),
     "zc": ("#eda100", "Z→C"),
     "cc": ("#4a3aa7", "C→C (halo)"),
-    "db": ("#eb6834", "D→B"),
-    "zb": ("#1baf7a", "Z→B"),
+    "db": ("#eb6834", "D→Y"),
+    "zb": ("#1baf7a", "Z→Y"),
     "dz": ("#e87ba4", "D→Z"),
     "zz": ("#008300", "Z→Z"),
 }

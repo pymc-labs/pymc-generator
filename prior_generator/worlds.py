@@ -356,13 +356,13 @@ def edges_with_coeffs(g: dict, params: dict) -> list[tuple[str, str, str, float]
             if g["g_dz"][j, m]:
                 out.append(("dz", f"D{j + 1}", f"Z{m + 1}", float(params["u_dz"][j, m])))
         if g["g_db"][j]:
-            out.append(("db", f"D{j + 1}", "B", float(params["delta_db"][j])))
+            out.append(("db", f"D{j + 1}", "Y", float(params["delta_db"][j])))
     for m in range(n_covariates):
         for k in range(n_treatments):
             if g["g_zc"][m, k]:
                 out.append(("zc", f"Z{m + 1}", f"C{k + 1}", float(params["v_zc"][m, k])))
         if g["g_zb"][m]:
-            out.append(("zb", f"Z{m + 1}", "B", float(params["rho_zb"][m])))
+            out.append(("zb", f"Z{m + 1}", "Y", float(params["rho_zb"][m])))
         for m2 in range(n_covariates):
             if g["g_zz"][m, m2]:
                 out.append(("zz", f"Z{m + 1}", f"Z{m2 + 1}", float(params["gamma_zz"][m, m2])))

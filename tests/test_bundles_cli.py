@@ -60,6 +60,21 @@ def _world(
     )
 
 
+def test_exported_dag_keeps_the_intercept_parentless(tmp_path):
+    from prior_generator.worlds import edges_with_coeffs
+
+    world = _world(4)
+    edges = edges_with_coeffs(world.g, world.params)
+    outcome_edges = [edge for edge in edges if edge[0] in {"db", "zb"}]
+    assert outcome_edges
+    assert all(target == "Y" for _, _, target, _ in outcome_edges)
+    assert not any(target == "B" for _, _, target, _ in edges)
+    out = write_scm_bundle(world, tmp_path / "dag", plots=False)
+    dot = (out / "dag.dot").read_text()
+    for _, source, _, _ in outcome_edges:
+        assert f"{source} -> Y" in dot.replace('"', "")
+
+
 def _additive_columns(frame: pd.DataFrame) -> list[str]:
     return [
         column
