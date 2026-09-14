@@ -24,6 +24,9 @@ read the migration notes before upgrading.
 - Distributions ship inline typing information, with typed lazy public exports
   and no module-wide type-error exemptions. Corpus and graph mappings describe
   their heterogeneous values; generation remains numerically unchanged.
+- Contribution, conduct, security-reporting, and release-review policies now
+  document maintainer responsibilities, scientific evidence requirements, and
+  a reporting fallback when private GitHub vulnerability reporting is unavailable.
 - Outcome distributions and generated-data diagnostics, with selectable quantities,
   pooled or per-world summaries, explicit validity masks, and optional signal gates.
 - Auditable world equations, realized parameters, and exogenous innovations;

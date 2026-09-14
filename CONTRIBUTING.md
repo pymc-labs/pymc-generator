@@ -1,5 +1,22 @@
 # Contributing
 
+## Working with maintainers
+
+This is a PyMC Labs project. Maintainers listed in [CODEOWNERS](.github/CODEOWNERS)
+review contributions and make merge/release decisions. Follow the
+[Code of Conduct](CODE_OF_CONDUCT.md); report sensitive vulnerabilities through
+[the security policy](SECURITY.md), not a public issue.
+
+Open an issue before a substantial API, schema, or scientific-model change.
+Keep pull requests focused and explain the problem, intended behavior, evidence,
+and compatibility impact. Submit only material you have the right to contribute,
+under the project's [MIT license](LICENSE), and preserve upstream attribution.
+
+Tests should protect observable behavior or a plausible regression. For changes
+that do not warrant a permanent test, record an executable smoke check or other
+appropriate evidence. Avoid opaque hashes, implementation-only assertions, and
+loosening numerical tolerances merely to obtain a passing result.
+
 ## Development setup
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (0.9.10 or
@@ -72,6 +89,12 @@ RNG draw order is deliberate: disabled features consume no RNG. Changes to
 draw order, numerical dependencies, or generation semantics require explicit
 evidence and migration notes; cross-platform bitwise equality is not promised.
 
+For scientific or numerical changes, compare representative generated arrays
+before and after, record dependency versions and seeds, and explain any intended
+differences. Recovery examples must report divergences, effective sample sizes,
+convergence diagnostics, and undefined metrics honestly. Passing a build or one
+fit is not evidence of universal identifiability, calibration, or recovery.
+
 ## Build artifacts
 
 Build with locked tools rather than an isolated resolver selecting new versions:
@@ -141,3 +164,15 @@ it is not interchangeable with `uv.lock`.
   publishing it. uv and native conda are the primary installation paths.
   Repository visibility is a separate final readiness decision, never an
   automatic build or release step.
+
+Before publishing a draft, maintainers must check that the release commit has
+passing CI and documentation results, review migration notes and scientific
+limitations, and verify installation from the actual release assets. Preserve
+artifact checksums and platform-specific replay information where applicable.
+Do not overwrite a published tag or replace its artifacts to conceal a defect;
+issue a new version with an explanation.
+
+Before changing repository visibility, separately review source/history for
+secrets and private data, attribution and redistribution rights, available
+repository protections, and all outstanding release-readiness failures. A
+successful local check is not a substitute for a passing remote workflow.
