@@ -365,6 +365,10 @@ class DataGenerator:
                 continue
             if not isinstance(value, np.ndarray):
                 errors.append(f"{key} must be an ndarray")
+        if isinstance(identifiability, dict):
+            for key, value in identifiability.items():
+                if not isinstance(value, np.ndarray):
+                    errors.append(f"identifiability.{key} must be an ndarray")
         if errors:
             return errors
 
@@ -555,10 +559,16 @@ class DataGenerator:
                 errors.append(f"{key} has unsupported dtype {value.dtype}")
             elif not np.isfinite(value).all():
                 errors.append(f"{key} contains NaN or Inf")
-        if has_signal_labels:
-            for key in signal_label_keys:
-                if not np.isfinite(identifiability[key]).all():
-                    errors.append(f"{key} contains NaN or Inf")
+        if isinstance(identifiability, dict):
+            for key, value in identifiability.items():
+                if value.dtype.hasobject or not (
+                    np.issubdtype(value.dtype, np.integer)
+                    or np.issubdtype(value.dtype, np.floating)
+                    or np.issubdtype(value.dtype, np.bool_)
+                ):
+                    errors.append(f"identifiability.{key} has unsupported dtype {value.dtype}")
+                elif not np.isfinite(value).all():
+                    errors.append(f"identifiability.{key} contains NaN or Inf")
 
         positive_sales_scale = (corpus["sales_scale"] > 0.0).all()
         if not positive_sales_scale:
@@ -1251,6 +1261,8 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
                     raise ValueError(f"identifiability.{label} may not have complex dtype")
                 if not _is_real_numeric(value):
                     raise ValueError(f"identifiability.{label} must have a real numeric dtype")
+                if not np.isfinite(value).all():
+                    raise ValueError(f"identifiability.{label} contains NaN or Inf")
                 save_dict[f"identifiability__{label}"] = value
         else:
             if not isinstance(v, np.ndarray):

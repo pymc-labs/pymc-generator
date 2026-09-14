@@ -621,6 +621,28 @@ def test_save_corpus_rejects_non_numeric_identifiability_array(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "value",
+    ([1.0], np.array([object()]), np.array([1j]), np.array([np.nan])),
+)
+def test_nested_extensions_follow_numeric_persistence_contract(tmp_path, corpus, value):
+    broken = dict(corpus)
+    broken["identifiability"] = dict(corpus["identifiability"], extra=value)
+    assert any("identifiability.extra" in error for error in DataGenerator.validate_corpus(broken))
+    with pytest.raises((TypeError, ValueError), match="identifiability.extra"):
+        pg.save_corpus(broken, tmp_path / "invalid-extension.npz")
+
+
+def test_numeric_nested_extension_roundtrips(tmp_path, corpus):
+    extended = dict(corpus)
+    values = np.array([0.25, 0.75])
+    extended["identifiability"] = dict(corpus["identifiability"], extra=values)
+    assert DataGenerator.validate_corpus(extended) == []
+    path = tmp_path / "extension.npz"
+    pg.save_corpus(extended, path)
+    np.testing.assert_array_equal(pg.load_corpus(path)["identifiability"]["extra"], values)
+
+
+@pytest.mark.parametrize(
     "diagnostics",
     (np.array(["{}"]), np.array("{not json"), np.array("[]")),
 )

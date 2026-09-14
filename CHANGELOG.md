@@ -12,6 +12,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 - Require schema metadata at corpus persistence boundaries; reject partial legacy
   vocabularies and prevent legacy keys from overriding an explicit version.
+- Validate every identifiability extension as a finite real numeric array before
+  accepting or saving it; valid numeric extensions remain supported.
 
 ### Added
 
