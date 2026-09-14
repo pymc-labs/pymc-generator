@@ -16,7 +16,7 @@ pipeline consumes (persist with ``prior_generator.save_corpus``).
 
 Extraction note: the legacy L0/L1 PyMC-model rungs from structural-pfn were
 deprecated there (plan-05) and deliberately NOT migrated; the one supported
-world prior is ``make_scm_prior(texture="diverse")``.
+world prior is the default ``make_scm_prior`` configuration.
 """
 
 from __future__ import annotations
@@ -316,7 +316,7 @@ class SCMPrior:
     # signed and its level is identified by ``rw_z_mean`` alone.
     # Defaults are inert: no graph term, the magnitudes degenerate to constants
     # (no parameter RV, no RNG consumed) and corpora stay byte-identical to the
-    # pre-texture format. make_scm_prior(texture="diverse") enables them.
+    # pre-texture format. make_scm_prior enables them.
     control_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     control_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
     control_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
@@ -1498,7 +1498,7 @@ def _make_support_mask(
 def _warn_flat_texture(cfg: SCMPrior) -> None:
     """Steer every caller to the ONE supported world prior.
 
-    The blessed path is ``make_scm_prior(texture="diverse")`` — the
+    The default ``make_scm_prior`` configuration supplies
     additive SCM with high-frequency channel texture and adstock burn-in.
     A config with the flat (smooth-walk-only) channel prior still generates
     but warns: its contribution targets degenerate to near-flat lines
@@ -1513,7 +1513,7 @@ def _warn_flat_texture(cfg: SCMPrior) -> None:
             "The flat (smooth-walk-only) channel texture is "
             "deprecated: it produces near-flat contribution targets the model cannot "
             "learn attribution from. Build configs with "
-            "make_scm_prior(texture='diverse').",
+            "make_scm_prior.",
             FutureWarning,
             stacklevel=3,
         )
@@ -1566,7 +1566,7 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
     Notes
     -----
     Priors with the flat (texture-free) channel prior emit a ``FutureWarning``
-    — build with ``make_scm_prior(texture="diverse")`` instead.
+    — build with ``make_scm_prior`` instead.
     """
     _warn_flat_texture(prior)
     prior.validate()

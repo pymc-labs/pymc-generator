@@ -295,7 +295,7 @@ the base rates and budgets.
   to each control's own walk std and the pulse centred on its fire
   probability. Both are inert on a raw `SCMPrior` — no graph term, no RNG
   consumed, byte-identical corpora — and enabled by
-  `make_scm_prior(texture="diverse")`.
+  `make_scm_prior`.
 
 Persisted `param_rw_*_std` labels declare a walk's **expected standard
 deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.
@@ -674,7 +674,7 @@ serves every level:
 | **Interactions** | how many arrows of each type | `edge_budget` (per-type "pot"), `min_dead_channels` |
 | **Nonlinearity** | media-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` (e.g. `rw_sales_std_sigma`, coefficient ranges) |
-| **Texture** | channels' high-frequency drive | `texture="diverse"` |
+| **Texture** | channels' and controls' high-frequency drive | explicit noise, pulse, and walk ranges |
 
 ### Interactions: the edge budget
 

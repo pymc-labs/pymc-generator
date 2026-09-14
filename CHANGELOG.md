@@ -33,6 +33,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - Benchmark compilation paths on shared concrete structures and seeds, report
   pre-filter candidate throughput, and remove unsupported equivalence and
   extrapolated production-speed claims.
+- Remove the single-choice `texture` factory argument. Default ranges and
+  explicit range overrides are unchanged.
 
 ### Added
 
@@ -179,7 +181,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   `param_control_pulse_amp` / `param_control_pulse_prob`, new innovations
   `eps_z_hf` / `eps_z_pulse` in `SCM.exogenous`, per-control `texture` records
   in `SCM.equation_parameters`, and the executed term in `SCM.equations`.
-  `make_scm_prior(texture="diverse")` enables it, which **changes generated
+  `make_scm_prior` enables it, which **changes generated
   worlds at a fixed seed**: the new draws re-partition the seeded RNG list
   (`reseed_rngs` assigns streams by the compiled graph's traversal order), so
   every non-structural array moves — not only the controls. Provably unchanged:
@@ -775,6 +777,6 @@ While the project is on 0.x, minor versions may contain breaking changes.
 
 - The deprecated L0/L1 PyMC generation path, legacy channel texture, and the
   deprecated `create_generator`/`create_variable_size_generator` constructors.
-  The one supported prior is `make_scm_prior(texture="diverse")`.
+  The supported factory is `make_scm_prior`.
 - Dead modules with zero importers (`cdag_catalog`, `spec_to_adjacency`,
   `corpus_provider`).

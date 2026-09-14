@@ -363,7 +363,7 @@ serves every level.
 | **Interactions** | how many arrows of each type | `edge_budget` (per-type "pot"), `min_dead_channels` |
 | **Nonlinearity** | media-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` |
-| **Texture** | channels' and controls' high-frequency drive | `texture="diverse"` |
+| **Texture** | channels' and controls' high-frequency drive | explicit noise, pulse, and walk ranges |
 
 ### The edge budget
 

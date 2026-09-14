@@ -29,7 +29,7 @@ def _linear_family_probs(family_keys: tuple[str, ...]) -> dict[str, float]:
     return {family: 1.0 if index == 0 else 0.0 for index, family in enumerate(family_keys)}
 
 
-#: Texture prior for ``texture="diverse"``.
+#: Default channel and control texture applied by ``make_scm_prior``.
 #:
 #: Channels get iid weekly execution noise, campaign pulses, a floored uniform
 #: walk-std (the legacy HalfNormal piles mass at 0 -> flat contribution
@@ -75,7 +75,6 @@ def make_scm_prior(
     n_covariates_active_range: tuple[int, int] | None = None,
     n_latent_active_range: tuple[int, int] | None = None,
     nonlinearity: str = "diverse",
-    texture: str = "diverse",
     **overrides: Any,
 ) -> SCMPrior:
     """Build a validated additive-SCM :class:`SCMPrior` with a pinned max-layout.
@@ -108,41 +107,11 @@ def make_scm_prior(
         ``"linear"`` forces a purely linear media response (no adstock, no
         saturation) for the simplest additive graph; ``"diverse"`` keeps the
         full family mix from ``SCMPrior`` defaults.
-    texture : {"diverse"}
-        Texture axis, for channels AND controls. ``"diverse"`` (the only
-        supported value) gives channels high-frequency exogenous drive — iid
-        weekly noise, campaign pulses, a floored RELATIVE walk std, and a
-        widened channel-level range (``rw_positive_mean_range``) — plus an
-        ``l_max`` adstock burn-in, so spend sweeps its response curve and
-        contribution targets carry signal (:data:`_DIVERSE_TEXTURE`). The
-        relative channel factors anchor on ``softplus(walk mean)``; heavy
-        pulses raise the realized channel level above that anchor (up to ~1.7x
-        at the range top), so realized CVs run somewhat below the drawn factors
-        — retune against the :mod:`prior_generator.signal_diagnostics` gate,
-        not the raw ranges.
-
-        The burn-in this preset sets is ``l_max`` (following an overridden
-        ``l_max``, and overridable on its own). A raw ``SCMPrior`` instead
-        defaults to ``adstock_burn_in=0`` with ``l_max=8``; both ``0`` (off)
-        and ``>= l_max`` are legal, nothing in between.
-
-        Controls get the same two terms, RELATIVE to each control's own walk
-        std and with a CENTRED pulse (``amp * (fire - prob)``), so a control's
-        expected level stays ``rw_z_mean`` EXACTLY (a control applies no
-        activation) and the parameter-only saturation reference levels are
-        untouched. This is what makes ``Z`` separable from the baseline: both
-        are otherwise smoothed walks over the same function space, which leaves
-        ``Z->B`` weakly identified against baseline drift.
-
-        The deprecated ``"legacy"`` (smooth-walk-only) texture from
-        structural-pfn was not migrated; reproducing pre-fix corpora requires
-        structural-pfn itself.
+        Channel and control texture defaults are applied regardless of this
+        choice. Configure their ranges through ``**overrides``.
     **overrides
         Any other :class:`SCMPrior` field, passed straight to its constructor.
-        The accepted keys are therefore exactly the 57 :class:`SCMPrior`
-        dataclass fields this signature does not already bind by name (64
-        fields, less the seven named above) — e.g. ``n_time_steps``,
-        ``n_cells``, ``seed``,
+        For example, ``n_time_steps``, ``n_cells``, ``seed``,
         ``l_max``, any ``*_coeff_range``, ``rw_baseline_std_range`` /
         ``rw_sales_std_range`` for the default relative outcome-noise axis,
         ``outcome_std_mode="absolute"`` with ``rw_sales_std_sigma`` for the
@@ -152,8 +121,8 @@ def make_scm_prior(
 
         Precedence, in application order: this function's own defaults (the
         pinned ``*_active_range`` values and ``edge_budget``), then the
-        ``nonlinearity="linear"`` family probabilities, then the ``texture``
-        preset (:data:`_DIVERSE_TEXTURE`), then ``adstock_burn_in``, then
+        ``nonlinearity="linear"`` family probabilities, then the default texture
+        ranges (:data:`_DIVERSE_TEXTURE`), then ``adstock_burn_in``, then
         ``**overrides``. So an override wins over every one of them — including
         the texture ranges (``channel_hf_sigma_range=(0.0, 0.0)`` disables the
         channel jitter the preset just enabled) and the burn-in
@@ -176,11 +145,6 @@ def make_scm_prior(
     """
     if nonlinearity not in ("diverse", "linear"):
         raise ValueError(f"nonlinearity must be 'diverse' or 'linear', got {nonlinearity!r}")
-    if texture != "diverse":
-        raise ValueError(
-            f"texture must be 'diverse', got {texture!r}. The deprecated 'legacy' "
-            f"texture was not migrated from structural-pfn."
-        )
 
     kwargs: dict[str, Any] = {
         "n_treatments": n_treatments,

@@ -267,9 +267,6 @@ def test_factory_overrides_win():
     assert cfg.spend_cv_floor == 0.2
 
 
-def test_legacy_texture_rejected():
-    with pytest.raises(ValueError, match="texture"):
-        pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, texture="legacy")
 
 
 def test_bad_nonlinearity_rejected():
