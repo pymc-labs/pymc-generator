@@ -265,10 +265,10 @@ class SCMPrior:
     zb_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->B loadings
     beta_additive_range: tuple[float, float] = (0.5, 2.0)  # channel effects
     # Random-walk and outcome-noise priors.
-    rw_mean_range: tuple[float, float] = (-1.0, 1.0)  # signed nodes (D, Z)
+    rw_control_mean_range: tuple[float, float] = (-1.0, 1.0)  # control drive (Z)
     rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # channels
     rw_baseline_mean_range: tuple[float, float] = (3.0, 8.0)  # baseline level
-    rw_std_sigma: float = 1.0  # HalfNormal prior for D/Z and absolute-mode RW_B std
+    rw_std_sigma: float = 1.0  # HalfNormal prior for Z and absolute-mode RW_B std
     rw_baseline_std_sigma: float | None = None  # absolute-mode RW_B; None follows rw_std_sigma
     rw_sales_std_sigma: float = 0.25  # absolute-mode iid sales-noise std
     outcome_std_mode: Literal["relative", "absolute"] = "relative"
@@ -613,7 +613,7 @@ class SCMPrior:
             "zz_coeff_range",
             "db_coeff_range",
             "zb_coeff_range",
-            "rw_mean_range",
+            "rw_control_mean_range",
             "rw_baseline_mean_range",
         ):
             _finite_range(name)

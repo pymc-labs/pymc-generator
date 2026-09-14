@@ -72,7 +72,7 @@ def dea_prior(*, n_cells: int, draws_per_cell: int = 5, seed: int = 999000):
         zz_coeff_range=(-0.2, 0.2),
         db_coeff_range=(0.15, 0.45),
         zb_coeff_range=(0.1, 0.4),
-        rw_mean_range=(-1.0, 1.0),
+        rw_control_mean_range=(-1.0, 1.0),
         rw_positive_mean_range=(0.3, 4.0),
         rw_baseline_mean_range=(3.0, 8.0),
         rw_baseline_std_range=(0.05, 0.2),

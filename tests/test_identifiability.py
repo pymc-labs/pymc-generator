@@ -379,7 +379,7 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         "control_hf_sigma_range": (0.0, 0.0),
         "control_pulse_prob_range": (0.0, 0.0),
         "control_pulse_amp_range": (0.0, 0.0),
-        "rw_mean_range": (3.0, 3.0),
+        "rw_control_mean_range": (3.0, 3.0),
         "rw_positive_mean_range": (3.0, 3.0),
         "rw_baseline_mean_range": (3.0, 3.0),
         "adstock_burn_in": 0,

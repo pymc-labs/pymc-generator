@@ -343,7 +343,7 @@ def test_relative_outcome_std_ranges_must_be_finite_nonnegative_bounds(name, val
         ("beta_additive_range", (-0.1, 1.0)),
         ("cc_coeff_range", (-0.1, 0.2)),
         ("rw_positive_mean_range", (0.0, 1.0)),
-        ("rw_mean_range", (np.nan, 1.0)),
+        ("rw_control_mean_range", (np.nan, 1.0)),
         ("rw_baseline_mean_range", (2.0, 1.0)),
     ),
 )

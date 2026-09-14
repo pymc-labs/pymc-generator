@@ -49,6 +49,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   to `saturation_scale`; these are structural anchors, not realized means.
 - Rename `min_dead_channels` to `min_no_direct_effect_channels`: the floor
   guarantees zero direct contribution, not absence of indirect causal influence.
+- Rename `rw_mean_range` to `rw_control_mean_range`; the range affects the
+  control drive, not the separately anchored latent demand.
 
 ### Added
 

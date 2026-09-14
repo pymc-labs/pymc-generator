@@ -7,6 +7,10 @@ only when you need a field the preset does not surface.
 
 ## Control texture
 
+`rw_control_mean_range` sets the signed control drive's walk mean. It does not
+set latent demand's mean: demand is anchored to mean zero and unit scale, with
+its magnitude represented by the outgoing loadings.
+
 A control's own drive is otherwise a smoothed random walk, i.e. the same
 function class as the smooth baseline walk `RW_B`. The two are then nearly
 collinear over a typical horizon, so the `Z → B` loading `rho_zb` trades off

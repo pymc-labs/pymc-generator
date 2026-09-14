@@ -533,7 +533,7 @@ def _walk_priors(
             "rw_z",
             n_covariates,
             False,
-            cfg.rw_mean_range,
+            cfg.rw_control_mean_range,
             structural.get("smoothness_z"),
             std_sigma=cfg.rw_std_sigma,
             rw_smoothness_max_weeks=rw_smoothness_max_weeks,
