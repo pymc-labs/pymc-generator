@@ -428,6 +428,22 @@ def test_empty_quantity_subset_is_rejected(corpus):
         outcome_distributions(corpus, quantities=[])
 
 
+@pytest.mark.parametrize(
+    "name, keys",
+    [
+        ("sales", ("sales_raw",)),
+        ("media_contribution", ("sales_raw", "contributions_raw", "indirect_effects")),
+        ("spend", ("sales_raw", "spend_raw", "treatment_active_mask")),
+    ],
+)
+def test_quantity_subset_requires_only_its_dependencies(corpus, name, keys):
+    full = outcome_distributions(corpus, normalize="none")
+    minimal = {key: corpus[key] for key in keys}
+    subset = outcome_distributions(minimal, quantities=(name,), normalize="none")
+    np.testing.assert_array_equal(subset[name].values, full[name].values)
+    np.testing.assert_array_equal(subset[name].unit_share, full[name].unit_share)
+
+
 def test_missing_corpus_key_names_it():
     with pytest.raises(KeyError, match="missing keys"):
         outcome_distributions({"sales_raw": np.zeros((2, 3))})

@@ -68,6 +68,22 @@ is genuinely undefined, so every share for that world — and its
 `np.allclose(..., equal_nan=False)` on a filtered subset, or `np.nanmean`, if
 your corpus can contain one.
 
+Request only the quantities needed for a question. The adapters load their
+dependencies and column masks, not every corpus array:
+
+```python
+sales_only = pg.outcome_distributions(
+    {"sales_raw": corpus["sales_raw"]},
+    quantities=("sales",),
+    normalize="none",
+)
+print(sales_only.table())
+```
+
+`sales_raw` remains required for dimensions and shares. `sales_scale` is required
+only for `normalize="sales_scale"`. The derived `media_contribution` additionally
+needs `contributions_raw` and `indirect_effects`, but no per-column masks.
+
 ## Conditioning and scale
 
 Conditioning is a world row mask, not a separate API:

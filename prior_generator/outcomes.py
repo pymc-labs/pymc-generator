@@ -636,7 +636,7 @@ class _Dense:
     masks: dict[str, np.ndarray]
     n_worlds: int
     n_time_steps: int
-    sales_scale: np.ndarray
+    sales_scale: np.ndarray | None
     world_ids: np.ndarray
 
 
@@ -657,8 +657,15 @@ def _world_index(n_available: int, worlds: Any) -> np.ndarray:
 _CORPUS_KEYS: dict[str, str] = {spec.name: spec.corpus_key for spec in _SPECS if spec.corpus_key}
 
 
-def _dense_from_corpus(corpus: Mapping[str, Any], worlds: Any) -> _Dense:
-    required = [*_CORPUS_KEYS.values(), "sales_scale", *_MASK_KEYS.values()]
+def _dense_from_corpus(
+    corpus: Mapping[str, Any], worlds: Any, needed: set[str],
+    mask_kinds: set[str], need_scale: bool,
+) -> _Dense:
+    keys = {name: _CORPUS_KEYS[name] for name in needed}
+    mask_keys = {kind: _MASK_KEYS[kind] for kind in mask_kinds if kind != "source"}
+    required = [*keys.values(), *mask_keys.values()]
+    if need_scale:
+        required.append("sales_scale")
     missing = sorted({key for key in required if key not in corpus})
     if missing:
         raise KeyError(f"corpus is missing keys required for outcome distributions: {missing}")
@@ -666,15 +673,23 @@ def _dense_from_corpus(corpus: Mapping[str, Any], worlds: Any) -> _Dense:
     idx = _world_index(int(sales.shape[0]), worlds)
     if idx.size == 0:
         raise ValueError("world selection is empty")
-    arrays = {name: np.asarray(corpus[key])[idx] for name, key in _CORPUS_KEYS.items()}
-    masks = {kind: np.asarray(corpus[key])[idx].astype(bool) for kind, key in _MASK_KEYS.items()}
-    masks["source"] = np.ones((idx.size, 3), dtype=bool)
+    selection = slice(None) if worlds is None else worlds if isinstance(worlds, slice) else idx
+    arrays = {name: np.asarray(corpus[key])[selection] for name, key in keys.items()}
+    masks = {
+        kind: np.asarray(corpus[key])[selection].astype(bool)
+        for kind, key in mask_keys.items()
+    }
+    if "source" in mask_kinds:
+        masks["source"] = np.ones((idx.size, 3), dtype=bool)
     return _Dense(
         arrays=arrays,
         masks=masks,
         n_worlds=int(idx.size),
         n_time_steps=int(sales.shape[1]),
-        sales_scale=np.asarray(corpus["sales_scale"], dtype=np.float64)[idx],
+        sales_scale=(
+            np.asarray(corpus["sales_scale"])[selection].astype(np.float64)
+            if need_scale else None
+        ),
         world_ids=idx,
     )
 
@@ -682,7 +697,10 @@ def _dense_from_corpus(corpus: Mapping[str, Any], worlds: Any) -> _Dense:
 _WORLD_KEYS: dict[str, str] = {spec.name: spec.world_key for spec in _SPECS if spec.world_key}
 
 
-def _dense_from_worlds(scms: Sequence[SCM], worlds: Any) -> _Dense:
+def _dense_from_worlds(
+    scms: Sequence[SCM], worlds: Any, needed: set[str],
+    mask_kinds: set[str], need_scale: bool,
+) -> _Dense:
     idx = _world_index(len(scms), worlds)
     if idx.size == 0:
         raise ValueError("world selection is empty")
@@ -691,19 +709,19 @@ def _dense_from_worlds(scms: Sequence[SCM], worlds: Any) -> _Dense:
     if len(horizons) > 1:
         raise ValueError(f"worlds must share n_time_steps to be pooled; got {sorted(horizons)}")
     n_time_steps = horizons.pop()
-    widths = {
-        "channel": max(w.n_treatments for w in chosen),
-        "control": max(w.n_covariates for w in chosen),
-        "latent": max(w.n_latent for w in chosen),
+    width_attributes = {
+        "channel": "n_treatments", "control": "n_covariates", "latent": "n_latent",
     }
+    needed_kinds = {_BY_NAME[name].columns for name in needed} - {"", "source"}
     per_world = {
-        "channel": [w.n_treatments for w in chosen],
-        "control": [w.n_covariates for w in chosen],
-        "latent": [w.n_latent for w in chosen],
+        kind: [getattr(world, width_attributes[kind]) for world in chosen]
+        for kind in needed_kinds
     }
+    widths = {kind: max(counts) for kind, counts in per_world.items()}
     n_worlds = int(idx.size)
     arrays: dict[str, np.ndarray] = {}
-    for name, key in _WORLD_KEYS.items():
+    for name in needed:
+        key = _WORLD_KEYS[name]
         kind = _BY_NAME[name].columns
         if kind == "":
             arrays[name] = np.stack([np.asarray(w.data[key], dtype=np.float64) for w in chosen])
@@ -716,12 +734,16 @@ def _dense_from_worlds(scms: Sequence[SCM], worlds: Any) -> _Dense:
         arrays[name] = dense
     masks = {
         kind: (np.arange(widths[kind])[None, :] < np.asarray(per_world[kind])[:, None])
-        for kind in widths
+        for kind in mask_kinds if kind != "source"
     }
-    masks["source"] = np.ones((n_worlds, 3), dtype=bool)
+    if "source" in mask_kinds:
+        masks["source"] = np.ones((n_worlds, 3), dtype=bool)
     # The corpus defines sales_scale over supported observations only; a bare
     # SCM has no train/query split, so the full-window std is the analogue.
-    sales_scale = np.asarray([np.asarray(w.data["sales"]).std() for w in chosen], dtype=np.float64)
+    sales_scale = (
+        np.asarray([np.asarray(w.data["sales"]).std() for w in chosen], dtype=np.float64)
+        if need_scale else None
+    )
     return _Dense(
         arrays=arrays,
         masks=masks,
@@ -767,7 +789,9 @@ def outcome_distributions(
         Subset of :data:`OUTCOME_QUANTITIES` to compute; default all, and an
         empty subset is rejected — there is nothing to report. Note
         :meth:`OutcomeDistributions.additive_share_total` needs the full
-        additive set.
+        additive set. Only requested arrays, their dependencies, and their
+        column masks are loaded. ``sales_raw`` supplies the world/time axes and
+        share denominator; ``sales_scale`` is needed only for that normalization.
     worlds
         World selector — boolean mask over corpus rows, integer index array,
         or slice. Use it to condition on anything you can express as a row
@@ -809,21 +833,28 @@ def outcome_distributions(
             f"quantities is empty; name at least one of {list(OUTCOME_QUANTITIES)} "
             "or pass None for all of them"
         )
+    needed = set(names) | {"sales"}
+    if "media_contribution" in needed:
+        needed.remove("media_contribution")
+        needed.update(("channel_contribution", "indirect_effects"))
+    mask_kinds = {_BY_NAME[name].columns for name in names} - {""}
+    need_scale = normalize == "sales_scale"
 
     if isinstance(source, Mapping):
-        dense = _dense_from_corpus(source, worlds)
+        dense = _dense_from_corpus(source, worlds, needed, mask_kinds, need_scale)
     elif isinstance(source, Sequence):
         if not source:
             raise ValueError("no worlds to summarize")
         if not hasattr(source[0], "data"):
             raise TypeError("sequence source must contain SCM worlds")
-        dense = _dense_from_worlds(source, worlds)
+        dense = _dense_from_worlds(source, worlds, needed, mask_kinds, need_scale)
     else:
         raise TypeError(f"source must be a corpus mapping or a sequence of SCM, got {type(source)}")
 
     raw_sales = dense.arrays["sales"].astype(np.float64, copy=False)
     if normalize == "sales_scale":
-        scale = dense.sales_scale.copy()
+        assert dense.sales_scale is not None
+        scale = dense.sales_scale
     elif normalize == "sales_mean":
         scale = np.abs(raw_sales.mean(axis=1))
     else:
