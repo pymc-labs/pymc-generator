@@ -108,6 +108,53 @@ PRIOR_COND_LAYOUT: tuple[str, ...] = (
     "hill_shape_width",
 )
 
+#: Required corpus arrays: named axes and storage dtype. Optional metadata
+#: blocks are validated separately; ``prior_cond`` follows PRIOR_COND_LAYOUT.
+CORPUS_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
+    "spend_raw": (("task", "time", "treatment"), np.float32),
+    "spend_norm": (("task", "time", "treatment"), np.float32),
+    "spend_share": (("task", "time", "treatment"), np.float32),
+    "controls": (("task", "time", "covariate"), np.float32),
+    "sales_raw": (("task", "time"), np.float32),
+    "sales_norm": (("task", "time"), np.float32),
+    "support_mask": (("task", "time"), np.uint8),
+    "is_future": (("task",), np.uint8),
+    "g": (("task", "edge"), np.uint8),
+    "contributions_raw": (("task", "time", "treatment"), np.float32),
+    "baseline_raw": (("task", "time"), np.float32),
+    "demand": (("task", "time", "latent"), np.float32),
+    "spend_means": (("task", "treatment"), np.float32),
+    "sales_scale": (("task",), np.float32),
+    "is_val": (("task",), np.uint8),
+    "cell_id": (("task",), np.int32),
+    "treatment_active_mask": (("task", "treatment"), np.uint8),
+    "covariate_active_mask": (("task", "covariate"), np.uint8),
+    "latent_active_mask": (("task", "latent"), np.uint8),
+    "n_treatments_active": (("task",), np.int32),
+    "n_covariates_active": (("task",), np.int32),
+    "n_latent_active": (("task",), np.int32),
+    "confounding_strength": (("task",), np.float32),
+    "indirect_effects": (("task", "time"), np.float32),
+    "channel_active": (("task", "treatment"), np.uint8),
+    "control_contribution": (("task", "time", "covariate"), np.float32),
+    "confounder_contribution": (("task", "time", "latent"), np.float32),
+    "baseline_intrinsic": (("task", "time"), np.float32),
+    "sales_noise": (("task", "time"), np.float32),
+    "indirect_effects_by_source": (("task", "time", "indirect_source"), np.float32),
+    "channel_shock_mask": (("task", "time", "treatment"), np.uint8),
+    "channel_shock_channel": (("task", "shock"), np.int32),
+    "channel_shock_start": (("task", "shock"), np.int32),
+    "channel_shock_length": (("task", "shock"), np.int32),
+    "channel_shock_level_multiplier": (("task", "shock"), np.float32),
+    "channel_shock_level": (("task", "shock"), np.float32),
+    "channel_level": (("task", "treatment"), np.float32),
+    "saturation_scale": (("task", "treatment"), np.float32),
+    "adstock_family": (("task", "treatment"), np.uint8),
+    "adstock_alpha": (("task", "treatment"), np.float32),
+    "weibull_lam": (("task", "treatment"), np.float32),
+    "weibull_k": (("task", "treatment"), np.float32),
+}
+
 
 @dataclass(frozen=True)
 class SlotLayout:

@@ -43,6 +43,7 @@ from .signal_diagnostics import (
     summarize_signal_metrics,
 )
 from .slots import (
+    CORPUS_ARRAY_FIELDS,
     CORPUS_SCHEMA_VERSION,
     EDGE_TYPES_EXTENDED,
     LEGACY_CORPUS_KEYS_V1,
@@ -293,52 +294,7 @@ class DataGenerator:
         """
         errors = []
 
-        # Check required keys
-        required_keys = [
-            "spend_raw",
-            "spend_norm",
-            "spend_share",
-            "controls",
-            "sales_raw",
-            "sales_norm",
-            "support_mask",
-            "is_future",
-            "g",
-            "contributions_raw",
-            "baseline_raw",
-            "demand",
-            "spend_means",
-            "sales_scale",
-            "is_val",
-            "cell_id",
-            "treatment_active_mask",
-            "covariate_active_mask",
-            "latent_active_mask",
-            "n_treatments_active",
-            "n_covariates_active",
-            "n_latent_active",
-            "confounding_strength",
-            "indirect_effects",
-            "channel_active",
-            "control_contribution",
-            "confounder_contribution",
-            "baseline_intrinsic",
-            "sales_noise",
-            "indirect_effects_by_source",
-            "channel_shock_mask",
-            "channel_shock_channel",
-            "channel_shock_start",
-            "channel_shock_length",
-            "channel_shock_level_multiplier",
-            "channel_shock_level",
-            "channel_level",
-            "saturation_scale",
-            "adstock_family",
-            "adstock_alpha",
-            "weibull_lam",
-            "weibull_k",
-        ]
-        for key in required_keys:
+        for key in CORPUS_ARRAY_FIELDS:
             if key not in corpus:
                 errors.append(f"Missing required key: {key}")
 
@@ -371,14 +327,8 @@ class DataGenerator:
         if errors:
             return errors
 
-        core_ndims = {
-            "spend_raw": 3,
-            "controls": 3,
-            "demand": 3,
-            "g": 2,
-            "channel_shock_channel": 2,
-        }
-        for key, ndim in core_ndims.items():
+        for key in ("spend_raw", "controls", "demand", "g", "channel_shock_channel"):
+            ndim = len(CORPUS_ARRAY_FIELDS[key][0])
             value = corpus[key]
             if not isinstance(value, np.ndarray) or value.ndim != ndim:
                 actual = getattr(value, "ndim", type(value).__name__)
@@ -400,60 +350,29 @@ class DataGenerator:
         )
         n_channel_shocks = corpus["channel_shock_channel"].shape[1]
 
-        # Check shapes
-        expected_shapes = {
-            "spend_raw": (n_tasks, n_time_steps, n_treatments),
-            "spend_norm": (n_tasks, n_time_steps, n_treatments),
-            "spend_share": (n_tasks, n_time_steps, n_treatments),
-            "controls": (n_tasks, n_time_steps, n_covariates),
-            "sales_raw": (n_tasks, n_time_steps),
-            "sales_norm": (n_tasks, n_time_steps),
-            "support_mask": (n_tasks, n_time_steps),
-            "is_future": (n_tasks,),
-            "g": (n_tasks, layout.n_slots),
-            "contributions_raw": (n_tasks, n_time_steps, n_treatments),
-            "baseline_raw": (n_tasks, n_time_steps),
-            "demand": (n_tasks, n_time_steps, n_latent),
-            "spend_means": (n_tasks, n_treatments),
-            "sales_scale": (n_tasks,),
-            "is_val": (n_tasks,),
-            "cell_id": (n_tasks,),
-            "treatment_active_mask": (n_tasks, n_treatments),
-            "covariate_active_mask": (n_tasks, n_covariates),
-            "latent_active_mask": (n_tasks, n_latent),
-            "n_treatments_active": (n_tasks,),
-            "n_covariates_active": (n_tasks,),
-            "n_latent_active": (n_tasks,),
-            "confounding_strength": (n_tasks,),
-            "indirect_effects": (n_tasks, n_time_steps),
-            "channel_active": (n_tasks, n_treatments),
-            "control_contribution": (n_tasks, n_time_steps, n_covariates),
-            "confounder_contribution": (n_tasks, n_time_steps, n_latent),
-            "baseline_intrinsic": (n_tasks, n_time_steps),
-            "sales_noise": (n_tasks, n_time_steps),
-            "indirect_effects_by_source": (n_tasks, n_time_steps, 3),
-            "channel_shock_mask": (n_tasks, n_time_steps, n_treatments),
-            "channel_shock_channel": (n_tasks, n_channel_shocks),
-            "channel_shock_start": (n_tasks, n_channel_shocks),
-            "channel_shock_length": (n_tasks, n_channel_shocks),
-            "channel_shock_level_multiplier": (n_tasks, n_channel_shocks),
-            "channel_shock_level": (n_tasks, n_channel_shocks),
-            "channel_level": (n_tasks, n_treatments),
-            "saturation_scale": (n_tasks, n_treatments),
-            "adstock_family": (n_tasks, n_treatments),
-            "adstock_alpha": (n_tasks, n_treatments),
-            "weibull_lam": (n_tasks, n_treatments),
-            "weibull_k": (n_tasks, n_treatments),
+        dimensions = {
+            "task": n_tasks,
+            "time": n_time_steps,
+            "treatment": n_treatments,
+            "covariate": n_covariates,
+            "latent": n_latent,
+            "edge": layout.n_slots,
+            "shock": n_channel_shocks,
+            "indirect_source": 3,
+        }
+        field_specs = {
+            key: (tuple(dimensions[axis] for axis in axes), dtype)
+            for key, (axes, dtype) in CORPUS_ARRAY_FIELDS.items()
         }
         if "prior_cond" in corpus:
-            expected_shapes["prior_cond"] = (n_tasks, len(PRIOR_COND_LAYOUT))
+            field_specs["prior_cond"] = ((n_tasks, len(PRIOR_COND_LAYOUT)), np.float32)
             if not isinstance(corpus["prior_cond"], np.ndarray):
                 errors.append("prior_cond must be an ndarray")
 
         if errors:
             return errors
 
-        for key, expected in expected_shapes.items():
+        for key, (expected, _) in field_specs.items():
             if key not in corpus:
                 continue
             actual = corpus[key].shape
@@ -483,53 +402,7 @@ class DataGenerator:
             if errors:
                 return errors
 
-        expected_dtypes = {
-            "spend_raw": np.float32,
-            "spend_norm": np.float32,
-            "spend_share": np.float32,
-            "controls": np.float32,
-            "sales_raw": np.float32,
-            "sales_norm": np.float32,
-            "support_mask": np.uint8,
-            "is_future": np.uint8,
-            "g": np.uint8,
-            "contributions_raw": np.float32,
-            "baseline_raw": np.float32,
-            "demand": np.float32,
-            "spend_means": np.float32,
-            "sales_scale": np.float32,
-            "is_val": np.uint8,
-            "cell_id": np.int32,
-            "channel_shock_mask": np.uint8,
-            "treatment_active_mask": np.uint8,
-            "covariate_active_mask": np.uint8,
-            "latent_active_mask": np.uint8,
-            "n_treatments_active": np.int32,
-            "n_covariates_active": np.int32,
-            "n_latent_active": np.int32,
-            "indirect_effects": np.float32,
-            "channel_active": np.uint8,
-            "control_contribution": np.float32,
-            "confounder_contribution": np.float32,
-            "baseline_intrinsic": np.float32,
-            "sales_noise": np.float32,
-            "indirect_effects_by_source": np.float32,
-            "channel_shock_channel": np.int32,
-            "channel_shock_start": np.int32,
-            "channel_shock_length": np.int32,
-            "channel_shock_level_multiplier": np.float32,
-            "channel_shock_level": np.float32,
-            "channel_level": np.float32,
-            "confounding_strength": np.float32,
-            "saturation_scale": np.float32,
-            "adstock_family": np.uint8,
-            "adstock_alpha": np.float32,
-            "weibull_lam": np.float32,
-            "weibull_k": np.float32,
-        }
-        if "prior_cond" in corpus:
-            expected_dtypes["prior_cond"] = np.float32
-        for key, dtype in expected_dtypes.items():
+        for key, (_, dtype) in field_specs.items():
             if key in corpus and corpus[key].dtype != dtype:
                 errors.append(f"{key} has dtype {corpus[key].dtype}, expected {np.dtype(dtype)}")
         if has_signal_labels:
