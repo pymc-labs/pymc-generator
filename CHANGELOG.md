@@ -18,6 +18,9 @@ read the migration notes before upgrading.
   SHA-256 checksums. PyPI/TestPyPI publishing and its unused permissions are removed.
 - Source archives now include the complete test suite and developer/documentation
   support files. CI exercises the unpacked archive independently of the checkout.
+- Package metadata uses an SPDX MIT license expression and retains both copyright
+  notices. Runtime and distribution versions share `_version.py`; uv refreshes
+  editable metadata when that file changes.
 - Outcome distributions and generated-data diagnostics, with selectable quantities,
   pooled or per-world summaries, explicit validity masks, and optional signal gates.
 - Auditable world equations, realized parameters, and exogenous innovations;

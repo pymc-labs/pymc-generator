@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ._version import __version__
+
 if TYPE_CHECKING:
     from .data_generator import DataGenerator
     from .sampler import SCMPrior
 
-__version__ = "0.0.1"
 
 _LAZY_IMPORTS = {
     # config + generation

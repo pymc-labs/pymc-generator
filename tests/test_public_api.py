@@ -32,10 +32,6 @@ def test_all_public_symbols_resolve():
 
 
 def test_version_matches_the_installed_distribution():
-    # __version__ is hand-maintained in prior_generator/__init__.py while the
-    # packaged version lives in pyproject [project].version, and release.yml
-    # gates a tag against pyproject alone — so a bumped pyproject with a stale
-    # __init__ would ship a wheel that misreports itself.
     assert pg.__version__ == importlib.metadata.version("prior-generator")
 
 

@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "prior-generator"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor / PyMC / pymc-marketing."
 # pymc 6.0.1 (the pinned modeling stack) requires Python >= 3.12.
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "PyMC Labs"},
     {name = "Carlos Trujillo"},
@@ -18,7 +19,6 @@ keywords = ["marketing-mix-model", "synthetic-data", "structural-causal-models",
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -70,12 +70,16 @@ build = ["build", "twine", "setuptools>=77", "wheel"]
 
 [tool.uv]
 required-version = ">=0.9.10"
+cache-keys = [{file = "pyproject.toml"}, {file = "prior_generator/_version.py"}]
 
 [project.scripts]
 prior-generator = "prior_generator.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["prior_generator*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "prior_generator._version.__version__"}
 
 [project.urls]
 Homepage = "https://github.com/pymc-labs/prior-generator"

@@ -129,7 +129,9 @@ it is not interchangeable with `uv.lock`.
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`
   (Keep a Changelog format).
 - Move the release's `[Unreleased]` items under `## [X.Y.Z] - YYYY-MM-DD`,
-  update the package version, and push tag `vX.Y.Z` from a reviewed commit.
+  update `prior_generator/_version.py`, run `uv sync --locked` to refresh installed
+  metadata, and push tag `vX.Y.Z` from a reviewed commit. Build metadata and the
+  public `__version__` both use this one version value.
 - The tag workflow reuses CI's locked tests, lint/type checks, wheel smoke test,
   and native conda build. Conda packages use that same verified source archive.
   It creates a **draft GitHub Release** containing the wheel, source archive,
