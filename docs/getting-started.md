@@ -38,6 +38,43 @@ Development and documentation profiles are described in
 After selecting a profile with `uv sync`, use `uv run --no-sync` so running a
 command does not silently remove optional tools from that environment.
 
+## Install with conda
+
+Use the native channel built from this repository or unpacked from a GitHub
+release's `conda-channel.tar.gz`. The channel contains `prior-generator` and
+exact-commit companion builds of pymc-marketing and pymc-extras; remaining
+native dependencies come from conda-forge. Core numerical and diagnostic source
+versions are pinned to match the uv lock.
+
+From a checkout with a channel at `dist/conda-channel`:
+
+```bash
+conda create --name prior-generator --override-channels --strict-channel-priority \
+  --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
+  python=3.13 prior-generator=0.0.1
+conda activate prior-generator
+python -c "import prior_generator as pg; print(pg.__version__)"
+prior-generator --help
+```
+
+For an unpacked release channel, substitute its absolute directory in the
+`file://` URL. While no release channel is available, follow the
+[native build instructions](https://github.com/pymc-labs/prior-generator/blob/main/CONTRIBUTING.md#conda-artifacts).
+This is a native conda install: it does not overlay a pip environment or
+replace the pinned development commits with released upstream versions.
+
+Record a solved environment when reproducing a native run:
+
+```bash
+conda list --explicit --sha256 > conda-platform.lock
+conda create --name prior-generator-replay --file conda-platform.lock
+```
+
+An explicit conda lock is **platform-specific** and may contain absolute local
+channel URLs; retain that channel and its packages. Native BLAS/compiler builds
+and conda dependency resolution need not match the uv wheel environment, so
+cross-environment bitwise equality is not a supported guarantee.
+
 ## 1 · Sample one world
 
 A world is drawn from a **prior**. The quickest way to get a well-formed prior is

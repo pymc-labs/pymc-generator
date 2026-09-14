@@ -1,0 +1,10 @@
+name: prior-generator-build
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - conda=26.1.1
+  - conda-build=25.11.1
+  - conda-libmamba-solver=25.4.0
+  - uv=0.9.10

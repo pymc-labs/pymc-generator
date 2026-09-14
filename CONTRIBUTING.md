@@ -86,6 +86,39 @@ The smoke command exercises generation, reconstruction, and persisted-corpus
 validation. CI also runs it against a wheel installed into a clean environment
 with runtime dependencies taken from `uv.lock`.
 
+## Conda artifacts
+
+The native build has its own conda environment; it does not change your base
+environment or the locked uv modeling stack:
+
+```bash
+conda env create --file conda/build-environment.yml
+conda activate prior-generator-build
+uv sync --locked --group build
+uv run --no-sync python -m build --sdist --no-isolation
+uv run --no-sync python scripts/build_conda.py dist/prior_generator-0.0.1.tar.gz \
+  --conda "$CONDA_PREFIX/bin/conda"
+```
+
+Supply the exact source archive for the version being built. The script reads
+its version and SHA-256, builds and tests the two exact-commit upstream companion
+packages, then builds and tests `prior-generator`. All runtime packages are
+native conda packages. Pip is used only as the build backend's installation
+frontend with dependency resolution and build isolation disabled.
+
+The builder uses libmamba with explicit channels, never uploads to Anaconda.org,
+and publishes `dist/conda-channel` only after all package tests pass. Its output
+directory must not already exist; choose a fresh `--output-folder` when repeating
+a build. Recipes retain upstream license files and immutable source checksums.
+When deliberately changing a modeling dependency, update both `uv.lock` and its
+native recipe, including the source checksum and commit-specific build string.
+
+Follow the [conda installation instructions](docs/getting-started.md#install-with-conda)
+to create an environment from the resulting channel. From the checkout, verify it
+with that environment's `python -I scripts/smoke_install.py`. Preserve a
+platform-specific `conda list --explicit --sha256` export for native-run replay;
+it is not interchangeable with `uv.lock`.
+
 ## Changelog & releases
 
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`

@@ -33,6 +33,24 @@ numerical results. See [getting started](docs/getting-started.md) for installati
 and executable examples, and [CONTRIBUTING.md](CONTRIBUTING.md) for development
 and documentation environments.
 
+## Install with conda
+
+Use a locally built channel or a GitHub release's native channel archive:
+
+```bash
+conda create --name prior-generator --override-channels --strict-channel-priority \
+  --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
+  python=3.13 prior-generator=0.0.1
+conda activate prior-generator
+```
+
+The companion packages retain the exact pymc-marketing and pymc-extras commits
+used by the uv lock, with matching core numerical and diagnostic versions.
+This is not a pip overlay. See the
+[conda installation guide](docs/getting-started.md#install-with-conda) for channel
+paths and platform-specific environment exports, or
+[native build instructions](CONTRIBUTING.md#conda-artifacts) when building from source.
+
 ## Quickstart
 
 ```python

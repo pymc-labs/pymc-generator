@@ -1,0 +1,3 @@
+include uv.lock .python-version
+include scripts/*.py
+recursive-include conda *.yaml *.yml

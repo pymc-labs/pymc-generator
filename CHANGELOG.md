@@ -8,6 +8,11 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Native conda packaging with exact-commit pymc-marketing/pymc-extras companions,
+  matching core numerical versions, isolated build tooling, and no automatic
+  uploads. Package tests exercise generation, persistence, and the installed CLI.
+  On macOS arm64, all 353 preservation arrays match the original uv baseline
+  and an environment recreated from an explicit 181-package conda lock.
 - Outcome distributions and generated-data diagnostics, with selectable quantities,
   pooled or per-world summaries, explicit validity masks, and optional signal gates.
 - Auditable world equations, realized parameters, and exogenous innovations;
