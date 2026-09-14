@@ -11,13 +11,33 @@ Public symbols are lazy-loaded so ``import prior_generator`` stays light
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._version import __version__
 
 if TYPE_CHECKING:
-    from .data_generator import DataGenerator
-    from .sampler import SCMPrior
+    from .bundles import write_scenario_bundles, write_scm_bundle
+    from .data_generator import DataGenerator, load_corpus, save_corpus
+    from .describe import describe_scm
+    from .diagnostics import DataDiagnostics, data_diagnostics
+    from .outcomes import (
+        OUTCOME_QUANTITIES,
+        OutcomeDistributions,
+        QuantityDistribution,
+        outcome_distributions,
+    )
+    from .presets import make_scm_prior
+    from .sampler import SCMPrior, sample_prior_predictive
+    from .scenarios import SCENARIOS
+    from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION
+    from .world_model import (
+        build_oracle_model,
+        build_world_model,
+        draw_worlds,
+        sample_prior_cond,
+        sample_structure,
+    )
+    from .worlds import SCM, sample_scm
 
 
 _LAZY_IMPORTS = {
@@ -57,7 +77,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in _LAZY_IMPORTS:
         import importlib
 

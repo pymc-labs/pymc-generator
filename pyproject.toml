@@ -78,6 +78,9 @@ prior-generator = "prior_generator.cli:main"
 [tool.setuptools.packages.find]
 include = ["prior_generator*"]
 
+[tool.setuptools.package-data]
+prior_generator = ["py.typed"]
+
 [tool.setuptools.dynamic]
 version = {attr = "prior_generator._version.__version__"}
 
@@ -166,15 +169,3 @@ module = [
 ]
 ignore_missing_imports = true
 
-# Type-error backlog inherited from the structural-pfn extraction (these
-# modules were mypy-grandfathered there too). MyPy is BLOCKING in CI; these
-# modules are grandfathered with ignore_errors until each is burned down.
-# Do NOT add new modules here — new code must type-check clean. Remove a
-# module from this list once its errors are fixed.
-[[tool.mypy.overrides]]
-module = [
-    "prior_generator.data_generator",
-    "prior_generator.mechanisms",
-    "prior_generator.sampler",
-]
-ignore_errors = true

@@ -62,8 +62,9 @@ def _kernel_width(smoothness: float, n_time_steps: int, rw_smoothness_max_weeks:
 
 def _centred_walk_operator(n_time_steps: int, width: int) -> np.ndarray:
     steps = np.tril(np.ones((n_time_steps, n_time_steps)))
-    columns = _smooth_columns_numpy(steps, width)
-    return columns - columns.mean(axis=0, keepdims=True)
+    columns: np.ndarray = _smooth_columns_numpy(steps, width)
+    centred: np.ndarray = columns - columns.mean(axis=0, keepdims=True)
+    return centred
 
 
 def _walk_operator_scale(columns: np.ndarray) -> float:

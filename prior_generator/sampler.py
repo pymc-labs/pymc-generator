@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 import warnings
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -682,9 +682,9 @@ class SCMPrior:
                     f"{PRIOR_COND_QUANTITIES}, got {unknown}"
                 )
         if self.prior_conditioning or self.prior_cond_width_ranges is not None:
-            for q, spec in self.prior_cond_spec().items():
-                s_lo, s_hi = spec["support"]
-                w_lo, w_hi = spec["width_range"]
+            for q, cond_spec in self.prior_cond_spec().items():
+                s_lo, s_hi = cond_spec["support"]
+                w_lo, w_hi = cond_spec["width_range"]
                 if not 0.0 < w_lo <= w_hi <= s_hi - s_lo:
                     raise ValueError(
                         f"prior conditioning for {q!r} needs "
@@ -764,14 +764,18 @@ class SCMPrior:
                 raise ValueError(f"rw_baseline_std_sigma must be finite and > 0, got {sigma}")
         if self.confounding_strength_range is not None:
             try:
-                lo, hi = self.confounding_strength_range
-                lo, hi = float(lo), float(hi)
+                strength_lo, strength_hi = self.confounding_strength_range
+                strength_lo, strength_hi = float(strength_lo), float(strength_hi)
             except (TypeError, ValueError):
                 raise ValueError(
                     "confounding_strength_range must be a (lo, hi) pair or None, got "
                     f"{self.confounding_strength_range!r}"
                 )
-            if not (np.isfinite(lo) and np.isfinite(hi) and 0.0 <= lo <= hi <= 0.95):
+            if not (
+                np.isfinite(strength_lo)
+                and np.isfinite(strength_hi)
+                and 0.0 <= strength_lo <= strength_hi <= 0.95
+            ):
                 raise ValueError(
                     "confounding_strength_range must satisfy finite 0 <= lo <= hi <= 0.95, "
                     f"got {self.confounding_strength_range}"
@@ -1004,7 +1008,7 @@ def _sample_g(
     rates: dict[str, float] | None = None,
     budget: dict[str, int | tuple[int, int]] | None = None,
     min_no_direct: int = 0,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Draw one DAG cell from the slot base rates (0/1 numpy arrays).
 
     For variable-size DAGs, pass n_treatments_active, n_covariates_active,
@@ -1137,7 +1141,7 @@ def sample_g_additive(
     n_treatments_active: int | None = None,
     n_covariates_active: int | None = None,
     n_latent_active: int | None = None,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Draw one DAG cell for the additive SCM.
 
     Extends :func:`_sample_g` with the four new edge types. C->C and Z->Z
@@ -1294,7 +1298,7 @@ def _signal_block(
     return out
 
 
-def _finalize_corpus(corpus: dict, cfg: SCMPrior) -> dict:
+def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
     """Derive retained-corpus diagnostics and signal features exactly once.
 
     Generation deliberately leaves task-leading arrays unsummarized so callers
@@ -1499,8 +1503,8 @@ def _recompute_retained_cell_split(corpus: dict) -> None:
     corpus["is_val"] = np.isin(cell_id, val_cells).astype(np.uint8)
 
 
-def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict:
-    """Draw a prior-predictive corpus: n_tasks SCMs and their data (dict of ndarrays).
+def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, Any]:
+    """Draw a corpus of n_tasks SCMs: numerical arrays and nested diagnostic metadata.
 
     Each world routes through :func:`_generate_corpus_additive` — the additive
     causal SCM with the extended g-vector layout and exact interventional
@@ -1671,7 +1675,7 @@ def _additive_task_ok(
     return True
 
 
-def _generate_corpus_additive(cfg: SCMPrior) -> dict:
+def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     """Generate a padded additive-SCM corpus.
 
     The public schema is documented by :func:`sample_prior_predictive`.
@@ -1704,7 +1708,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         "shock": cfg.n_channel_shocks,
         "indirect_source": 3,
     }
-    corpus = {
+    corpus: dict[str, Any] = {
         key: np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
         for key, (axes, dtype) in CORPUS_ARRAY_FIELDS.items()
     }
@@ -1807,6 +1811,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 # deterministics must precede the legacy outputs: appending
                 # them changes legacy draws, while a separate same-seed call
                 # produces parameters from a different joint world.
+                draw_names: tuple[str, ...]
                 if cfg.n_channel_shocks:
                     draw_names = (
                         _CORPUS_PARAM_NAMES
@@ -1856,11 +1861,11 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                     cell_rejected += 1
                     continue
 
-                support, split_type = _make_support_mask(
+                support, task_split_type = _make_support_mask(
                     rng, n_time_steps, n_query, cfg.p_long_horizon
                 )
-                sales_scale = float(np.std(drawn["sales"][support == 1]))
-                if not (np.isfinite(sales_scale) and sales_scale > 0.0):
+                candidate_sales_scale = float(np.std(drawn["sales"][support == 1]))
+                if not (np.isfinite(candidate_sales_scale) and candidate_sales_scale > 0.0):
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -1869,11 +1874,11 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
                 spend_raw[row, :, :n_treatments_active] = drawn["channels"]
                 for key, source in draw_fields.items():
                     value = drawn[source]
-                    prefix = (row, *(slice(size) for size in np.shape(value)))
+                    prefix: tuple[int | slice, ...] = (row, *(slice(size) for size in np.shape(value)))
                     corpus[key][prefix] = value
                 corpus["adstock_family"][row, :n_treatments_active] = structural["adstock_family"]
                 corpus["support_mask"][row] = support
-                corpus["is_future"][row] = split_type
+                corpus["is_future"][row] = task_split_type
                 accepted += 1
             del drawn_b, drawn
         if accepted < cfg.draws_per_cell:

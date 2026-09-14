@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
@@ -32,6 +32,9 @@ from .sampler import (
     sample_g_additive,
 )
 from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION, per_channel_signal
+
+if TYPE_CHECKING:
+    import pymc as pm
 
 #: Adstock family names, indexed by ``params["adstock_family"]``.
 ADSTOCK_NAMES = ADSTOCK_FAMILY_KEYS
@@ -189,7 +192,7 @@ class SCM:
         """Max |Σ true components − sales| (float64; ~1e-15 in practice)."""
         return float(np.abs(self.reconstruction() - self.data["sales"]).max())
 
-    def oracle_model(self, *, latent: Literal["marginal", "sampled"] = "marginal"):
+    def oracle_model(self, *, latent: Literal["marginal", "sampled"] = "marginal") -> pm.Model:
         """The observed-data posterior ``pm.Model`` for THIS world.
 
         Rebuilds :func:`prior_generator.world_model.build_oracle_model` from

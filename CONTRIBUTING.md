@@ -27,9 +27,10 @@ uv run --no-sync pytest tests/
 uv run --no-sync pytest tests/ --runslow -m slow
 ```
 
-MyPy is blocking. A small set of modules inherited a type-error backlog from
-the structural-pfn extraction and are grandfathered in `pyproject.toml` — do
-not add new modules to that list.
+MyPy is blocking for every package module; blanket `ignore_errors` exemptions
+are not allowed. The distribution ships `py.typed`, and lazy public exports have
+explicit type-checking imports. Corpus mappings contain arrays plus nested
+metadata, so their values are heterogeneous rather than uniformly ndarrays.
 
 ## Documentation
 

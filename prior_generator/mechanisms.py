@@ -50,11 +50,13 @@ import pytensor.tensor as pt
 from pymc_marketing.mmm import transformers as _pmm
 from pytensor.tensor import TensorVariable
 from pytensor.xtensor import as_xtensor
+from pytensor.xtensor.type import XTensorVariable
 
 
-def _as_time(x: TensorVariable) -> TensorVariable:
+def _as_time(x: TensorVariable) -> XTensorVariable:
     """Wrap a ``(n_time_steps,)`` time column as an xtensor with a named ``time`` dim."""
-    return as_xtensor(pt.as_tensor_variable(x), dims=("time",))
+    result: XTensorVariable = as_xtensor(pt.as_tensor_variable(x), dims=("time",))
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -79,13 +81,13 @@ def logistic_saturation(x: TensorVariable, lam: TensorVariable) -> TensorVariabl
 
 
 def michaelis_menten(
-    x: TensorVariable, alpha: TensorVariable, lam: TensorVariable
+    x: TensorVariable, alpha: TensorVariable | float, lam: TensorVariable
 ) -> TensorVariable:
     """Michaelis–Menten: alpha * x / (lam + x); ``pymc_marketing`` ``michaelis_menten``."""
     return _pmm.michaelis_menten(_as_time(x), alpha=alpha, lam=lam).values
 
 
-def tanh_saturation(x: TensorVariable, b: TensorVariable, c: TensorVariable) -> TensorVariable:
+def tanh_saturation(x: TensorVariable, b: TensorVariable | float, c: TensorVariable) -> TensorVariable:
     """Tanh saturation: b * tanh(x / (b * c)); ``pymc_marketing`` ``tanh_saturation``."""
     return _pmm.tanh_saturation(_as_time(x), b=b, c=c).values
 
@@ -167,19 +169,24 @@ SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
 # --------------------------------------------------------------------------
 
 
-def apply_geometric_adstock(x, alpha, l_max: int) -> TensorVariable:
+def apply_geometric_adstock(
+    x: TensorVariable, alpha: TensorVariable | float, l_max: int
+) -> TensorVariable:
     """Normalized geometric adstock of a ``(n_time_steps, 1)`` column over the time axis.
 
     Delegates to ``pymc_marketing.mmm.transformers.geometric_adstock`` (ConvMode
     ``After``, ``normalize=True``). ``alpha`` may be a float or a symbolic scalar.
     """
-    out = _pmm.geometric_adstock(
+    out: XTensorVariable = _pmm.geometric_adstock(
         _as_time(x[:, 0]), alpha=alpha, l_max=int(l_max), dim="time", normalize=True
     )
-    return out.values[:, None]
+    values: TensorVariable = out.values[:, None]
+    return values
 
 
-def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
+def apply_weibull_pdf_adstock(
+    x: TensorVariable, lam: TensorVariable | float, k: TensorVariable | float, l_max: int
+) -> TensorVariable:
     """Normalized min-max-rescaled Weibull-density adstock over the time axis.
 
     Delegates to ``pymc_marketing.mmm.transformers.weibull_adstock`` with
@@ -212,7 +219,7 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
     weight_span = raw_weight_max - weight_min
     minmax_weights = (raw_weights - weight_min) / weight_span
     weight_total = minmax_weights.sum()
-    out = _pmm.weibull_adstock(
+    out: XTensorVariable = _pmm.weibull_adstock(
         _as_time(x[:, 0]),
         lam=lam,
         k=k,
@@ -234,8 +241,9 @@ def apply_weibull_pdf_adstock(x, lam, k, l_max: int) -> TensorVariable:
         ),
         pt.gt(raw_weight_max, np.float64(1e-300)),
     )
-    return pt.switch(
+    result: TensorVariable = pt.switch(
         pt.invert(kernel_is_valid),
         pt.zeros_like(values),
         values,
     )
+    return result

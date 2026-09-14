@@ -21,6 +21,9 @@ read the migration notes before upgrading.
 - Package metadata uses an SPDX MIT license expression and retains both copyright
   notices. Runtime and distribution versions share `_version.py`; uv refreshes
   editable metadata when that file changes.
+- Distributions ship inline typing information, with typed lazy public exports
+  and no module-wide type-error exemptions. Corpus and graph mappings describe
+  their heterogeneous values; generation remains numerically unchanged.
 - Outcome distributions and generated-data diagnostics, with selectable quantities,
   pooled or per-world summaries, explicit validity masks, and optional signal gates.
 - Auditable world equations, realized parameters, and exogenous innovations;

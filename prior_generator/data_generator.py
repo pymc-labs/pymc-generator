@@ -28,6 +28,7 @@ import dataclasses
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, TypeGuard
 
 import numpy as np
 
@@ -148,7 +149,7 @@ class DataGenerator:
         n_tasks: int | None = None,
         seed: int | None = None,
         validate: bool = True,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Generate a corpus of synthetic MMM tasks.
 
         Parameters
@@ -191,7 +192,7 @@ class DataGenerator:
         batch_size: int = 100,
         seed: int | None = None,
         validate: bool = True,
-    ) -> Iterator[dict[str, np.ndarray]]:
+    ) -> Iterator[dict[str, Any]]:
         """Yield batches of at least two worlds without retaining earlier batches.
 
         Every corpus carries its own cell-level train/validation split, so a
@@ -243,7 +244,7 @@ class DataGenerator:
         n_tasks: int | None = None,
         seed: int | None = None,
         validate: bool = True,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, Any]:
         """Generate corpus and save to disk.
 
         Parameters
@@ -274,7 +275,7 @@ class DataGenerator:
 
 
     @staticmethod
-    def validate_corpus(corpus: dict[str, np.ndarray]) -> list[str]:
+    def validate_corpus(corpus: dict[str, Any]) -> list[str]:
         """Validate a generated corpus.
 
         Parameters
@@ -296,7 +297,7 @@ class DataGenerator:
         signal_label_keys = ("signal_metrics", "signal_metric_valid")
         if any(key in corpus for key in signal_label_keys):
             errors.append("signal labels must live under the identifiability metadata block")
-        identifiability = corpus.get("identifiability")
+        identifiability: Any = corpus.get("identifiability")
         if "identifiability" in corpus and not isinstance(identifiability, dict):
             errors.append("identifiability must be a mapping")
         has_signal_labels = isinstance(identifiability, dict) and all(
@@ -326,8 +327,8 @@ class DataGenerator:
             ndim = len(CORPUS_ARRAY_FIELDS[key][0])
             value = corpus[key]
             if value.ndim != ndim:
-                actual = value.ndim
-                errors.append(f"{key} must have ndim={ndim}, got {actual}")
+                actual_ndim = value.ndim
+                errors.append(f"{key} must have ndim={ndim}, got {actual_ndim}")
         if errors:
             return errors
 
@@ -556,8 +557,9 @@ class DataGenerator:
         if not isinstance(signal_diagnostics, dict):
             errors.append("diagnostics signal must be a mapping")
             return errors
+        edge_types: Any = diagnostics.get("edge_types")
         try:
-            normalized_edge_types = list(diagnostics.get("edge_types"))
+            normalized_edge_types = list(edge_types)
         except TypeError:
             normalized_edge_types = None
         if normalized_edge_types != list(EDGE_TYPES_EXTENDED):
@@ -571,7 +573,7 @@ class DataGenerator:
 
         metric_version = signal_diagnostics.get("metric_version")
 
-        def _is_integer(value):
+        def _is_integer(value: object) -> TypeGuard[int | np.integer]:
             return isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_))
 
         def _diagnostic_equal(actual, expected) -> bool:
@@ -604,7 +606,7 @@ class DataGenerator:
         )
         if not version_supported:
             errors.append("diagnostics signal metric_version is not supported")
-        metric_layout = signal_diagnostics.get("metric_layout")
+        metric_layout: Any = signal_diagnostics.get("metric_layout")
         try:
             normalized_layout = list(metric_layout)
         except TypeError:
@@ -696,7 +698,7 @@ class DataGenerator:
             if not isinstance(prior_diagnostics, dict):
                 errors.append("diagnostics prior_cond must be a mapping")
             else:
-                prior_layout = prior_diagnostics.get("layout")
+                prior_layout: Any = prior_diagnostics.get("layout")
                 try:
                     normalized_prior_layout = list(prior_layout)
                 except TypeError:
@@ -1014,7 +1016,7 @@ class DataGenerator:
 # ---------------------------------------------------------------------------
 
 
-def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
+def save_corpus(corpus: dict[str, Any], path: str | Path) -> None:
     """Save corpus to disk.
 
     Parameters
@@ -1047,7 +1049,7 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
         )
 
     # Convert diagnostics dict to JSON string if present
-    save_dict = {}
+    save_dict: dict[str, Any] = {}
     for k, v in corpus.items():
         if k == "diagnostics":
             if not isinstance(v, dict):
@@ -1101,7 +1103,7 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
     np.savez_compressed(path, **save_dict)
 
 
-def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
+def load_corpus(path: str | Path) -> dict[str, Any]:
     """Load corpus from disk.
 
     Parameters
@@ -1119,7 +1121,7 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
         raise FileNotFoundError(f"Corpus file not found: {path}")
 
     with np.load(path, allow_pickle=False) as data:
-        corpus = {k: data[k] for k in data.files}
+        corpus: dict[str, Any] = {k: data[k] for k in data.files}
 
     identifiability = {
         key.removeprefix("identifiability__"): corpus.pop(key)
