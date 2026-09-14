@@ -20,6 +20,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   floor scope, non-media accumulation order, and clipped attribution semantics.
 - Export demand/control outcome edges to sales rather than the parentless
   intercept; DOT and plotted DAGs now agree with the executed equations.
+- Refuse nonempty bundle destinations before writing, preventing stale figures
+  or scenarios from being paired with newly generated data.
 
 ### Added
 

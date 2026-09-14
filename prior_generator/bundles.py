@@ -36,6 +36,11 @@ from .sampler import SCMPrior
 from .scenarios import SCENARIOS, Scenario
 from .worlds import SCM, draw_feasible_graph, sample_scm
 
+def _require_empty_destination(path: Path) -> None:
+    if path.exists() and (not path.is_dir() or any(path.iterdir())):
+        raise FileExistsError(f"bundle destination must be absent or empty: {path}")
+
+
 
 def write_scm_bundle(
     world: SCM,
@@ -51,7 +56,7 @@ def write_scm_bundle(
     world : SCM
         A sampled world (see :func:`prior_generator.sample_scm`).
     out_dir : path-like
-        Target directory (created if missing).
+        Empty target directory (created if missing). Nonempty targets are refused.
     title : str, optional
         Figure/description title; defaults to ``world.name``.
     plots : bool
@@ -74,6 +79,7 @@ def write_scm_bundle(
     title = world.name if title is None else title
 
     out = Path(out_dir)
+    _require_empty_destination(out)
     out.mkdir(parents=True, exist_ok=True)
 
     recon = world.reconstruction()
@@ -184,6 +190,7 @@ def write_scenario_bundles(
         untouched rather than stranding a half-written inspection set.
     """
     out_root = Path(out_root)
+    _require_empty_destination(out_root)
     # Pre-flight. Feasibility is a property of (edge_budget, connect_all)
     # alone — no amount of writing folders changes it — so discovering it
     # mid-loop would strand the bundles written so far on disk. This runs the

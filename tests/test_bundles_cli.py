@@ -162,6 +162,24 @@ def test_bundle_writes_the_figures_when_plots_are_enabled(tmp_path):
     assert {path.name for path in out.iterdir()} == set(TEXT_FILES | PLOT_FILES)
 
 
+def test_bundle_refuses_rewrite_without_touching_existing_artifacts(tmp_path):
+    world = _world(0)
+    out = write_scm_bundle(world, tmp_path / "bundle", plots=True)
+    before = {path.name: path.read_bytes() for path in out.iterdir()}
+    with pytest.raises(FileExistsError):
+        write_scm_bundle(world, out, plots=False)
+    assert {path.name: path.read_bytes() for path in out.iterdir()} == before
+
+
+def test_scenario_writer_refuses_nonempty_root(tmp_path):
+    sentinel = tmp_path / "unrelated.txt"
+    sentinel.write_text("preserve me")
+    with pytest.raises(FileExistsError):
+        write_scenario_bundles(tmp_path, plots=False)
+    assert sentinel.read_text() == "preserve me"
+    assert list(tmp_path.iterdir()) == [sentinel]
+
+
 def test_forced_connectivity_connects_every_node_in_every_scenario(tmp_path):
     """``require_path_to_y=True`` must be attainable for all five scenarios.
 
