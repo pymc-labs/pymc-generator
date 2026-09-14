@@ -320,10 +320,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   Deliberately unchanged: the edge-type axis (`cy, dc, dz, dy, zy, zc, cc, zz`,
   `g_cy`…`g_zz`, the packed `g` key, `edge_budget` keys), node and equation
   symbols (`C_k`, `Z_m`, `D_j`, `B`, `Y`, `RW_*`), loop indices, and `l_max`.
-  Generation is byte-identical: the corpus hash contract in
-  `tests/test_identifiability.py` reproduces every pre-rename digest for the 35
-  untouched keys, and the 6 renamed keys reproduce theirs when hashed under
-  their old names (that test seeds the digest with the key name).
+  Numerical preservation is checked directly by the same-environment baseline
+  harness in `benchmarks/generation_baseline.py`, rather than opaque test digests.
 - **Persisted corpus schema is versioned at 2** (breaking): the corpus keys
   `K_active`, `M_active`, `J_active`, `active_c_mask`, `active_m_mask`, and
   `active_j_mask` are now `n_treatments_active`, `n_covariates_active`,
