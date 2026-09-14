@@ -53,6 +53,9 @@ While the project is on 0.x, minor versions may contain breaking changes.
   control drive, not the separately anchored latent demand.
 - Rename the experimental `world_model_batched` module to
   `world_model_template`: it reuses compilation, rather than batching cells.
+- Rename outcome edges `db`/`zb` to `dy`/`zy`, including graph keys, loadings,
+  coefficient ranges, audits, and examples. Schema v3 migrates v1/v2 metadata
+  without changing packed positions or arrays; all 353 preservation arrays match.
 
 ### Added
 
@@ -130,7 +133,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   pure associativity, but it is what makes the floor safe: `baseline_floor`
   censors ONE additive term (`B = max(RW_B, floor)`, a censored walk, so `B`
   may sit exactly AT the floor), leaving `control_contribution[:, m]` exactly
-  `g_zb[m]·ρ[m]·Z[:, m]` and the decomposition exact. Flooring a sum that still
+  `g_zy[m]·ρ[m]·Z[:, m]` and the decomposition exact. Flooring a sum that still
   contained the parents would break both. `None` (default) keeps the signed
   walk; the floor adds no RV and consumes no RNG, so a floor that never binds
   reproduces the unfloored corpus byte for byte.
@@ -183,7 +186,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   `control_pulse_amp_range`): controls now carry high-frequency own drive —
   iid weekly noise plus a **centred** calendar pulse — instead of being smooth
   random walks only. A smooth-walk control lives in the same function space as
-  the smooth baseline walk `RW_B`, so the `Z→B` loading `rho_zb` trades off
+  the smooth baseline walk `RW_B`, so the `Z→Y` loading `rho_zy` trades off
   against baseline drift and is only weakly identified; the added
   high-frequency content is what a smooth baseline cannot mimic (and what real
   promo / holiday / price-step regressors look like). For control `m` with
@@ -195,7 +198,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   anchor — is unchanged. Measured on 18 controls over six worlds at
   `n_time_steps=78`, R² against a 5-term smooth cosine basis drops from a
   median 0.94 (0.54–0.995) to 0.64 (0.22–0.93): ~6.5x more of the variation
-  that identifies `rho_zb`. New reports `param_control_hf_sigma` /
+  that identifies `rho_zy`. New reports `param_control_hf_sigma` /
   `param_control_pulse_amp` / `param_control_pulse_prob`, new innovations
   `eps_z_hf` / `eps_z_pulse` in `SCM.exogenous`, per-control `texture` records
   in `SCM.equation_parameters`, and the executed term in `SCM.equations`.
@@ -314,7 +317,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   `build_world_model` / `build_oracle_model` / `write_scenario_bundles`
   horizon parameter. Shape documentation now reads
   `(n_tasks, n_time_steps, n_treatments)` instead of `(N, T, K)`.
-  Deliberately unchanged: the edge-type axis (`cy, dc, dz, db, zb, zc, cc, zz`,
+  Deliberately unchanged: the edge-type axis (`cy, dc, dz, dy, zy, zc, cc, zz`,
   `g_cy`…`g_zz`, the packed `g` key, `edge_budget` keys), node and equation
   symbols (`C_k`, `Z_m`, `D_j`, `B`, `Y`, `RW_*`), loop indices, and `l_max`.
   Generation is byte-identical: the corpus hash contract in
@@ -418,17 +421,17 @@ While the project is on 0.x, minor versions may contain breaking changes.
   the frozen corpus hashes move because removing two RVs shifts later seeded draws.
 - **The latent factor is pinned to mean 0 / scale 1** (breaking): `rw_d_mean`
   and `rw_d_std` are no longer drawn. A latent factor carries no scale of its
-  own — `(sigma_d, w_dc, u_dz, delta_db) -> (lam*sigma_d, w/lam, u/lam,
-  delta/lam)` left every observable identical, and `delta_db * mu_d` was
+  own — `(sigma_d, w_dc, u_dz, delta_dy) -> (lam*sigma_d, w/lam, u/lam,
+  delta/lam)` left every observable identical, and `delta_dy * mu_d` was
   absorbed by `rw_b_mean`, so none of the loading magnitudes were recoverable.
   The whole `D -> *` magnitude now lives in the loadings. The graph admits an
-  exact sign flip when `eps_d`, `w_dc`, `u_dz`, and `delta_db` are all negated,
-  but the supported prior's strictly positive `db_coeff_range`,
+  exact sign flip when `eps_d`, `w_dc`, `u_dz`, and `delta_dy` are all negated,
+  but the supported prior's strictly positive `dy_coeff_range`,
   `dc_coeff_range`, and `dz_coeff_range` exclude the reflected parameters, so
   demand's sign is identified. If a user widens any of those ranges to admit
   negatives, only `|D|` and the loading magnitudes are recoverable. Latent
   influence is consequently less dispersed across worlds (the `HalfNormal`
-  factor is gone); widen `db_coeff_range` / `dc_coeff_range` / `dz_coeff_range`
+  factor is gone); widen `dy_coeff_range` / `dc_coeff_range` / `dz_coeff_range`
   to restore spread — those knobs are now meaningful rather than confounded.
 - **The saturation anchor is a function of parameters alone** (breaking):
   `saturation_scale` was the mean of the realized adstocked series over the
@@ -687,14 +690,14 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - **Forced connectivity is feasible for every scenario**: `connect_all=True`
   rejects any draw with an isolated node, which no `channel_halo` draw could
   satisfy — with `zc = zz = dz = 0` a control's only route to `Y` is its own
-  `Z→B` arrow, and the scenario's `zb=(1, 1)` budget left the second control
+  `Z→Y` arrow, and the scenario's `zy=(1, 1)` budget left the second control
   permanently isolated (per-draw feasible fraction 0.00%). `prior-generator
   --require-path-to-y` consequently wrote folders `0`, `1`, `2` and then died
   with `RuntimeError: world 'channel_halo': no DAG satisfying the connectivity
   rule in 2000 draws`, exiting 1 with partial output on disk. Scenarios now
   carry a connectivity-only `Scenario.connect_all_edge_budget` that
   `Scenario.prior(..., connect_all=...)` substitutes over `edge_budget` ONLY
-  when connectivity is forced: `channel_halo` gets `{"zb": (2, 2)}`
+  when connectivity is forced: `channel_halo` gets `{"zy": (2, 2)}`
   (0.00% → 17.07%) and `kitchen_sink` gets `{"cc": (3, 4)}`, since `cy = 4` of 6
   leaves two feeder channels each needing an outgoing halo arrow and a
   `(1, 2)` budget can draw just one (0.85% → 5.89%). All five scenarios now

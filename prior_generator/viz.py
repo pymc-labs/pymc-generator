@@ -43,8 +43,8 @@ EDGE_STYLE: dict[str, tuple[str, str]] = {
     "dc": ("#e34948", "D→C (confounding)"),
     "zc": ("#eda100", "Z→C"),
     "cc": ("#4a3aa7", "C→C (halo)"),
-    "db": ("#eb6834", "D→Y"),
-    "zb": ("#1baf7a", "Z→Y"),
+    "dy": ("#eb6834", "D→Y"),
+    "zy": ("#1baf7a", "Z→Y"),
     "dz": ("#e87ba4", "D→Z"),
     "zz": ("#008300", "Z→Z"),
 }
@@ -67,7 +67,7 @@ def plot_dag(world: SCM, path: str, title: str | None = None) -> None:
 
     g, params = world.g, world.params
     title = world.name if title is None else title
-    n_treatments, n_covariates, n_latent = len(g["g_cy"]), len(g["g_zb"]), len(g["g_db"])
+    n_treatments, n_covariates, n_latent = len(g["g_cy"]), len(g["g_zy"]), len(g["g_dy"])
 
     def _col(n: int, x: float) -> dict[int, tuple[float, float]]:
         ys = np.linspace(0.9, 0.1, n) if n > 1 else [0.5]
@@ -236,21 +236,21 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     ax = axes[2]
     ax.plot(weeks, d["baseline_intrinsic"], color=MUTED, lw=1.4, label="baseline intrinsic")
     for j in range(n_latent):
-        if g["g_db"][j]:  # absent edges are identically zero — skip the clutter
+        if g["g_dy"][j]:  # absent edges are identically zero — skip the clutter
             ax.plot(
                 weeks,
                 d["confounder_contribution"][:, j],
-                color=EDGE_STYLE["db"][0],
+                color=EDGE_STYLE["dy"][0],
                 lw=1.2,
                 ls=["-", "--"][j % 2],
                 label=f"D{j + 1}→Y",
             )
     for m in range(n_covariates):
-        if g["g_zb"][m]:
+        if g["g_zy"][m]:
             ax.plot(
                 weeks,
                 d["control_contribution"][:, m],
-                color=EDGE_STYLE["zb"][0],
+                color=EDGE_STYLE["zy"][0],
                 lw=1.2,
                 ls=["-", "--", ":", "-."][m % 4],
                 label=f"Z{m + 1}→Y",

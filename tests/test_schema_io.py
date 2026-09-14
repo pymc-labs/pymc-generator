@@ -57,7 +57,7 @@ def parentless_baseline_corpus():
         n_cells=2,
         draws_per_cell=1,
         seed=19,
-        edge_budget={"db": (0, 0), "zb": (0, 0)},
+        edge_budget={"dy": (0, 0), "zy": (0, 0)},
     )
     return pg.sample_prior_predictive(cfg)
 
@@ -355,7 +355,7 @@ def test_single_node_edge_marginals_are_defined_without_empty_mean_warning(recwa
 
 
 def test_edge_base_rates_report_legacy_overrides():
-    overrides = {"cy": 0.11, "dc": 0.22, "db": 0.33, "zb": 0.44}
+    overrides = {"cy": 0.11, "dc": 0.22, "dy": 0.33, "zy": 0.44}
     corpus = pg.sample_prior_predictive(
         pg.make_scm_prior(
             n_treatments=1,
@@ -391,41 +391,99 @@ def test_save_load_roundtrip(tmp_path, corpus):
     assert isinstance(loaded["identifiability"], dict)
 
 
-def _write_v1_shard(path, corpus):
-    """Persist ``corpus`` with the pre-v2 symbolic dimension keys and no version."""
+def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
+    """Write the historical vocabulary independently of the reader's mapping."""
     import json
 
-    payload = {}
+    diagnostics = {
+        key: value for key, value in corpus["diagnostics"].items()
+        if key not in {"schema_version", "timing"}
+    }
+    diagnostics["edge_types"] = ["cy", "dc", "dz", "db", "zb", "zc", "cc", "zz"]
+    for field in ("edge_base_rates", "edge_marginals", "edge_budget"):
+        values = diagnostics.get(field)
+        if values is not None:
+            diagnostics[field] = {
+                {"dy": "db", "zy": "zb"}.get(key, key): value
+                for key, value in values.items()
+            }
+    diagnostics["min_dead_channels"] = diagnostics.pop("min_no_direct_effect_channels")
+    if version == 2:
+        diagnostics["schema_version"] = 2
+    diagnostics.update(diagnostics_overrides or {})
+    payload = {"diagnostics": np.array(json.dumps(diagnostics))}
     for key, value in corpus.items():
         if key == "diagnostics":
-            diagnostics = {k: v for k, v in value.items() if k != "schema_version"}
-            payload[key] = np.array(json.dumps(diagnostics))
-        elif key == "identifiability":
+            continue
+        if key == "identifiability":
             for label, array in value.items():
                 payload[f"identifiability__{label}"] = array
         else:
             payload[key] = value
-    for old, new in LEGACY_CORPUS_KEYS_V1.items():
-        payload[old] = payload.pop(new)
+    if version == 1:
+        for old, new in LEGACY_CORPUS_KEYS_V1.items():
+            payload[old] = payload.pop(new)
     np.savez_compressed(path, **payload)
 
 
-def test_load_corpus_migrates_v1_dimension_keys(tmp_path, corpus):
-    """A shard written before the rename stays loadable, with only its keys changed."""
-    path = tmp_path / "v1.npz"
-    _write_v1_shard(path, corpus)
+@pytest.mark.parametrize("version", (1, 2))
+def test_load_corpus_migrates_legacy_metadata_without_changing_arrays(tmp_path, corpus, version):
+    path = tmp_path / f"v{version}.npz"
+    _write_legacy_shard(path, corpus, version)
     loaded = pg.load_corpus(path)
 
-    assert not set(loaded) & set(LEGACY_CORPUS_KEYS_V1)
-    for new in LEGACY_CORPUS_KEYS_V1.values():
-        assert np.array_equal(loaded[new], corpus[new]), new
-    assert loaded["diagnostics"]["schema_version"] == CORPUS_SCHEMA_VERSION
+    assert set(loaded) == set(corpus)
+    for key, value in corpus.items():
+        if isinstance(value, np.ndarray):
+            np.testing.assert_array_equal(loaded[key], value, err_msg=key)
+    for key, value in corpus["identifiability"].items():
+        np.testing.assert_array_equal(loaded["identifiability"][key], value, err_msg=key)
+    assert loaded["diagnostics"] == {
+        key: value for key, value in corpus["diagnostics"].items() if key != "timing"
+    }
     assert DataGenerator.validate_corpus(loaded) == []
+
+
+@pytest.mark.parametrize(("field", "value", "reason"), (
+    ("edge_types", ["cy", "dc", "dz", "zb", "db", "zc", "cc", "zz"], "edge order"),
+    ("edge_types", list(EDGE_TYPES_EXTENDED), "edge order"),
+    ("edge_base_rates", {"db": 0.5, "dy": 0.2}, "mixes"),
+    ("edge_marginals", {"zb": 0.5, "zy": 0.2}, "mixes"),
+    ("edge_budget", {"db": 1, "dy": 1}, "mixes"),
+    ("edge_budget", [], "mapping"),
+    ("min_no_direct_effect_channels", 7, "conflicting"),
+))
+def test_v2_migration_rejects_ambiguous_metadata(tmp_path, corpus, field, value, reason):
+    path = tmp_path / "ambiguous-v2.npz"
+    _write_legacy_shard(path, corpus, 2, diagnostics_overrides={field: value})
+    with pytest.raises(ValueError, match=reason):
+        pg.load_corpus(path)
+
+
+@pytest.mark.parametrize("field", ("edge_types", "edge_base_rates", "edge_marginals", "edge_budget"))
+def test_current_schema_rejects_legacy_edge_names_at_every_boundary(tmp_path, corpus, field):
+    import json
+
+    bad = dict(corpus)
+    legacy_value = ["db"] if field == "edge_types" else {"db": 1}
+    bad["diagnostics"] = {**corpus["diagnostics"], field: legacy_value}
+    assert any("pre-v3" in error for error in DataGenerator.validate_corpus(bad))
+    path = tmp_path / "mislabeled.npz"
+    with pytest.raises(ValueError, match="pre-v3"):
+        pg.save_corpus(bad, path)
+    assert not path.exists()
+    pg.save_corpus(corpus, path)
+    with np.load(path, allow_pickle=False) as stored:
+        payload = dict(stored)
+    payload["diagnostics"] = np.array(json.dumps(bad["diagnostics"]))
+    np.savez(path, **payload)
+    with pytest.raises(ValueError, match="pre-v3"):
+        pg.load_corpus(path)
 
 
 def test_load_corpus_rejects_a_shard_mixing_both_vocabularies(tmp_path, corpus):
     path = tmp_path / "mixed.npz"
-    _write_v1_shard(path, corpus)
+    _write_legacy_shard(path, corpus, 1)
     with np.load(path, allow_pickle=False) as data:
         payload = {key: data[key] for key in data.files}
     payload["n_treatments_active"] = payload["K_active"]
@@ -1215,8 +1273,8 @@ def test_validate_corpus_rejects_graph_edges_incident_to_padding(padded_corpus, 
         "cy": (inactive["c"],),
         "dc": (0, inactive["c"]),
         "dz": (0, inactive["m"]),
-        "db": (inactive["j"],),
-        "zb": (inactive["m"],),
+        "dy": (inactive["j"],),
+        "zy": (inactive["m"],),
         "zc": (inactive["m"], 0),
         "cc": (0, inactive["c"]),
         "zz": (0, inactive["m"]),
@@ -1339,8 +1397,8 @@ def test_validate_corpus_rejects_balanced_null_channel_contribution(corpus):
 @pytest.mark.parametrize(
     ("edge_type", "contribution_key", "message"),
     (
-        ("zb", "control_contribution", "without a Z->B edge"),
-        ("db", "confounder_contribution", "without a D->B edge"),
+        ("zy", "control_contribution", "without a Z->Y edge"),
+        ("dy", "confounder_contribution", "without a D->Y edge"),
     ),
 )
 def test_validate_corpus_rejects_balanced_parentless_baseline_contribution(

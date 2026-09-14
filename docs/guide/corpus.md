@@ -44,10 +44,10 @@ float32/uint8/int32):
 | `treatment_active_mask` / `covariate_active_mask` / `latent_active_mask` | (n_tasks, n_treatments / n_covariates / n_latent) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block, and `short_horizon_n_query` split metadata |
 
-`demand` is a latent factor pinned to mean 0 / scale 1, putting its `D→B`,
+`demand` is a latent factor pinned to mean 0 / scale 1, putting its `D→Y`,
 `D→C`, and `D→Z` magnitude in the loadings. The graph admits an exact sign
-flip (`eps_d`, `w_dc`, `u_dz`, and `delta_db` all negated), but the supported
-prior's strictly positive `db_coeff_range`, `dc_coeff_range`, and
+flip (`eps_d`, `w_dc`, `u_dz`, and `delta_dy` all negated), but the supported
+prior's strictly positive `dy_coeff_range`, `dc_coeff_range`, and
 `dz_coeff_range` exclude the reflected parameters, so demand's sign is
 identified unless a user widens one of those ranges to admit negatives; then
 only `|D|` and the loading magnitudes are recoverable.
@@ -327,29 +327,15 @@ and increment per batch; batching is reproducible but is not equivalent to one
 larger generation call. Consume the iterator as shown to bound retained data,
 or explicitly call `list(...)` if retaining all batches is intentional.
 
-### Schema version and the v1 migration
+### Schema versions
 
-Every corpus records its persisted-schema version in
-`corpus["diagnostics"]["schema_version"]`, which is `2` for anything generated
-today. Version 1 shards used the old symbolic dimension keys; `load_corpus`
-renames them on read **first**, then requires the version to be exactly
-`CORPUS_SCHEMA_VERSION` (`2`) as a non-bool integer — so a `.npz` written
-before the rename stays loadable with no conversion step, while a shard whose
-version is missing, malformed (the string `"2"`), or from the future (`99`) is
-rejected outright rather than half-read. `validate_corpus` reports the same
-condition as an error string, and `save_corpus` raises; `save_corpus` also
-refuses a corpus that still carries v1 keys, so new shards can only contain the
-canonical names. The rename map is
-`prior_generator.slots.LEGACY_CORPUS_KEYS_V1`:
+New corpora use `diagnostics["schema_version"] = 3`. Loading a supported v1/v2
+shard migrates its dimension and outcome-edge metadata in memory without
+changing numerical arrays or their packed positions. Saving requires the
+current vocabulary; it never silently writes an old schema.
 
-| v1 key | v2 key |
-| --- | --- |
-| `K_active` | `n_treatments_active` |
-| `M_active` | `n_covariates_active` |
-| `J_active` | `n_latent_active` |
-| `active_c_mask` | `treatment_active_mask` |
-| `active_m_mask` | `covariate_active_mask` |
-| `active_j_mask` | `latent_active_mask` |
+See the [migration reference](../reference/corpus.md#schema-versions-and-migration)
+for historical key mappings and rejected ambiguous formats.
 
 ### Diagnostics that do not go into the file
 

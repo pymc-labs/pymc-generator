@@ -143,9 +143,9 @@ flowchart LR
 
     D -- "dc" --> C
     D -- "dz" --> Z
-    D -- "db" --> B
+    D -- "dy" --> Y
     Z -- "zc" --> C
-    Z -- "zb" --> B
+    Z -- "zy" --> Y
     Z -. "zz" .-> Z
     C -. "cc" .-> C
     C == "cy — nonlinear:<br/>adstock + saturation" ==> Y
@@ -158,8 +158,8 @@ flowchart LR
 | Type | Edge | Meaning | Effect on Y |
 | --- | --- | --- | --- |
 | `cy` | C → Y | **Direct** media response (adstock + saturation), coeff `βₖ` | direct |
-| `db` | D → B | Demand lifts the baseline | direct (baseline) |
-| `zb` | Z → B | Controls lift the baseline | direct (baseline) |
+| `dy` | D → Y | Demand contributes directly to sales | direct (non-media) |
+| `zy` | Z → Y | Controls contribute directly to sales | direct (non-media) |
 | `dc` | D → C | Demand drives spend — **confounds** attribution | indirect |
 | `zc` | Z → C | Controls drive spend (e.g. promo triggers media) | indirect |
 | `cc` | C → C | Channel **halo** (upstream channels amplify downstream) | indirect |
@@ -186,7 +186,7 @@ Three structural facts do the heavy lifting:
 1. **Only the direct `C → Y` path is nonlinear.** `f_k` is that channel's
    adstock ⊙ saturation response. **Every other loading is additive and linear
    on the child's pre-activation scale** — all the input→input interactions
-   (`dc, zc, cc, dz, zz`) and the baseline drivers (`db, zb`) are plain linear
+   (`dc, zc, cc, dz, zz`) and the baseline drivers (`dy, zy`) are plain linear
    coefficients inside the parenthesis. For `B`, `Z` and `Y` there is no
    parenthesis, so those edges are linear on the *observed* scale too. A
    channel is the exception: `C_k = softplus(...)`, so the observed
@@ -207,7 +207,7 @@ Three structural facts do the heavy lifting:
    the contribution targets degenerate to flat lines. For controls the same two
    terms (`s_m·η`, `c_m·(h − q_m)`) exist for a different reason: a
    smooth-walk-only control occupies the same function space as the smooth
-   baseline walk, which leaves `Z → B` weakly identified against baseline
+   baseline walk, which leaves `Z → Y` weakly identified against baseline
    drift. The control pulse is **centred** on its own fire probability, so both
    added terms are mean-zero and a control's expected level stays `rw_z_mean`
    (i.e. `E[F_m − RW_m] = 0`) — exactly, since a control applies no
@@ -228,7 +228,7 @@ Three structural facts do the heavy lifting:
    censors that intercept (`max(RW_B, floor)`), so it is `≥ floor` by
    construction and may sit exactly *at* it. Keeping the parents outside `B` is
    what makes the floor safe: it clips one additive term, leaving
-   `control_contribution[:, m] = g_zb[m]·ρ[m]·Z[:, m]` exact.
+   `control_contribution[:, m] = g_zy[m]·ρ[m]·Z[:, m]` exact.
 
    **Sales is never censored, and cannot be strictly guaranteed.** With
    `baseline_floor_scope="non_media"` the floor clips the *running* non-media
@@ -435,8 +435,8 @@ fully-decomposed identity:
 ```text
 sales = baseline_intrinsic                 (the intercept B, floored if configured)
       + sales_noise                        (iid observation noise RW_Y)
-      + Σ_j confounder_contribution_j      (D → B)
-      + Σ_m control_contribution_m         (Z → B)
+      + Σ_j confounder_contribution_j      (D → Y)
+      + Σ_m control_contribution_m         (Z → Y)
       + Σ_k contributions_k                (direct C → Y)
       + Σ_s indirect_effects_by_source_s   (s ∈ {cc, zc, dc})
 ```
@@ -588,11 +588,11 @@ and they bound what a model trained on this data can be expected to learn.
 - **Spend is non-negative.** Channels pass through `softplus`, so spend stays ≥ 0
   even when signed upstream terms push the pre-activation below zero.
 - **Latent demand is never observed.** `D` is the hidden confounder that drives
-  both spend (`dc`) and the baseline (`db`) — the exact mechanism that biases
+  both spend (`dc`) and sales (`dy`) — the exact mechanism that biases
   naive attribution. Controls `Z` *are* observed. `D` is pinned to mean 0 /
-  scale 1, putting its `D→B`, `D→C`, and `D→Z` magnitude in the loadings. The
-  graph admits an exact sign flip (`eps_d`, `w_dc`, `u_dz`, and `delta_db` all
-  negated), but the supported prior's strictly positive `db_coeff_range`,
+  scale 1, putting its `D→Y`, `D→C`, and `D→Z` magnitude in the loadings. The
+  graph admits an exact sign flip (`eps_d`, `w_dc`, `u_dz`, and `delta_dy` all
+  negated), but the supported prior's strictly positive `dy_coeff_range`,
   `dc_coeff_range`, and `dz_coeff_range` exclude the reflected parameters, so
   demand's sign is identified unless a user widens one of those ranges to admit
   negatives; then only `|D|` and the loading magnitudes are recoverable.
@@ -698,7 +698,7 @@ cfg = pg.make_scm_prior(
   exactly `N`.
 - Counts are capped at the number of **eligible pairs** for that type.
 - Edge types **omitted** from the dict keep their per-pair Bernoulli base rate —
-  budgeting `zc` leaves `zb` untouched.
+  budgeting `zc` leaves `zy` untouched.
 - `cy` keeps its `≥ 1` floor (a world always has at least one direct channel).
 
 ### Direct-null channels
@@ -814,8 +814,8 @@ decomposition failure can be traced to the mechanism that broke:
 | # | Scenario | Isolates |
 | --- | --- | --- |
 | 0 | `direct_only` | Pure `C→Y`; no interactions — indirect effects are exactly zero |
-| 1 | `confounded_spend` | Latent demand drives both spend (`D→C`) and baseline (`D→B`) |
-| 2 | `promo_drives_spend` | Controls push spend (`Z→C`) and baseline (`Z→B`); demand moves controls (`D→Z`) |
+| 1 | `confounded_spend` | Latent demand drives both spend (`D→C`) and sales (`D→Y`) |
+| 2 | `promo_drives_spend` | Controls push spend (`Z→C`) and sales (`Z→Y`); demand moves controls (`D→Z`) |
 | 3 | `channel_halo` | Channel-to-channel amplification (`C→C`); feeder & isolated-null channels |
 | 4 | `kitchen_sink` | Everything at once at sparse budgets — the hardest decomposition |
 
@@ -829,7 +829,7 @@ scm = pg.sample_scm(sc.prior(n_time_steps=104, seed=0), seed=0,
 scenario whose budgets *rely* on them. Each scenario therefore carries a
 connectivity-only `connect_all_edge_budget` that `Scenario.prior` substitutes
 over `edge_budget` only when connectivity is forced (`channel_halo`:
-`{"zb": (2, 2)}`; `kitchen_sink`: `{"cc": (3, 4)}`). Default, unforced worlds
+`{"zy": (2, 2)}`; `kitchen_sink`: `{"cc": (3, 4)}`). Default, unforced worlds
 are bit-identical to before the substitution existed.
 
 ## Public API

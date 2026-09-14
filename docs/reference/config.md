@@ -13,7 +13,7 @@ its magnitude represented by the outgoing loadings.
 
 A control's own drive is otherwise a smoothed random walk, i.e. the same
 function class as the smooth baseline walk `RW_B`. The two are then nearly
-collinear over a typical horizon, so the `Z → B` loading `rho_zb` trades off
+collinear over a typical horizon, so the `Z → Y` loading `rho_zy` trades off
 against baseline drift and is only weakly identified. These three knobs add the
 high-frequency content a smooth baseline cannot mimic:
 
@@ -85,7 +85,7 @@ cfg = make_scm_prior(baseline_floor=0.0)   # baseline >= 0 by construction
 
 Why this is safe: the intercept carries **no parents**. Latent demand and the
 controls enter `Y` directly, so the floor clips one additive term and
-`control_contribution[:, m]` stays exactly `g_zb[m] * rho_zb[m] * Z[:, m]`.
+`control_contribution[:, m]` stays exactly `g_zy[m] * rho_zy[m] * Z[:, m]`.
 Flooring a sum that contained the parents would break that identity.
 
 The floor is a pure clip: it adds no random variable and consumes no RNG, so a
@@ -127,7 +127,7 @@ for channels. So:
 - the columns still sum **exactly** to the total, so the decomposition identity
   is untouched (measured identity error 1.8e-15);
 - where the floor does not bind, every column equals the linear split
-  ($g^{zb}_m \rho_m Z_m$) and the persisted corpus is byte-identical to the
+  ($g^{zy}_m \rho_m Z_m$) and the persisted corpus is byte-identical to the
   unfloored one.
 
 The cost is that a per-node column is **no longer linear in its node** where the

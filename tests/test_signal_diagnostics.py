@@ -53,8 +53,8 @@ def _direct_only_edge_budget() -> dict[str, int | tuple[int, int]]:
     return {
         "cy": (1, 1),
         "dc": 0,
-        "db": 0,
-        "zb": 0,
+        "dy": 0,
+        "zy": 0,
         "dz": 0,
         "zc": 0,
         "cc": 0,

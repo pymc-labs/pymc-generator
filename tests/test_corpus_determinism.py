@@ -27,7 +27,7 @@ from prior_generator.sampler import (
     MAX_TOPUPS_PER_CELL,
     SCMPrior,
 )
-from prior_generator.slots import CORPUS_SCHEMA_VERSION, LEGACY_CORPUS_KEYS_V1
+from prior_generator.slots import LEGACY_CORPUS_KEYS_V1
 
 
 def _tiny_config(**overrides):
@@ -166,27 +166,6 @@ def test_unsupported_schema_versions_are_refused_everywhere(
         pg.load_corpus(good)
 
 
-def test_a_genuine_v1_shard_still_migrates_and_is_stamped(tmp_path, tiny_corpus):
-    """A v1 shard carries v1 names and NO version — migration runs before the check."""
-    payload = {}
-    for key, value in tiny_corpus.items():
-        if key == "diagnostics":
-            stripped = {k: v for k, v in value.items() if k not in {"schema_version", "timing"}}
-            payload[key] = np.array(json.dumps(stripped))
-        elif key == "identifiability":
-            for label, array in value.items():
-                payload[f"identifiability__{label}"] = array
-        else:
-            payload[key] = value
-    for old, new in LEGACY_CORPUS_KEYS_V1.items():
-        payload[old] = payload.pop(new)
-    path = tmp_path / "v1.npz"
-    np.savez_compressed(path, **payload)
-
-    loaded = pg.load_corpus(path)
-    assert not set(loaded) & set(LEGACY_CORPUS_KEYS_V1)
-    assert loaded["diagnostics"]["schema_version"] == CORPUS_SCHEMA_VERSION
-    assert DataGenerator.validate_corpus(loaded) == []
 
 
 def test_persistence_requires_diagnostics(tmp_path):

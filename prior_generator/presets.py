@@ -1,7 +1,7 @@
 """Complexity presets for the additive-SCM corpus.
 
 The additive SCM fixes the *structure* — the 8-block extended edge layout
-(cy, dc, dz, db, zb, zc, cc, zz), the additive structural equations, and the
+(cy, dc, dz, dy, zy, zc, cc, zz), the additive structural equations, and the
 ``indirect_effects`` outputs. This module dials *complexity* within that fixed
 structure along orthogonal axes, keeping the schema (tensor shapes) identical
 so one model / eval harness serves every complexity level:
@@ -48,7 +48,7 @@ def _linear_family_probs(family_keys: tuple[str, ...]) -> dict[str, float]:
 #:
 #: Controls get the same two high-frequency terms, RELATIVE to each control's
 #: own walk std and with a CENTRED pulse. Without them a control is a smoothed
-#: walk drawn from the same function class as the baseline walk, so ``Z->B`` is
+#: walk drawn from the same function class as the baseline walk, so ``Z->Y`` is
 #: only weakly separable from baseline drift; the added high-frequency content
 #: is what a smooth baseline cannot mimic (and what real promo / holiday /
 #: price-step regressors look like). The ranges keep the diversity spread:
@@ -90,7 +90,7 @@ def make_scm_prior(
         places up to 5 control->channel arrows over the eligible pairs (count
         drawn uniformly in ``{0..5}``, however they land); use ``{"zc": (5, 5)}``
         for exactly 5, or ``{"zc": (2, 5)}`` for a custom range. Each type's pot
-        is independent — budgeting ``zc`` leaves ``zb`` (controls' effect on the
+        is independent — budgeting ``zc`` leaves ``zy`` (controls' effect on the
         outcome) alone. Types omitted from the dict keep their Bernoulli base
         rate. See :class:`SCMPrior.edge_budget`.
         A ``cy`` budget alone cannot reserve an active channel without a direct

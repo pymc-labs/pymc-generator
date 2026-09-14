@@ -65,8 +65,8 @@ def _config(**overrides):
             "cy": (2, 2),
             "dc": (0, 0),
             "dz": (0, 0),
-            "db": (0, 0),
-            "zb": (0, 0),
+            "dy": (0, 0),
+            "zy": (0, 0),
             "zc": (0, 0),
             "cc": (0, 0),
             "zz": (0, 0),
@@ -164,8 +164,8 @@ def test_expanded_audit_preserves_seeded_single_world_outputs():
         "g_cy": np.ones(2, dtype=int),
         "g_dc": np.zeros((1, 2), dtype=int),
         "g_dz": np.zeros((1, 2), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(2, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(2, dtype=int),
         "g_zc": np.zeros((2, 2), dtype=int),
         "g_cc": np.zeros((2, 2), dtype=int),
         "g_zz": np.zeros((2, 2), dtype=int),
@@ -194,8 +194,8 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
         "g_cy": np.ones(2, dtype=int),
         "g_dc": np.zeros((1, 2), dtype=int),
         "g_dz": np.zeros((1, 2), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(2, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(2, dtype=int),
         "g_zc": np.zeros((2, 2), dtype=int),
         "g_cc": np.zeros((2, 2), dtype=int),
         "g_zz": np.zeros((2, 2), dtype=int),
@@ -209,8 +209,8 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
         "v_zc",
         "alpha_cc",
         "gamma_zz",
-        "delta_db",
-        "rho_zb",
+        "delta_dy",
+        "rho_zy",
         *_MECHANISM_PARAM_NAMES,
         "hf_sigma",
         "pulse_amp",
@@ -332,8 +332,8 @@ def test_equations_use_only_active_parents_and_keep_walk_only_nodes():
         "g_cy": np.array([1, 0]),
         "g_dc": np.array([[1, 0]]),
         "g_dz": np.array([[1, 0]]),
-        "g_db": np.array([0]),
-        "g_zb": np.array([0, 0]),
+        "g_dy": np.array([0]),
+        "g_zy": np.array([0, 0]),
         "g_zc": np.array([[1, 0], [0, 0]]),
         "g_cc": np.zeros((2, 2), dtype=int),
         "g_zz": np.array([[0, 1], [0, 0]]),
@@ -360,8 +360,8 @@ def test_response_audit_contains_only_family_specific_shape_parameters():
         "g_cy": np.ones(2, dtype=int),
         "g_dc": np.zeros((1, 2), dtype=int),
         "g_dz": np.zeros((1, 2), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(2, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(2, dtype=int),
         "g_zc": np.zeros((2, 2), dtype=int),
         "g_cc": np.zeros((2, 2), dtype=int),
         "g_zz": np.zeros((2, 2), dtype=int),
@@ -437,8 +437,8 @@ def _edgeless_graph(n_treatments: int = 2, n_covariates: int = 2) -> dict:
         "g_cy": np.ones(n_treatments, dtype=int),
         "g_dc": np.zeros((1, n_treatments), dtype=int),
         "g_dz": np.zeros((1, n_covariates), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(n_covariates, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(n_covariates, dtype=int),
         "g_zc": np.zeros((n_covariates, n_treatments), dtype=int),
         "g_cc": np.zeros((n_treatments, n_treatments), dtype=int),
         "g_zz": np.zeros((n_covariates, n_covariates), dtype=int),
@@ -512,7 +512,6 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     assert "smoothness_y" not in world.extras["structural"]
     assert "smoothness" not in world.params["rw_y"]
     assert "rw_smoothness_max_weeks" not in world.params["rw_y"]
-    assert set(world.equation_parameters["Y"]) == {"iid_noise"}  # edgeless: no Y parents
     assert "smoothness" not in world.equation_parameters["Y"]["iid_noise"]
     assert "RW_full(eps_y" not in world.equations["Y"]
 
@@ -741,8 +740,8 @@ def test_control_texture_leaves_the_parameter_only_saturation_anchor_exact():
             "cy": (2, 2),
             "dc": (0, 0),
             "dz": (0, 0),
-            "db": (0, 0),
-            "zb": (2, 2),
+            "dy": (0, 0),
+            "zy": (2, 2),
             "zc": (2, 2),
             "cc": (0, 0),
             "zz": (0, 0),
@@ -786,7 +785,7 @@ def test_intercept_is_censored_at_the_floor_and_the_parents_stay_exact():
     not offer either guarantee.
     """
     # Low intercept level + a wide absolute-mode walk, so the floor really binds.
-    # Live zb/db edges too, so the "parents stay exact" check is not vacuous.
+    # Live zy/dy edges too, so the "parents stay exact" check is not vacuous.
     stress = {
         "outcome_std_mode": "absolute",
         "rw_baseline_mean_range": (0.5, 1.5),
@@ -799,8 +798,8 @@ def test_intercept_is_censored_at_the_floor_and_the_parents_stay_exact():
             "cy": (2, 2),
             "dc": (0, 0),
             "dz": (0, 0),
-            "db": (1, 1),
-            "zb": (2, 2),
+            "dy": (1, 1),
+            "zy": (2, 2),
             "zc": (0, 0),
             "cc": (0, 0),
             "zz": (0, 0),
@@ -834,8 +833,8 @@ def test_intercept_is_censored_at_the_floor_and_the_parents_stay_exact():
     params, g = floored.params, floored.g
     for m in range(floored.n_covariates):
         expected = (
-            float(np.asarray(g["g_zb"])[m])
-            * float(np.asarray(params["rho_zb"])[m])
+            float(np.asarray(g["g_zy"])[m])
+            * float(np.asarray(params["rho_zy"])[m])
             * np.asarray(floored.data["controls"], dtype=float)[:, m]
         )
         np.testing.assert_allclose(
@@ -874,7 +873,7 @@ def test_sales_is_never_censored_and_the_filter_carries_non_negativity():
 
 
 def _absorbing_stress(**overrides):
-    """Live zb/db edges and a low, wide intercept: the floor really binds."""
+    """Live zy/dy edges and a low, wide intercept: the floor really binds."""
     stress = {
         "outcome_std_mode": "absolute",
         "rw_baseline_mean_range": (0.5, 1.5),
@@ -888,8 +887,8 @@ def _absorbing_stress(**overrides):
             "cy": (2, 2),
             "dc": (0, 0),
             "dz": (0, 0),
-            "db": (2, 2),
-            "zb": (3, 3),
+            "dy": (2, 2),
+            "zy": (3, 3),
             "zc": (0, 0),
             "cc": (0, 0),
             "zz": (0, 0),
@@ -911,7 +910,7 @@ def _non_media(world) -> np.ndarray:
 def test_absorbing_floor_makes_the_whole_non_media_total_non_negative():
     """A negative control effect is credited only down to the floor.
 
-    Flooring the intercept alone cannot stop a large negative ``rho_zb * Z``
+    Flooring the intercept alone cannot stop a large negative ``rho_zy * Z``
     from dragging the non-media total under; ``scope="non_media"`` clips the
     running total instead, so the excess is absorbed. The per-node columns
     become the telescoping difference each node caused, so they still sum

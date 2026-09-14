@@ -70,11 +70,11 @@ def _channel_lines(g: dict, params: dict) -> list[str]:
 
 
 def _control_lines(g: dict, params: dict) -> list[str]:
-    n_covariates = len(g["g_zb"])
+    n_covariates = len(g["g_zy"])
     lines = []
     for m in range(n_covariates):
         bits = [
-            f"Z{m + 1}: zb={int(g['g_zb'][m])}",
+            f"Z{m + 1}: zy={int(g['g_zy'][m])}",
             f"walk(mean={params['rw_z']['mean'][m]:.2f},std={params['rw_z']['std'][m]:.2f},"
             f"smooth={params['rw_z']['smoothness'][m]:.2f})",
             f"control_hf_sigma={params['control_hf_sigma'][m]:.2f}",
@@ -218,8 +218,8 @@ def world_to_dot(world: SCM) -> str:
     library/binary is never invoked; renderable with any external tool)."""
     g, params = world.g, world.params
     n_treatments = len(g["g_cy"])
-    n_covariates = len(g["g_zb"])
-    n_latent = len(g["g_db"])
+    n_covariates = len(g["g_zy"])
+    n_latent = len(g["g_dy"])
     f = io.StringIO()
     f.write("digraph CDAG {\n  rankdir=LR;\n  node [shape=ellipse];\n")
     for k in range(n_treatments):

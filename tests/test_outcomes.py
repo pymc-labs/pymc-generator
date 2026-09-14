@@ -148,7 +148,7 @@ def test_zero_sales_world_reports_an_undefined_share_not_zero():
         l_max=1,
         adstock_burn_in=0,
         nonlinearity="linear",
-        edge_budget=dict.fromkeys(("dc", "dz", "zc", "cc", "zz", "db", "zb"), (0, 0))
+        edge_budget=dict.fromkeys(("dc", "dz", "zc", "cc", "zz", "dy", "zy"), (0, 0))
         | {"cy": (1, 1)},
         rw_baseline_mean_range=(0.0, 0.0),
         rw_baseline_std_range=(0.0, 0.0),

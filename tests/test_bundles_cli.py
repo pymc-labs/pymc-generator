@@ -64,7 +64,7 @@ def test_exported_dag_keeps_the_intercept_parentless(tmp_path):
 
     world = _world(4)
     edges = edges_with_coeffs(world.g, world.params)
-    outcome_edges = [edge for edge in edges if edge[0] in {"db", "zb"}]
+    outcome_edges = [edge for edge in edges if edge[0] in {"dy", "zy"}]
     assert outcome_edges
     assert all(target == "Y" for _, _, target, _ in outcome_edges)
     assert not any(target == "B" for _, _, target, _ in edges)
@@ -182,7 +182,7 @@ def test_scenario_writer_refuses_nonempty_root(tmp_path):
 def test_forced_connectivity_connects_every_node_in_every_scenario(tmp_path):
     """``require_path_to_y=True`` must be attainable for all five scenarios.
 
-    channel_halo budgets ``zb=(1, 1)`` with ``zc=zz=dz=0``, so one of its two
+    channel_halo budgets ``zy=(1, 1)`` with ``zc=zz=dz=0``, so one of its two
     controls has no route to Y at all: forcing connectivity on that budget is
     unsatisfiable at any draw count, not merely unlikely. The scenarios carry
     a ``connect_all_edge_budget`` that substitutes a feasible budget, and this
@@ -208,16 +208,16 @@ def test_scenario_prior_substitutes_the_budget_only_when_forced():
     """``connect_all_edge_budget`` overrides ``edge_budget``, and only then."""
     halo = SCENARIOS[3]
     assert halo.name == "channel_halo" and not halo.connect_all
-    assert halo.connect_all_edge_budget == {"zb": (2, 2)}
+    assert halo.connect_all_edge_budget == {"zy": (2, 2)}
 
     # The default follows the scenario's own policy: traps intact.
-    assert halo.prior(n_time_steps=24, seed=0).edge_budget["zb"] == (1, 1)
-    assert halo.prior(n_time_steps=24, seed=0, connect_all=False).edge_budget["zb"] == (1, 1)
+    assert halo.prior(n_time_steps=24, seed=0).edge_budget["zy"] == (1, 1)
+    assert halo.prior(n_time_steps=24, seed=0, connect_all=False).edge_budget["zy"] == (1, 1)
     forced = halo.prior(n_time_steps=24, seed=0, connect_all=True).edge_budget
-    assert forced["zb"] == (2, 2)
+    assert forced["zy"] == (2, 2)
     # Only the named type moves; everything else is the scenario's own budget.
-    assert {et: v for et, v in forced.items() if et != "zb"} == {
-        et: v for et, v in halo.edge_budget.items() if et != "zb"
+    assert {et: v for et, v in forced.items() if et != "zy"} == {
+        et: v for et, v in halo.edge_budget.items() if et != "zy"
     }
 
     # A scenario that needs no substitution is unaffected by either policy.
@@ -238,15 +238,15 @@ def test_infeasible_forced_scenario_raises_before_writing_anything(tmp_path):
     """
     impossible = Scenario(
         name="impossible_control",
-        purpose="A control with no zb/zc/zz/dz route to Y under forced connectivity.",
+        purpose="A control with no zy/zc/zz/dz route to Y under forced connectivity.",
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
         connect_all=False,
         edge_budget={
             "cy": (2, 2),
-            "db": (1, 1),
-            "zb": (1, 1),
+            "dy": (1, 1),
+            "zy": (1, 1),
             "dc": 0,
             "zc": 0,
             "dz": 0,

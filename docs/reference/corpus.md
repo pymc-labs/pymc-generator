@@ -16,20 +16,27 @@ facade (which adds batching, schema validation, and save-on-generate).
 
 ::: prior_generator.data_generator.load_corpus
 
-## Schema version and the v1 migration
+## Schema versions and migration
 
-`corpus["diagnostics"]["schema_version"]` records the persisted schema version;
-it is `2` for every corpus generated today. Version 1 shards used the old
-symbolic dimension keys. `load_corpus` renames them on read **first** and then
-requires the version to equal `CORPUS_SCHEMA_VERSION` (`2`) as a non-bool
-integer, so `.npz` files written before the rename stay loadable unchanged
-while a missing, malformed (`"2"`) or future (`99`) version raises instead of
-being half-read. `validate_corpus` reports the same condition as an error
-string, and `save_corpus` raises — as it also does when handed a corpus that
-still carries v1 keys, so new shards can only contain the canonical names. The
-rename map is `prior_generator.slots.LEGACY_CORPUS_KEYS_V1`:
+New corpora use integer `diagnostics["schema_version"] = 3`. `save_corpus`
+accepts only the current version and vocabulary. `load_corpus` supports:
 
-| v1 key | v2 key |
+- **v1:** unstamped shards with all six historical dimension keys below.
+- **v2:** explicitly stamped shards with the historical edge order
+  `cy, dc, dz, db, zb, zc, cc, zz`.
+- **v3:** the current vocabulary.
+
+Loading v1/v2 migrates metadata in memory; it does not rewrite the file,
+reorder graph slots, cast arrays, or regenerate values. Missing or malformed
+versions, future versions, partial/mixed dimension vocabularies, conflicting
+edge names, and unrecognized v2 edge orders are rejected.
+
+Call `DataGenerator.validate_corpus` after loading when full shape, numerical,
+and decomposition validation is required.
+
+### Historical dimension names
+
+| v1 key | Current key |
 | --- | --- |
 | `K_active` | `n_treatments_active` |
 | `M_active` | `n_covariates_active` |
@@ -37,6 +44,18 @@ rename map is `prior_generator.slots.LEGACY_CORPUS_KEYS_V1`:
 | `active_c_mask` | `treatment_active_mask` |
 | `active_m_mask` | `covariate_active_mask` |
 | `active_j_mask` | `latent_active_mask` |
+
+### Historical outcome-edge names
+
+The two outcome blocks keep their original positions in packed `g`.
+Their names change from `db` to `dy` and `zb` to `zy` in `edge_types`,
+`edge_base_rates`, `edge_marginals`, and `edge_budget`. The diagnostic
+`min_dead_channels` becomes `min_no_direct_effect_channels`.
+
+The Python API uses only the new names: `g_dy`, `g_zy`, `delta_dy`, `rho_zy`,
+`dy_coeff_range`, and `zy_coeff_range`. Old keyword arguments and graph-dict
+aliases are not supported. These edges enter sales `Y`, not the parentless
+intercept `B`.
 
 ## Timing telemetry is not persisted
 

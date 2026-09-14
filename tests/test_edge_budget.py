@@ -64,16 +64,16 @@ def test_range_pot_varies_within_bounds():
 
 
 def test_pots_are_independent():
-    cfg = _cfg({"zc": (5, 5), "zb": (3, 3)})
+    cfg = _cfg({"zc": (5, 5), "zy": (3, 3)})
     for seed in range(30):
         g = _draw(cfg, seed)
         assert g["g_zc"].sum() == 5
-        assert g["g_zb"].sum() == 3
+        assert g["g_zy"].sum() == 3
 
 
 def test_budgeting_one_type_leaves_others_bernoulli():
     cfg = _cfg({"zc": 5})
-    zb_counts = {int(_draw(cfg, s)["g_zb"].sum()) for s in range(40)}
+    zb_counts = {int(_draw(cfg, s)["g_zy"].sum()) for s in range(40)}
     assert len(zb_counts) > 1
     assert all(_draw(cfg, s)["g_zc"].sum() <= 5 for s in range(40))
 

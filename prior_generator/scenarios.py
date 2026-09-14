@@ -37,7 +37,7 @@ class Scenario:
         Per-edge-type budget entries that OVERRIDE ``edge_budget`` when
         connectivity is forced (``prior(connect_all=True)``). A scenario tuned
         for isolated-null traps can budget an edge type so thinly that "every
-        node reaches Y" is unsatisfiable — a control with no ``zb``/``zc``/
+        node reaches Y" is unsatisfiable — a control with no ``zy``/``zc``/
         ``zz``/``dz`` arrow available cannot reach Y at any draw count — so
         forcing connectivity has to substitute a budget that admits it.
         Entries are chosen empirically as the smallest change reaching a
@@ -110,8 +110,8 @@ SCENARIOS: tuple[Scenario, ...] = (
         connect_all=True,
         edge_budget={
             "cy": (4, 4),
-            "db": (1, 1),
-            "zb": (2, 2),
+            "dy": (1, 1),
+            "zy": (2, 2),
             "dc": 0,
             "zc": 0,
             "cc": 0,
@@ -122,8 +122,8 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         name="confounded_spend",
         purpose=(
-            "Classic MMM confounding: latent demand drives BOTH spend (D→C) and the "
-            "baseline (D→B). The dc indirect column carries the demand-through-spend "
+            "Classic MMM confounding: latent demand drives BOTH spend (D→C) and "
+            "sales (D→Y). The dc indirect column carries the demand-through-spend "
             "effect; naive attribution overcredits channels."
         ),
         n_treatments=4,
@@ -133,8 +133,8 @@ SCENARIOS: tuple[Scenario, ...] = (
         edge_budget={
             "cy": (4, 4),
             "dc": (3, 3),
-            "db": (2, 2),
-            "zb": (2, 2),
+            "dy": (2, 2),
+            "zy": (2, 2),
             "zc": 0,
             "cc": 0,
             "dz": 0,
@@ -145,7 +145,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         name="promo_drives_spend",
         purpose=(
             "Observed controls push spend (Z→C, e.g. promo calendar triggers media) "
-            "AND the baseline (Z→B), with demand also moving the controls (D→Z). "
+            "AND sales (Z→Y), with demand also moving the controls (D→Z). "
             "The zc indirect column carries the control-through-spend effect."
         ),
         n_treatments=4,
@@ -155,8 +155,8 @@ SCENARIOS: tuple[Scenario, ...] = (
         edge_budget={
             "cy": (4, 4),
             "zc": (3, 3),
-            "zb": (3, 3),
-            "db": (1, 1),
+            "zy": (3, 3),
+            "dy": (1, 1),
             "dz": (2, 2),
             "dc": 0,
             "cc": 0,
@@ -181,15 +181,15 @@ SCENARIOS: tuple[Scenario, ...] = (
         edge_budget={
             "cy": (3, 3),
             "cc": (3, 3),
-            "db": (1, 1),
-            "zb": (1, 1),
+            "dy": (1, 1),
+            "zy": (1, 1),
             "dc": 0,
             "zc": 0,
             "dz": 0,
             "zz": 0,
         },
         # Forced connectivity (``prior(connect_all=True)``): with zc=zz=dz=0 a
-        # control's ONLY route to Y is its own Z->B arrow, so zb=(1,1) leaves
+        # control's ONLY route to Y is its own Z->Y arrow, so zy=(1,1) leaves
         # the second control edgeless — permanently isolated, at any draw
         # count. Budgeting both arrows is the whole fix; nothing else needs to
         # move. The channels already cope: g_cc is strict upper triangular
@@ -197,9 +197,9 @@ SCENARIOS: tuple[Scenario, ...] = (
         # take one of the three cy arrows, which leaves the two feeders to be
         # covered by three cc arrows. Measured per-draw feasible fraction
         # (sample_g_additive + worlds.node_status, 4000 draws): 0.00% as
-        # budgeted above -> 17.07% with zb=(2,2), i.e. ~1e-163 odds of
+        # budgeted above -> 17.07% with zy=(2,2), i.e. ~1e-163 odds of
         # exhausting sample_scm's 2000 graph rounds.
-        connect_all_edge_budget={"zb": (2, 2)},
+        connect_all_edge_budget={"zy": (2, 2)},
     ),
     Scenario(
         name="kitchen_sink",
@@ -221,7 +221,7 @@ SCENARIOS: tuple[Scenario, ...] = (
             "dc": (2, 2),
             "zc": (1, 3),
             "cc": (1, 2),
-            "zb": (2, 2),
+            "zy": (2, 2),
             "zz": (1, 2),
         },
         # Forced connectivity: nothing here is structurally impossible, only

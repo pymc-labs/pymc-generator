@@ -41,8 +41,8 @@ def _default_family_probs(name: str) -> dict[str, float]:
 def _structure_test_graph() -> dict[str, np.ndarray]:
     return {
         "g_cy": np.ones(11),
-        "g_zb": np.ones(2),
-        "g_db": np.ones(1),
+        "g_zy": np.ones(2),
+        "g_dy": np.ones(1),
     }
 
 

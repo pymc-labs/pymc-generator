@@ -7,8 +7,8 @@ mechanism that broke. Each fixes graph sizes and per-edge-type arrow budgets.
 | # | Scenario | Isolates |
 | --- | --- | --- |
 | 0 | `direct_only` | Pure `C→Y`; no interactions — indirect effects are exactly zero |
-| 1 | `confounded_spend` | Latent demand drives both spend (`D→C`) and baseline (`D→B`) |
-| 2 | `promo_drives_spend` | Controls push spend (`Z→C`) and baseline (`Z→B`); demand moves controls (`D→Z`) |
+| 1 | `confounded_spend` | Latent demand drives both spend (`D→C`) and sales (`D→Y`) |
+| 2 | `promo_drives_spend` | Controls push spend (`Z→C`) and sales (`Z→Y`); demand moves controls (`D→Z`) |
 | 3 | `channel_halo` | Channel-to-channel amplification (`C→C`); feeder & isolated-null channels |
 | 4 | `kitchen_sink` | Everything at once at sparse budgets — the hardest decomposition |
 
@@ -68,8 +68,8 @@ print("isolated nulls:", iso or "none this draw")
 
 `connect_all=True` rejects any draw with an isolated node, and for a scenario
 designed around isolated nulls that can be infeasible: with `zc = zz = dz = 0`,
-`channel_halo`'s only route from a control to `Y` is its own `Z→B` arrow, so its
-`zb=(1, 1)` budget left the second control permanently isolated — 0.00% of draws
+`channel_halo`'s only route from a control to `Y` is its own `Z→Y` arrow, so its
+`zy=(1, 1)` budget left the second control permanently isolated — 0.00% of draws
 were feasible, and the CLI's `--require-path-to-y` died with
 `RuntimeError: world 'channel_halo': no DAG satisfying the connectivity rule in
 2000 draws` after having already written folders `0`, `1`, `2`.
@@ -77,7 +77,7 @@ were feasible, and the CLI's `--require-path-to-y` died with
 Scenarios therefore carry a second, connectivity-only budget in
 `Scenario.connect_all_edge_budget`, and `Scenario.prior(..., connect_all=...)`
 substitutes its entries over `edge_budget` **only when connectivity is forced**.
-`channel_halo` supplies `{"zb": (2, 2)}` (feasible fraction 0.00% → 17.07%) and
+`channel_halo` supplies `{"zy": (2, 2)}` (feasible fraction 0.00% → 17.07%) and
 `kitchen_sink` supplies `{"cc": (3, 4)}` — with `cy = 4` of 6, the two feeder
 channels each need an outgoing halo arrow and a `(1, 2)` budget can draw just
 one (0.85% → 5.89%). Default, unforced worlds are bit-identical to before.

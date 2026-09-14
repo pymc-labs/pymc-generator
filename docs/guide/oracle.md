@@ -82,7 +82,7 @@ weekly horizons.
 What is comparable, in both modes: `contributions` against
 `world.data["contributions_observed"]` (exactly), and `sales_mu` against
 `world.data["sales"]` for total mean fit. Sampled mode's `baseline` is `B`
-including its `D→B` and `Z→B` parent terms but *excluding* `RW_Y`, while the
+including its `D→Y` and `Z→Y` parent terms but *excluding* `RW_Y`, while the
 persisted `world.data["baseline"]` is `B + RW_Y` — so subtract the persisted
 `world.data["sales_noise"]` column (`RW_Y` is stored in its own right) before
 comparing, or compare against `world.data["baseline_intrinsic"]` plus the
@@ -109,7 +109,7 @@ same order, as the API reference):
     `p(Z | D)` is not modeled. This also deliberately does **not** model
     `p(C | eps_b)` or exploit baseline information encoded through the
     channel–baseline correlation (rho, configured here as confounding strength);
-    demand is inferred from the sales residual via `D → B` only — in sampled
+    demand is inferred from the sales residual via `D → Y` only — in sampled
     mode as an explicit latent, in marginal mode by integrating that same path
     through the residual covariance. This is a
     plug-in-channel qualification, not a claim of exact conditioning.
@@ -131,7 +131,7 @@ same order, as the API reference):
 4. **Posterior-series labels.** Marginal mode has no `demand` and no
    `baseline` deterministic; its full-length `sales_mu` is `E[sales | θ]` and
    excludes every latent walk realization. Sampled mode's `baseline` is `B`
-   (including its `D→B` and `Z→B` parent terms) without `RW_Y`, whereas the
+   (including its `D→Y` and `Z→Y` parent terms) without `RW_Y`, whereas the
    persisted `data["baseline"]` is `B + RW_Y` — subtract the persisted
    `sales_noise` column to compare them. `contributions` is exactly comparable
    with `world.data["contributions_observed"]` in both modes; compare

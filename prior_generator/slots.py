@@ -6,12 +6,12 @@ slot ordering, sizes, and base rates from here — no magic numbers elsewhere.
 The additive SCM uses the extended 8-block edge layout
 (`EDGE_TYPES_EXTENDED`):
 
-    {C->Y, D->C, D->Z, D->B, Z->B, Z->C, C->C, Z->Z}.
+    {C->Y, D->C, D->Z, D->Y, Z->Y, Z->C, C->C, Z->Z}.
 
 Canonical g-vector ordering (LOCKED):
 
     [ g_cy (n_treatments) | g_dc (n_latent * n_treatments)
-    | g_dz (n_latent * n_covariates) | g_db (n_latent) | g_zb (n_covariates)
+    | g_dz (n_latent * n_covariates) | g_dy (n_latent) | g_zy (n_covariates)
     | g_zc (n_covariates * n_treatments)
     | g_cc (n_treatments**2 - n_treatments)
     | g_zz (n_covariates**2 - n_covariates) ]
@@ -42,21 +42,21 @@ N_TIME_STEPS_DEMO = 104  # time steps (weeks) per task (design doc §6.1: 104–
 # --------------------------------------------------------------------------
 P_CY = 0.8  # C_k -> Y   (null channels possible: 1 - 0.8)
 P_DC = 0.5  # D_j -> C_k (endogenous spend)
-P_DB = 0.5  # D_j -> B   (confounding path)
-P_ZB = 0.4  # Z_m -> B
+P_DY = 0.5  # D_j -> Y   (confounding path)
+P_ZY = 0.4  # Z_m -> Y
 P_ZC = 0.3  # Z_m -> C_k (extended layout, unused in demo)
 P_DZ = 0.3  # D_j -> Z_m (extended layout)
 P_CC = 0.15  # C_i -> C_k, i != k (extended layout)
 P_ZZ = 0.1  # Z_i -> Z_m, i != m (extended layout)
 
 # Edge types in the locked canonical block order.
-EDGE_TYPES_EXTENDED: tuple[str, ...] = ("cy", "dc", "dz", "db", "zb", "zc", "cc", "zz")
+EDGE_TYPES_EXTENDED: tuple[str, ...] = ("cy", "dc", "dz", "dy", "zy", "zc", "cc", "zz")
 
 EDGE_BASE_RATES: dict[str, float] = {
     "cy": P_CY,
     "dc": P_DC,
-    "db": P_DB,
-    "zb": P_ZB,
+    "dy": P_DY,
+    "zy": P_ZY,
     "dz": P_DZ,
     "zc": P_ZC,
     "cc": P_CC,
@@ -72,10 +72,10 @@ _SQUARE_TYPES: dict[str, str] = {"cc": "n_treatments", "zz": "n_covariates"}
 # --------------------------------------------------------------------------
 # 1: symbolic dimension keys (``K_active``, ``M_active``, ``J_active``,
 #    ``active_c_mask``, ``active_m_mask``, ``active_j_mask``).
-# 2: canonical descriptive names (see LEGACY_CORPUS_KEYS_V1). Written into
-#    ``diagnostics["schema_version"]``; ``load_corpus`` migrates v1 shards on
-#    read, ``save_corpus`` refuses to write v1 names.
-CORPUS_SCHEMA_VERSION: int = 2
+# 2: descriptive dimension keys, with legacy db/zb outcome-edge names.
+# 3: dy/zy outcome-edge names and an explicitly direct-null channel floor.
+# Packed graph positions and all numeric arrays are unchanged.
+CORPUS_SCHEMA_VERSION: int = 3
 
 #: v1 corpus key -> v2 canonical key, applied by ``load_corpus``.
 LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
@@ -86,6 +86,10 @@ LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
     "active_m_mask": "covariate_active_mask",
     "active_j_mask": "latent_active_mask",
 }
+
+#: Historical v2 order and metadata keys; only the disk reader accepts these.
+LEGACY_EDGE_TYPES_V2: tuple[str, ...] = ("cy", "dc", "dz", "db", "zb", "zc", "cc", "zz")
+LEGACY_EDGE_KEYS_V2: dict[str, str] = {"db": "dy", "zb": "zy"}
 
 # --------------------------------------------------------------------------
 # Prior-conditioning (ACE) layout — design-freeze constants (to-do 01)
@@ -180,8 +184,8 @@ class SlotLayout:
             "cy": self.n_treatments,
             "dc": self.n_latent * self.n_treatments,
             "dz": self.n_latent * self.n_covariates,
-            "db": self.n_latent,
-            "zb": self.n_covariates,
+            "dy": self.n_latent,
+            "zy": self.n_covariates,
             "zc": self.n_covariates * self.n_treatments,
             "cc": self.n_treatments * (self.n_treatments - 1),
             "zz": self.n_covariates * (self.n_covariates - 1),
@@ -209,8 +213,8 @@ class SlotLayout:
             "cy": (self.n_treatments,),
             "dc": (self.n_latent, self.n_treatments),
             "dz": (self.n_latent, self.n_covariates),
-            "db": (self.n_latent,),
-            "zb": (self.n_covariates,),
+            "dy": (self.n_latent,),
+            "zy": (self.n_covariates,),
             "zc": (self.n_covariates, self.n_treatments),
             "cc": (self.n_treatments, self.n_treatments),
             "zz": (self.n_covariates, self.n_covariates),
@@ -225,8 +229,8 @@ class SlotLayout:
         self,
         g_cy=None,
         g_dc=None,
-        g_db=None,
-        g_zb=None,
+        g_dy=None,
+        g_zy=None,
         *,
         g_dz=None,
         g_zc=None,
@@ -247,8 +251,8 @@ class SlotLayout:
         provided = {
             "cy": g_cy,
             "dc": g_dc,
-            "db": g_db,
-            "zb": g_zb,
+            "dy": g_dy,
+            "zy": g_zy,
             "dz": g_dz,
             "zc": g_zc,
             "cc": g_cc,

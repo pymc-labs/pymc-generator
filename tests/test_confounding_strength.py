@@ -27,7 +27,7 @@ def _built(strength_range: tuple[float, float] | None):
         n_covariates=2,
         n_latent=1,
         n_time_steps=24,
-        edge_budget={"cy": (2, 2), "dc": (2, 2), "db": (1, 1), "zc": (2, 2)},
+        edge_budget={"cy": (2, 2), "dc": (2, 2), "dy": (1, 1), "zc": (2, 2)},
         confounding_strength_range=strength_range,
     )
     rng = np.random.default_rng(42)
@@ -95,8 +95,8 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         "g_cy": np.ones(1, dtype=int),
         "g_dc": np.zeros((1, 1), dtype=int),
         "g_dz": np.zeros((1, 1), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(1, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(1, dtype=int),
         "g_zc": np.zeros((1, 1), dtype=int),
         "g_cc": np.zeros((1, 1), dtype=int),
         "g_zz": np.zeros((1, 1), dtype=int),

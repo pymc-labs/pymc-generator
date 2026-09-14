@@ -61,8 +61,8 @@ _LEGACY_WORLD_PARAM_NAMES = tuple(
         "v_zc",
         "alpha_cc",
         "gamma_zz",
-        "delta_db",
-        "rho_zb",
+        "delta_dy",
+        "rho_zy",
         "adstock_alpha",
         "weibull_lam",
         "weibull_k",
@@ -102,8 +102,8 @@ class SCM:
         ``saturation_scale (n_treatments,)``, and
         ``indirect_effects_by_source (n_time_steps, 3)`` in the locked (cc, zc, dc) order.
     g : dict
-        Active-size DAG blocks (``g_cy``, ``g_dc``, ``g_dz``, ``g_db``,
-        ``g_zb``, ``g_zc``, ``g_cc``, ``g_zz``).
+        Active-size DAG blocks (``g_cy``, ``g_dc``, ``g_dz``, ``g_dy``,
+        ``g_zy``, ``g_zc``, ``g_cc``, ``g_zz``).
     params : dict
         Drawn SCM parameters (edge coefficients, per-node random-walk
         params, per-channel mechanism families and texture).
@@ -274,26 +274,26 @@ def path_to_y(g: dict) -> dict[str, bool]:
     """Directed reachability to Y for every node.
 
     A channel reaches Y via its own C->Y edge or a C->C chain into one; a
-    control via Z->B, Z->C into a reaching channel, or a Z->Z chain into a
-    reaching control; a demand via D->B, D->C, or D->Z into reaching nodes.
+    control via Z->Y, Z->C into a reaching channel, or a Z->Z chain into a
+    reaching control; a demand via D->Y, D->C, or D->Z into reaching nodes.
     """
     g_cy = np.asarray(g["g_cy"])
     g_cc = np.asarray(g["g_cc"])
-    g_zb = np.asarray(g["g_zb"])
+    g_zy = np.asarray(g["g_zy"])
     g_zc = np.asarray(g["g_zc"])
     g_zz = np.asarray(g["g_zz"])
-    g_db = np.asarray(g["g_db"])
+    g_dy = np.asarray(g["g_dy"])
     g_dc = np.asarray(g["g_dc"])
     g_dz = np.asarray(g["g_dz"])
-    n_treatments, n_covariates, n_latent = len(g_cy), len(g_zb), len(g_db)
+    n_treatments, n_covariates, n_latent = len(g_cy), len(g_zy), len(g_dy)
 
     c_ok = g_cy == 1
     for _ in range(n_treatments):  # propagate through C->C chains
         c_ok = c_ok | ((g_cc @ c_ok) > 0)
-    z_ok = (g_zb == 1) | ((g_zc @ c_ok) > 0)
+    z_ok = (g_zy == 1) | ((g_zc @ c_ok) > 0)
     for _ in range(n_covariates):  # propagate through Z->Z chains
         z_ok = z_ok | ((g_zz @ z_ok) > 0)
-    d_ok = (g_db == 1) | ((g_dc @ c_ok) > 0) | ((g_dz @ z_ok) > 0)
+    d_ok = (g_dy == 1) | ((g_dc @ c_ok) > 0) | ((g_dz @ z_ok) > 0)
 
     out: dict[str, bool] = {}
     out.update({f"C{k + 1}": bool(c_ok[k]) for k in range(n_treatments)})
@@ -314,13 +314,13 @@ def node_status(g: dict) -> dict[str, str]:
     reach = path_to_y(g)
     g_cy = np.asarray(g["g_cy"])
     g_cc = np.asarray(g["g_cc"])
-    g_zb = np.asarray(g["g_zb"])
+    g_zy = np.asarray(g["g_zy"])
     g_zc = np.asarray(g["g_zc"])
     g_zz = np.asarray(g["g_zz"])
-    g_db = np.asarray(g["g_db"])
+    g_dy = np.asarray(g["g_dy"])
     g_dc = np.asarray(g["g_dc"])
     g_dz = np.asarray(g["g_dz"])
-    n_treatments, n_covariates, n_latent = len(g_cy), len(g_zb), len(g_db)
+    n_treatments, n_covariates, n_latent = len(g_cy), len(g_zy), len(g_dy)
 
     touched: dict[str, bool] = {}
     for k in range(n_treatments):
@@ -329,10 +329,10 @@ def node_status(g: dict) -> dict[str, str]:
         )
     for m in range(n_covariates):
         touched[f"Z{m + 1}"] = bool(
-            g_zb[m] or g_zc[m, :].any() or g_zz[m, :].any() or g_zz[:, m].any() or g_dz[:, m].any()
+            g_zy[m] or g_zc[m, :].any() or g_zz[m, :].any() or g_zz[:, m].any() or g_dz[:, m].any()
         )
     for j in range(n_latent):
-        touched[f"D{j + 1}"] = bool(g_db[j] or g_dc[j, :].any() or g_dz[j, :].any())
+        touched[f"D{j + 1}"] = bool(g_dy[j] or g_dc[j, :].any() or g_dz[j, :].any())
 
     return {
         n: ("connected" if reach[n] else ("isolated" if not touched[n] else "dead-end"))
@@ -344,7 +344,7 @@ def edges_with_coeffs(g: dict, params: dict) -> list[tuple[str, str, str, float]
     """(edge_type, src, dst, coefficient) for every active edge."""
     out: list[tuple[str, str, str, float]] = []
     n_latent, n_treatments = np.asarray(g["g_dc"]).shape
-    n_covariates = np.asarray(g["g_zb"]).shape[0]
+    n_covariates = np.asarray(g["g_zy"]).shape[0]
     for k in range(n_treatments):
         if g["g_cy"][k]:
             out.append(("cy", f"C{k + 1}", "Y", float(params["beta"][k])))
@@ -355,14 +355,14 @@ def edges_with_coeffs(g: dict, params: dict) -> list[tuple[str, str, str, float]
         for m in range(n_covariates):
             if g["g_dz"][j, m]:
                 out.append(("dz", f"D{j + 1}", f"Z{m + 1}", float(params["u_dz"][j, m])))
-        if g["g_db"][j]:
-            out.append(("db", f"D{j + 1}", "Y", float(params["delta_db"][j])))
+        if g["g_dy"][j]:
+            out.append(("dy", f"D{j + 1}", "Y", float(params["delta_dy"][j])))
     for m in range(n_covariates):
         for k in range(n_treatments):
             if g["g_zc"][m, k]:
                 out.append(("zc", f"Z{m + 1}", f"C{k + 1}", float(params["v_zc"][m, k])))
-        if g["g_zb"][m]:
-            out.append(("zb", f"Z{m + 1}", "Y", float(params["rho_zb"][m])))
+        if g["g_zy"][m]:
+            out.append(("zy", f"Z{m + 1}", "Y", float(params["rho_zy"][m])))
         for m2 in range(n_covariates):
             if g["g_zz"][m, m2]:
                 out.append(("zz", f"Z{m + 1}", f"Z{m2 + 1}", float(params["gamma_zz"][m, m2])))
@@ -505,11 +505,11 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
     # the intercept alone (with its floor, when configured).
     y_parents: dict[str, float] = {}
     for j in range(n_latent):
-        if g["g_db"][j]:
-            y_parents[f"D{j + 1}"] = float(np.asarray(params["delta_db"])[j])
+        if g["g_dy"][j]:
+            y_parents[f"D{j + 1}"] = float(np.asarray(params["delta_dy"])[j])
     for m in range(n_covariates):
-        if g["g_zb"][m]:
-            y_parents[f"Z{m + 1}"] = float(np.asarray(params["rho_zb"])[m])
+        if g["g_zy"][m]:
+            y_parents[f"Z{m + 1}"] = float(np.asarray(params["rho_zy"])[m])
     values["B"] = {"random_walk": _rw_parameters(params, "rw_b", 0)}
     if world.cfg.baseline_floor is not None:
         values["B"]["floor"] = float(world.cfg.baseline_floor)
@@ -703,15 +703,15 @@ def _build_equations(world: SCM) -> dict[str, str]:
         "indirect_effects_by_source = [IE_cc, IE_zc, IE_dc]; "
         "indirect_effects = sum_k(contributions_observed[:, k] - contributions[:, k])."
     )
-    b_terms = [f"delta_db[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_db"][j]] + [
-        f"rho_zb[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zb"][m]
+    b_terms = [f"delta_dy[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_dy"][j]] + [
+        f"rho_zy[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zy"][m]
     ]
     if floor is not None and world.cfg.baseline_floor_scope == "non_media":
         non_media = (
             f"non_media_full = clip the running total at {float(floor)} as each parent "
             "joins, in the locked order B -> D1..DJ -> Z1..ZM; each per-node column is "
             "the telescoping difference that node caused, so the columns still sum "
-            "exactly to non_media_full while a negative rho_zb * Z is credited only "
+            "exactly to non_media_full while a negative rho_zy * Z is credited only "
             "down to the floor"
         )
     else:
@@ -768,7 +768,7 @@ def draw_feasible_graph(
         The accepted active-size ``g`` blocks, or None when all
         ``max_graph_rounds`` draws failed the rule — the budget then admits no
         satisfying DAG at all (a budget can make one structurally impossible:
-        controls with no ``zb``/``zc``/``zz``/``dz`` arrow can never reach Y),
+        controls with no ``zy``/``zc``/``zz``/``dz`` arrow can never reach Y),
         or admits one too rarely to find. None rather than an exception so a
         caller can probe several configs and report every infeasible one at
         once.

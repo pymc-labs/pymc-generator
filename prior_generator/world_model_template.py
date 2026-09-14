@@ -56,8 +56,8 @@ TEMPLATE_STRUCTURE_INPUT_NAMES: tuple[str, ...] = (
     "g_cy",
     "g_dc",
     "g_dz",
-    "g_db",
-    "g_zb",
+    "g_dy",
+    "g_zy",
     "g_zc",
     "g_cc",
     "g_zz",
@@ -127,8 +127,8 @@ def build_cell_inputs(
         "g_cy": np.asarray(g["g_cy"][:n_treatments], dtype="float64"),
         "g_dc": np.asarray(g["g_dc"][:n_latent, :n_treatments], dtype="float64"),
         "g_dz": np.asarray(g["g_dz"][:n_latent, :n_covariates], dtype="float64"),
-        "g_db": np.asarray(g["g_db"][:n_latent], dtype="float64"),
-        "g_zb": np.asarray(g["g_zb"][:n_covariates], dtype="float64"),
+        "g_dy": np.asarray(g["g_dy"][:n_latent], dtype="float64"),
+        "g_zy": np.asarray(g["g_zy"][:n_covariates], dtype="float64"),
         "g_zc": np.asarray(g["g_zc"][:n_covariates, :n_treatments], dtype="float64"),
         "g_cc": np.asarray(g["g_cc"][:n_treatments, :n_treatments], dtype="float64"),
         "g_zz": np.asarray(g["g_zz"][:n_covariates, :n_covariates], dtype="float64"),
@@ -213,7 +213,7 @@ def build_world_model_template(
         data = {name: pm.Data(name, init_inputs[name]) for name in TEMPLATE_STRUCTURE_INPUT_NAMES}
         g_data = {
             key: data[key]
-            for key in ("g_cy", "g_dc", "g_dz", "g_db", "g_zb", "g_zc", "g_cc", "g_zz")
+            for key in ("g_cy", "g_dc", "g_dz", "g_dy", "g_zy", "g_zc", "g_cc", "g_zz")
         }
         active_data = {
             key: data[key] for key in ("active_treatment", "active_covariate", "active_latent")

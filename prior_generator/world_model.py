@@ -186,8 +186,8 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     inside :func:`build_world_model`.
     """
     n_treatments = len(g_active["g_cy"])
-    n_covariates = len(g_active["g_zb"])
-    n_latent = len(g_active["g_db"])
+    n_covariates = len(g_active["g_zy"])
+    n_latent = len(g_active["g_dy"])
     ad_fam = rng.choice(
         len(ADSTOCK_FAMILY_KEYS),
         size=n_treatments,
@@ -506,17 +506,17 @@ def _walk_priors(
     if "d" in include:
         # A latent factor carries no scale or level of its own: both belong to
         # its loadings. Leaving rw_d_mean / rw_d_std free made
-        # (sigma_d, w_dc, u_dz, delta_db) -> (lam*sigma_d, w/lam, u/lam, delta/lam)
-        # an exact symmetry of every observable, and delta_db*mu_d was
+        # (sigma_d, w_dc, u_dz, delta_dy) -> (lam*sigma_d, w/lam, u/lam, delta/lam)
+        # an exact symmetry of every observable, and delta_dy*mu_d was
         # absorbed by rw_b_mean, so neither factor was recoverable. Pinning the
         # factor to mean 0 / scale 1 puts the whole D->* magnitude in the
         # loadings, which is what the data identifies.
         # The graph also admits a sign flip: negating eps_d together with w_dc,
-        # u_dz, and delta_db flips demand's sign while leaving every other output
+        # u_dz, and delta_dy flips demand's sign while leaving every other output
         # unchanged. The supported prior
         # assigns all three loading families strictly positive ranges, so the
         # reflection is outside support and demand's sign is identified. If a
-        # user widens db_coeff_range / dc_coeff_range / dz_coeff_range to admit
+        # user widens dy_coeff_range / dc_coeff_range / dz_coeff_range to admit
         # negatives, only |D| and the loading magnitudes are recoverable.
         out["rw_d"] = _rw_prior_group(
             "rw_d",
@@ -631,8 +631,8 @@ def _scm_params(
         "v_zc": _uniform(*specs["v_zc"]),
         "alpha_cc": _uniform(*specs["alpha_cc"]),
         "gamma_zz": _uniform(*specs["gamma_zz"]),
-        "delta_db": _uniform(*specs["delta_db"]),
-        "rho_zb": _uniform(*specs["rho_zb"]),
+        "delta_dy": _uniform(*specs["delta_dy"]),
+        "rho_zy": _uniform(*specs["rho_zy"]),
         "beta": _uniform(*specs["beta"]),
         # per-node random walks and iid outcome noise
         "rw_d": rw["rw_d"],
@@ -723,8 +723,8 @@ def _register_param_reports(
         "v_zc": params["v_zc"],
         "alpha_cc": params["alpha_cc"],
         "gamma_zz": params["gamma_zz"],
-        "delta_db": params["delta_db"],
-        "rho_zb": params["rho_zb"],
+        "delta_dy": params["delta_dy"],
+        "rho_zy": params["rho_zy"],
         # every per-channel mechanism shape parameter
         **{name: params[name] for name in _MECHANISM_PARAM_NAMES},
         # channel texture magnitudes and fire probability
@@ -895,8 +895,8 @@ def _uniform_prior_specs(
         "v_zc": ("v_zc", cfg.zc_coeff_range[0], cfg.zc_coeff_range[1], (n_c, n_t)),
         "alpha_cc": ("alpha_cc", cfg.cc_coeff_range[0], cfg.cc_coeff_range[1], (n_t, n_t)),
         "gamma_zz": ("gamma_zz", cfg.zz_coeff_range[0], cfg.zz_coeff_range[1], (n_c, n_c)),
-        "delta_db": ("delta_db", cfg.db_coeff_range[0], cfg.db_coeff_range[1], n_l),
-        "rho_zb": ("rho_zb", cfg.zb_coeff_range[0], cfg.zb_coeff_range[1], n_c),
+        "delta_dy": ("delta_dy", cfg.dy_coeff_range[0], cfg.dy_coeff_range[1], n_l),
+        "rho_zy": ("rho_zy", cfg.zy_coeff_range[0], cfg.zy_coeff_range[1], n_c),
         "beta": ("beta", cfg.beta_additive_range[0], cfg.beta_additive_range[1], n_t),
         # per-channel mechanism shape priors (adstock + saturation families)
         "adstock_alpha": ("adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], n_t),
@@ -1003,8 +1003,8 @@ def build_world_model(
         and the output names, in graph order.
     """
     n_treatments = len(g_active["g_cy"])
-    n_covariates = len(g_active["g_zb"])
-    n_latent = len(g_active["g_db"])
+    n_covariates = len(g_active["g_zy"])
+    n_latent = len(g_active["g_dy"])
     burn_in = cfg.adstock_burn_in
     n_time_steps_full = n_time_steps + burn_in
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
@@ -1148,7 +1148,7 @@ def build_oracle_model(
     -------
     pm.Model
         In marginal mode, free RVs are the outcome-side priors (``beta``,
-        live mechanism shapes, ``delta_db``, ``rho_zb``, and walk parameters)
+        live mechanism shapes, ``delta_dy``, ``rho_zy``, and walk parameters)
         without latent walk innovations. Deterministics ``contributions``
         (n_time_steps, n_treatments) and ``sales_mu`` (n_time_steps,) remain;
         ``sales_mu`` is ``E[sales | theta]`` and excludes latent walk
@@ -1172,7 +1172,7 @@ def build_oracle_model(
        about latent demand through ``p(C | D)`` / ``p(Z | D)`` is not modeled
        — including baseline information encoded through the channel–baseline
        correlation (rho, configured here as confounding strength). In sampled
-       mode demand is inferred from the sales residual via ``D -> B`` only; in
+       mode demand is inferred from the sales residual via ``D -> Y`` only; in
        marginal mode that same demand path is integrated through the residual
        covariance. Neither mode posits ``p(C | eps_b)`` or claims exact
        conditioning.
@@ -1189,8 +1189,8 @@ def build_oracle_model(
     4. **Posterior-series labels**: marginal mode has no ``demand`` or
        ``baseline`` deterministic. Its full-length ``sales_mu`` is
        ``E[sales | theta]`` and excludes every latent walk realization.
-       Sampled mode's ``baseline`` is ``B`` (including its ``D -> B`` and
-       ``Z -> B`` parent terms) without ``RW_Y``, while persisted
+       Sampled mode's ``baseline`` is ``B`` (including its ``D -> Y`` and
+       ``Z -> Y`` parent terms) without ``RW_Y``, while persisted
        ``data["baseline"]`` is ``B + RW_Y``; it is therefore not directly
        comparable. ``contributions`` is exactly comparable with
        ``world.data["contributions_observed"]`` in both modes; compare
@@ -1240,8 +1240,8 @@ def build_oracle_model(
         raise ValueError(f"latent must be 'marginal' or 'sampled', got {latent!r}")
 
     n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
-    n_covariates = len(g_active["g_zb"])  # observed controls
-    n_latent = len(g_active["g_db"])  # hidden confounders
+    n_covariates = len(g_active["g_zy"])  # observed controls
+    n_latent = len(g_active["g_dy"])  # hidden confounders
     channels = np.asarray(data["channels"], dtype="float64")
     controls = np.asarray(data["controls"], dtype="float64")
     sales = np.asarray(data["sales"], dtype="float64")
@@ -1276,8 +1276,8 @@ def build_oracle_model(
     g_cy = np.asarray(g_active["g_cy"], dtype="float64")
     adstock_family = np.asarray(structural["adstock_family"])
     burn_in = cfg.adstock_burn_in
-    g_db = np.asarray(g_active["g_db"], dtype="float64")
-    g_zb = np.asarray(g_active["g_zb"], dtype="float64")
+    g_dy = np.asarray(g_active["g_dy"], dtype="float64")
+    g_zy = np.asarray(g_active["g_zy"], dtype="float64")
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
     # How far back the response reaches decides how many leading weeks the
     # zero-padded convolution of reported spend cannot reproduce. The families
@@ -1330,8 +1330,8 @@ def build_oracle_model(
         )
         beta = _uniform(*specs["beta"])
         _apply_outcome_std_scale(cfg, rw, g_cy, beta)
-        delta_db = _uniform(*specs["delta_db"])
-        rho_zb = _uniform(*specs["rho_zb"])
+        delta_dy = _uniform(*specs["delta_dy"])
+        rho_zy = _uniform(*specs["rho_zy"])
         mech: dict[str, Any] = {name: _uniform(*specs[name]) for name in mech_names}
         mech_params: dict[str, Any] = {
             "l_max": cfg.l_max,
@@ -1355,7 +1355,7 @@ def build_oracle_model(
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
             contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
-        term_bz = pt.dot(pt.as_tensor_variable(controls), g_zb * rho_zb)  # (n_time_steps,)
+        term_zy = pt.dot(pt.as_tensor_variable(controls), g_zy * rho_zy)  # (n_time_steps,)
 
         if latent == "marginal":
             if cfg.baseline_floor is not None:
@@ -1368,7 +1368,7 @@ def build_oracle_model(
                 )
             sales_mu = pm.Deterministic(
                 "sales_mu",
-                rw["rw_b"]["mean"][0] + term_bz + contributions.sum(axis=1),
+                rw["rw_b"]["mean"][0] + term_zy + contributions.sum(axis=1),
             )
             covariance = (rw["rw_b"]["std"][0] ** 2) * pt.as_tensor_variable(
                 _walk_gram(structural["smoothness_b"][0])
@@ -1377,9 +1377,9 @@ def build_oracle_model(
                 rows.size, dtype="float64"
             )
             for j in range(n_latent):
-                if g_db[j] == 0.0:
+                if g_dy[j] == 0.0:
                     continue
-                loading = g_db[j] * delta_db[j]
+                loading = g_dy[j] * delta_dy[j]
                 covariance = covariance + (loading**2) * pt.as_tensor_variable(
                     _walk_gram(structural["smoothness_d"][j])
                 )
@@ -1416,15 +1416,15 @@ def build_oracle_model(
                 # in the same locked order (confounders, then controls).
                 running = _clip(walk_b[window])
                 for j in range(n_latent):
-                    running = _clip(running + (g_db[j] * delta_db[j]) * D_full[window][:, j])
+                    running = _clip(running + (g_dy[j] * delta_dy[j]) * D_full[window][:, j])
                 for m in range(n_covariates):
                     running = _clip(
-                        running + (g_zb[m] * rho_zb[m]) * pt.as_tensor_variable(controls)[:, m]
+                        running + (g_zy[m] * rho_zy[m]) * pt.as_tensor_variable(controls)[:, m]
                     )
                 baseline = pm.Deterministic("baseline", running)
             else:
-                term_bd = pt.dot(D_full[window], g_db * delta_db)  # (n_time_steps,)
-                baseline = pm.Deterministic("baseline", term_bd + term_bz + _clip(walk_b)[window])
+                term_dy = pt.dot(D_full[window], g_dy * delta_dy)  # (n_time_steps,)
+                baseline = pm.Deterministic("baseline", term_dy + term_zy + _clip(walk_b)[window])
             sales_mu = pm.Deterministic("sales_mu", baseline + contributions.sum(axis=1))
             pm.Normal(
                 "sales",

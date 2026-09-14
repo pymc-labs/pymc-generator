@@ -34,9 +34,9 @@ flowchart LR
 
     D -- "dc" --> C
     D -- "dz" --> Z
-    D -- "db" --> B
+    D -- "dy" --> Y
     Z -- "zc" --> C
-    Z -- "zb" --> B
+    Z -- "zy" --> Y
     Z -. "zz" .-> Z
     C -. "cc" .-> C
     C == "cy — nonlinear:<br/>adstock + saturation" ==> Y
@@ -49,8 +49,8 @@ flowchart LR
 | Type | Edge | Meaning | Effect on Y |
 | --- | --- | --- | --- |
 | `cy` | C → Y | **Direct** media response (adstock + saturation), coeff `βₖ` | direct |
-| `db` | D → B | Demand lifts the baseline | direct (baseline) |
-| `zb` | Z → B | Controls lift the baseline | direct (baseline) |
+| `dy` | D → Y | Demand contributes directly to sales | direct (non-media) |
+| `zy` | Z → Y | Controls contribute directly to sales | direct (non-media) |
 | `dc` | D → C | Demand drives spend — **confounds** attribution | indirect |
 | `zc` | Z → C | Controls drive spend (e.g. promo triggers media) | indirect |
 | `cc` | C → C | Channel **halo** (upstream channels amplify downstream) | indirect |
@@ -79,7 +79,7 @@ Two structural facts do the heavy lifting:
 1. **Only the direct `C → Y` path is nonlinear.** $f_k$ is that channel's
    adstock ⊙ saturation response. **Every other loading is additive and linear
    on the child's pre-activation scale** — all the input→input interactions
-   (`dc, zc, cc, dz, zz`) and the baseline drivers (`db, zb`) are plain linear
+   (`dc, zc, cc, dz, zz`) and the baseline drivers (`dy, zy`) are plain linear
    coefficients. Interaction *structure* is rich; interaction *shape* is
    linear.
 
@@ -123,7 +123,7 @@ Two structural facts do the heavy lifting:
 
 A smooth-walk-only control is drawn from the **same function space as the
 smooth baseline walk** $\mathrm{RW}_B$. Over a typical horizon the two are
-nearly collinear, so $\rho_m$ (the `Z → B` loading) trades off against baseline
+nearly collinear, so $\rho_m$ (the `Z → Y` loading) trades off against baseline
 drift and is only weakly identified — an unregularised fit blows up, and a
 shrinking estimator is doing the right thing on an unidentified direction.
 
@@ -168,7 +168,7 @@ A censored walk — not a softplus — so `B` can sit exactly *at* the floor, wh
 is what a baseline that "can be zero but never negative" means. Keeping the
 parents outside `B` is precisely what makes this safe: the floor clips **one**
 additive term, so `control_contribution[:, m]` stays exactly
-$g^{zb}_m \rho_m Z_{m}$ and the decomposition stays exact. Flooring a sum that
+$g^{zy}_m \rho_m Z_{m}$ and the decomposition stays exact. Flooring a sum that
 contained the parents would destroy that.
 
 `baseline_floor_scope` decides *what* the floor clips. The default,
@@ -212,7 +212,7 @@ in its node where the floor binds.
 ## A drawn graph
 
 Here is one graph, drawn live. Latent `D` confounds spend through `D→C` (red)
-while also lifting the baseline through `D→B` — the exact mechanism that biases
+while also affecting sales through `D→Y` — the exact mechanism that biases
 naive attribution.
 
 ```python exec="1" source="material-block" html="1"
@@ -292,7 +292,7 @@ deliberate, and they bound what a model trained on this data can learn.
   softplus-curved for a channel).
 - **Spend is non-negative.** Channels pass through `softplus`.
 - **Latent demand is never observed.** `D` drives both spend (`dc`) and the
-  baseline (`db`) — getting attribution right despite `D` is the core task.
+  sales (`dy`) — getting attribution right despite `D` is the core task.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
   triangle.
 - **κ-relative saturation.** Each curve's knee is set from a parameter-only

@@ -34,7 +34,7 @@ curve (without it, contribution targets degenerate to flat lines; the
 neutral defaults σ_k = 0, p_k = 0 disable both). The control own drive ``F_m``
 carries the same two terms (s_m, c_m, q_m), for a different reason: a
 smooth-walk-only control lives in the same function space as the smooth
-baseline walk, which leaves ``Z → B`` weakly identified against baseline
+baseline walk, which leaves ``Z → Y`` weakly identified against baseline
 drift. Its pulse is CENTRED (``h − q``) because a control is signed and its
 level belongs to ``rw_z_mean``: both added terms are then mean-zero, so
 ``E[Z_m]`` — which a control's softplus-free equation realizes EXACTLY — and
@@ -438,7 +438,7 @@ def build_symbolic_graph(
     g : dict
         Edge indicators: ``g_cy`` (n_treatments,),
         ``g_dc`` (n_latent, n_treatments), ``g_dz`` (n_latent, n_covariates),
-        ``g_db`` (n_latent,), ``g_zb`` (n_covariates,),
+        ``g_dy`` (n_latent,), ``g_zy`` (n_covariates,),
         ``g_zc`` (n_covariates, n_treatments),
         ``g_cc`` (n_treatments, n_treatments, strictly upper-triangular),
         ``g_zz`` (n_covariates, n_covariates, strictly upper-triangular).
@@ -504,8 +504,8 @@ def build_symbolic_graph(
     Notes
     -----
     Per-node terms split the aggregated D->Y / Z->Y baseline-side terms:
-    ``control_contribution[:, m] = g_zb[m]·ρ[m]·Z[:, m]`` and
-    ``confounder_contribution[:, j] = g_db[j]·δ[j]·D[:, j]``, with
+    ``control_contribution[:, m] = g_zy[m]·ρ[m]·Z[:, m]`` and
+    ``confounder_contribution[:, j] = g_dy[j]·δ[j]·D[:, j]``, with
     ``baseline_intrinsic = B`` (the floored intercept alone) and
     ``sales_noise = RW_Y``, so
     ``baseline_intrinsic + sales_noise + Σ_j confounder_contribution
@@ -532,8 +532,8 @@ def build_symbolic_graph(
         g_cy = _arr(g["g_cy"], (n_treatments,))
         g_dc = _arr(g["g_dc"], (n_latent, n_treatments))
         g_dz = _arr(g["g_dz"], (n_latent, n_covariates))
-        g_db = _arr(g["g_db"], (n_latent,))
-        g_zb = _arr(g["g_zb"], (n_covariates,))
+        g_dy = _arr(g["g_dy"], (n_latent,))
+        g_zy = _arr(g["g_zy"], (n_covariates,))
         g_zc = _arr(g["g_zc"], (n_covariates, n_treatments))
         g_cc = _arr(g["g_cc"], (n_treatments, n_treatments))
         g_zz = _arr(g["g_zz"], (n_covariates, n_covariates))
@@ -541,8 +541,8 @@ def build_symbolic_graph(
         g_cy = np.asarray(g["g_cy"], dtype="float64")
         g_dc = np.asarray(g["g_dc"], dtype="float64").reshape(n_latent, n_treatments)
         g_dz = np.asarray(g["g_dz"], dtype="float64").reshape(n_latent, n_covariates)
-        g_db = np.asarray(g["g_db"], dtype="float64").reshape(n_latent)
-        g_zb = np.asarray(g["g_zb"], dtype="float64").reshape(n_covariates)
+        g_dy = np.asarray(g["g_dy"], dtype="float64").reshape(n_latent)
+        g_zy = np.asarray(g["g_zy"], dtype="float64").reshape(n_covariates)
         g_zc = np.asarray(g["g_zc"], dtype="float64").reshape(n_covariates, n_treatments)
         g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(n_treatments, n_treatments)
         g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(n_covariates, n_covariates)
@@ -668,7 +668,7 @@ def build_symbolic_graph(
         # Own exogenous drive = smoothed walk + iid weekly noise + centred
         # calendar pulses. Without the high-frequency terms a control is a
         # smoothed walk over the SAME function space as the baseline walk, so
-        # rho_zb trades off against baseline drift and Z->B is only weakly
+        # rho_zy trades off against baseline drift and Z->Y is only weakly
         # identified. Both terms are mean-zero (the pulse subtracts its own fire
         # probability), so E[Z_m] is unchanged and _reference_levels stays exact.
         own = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
@@ -747,7 +747,7 @@ def build_symbolic_graph(
     # ``baseline_floor_scope`` decides WHAT the floor clips.
     #
     # "intercept": clip the intercept walk only. Every other term stays exactly
-    #     linear in its node (``control_contribution[:, m] == g_zb·ρ·Z``), which
+    #     linear in its node (``control_contribution[:, m] == g_zy·ρ·Z``), which
     #     is the cheapest, most estimator-friendly option — but a large negative
     #     ρ·Z can still drag the non-media total (and sales) below zero.
     # "non_media": clip the RUNNING TOTAL as each parent is added, in the LOCKED
@@ -762,8 +762,8 @@ def build_symbolic_graph(
     #         is untouched;
     #       * where the floor does not bind, every column is bit-identical to the
     #         linear split, so this is a clip and never a re-parameterisation.
-    delta_db = _arr(params["delta_db"], (n_latent,))
-    rho_zb = _arr(params["rho_zb"], (n_covariates,))
+    delta_dy = _arr(params["delta_dy"], (n_latent,))
+    rho_zy = _arr(params["rho_zy"], (n_covariates,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)
     baseline_floor = params.get("baseline_floor")
     floor_scope = params.get("baseline_floor_scope", "intercept")
@@ -773,10 +773,10 @@ def build_symbolic_graph(
         return expr if baseline_floor is None else pt.maximum(expr, float(baseline_floor))
 
     intercept = _clip(walk_b)
-    term_bd = _dot_terms(d_cols, g_db, delta_db, n_time_steps_full, **dot_kw)
-    term_bz = _dot_terms(z_cols, g_zb, rho_zb, n_time_steps_full, **dot_kw)
+    term_dy = _dot_terms(d_cols, g_dy, delta_dy, n_time_steps_full, **dot_kw)
+    term_zy = _dot_terms(z_cols, g_zy, rho_zy, n_time_steps_full, **dot_kw)
 
-    # -- per-node direct baseline terms (an exact split of term_bd / term_bz) --
+    # -- per-node direct baseline terms (an exact split of term_dy / term_zy) --
     if absorb:
         # Sequential graph surgery on the running non-media total. ``running`` is
         # the clipped total after each node joins; the column a node contributes
@@ -793,27 +793,27 @@ def build_symbolic_graph(
         running = intercept
         confounder_contrib_cols = []
         for j in range(n_latent):
-            if not _edge_live(g_db, j):
+            if not _edge_live(g_dy, j):
                 confounder_contrib_cols.append(zero_col)
                 continue
-            nxt = _clip(running + (g_db[j] * delta_db[j]) * d_cols[j])
+            nxt = _clip(running + (g_dy[j] * delta_dy[j]) * d_cols[j])
             confounder_contrib_cols.append(nxt - running)
             running = nxt
         control_contrib_cols = []
         for m in range(n_covariates):
-            if not _edge_live(g_zb, m):
+            if not _edge_live(g_zy, m):
                 control_contrib_cols.append(zero_col)
                 continue
-            nxt = _clip(running + (g_zb[m] * rho_zb[m]) * z_cols[m])
+            nxt = _clip(running + (g_zy[m] * rho_zy[m]) * z_cols[m])
             control_contrib_cols.append(nxt - running)
             running = nxt
         non_media = running
     else:
-        # column m of control_contribution   = g_zb[m]·ρ[m]·Z[:,m]  (sums to term_bz)
-        # column j of confounder_contribution = g_db[j]·δ[j]·D[:,j] (sums to term_bd)
-        control_contrib_cols = [(g_zb[m] * rho_zb[m]) * z_cols[m] for m in range(n_covariates)]
-        confounder_contrib_cols = [(g_db[j] * delta_db[j]) * d_cols[j] for j in range(n_latent)]
-        non_media = intercept + term_bd + term_bz
+        # column m of control_contribution   = g_zy[m]·ρ[m]·Z[:,m]  (sums to term_zy)
+        # column j of confounder_contribution = g_dy[j]·δ[j]·D[:,j] (sums to term_dy)
+        control_contrib_cols = [(g_zy[m] * rho_zy[m]) * z_cols[m] for m in range(n_covariates)]
+        confounder_contrib_cols = [(g_dy[j] * delta_dy[j]) * d_cols[j] for j in range(n_latent)]
+        non_media = intercept + term_dy + term_zy
     control_contribution = (
         pt.stack(control_contrib_cols, axis=1)
         if n_covariates > 0

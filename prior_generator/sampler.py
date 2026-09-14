@@ -261,8 +261,8 @@ class SCMPrior:
     zc_coeff_range: tuple[float, float] = (0.05, 0.3)  # Z->C loadings
     cc_coeff_range: tuple[float, float] = (0.05, 0.3)  # C->C (positive-only)
     zz_coeff_range: tuple[float, float] = (-0.2, 0.2)  # Z->Z (signed)
-    db_coeff_range: tuple[float, float] = (0.15, 0.45)  # D->B loadings
-    zb_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->B loadings
+    dy_coeff_range: tuple[float, float] = (0.15, 0.45)  # D->Y loadings
+    zy_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->Y loadings
     beta_additive_range: tuple[float, float] = (0.5, 2.0)  # channel effects
     # Random-walk and outcome-noise priors.
     rw_control_mean_range: tuple[float, float] = (-1.0, 1.0)  # control drive (Z)
@@ -306,7 +306,7 @@ class SCMPrior:
     # -- Control texture ---------------------------------------------------
     # A control's own drive is otherwise a smoothed random walk, i.e. exactly
     # the function class the equally smooth baseline walk (RW_B) spans, so the
-    # Z->B coefficient trades off against baseline drift and is only weakly
+    # Z->Y coefficient trades off against baseline drift and is only weakly
     # identified. These knobs add the high-frequency content a smooth walk
     # cannot mimic — iid weekly noise (sigma ~ U(range)) and calendar pulses
     # (per-week probability ~ U(prob_range), amplitude ~ U(amp_range)) — which
@@ -344,7 +344,7 @@ class SCMPrior:
     # WHAT the floor clips, when one is configured.
     #   "intercept" (default): the intercept walk only. Every other term stays
     #       exactly linear in its node, so ``control_contribution[:, m]`` remains
-    #       ``g_zb[m]·ρ[m]·Z[:, m]`` — but a large negative ρ·Z can still drag
+    #       ``g_zy[m]·ρ[m]·Z[:, m]`` — but a large negative ρ·Z can still drag
     #       the non-media total, and sales, below zero.
     #   "non_media": the running non-media TOTAL, clipped as each parent joins in
     #       the locked order intercept -> confounders -> controls. A negative
@@ -383,7 +383,7 @@ class SCMPrior:
     prior_cond_width_ranges: dict[str, tuple[float, float]] | None = None
 
     # Prior-shift eval support: optional overrides for the LEGACY edge base
-    # rates ("cy", "dc", "db", "zb") which otherwise come from the slots.py
+    # rates ("cy", "dc", "dy", "zy") which otherwise come from the slots.py
     # module constants. None (default) => byte-identical legacy behaviour.
     # The Phase-4 rates (dz/zc/cc/zz) have their own config fields above.
     edge_rate_overrides: dict[str, float] | None = None
@@ -397,7 +397,7 @@ class SCMPrior:
     # their Bernoulli base rate. None (default) => byte-identical legacy path.
     # Example: {"zc": 5} places up to 5 control->channel arrows however they
     # land (one control fanning out, or spread across controls — capped at 5),
-    # while "zb" (controls' effect on the outcome) is untouched.
+    # while "zy" (controls' effect on the outcome) is untouched.
     # Note: "cy" keeps its >=1 floor from the degenerate C->Y guard, so a cy
     # budget that draws 0 still yields exactly one C->Y edge.
     edge_budget: dict[str, int | tuple[int, int]] | None = None
@@ -611,8 +611,8 @@ class SCMPrior:
             "dz_coeff_range",
             "zc_coeff_range",
             "zz_coeff_range",
-            "db_coeff_range",
-            "zb_coeff_range",
+            "dy_coeff_range",
+            "zy_coeff_range",
             "rw_control_mean_range",
             "rw_baseline_mean_range",
         ):
@@ -697,11 +697,11 @@ class SCMPrior:
                     )
         # Prior-shift eval: legacy edge-rate overrides
         if self.edge_rate_overrides is not None:
-            unknown = sorted(set(self.edge_rate_overrides) - {"cy", "dc", "db", "zb"})
+            unknown = sorted(set(self.edge_rate_overrides) - {"cy", "dc", "dy", "zy"})
             if unknown:
                 raise ValueError(
                     f"edge_rate_overrides only accepts legacy edge types "
-                    f"('cy', 'dc', 'db', 'zb'), got {unknown}. The dz/zc/cc/zz "
+                    f"('cy', 'dc', 'dy', 'zy'), got {unknown}. The dz/zc/cc/zz "
                     f"rates have dedicated config fields."
                 )
             for et, rate in self.edge_rate_overrides.items():
@@ -1025,7 +1025,7 @@ def _sample_g(
         (all active).
     rates : optional dict
         Per-edge-type base-rate overrides for the legacy types
-        ("cy", "dc", "db", "zb"); missing keys fall back to
+        ("cy", "dc", "dy", "zy"); missing keys fall back to
         ``EDGE_BASE_RATES``. None (default) is byte-identical to the
         module constants (prior-shift eval support).
     budget : optional dict
@@ -1096,21 +1096,21 @@ def _sample_g(
                 1, _rates["dc"], size=(n_latent_active, n_treatments_active)
             )
 
-    g_db = np.zeros(n_latent_max)
+    g_dy = np.zeros(n_latent_max)
     if n_latent_active > 0:
-        if _budget.get("db") is not None:
-            n = _resolve_budget(rng, _budget["db"], n_latent_active)
-            g_db[:n_latent_active] = _scatter(rng, n, n_latent_active)
+        if _budget.get("dy") is not None:
+            n = _resolve_budget(rng, _budget["dy"], n_latent_active)
+            g_dy[:n_latent_active] = _scatter(rng, n, n_latent_active)
         else:
-            g_db[:n_latent_active] = rng.binomial(1, _rates["db"], size=n_latent_active)
+            g_dy[:n_latent_active] = rng.binomial(1, _rates["dy"], size=n_latent_active)
 
-    g_zb = np.zeros(n_covariates_max)
+    g_zy = np.zeros(n_covariates_max)
     if n_covariates_active > 0:
-        if _budget.get("zb") is not None:
-            n = _resolve_budget(rng, _budget["zb"], n_covariates_active)
-            g_zb[:n_covariates_active] = _scatter(rng, n, n_covariates_active)
+        if _budget.get("zy") is not None:
+            n = _resolve_budget(rng, _budget["zy"], n_covariates_active)
+            g_zy[:n_covariates_active] = _scatter(rng, n, n_covariates_active)
         else:
-            g_zb[:n_covariates_active] = rng.binomial(1, _rates["zb"], size=n_covariates_active)
+            g_zy[:n_covariates_active] = rng.binomial(1, _rates["zy"], size=n_covariates_active)
 
     # Active-node masks (1 = node exists, 0 = padding)
     active_treatment = np.zeros(n_treatments_max)
@@ -1123,8 +1123,8 @@ def _sample_g(
     return {
         "g_cy": g_cy,
         "g_dc": g_dc,
-        "g_db": g_db,
-        "g_zb": g_zb,
+        "g_dy": g_dy,
+        "g_zy": g_zy,
         "active_treatment": active_treatment,
         "active_covariate": active_covariate,
         "active_latent": active_latent,
@@ -1626,8 +1626,8 @@ def _slice_g_active(
         "g_cy": g["g_cy"][:n_treatments_active],
         "g_dc": g["g_dc"][:n_latent_active, :n_treatments_active],
         "g_dz": g["g_dz"][:n_latent_active, :n_covariates_active],
-        "g_db": g["g_db"][:n_latent_active],
-        "g_zb": g["g_zb"][:n_covariates_active],
+        "g_dy": g["g_dy"][:n_latent_active],
+        "g_zy": g["g_zy"][:n_covariates_active],
         "g_zc": g["g_zc"][:n_covariates_active, :n_treatments_active],
         "g_cc": g["g_cc"][:n_treatments_active, :n_treatments_active],
         "g_zz": g["g_zz"][:n_covariates_active, :n_covariates_active],
@@ -1705,11 +1705,11 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
     implies a non-finite observed path):
 
     * ``control_contribution`` (n_tasks, n_time_steps, n_covariates) — direct
-      Z->B effect per control (``g_zb[m]·ρ[m]·Z[:, m]``). Name matches the
+      Z->Y effect per control (``g_zy[m]·ρ[m]·Z[:, m]``). Name matches the
       legacy Phase-2 opt-in key so the existing per-control batch plumbing
       picks it up unchanged.
     * ``confounder_contribution`` (n_tasks, n_time_steps, n_latent) — direct
-      D->B effect per confounder (``g_db[j]·δ[j]·D[:, j]``).
+      D->Y effect per confounder (``g_dy[j]·δ[j]·D[:, j]``).
     * ``baseline_intrinsic`` (n_tasks, n_time_steps) — the intercept ``B``
       alone (``max(RW_B, baseline_floor)``; the plain signed walk when no floor
       is configured). Parents and observation noise are NOT folded in.
@@ -1812,7 +1812,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
         rows = slice(cell * cfg.draws_per_cell, (cell + 1) * cfg.draws_per_cell)
         corpus["cell_id"][rows] = cell
         corpus["g"][rows] = layout.pack(
-            g_cy=g["g_cy"], g_dc=g["g_dc"], g_db=g["g_db"], g_zb=g["g_zb"],
+            g_cy=g["g_cy"], g_dc=g["g_dc"], g_dy=g["g_dy"], g_zy=g["g_zy"],
             g_dz=g["g_dz"], g_zc=g["g_zc"], g_cc=g["g_cc"], g_zz=g["g_zz"],
         )
         for key, source in (
@@ -2036,8 +2036,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict:
             "cy": float(effective_legacy_edge_rates["cy"]),
             "dc": float(effective_legacy_edge_rates["dc"]),
             "dz": float(cfg.dz_base_rate),
-            "db": float(effective_legacy_edge_rates["db"]),
-            "zb": float(effective_legacy_edge_rates["zb"]),
+            "dy": float(effective_legacy_edge_rates["dy"]),
+            "zy": float(effective_legacy_edge_rates["zy"]),
             "zc": float(cfg.zc_base_rate),
             "cc": float(cfg.cc_base_rate),
             "zz": float(cfg.zz_base_rate),

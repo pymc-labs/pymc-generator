@@ -48,6 +48,8 @@ from .slots import (
     CORPUS_SCHEMA_VERSION,
     EDGE_TYPES_EXTENDED,
     LEGACY_CORPUS_KEYS_V1,
+    LEGACY_EDGE_KEYS_V2,
+    LEGACY_EDGE_TYPES_V2,
     PRIOR_COND_LAYOUT,
     PRIOR_COND_QUANTITIES,
     SlotLayout,
@@ -90,6 +92,15 @@ def _schema_version_error(diagnostics: object) -> str | None:
             f"corpus schema_version {int(version)} is not supported; this build reads "
             f"schema_version={CORPUS_SCHEMA_VERSION}"
         )
+    for field in ("edge_types", "edge_base_rates", "edge_marginals", "edge_budget"):
+        value = diagnostics.get(field)
+        if isinstance(value, (dict, list, tuple)) or (
+            isinstance(value, np.ndarray) and value.ndim == 1
+        ):
+            if any(isinstance(key, str) and key in LEGACY_EDGE_KEYS_V2 for key in value):
+                return f"diagnostics {field} uses pre-v3 outcome-edge names"
+    if "min_dead_channels" in diagnostics:
+        return "diagnostics uses the pre-v3 min_dead_channels name"
     return None
 
 
@@ -810,8 +821,8 @@ class DataGenerator:
             "cy": treatment_present,
             "dc": latent_present[:, :, None] & treatment_present[:, None, :],
             "dz": latent_present[:, :, None] & covariate_present[:, None, :],
-            "db": latent_present,
-            "zb": covariate_present,
+            "dy": latent_present,
+            "zy": covariate_present,
             "zc": covariate_present[:, :, None] & treatment_present[:, None, :],
             "cc": treatment_present[:, :, None] & treatment_present[:, None, :],
             "zz": covariate_present[:, :, None] & covariate_present[:, None, :],
@@ -830,10 +841,10 @@ class DataGenerator:
             errors.append("channel_active does not match graph reachability rule")
         if _padded_nonzero(corpus["contributions_raw"], ~direct):
             errors.append("contributions_raw is nonzero for channels without C->Y edges")
-        if _padded_nonzero(corpus["control_contribution"], graph["zb"] != 1):
-            errors.append("control_contribution is nonzero without a Z->B edge")
-        if _padded_nonzero(corpus["confounder_contribution"], graph["db"] != 1):
-            errors.append("confounder_contribution is nonzero without a D->B edge")
+        if _padded_nonzero(corpus["control_contribution"], graph["zy"] != 1):
+            errors.append("control_contribution is nonzero without a Z->Y edge")
+        if _padded_nonzero(corpus["confounder_contribution"], graph["dy"] != 1):
+            errors.append("confounder_contribution is nonzero without a D->Y edge")
         for source_index, edge_type in enumerate(("cc", "zc", "dc")):
             source_present = graph[edge_type].reshape(n_tasks, -1).any(axis=1)
             if (corpus["indirect_effects_by_source"][~source_present, :, source_index] != 0).any():
@@ -1148,7 +1159,30 @@ def load_corpus(path: str | Path) -> dict[str, np.ndarray]:
             raise ValueError(f"corpus {path}: incomplete legacy dimension keys")
         for old, new in outdated.items():
             corpus[new] = corpus.pop(old)
-        diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
+        diagnostics["schema_version"] = 2
+
+    diagnostics = corpus.get("diagnostics")
+    if isinstance(diagnostics, dict) and type(diagnostics.get("schema_version")) is int:
+        if diagnostics["schema_version"] == 2:
+            if diagnostics.get("edge_types") != list(LEGACY_EDGE_TYPES_V2):
+                raise ValueError(f"corpus {path}: unrecognized v2 edge order")
+            for field in ("edge_base_rates", "edge_marginals", "edge_budget"):
+                values = diagnostics.get(field)
+                if values is None:
+                    continue
+                if not isinstance(values, dict):
+                    raise ValueError(f"corpus {path}: v2 {field} must be a mapping")
+                if any(key in values for key in LEGACY_EDGE_KEYS_V2.values()):
+                    raise ValueError(f"corpus {path}: {field} mixes v2 and v3 edge names")
+                diagnostics[field] = {
+                    LEGACY_EDGE_KEYS_V2.get(key, key): value for key, value in values.items()
+                }
+            if "min_dead_channels" in diagnostics:
+                if "min_no_direct_effect_channels" in diagnostics:
+                    raise ValueError(f"corpus {path}: conflicting direct-null floor names")
+                diagnostics["min_no_direct_effect_channels"] = diagnostics.pop("min_dead_channels")
+            diagnostics["edge_types"] = list(EDGE_TYPES_EXTENDED)
+            diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
 
     version_problem = _schema_version_error(corpus.get("diagnostics"))
     if version_problem is not None:

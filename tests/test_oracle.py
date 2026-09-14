@@ -38,8 +38,8 @@ from prior_generator.world_model import (
 #: Free RVs the two models must define identically (same name, same prior).
 SHARED_RV_NAMES = (
     "beta",
-    "delta_db",
-    "rho_zb",
+    "delta_dy",
+    "rho_zy",
     "adstock_alpha",
     "weibull_lam",
     "weibull_k",
@@ -62,8 +62,8 @@ SHARED_RV_NAMES = (
 #: Priors shared with generation for every oracle mode before live mechanisms.
 _SHARED_ORACLE_PRIOR_NAMES = (
     "beta",
-    "delta_db",
-    "rho_zb",
+    "delta_dy",
+    "rho_zy",
     "rw_b_mean",
 )
 
@@ -96,8 +96,8 @@ def _direct_only_graph(n_treatments: int = 2) -> dict[str, np.ndarray]:
         "g_cy": np.ones(n_treatments, dtype=int),
         "g_dc": np.zeros((1, n_treatments), dtype=int),
         "g_dz": np.zeros((1, 1), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(1, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(1, dtype=int),
         "g_zc": np.zeros((1, n_treatments), dtype=int),
         "g_cc": np.zeros((n_treatments, n_treatments), dtype=int),
         "g_zz": np.zeros((1, 1), dtype=int),
@@ -379,8 +379,8 @@ def test_marginal_sales_logp_matches_numpy_mvn():
         outcome_std_mode="absolute",
     )
     g = _direct_only_graph(1)
-    g["g_db"][:] = 1
-    g["g_zb"][:] = 1
+    g["g_dy"][:] = 1
+    g["g_zy"][:] = 1
     structural = sample_structure(g, cfg, np.random.default_rng(31))
     structural["adstock_family"][:] = 0
     structural["sat_family"][:] = 0
@@ -391,15 +391,15 @@ def test_marginal_sales_logp_matches_numpy_mvn():
     rows = np.arange(cfg.adstock_burn_in, n_time_steps_full)
     values = {
         "beta": np.array([1.2]),
-        "delta_db": np.array([0.3]),
-        "rho_zb": np.array([0.2]),
+        "delta_dy": np.array([0.3]),
+        "rho_zy": np.array([0.2]),
         "rw_b_mean": np.array([4.0]),
         "rw_b_std": np.array([0.4]),
         "rw_y_std": np.array([0.1]),
     }
     channels = np.linspace(0.5, 3.0, cfg.n_time_steps)[:, None]
     controls = np.linspace(-0.4, 0.6, cfg.n_time_steps)[:, None]
-    mean_for_sales = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zb"][0]
+    mean_for_sales = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zy"][0]
     mean_for_sales = mean_for_sales + values["beta"][0] * channels[:, 0] / 2.0
     residual = 0.15 * np.sin(np.arange(cfg.n_time_steps))
     sales = mean_for_sales + residual - residual.mean()
@@ -429,11 +429,11 @@ def test_marginal_sales_logp_matches_numpy_mvn():
         restricted = basis[rows]
         return restricted @ restricted.T
 
-    mu = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zb"][0]
+    mu = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zy"][0]
     mu = mu + values["beta"][0] * channels[:, 0] / 2.0
     covariance = (values["rw_b_std"][0] ** 2) * gram(float(structural["smoothness_b"][0]))
     covariance = covariance + (values["rw_y_std"][0] ** 2) * np.eye(rows.size)
-    covariance = covariance + (values["delta_db"][0] ** 2) * gram(
+    covariance = covariance + (values["delta_dy"][0] ** 2) * gram(
         float(structural["smoothness_d"][0])
     )
     covariance = covariance + 1e-12 * np.eye(rows.size)
@@ -594,8 +594,8 @@ def test_oracle_warmup_exempts_identity_adstock():
             edge_budget={
                 "cy": (1, 1),
                 "dc": 0,
-                "db": 0,
-                "zb": 0,
+                "dy": 0,
+                "zy": 0,
                 "dz": 0,
                 "zc": 0,
                 "cc": 0,
@@ -701,8 +701,8 @@ def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
         edge_budget={
             "cy": (1, 1),
             "dc": 0,
-            "db": 0,
-            "zb": 0,
+            "dy": 0,
+            "zy": 0,
             "dz": 0,
             "zc": 0,
             "cc": 0,
@@ -872,8 +872,8 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
         "g_cy": np.array([1]),
         "g_dc": np.zeros((1, 1), dtype=int),
         "g_dz": np.zeros((1, 1), dtype=int),
-        "g_db": np.zeros(1, dtype=int),
-        "g_zb": np.zeros(1, dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zy": np.zeros(1, dtype=int),
         "g_zc": np.zeros((1, 1), dtype=int),
         "g_cc": np.zeros((1, 1), dtype=int),
         "g_zz": np.zeros((1, 1), dtype=int),
