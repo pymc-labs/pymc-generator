@@ -148,6 +148,31 @@ with that environment's `python -I scripts/smoke_install.py`. Preserve a
 platform-specific `conda list --explicit --sha256` export for native-run replay;
 it is not interchangeable with `uv.lock`.
 
+## Repository protections
+
+Keep `main` protected for administrators too: require an up-to-date branch,
+resolved review conversations, and one approval from someone other than the
+latest pusher; dismiss stale approvals and prohibit force pushes and deletion.
+Required checks are `lint`, `test (3.12)`, `test (3.13)`, `slow-tests`, `build`,
+`native-conda`, `docs-build`, `secrets`, and `codeql`. CodeQL intentionally skips
+private repositories; GitHub accepts skipped required checks. Do not require
+the sole default code owner to approve their own contribution.
+
+Workflow tokens default to read-only and cannot approve pull requests. Actions
+are pinned to immutable revisions and checkouts do not retain credentials.
+Weekly Dependabot action-update PRs and dependency security alerts/PRs still
+require human review; numerical dependency updates need the preservation
+evidence above and matching uv/conda changes, not automatic merging.
+
+The free Gitleaks CLI scans all fetched Git history on pull requests, main-branch
+pushes, and a weekly schedule, with redacted output. CodeQL runs only when the
+event explicitly identifies a public repository. Neither workflow enables paid
+private security products. GitHub's private reporting, secret scanning, and push
+protection depend on repository eligibility; verify them separately before
+public release. Use the [security policy](SECURITY.md) reporting fallback when
+private reporting is unavailable. A clean scan is not proof that history contains
+no sensitive material.
+
 ## Changelog & releases
 
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`
@@ -166,7 +191,7 @@ it is not interchangeable with `uv.lock`.
   automatic build or release step.
 
 Before publishing a draft, maintainers must check that the release commit has
-passing CI and documentation results, review migration notes and scientific
+passing CI, documentation, and applicable security results, review migration notes and scientific
 limitations, and verify installation from the actual release assets. Preserve
 artifact checksums and platform-specific replay information where applicable.
 Do not overwrite a published tag or replace its artifacts to conceal a defect;

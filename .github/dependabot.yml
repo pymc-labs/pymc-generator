@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+# Numerical dependency updates remain deliberate, evidence-backed changes to
+# uv.lock and the native recipes; no automated version upgrades are configured.
