@@ -534,7 +534,7 @@ While the project is on 0.x, minor versions may contain breaking changes.
   `diagnostics["timing"] = {"elapsed_s": float, "tasks_per_sec": float}`, and
   the top-level `diagnostics["elapsed_s"]` / `diagnostics["tasks_per_sec"]`
   keys are **removed** — consumers reading them must move to the nested block.
-  `save_corpus` writes the diagnostics block WITHOUT `timing` (on a deep copy,
+  `save_corpus` writes the diagnostics block WITHOUT `timing` (on a filtered copy,
   so the caller's dict is never mutated), and `validate_corpus` accepts
   diagnostics with or without it. Those two numbers were the only
   nondeterministic values a generation produced, so removing them from the file

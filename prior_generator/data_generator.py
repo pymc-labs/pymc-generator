@@ -24,7 +24,6 @@ Usage:
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
@@ -1243,13 +1242,9 @@ def save_corpus(corpus: dict[str, np.ndarray], path: str | Path) -> None:
                     return value.tolist()
                 raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
-            # Drop the wall-clock block: it is the only nondeterministic
-            # diagnostic, so persisting it would give two same-seed generations
-            # different bytes for identical worlds. Deep-copy rather than pop —
-            # this function must leave the caller's corpus exactly as it found
-            # it, telemetry and nested structures included.
-            persisted = copy.deepcopy(v)
-            persisted.pop("timing", None)
+            # Timing is nondeterministic. JSON encoding is read-only, so only
+            # the top-level mapping needs rebuilding to leave the caller intact.
+            persisted = {key: value for key, value in v.items() if key != "timing"}
             save_dict[k] = np.array(json.dumps(persisted, default=_json_default))
         elif k == "identifiability":
             if not isinstance(v, dict):
