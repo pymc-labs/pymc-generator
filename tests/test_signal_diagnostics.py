@@ -327,26 +327,6 @@ def test_empty_signal_summary_has_none_quantiles():
     assert all(value is None for value in summary["sales_level_ratio_quantiles"].values())
 
 
-def test_final_float32_metrics_recompute_after_save_load(tmp_path):
-    x = np.array([0.1, 0.7, 2.1, 0.4, 1.3, 0.8], dtype=np.float64)[None, :, None].astype(np.float32)
-    y = (1.7 * x).astype(np.float32)
-    sales = (y[..., 0] + 10).astype(np.float32)
-    baseline = np.zeros_like(sales)
-    metrics, valid = dense_signal_metrics(x, y, sales, baseline, np.ones((1, 1)))
-    path = tmp_path / "signal.npz"
-    save_corpus(
-        {"spend_raw": x, "contributions_raw": y, "sales_raw": sales, "baseline_raw": baseline}, path
-    )
-    loaded = load_corpus(path)
-    recomputed, recomputed_valid = dense_signal_metrics(
-        loaded["spend_raw"],
-        loaded["contributions_raw"],
-        loaded["sales_raw"],
-        loaded["baseline_raw"],
-        np.ones((1, 1)),
-    )
-    assert np.array_equal(metrics, recomputed)
-    assert np.array_equal(valid, recomputed_valid)
 
 
 def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):

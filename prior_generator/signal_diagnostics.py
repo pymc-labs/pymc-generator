@@ -218,9 +218,10 @@ def _coefficient_of_variation(x: np.ndarray, sd: float) -> tuple[float, bool]:
     return (0.0, True) if np.all(x == 0.0) else (0.0, False)
 
 
-def _hf_ratio(x: np.ndarray) -> np.ndarray:
-    """High-frequency ratio along the last axis: 1 = white noise, ->0 smooth."""
-    sd = x.std(axis=-1)
+def _hf_ratio(x: np.ndarray, sd: np.ndarray | float | None = None) -> np.ndarray:
+    """High-frequency ratio along the last axis, optionally reusing its std."""
+    if sd is None:
+        sd = x.std(axis=-1)
     diff_sd = np.diff(x, axis=-1).std(axis=-1)
     out = np.zeros_like(sd)
     np.divide(diff_sd, np.sqrt(2.0) * sd, out=out, where=sd != 0.0)
@@ -462,64 +463,71 @@ def dense_signal_metrics(
     metrics = np.zeros((n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
     valid = np.zeros_like(metrics, dtype=np.uint8)
     metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
-    for n, k in zip(*np.nonzero(mask)):
-        x, y = spend[n, :, k], contributions[n, :, k]
-        std_x, std_y = x.std(), y.std()
-        spend_cv, spend_cv_valid = _coefficient_of_variation(x, std_x)
-        contrib_cv, contrib_cv_valid = _coefficient_of_variation(y, std_y)
-        values = {
-            "spend_cv": (spend_cv, spend_cv_valid),
-            "contrib_cv": (contrib_cv, contrib_cv_valid),
-            "contrib_rel_std": (std_y / scale[n], True),
-        }
-        for name, (value, is_valid) in values.items():
-            metrics[n, k, metric_index[name]] = value
-            valid[n, k, metric_index[name]] = is_valid
+    for n in range(n_tasks):
+        active_channels = np.flatnonzero(mask[n])
+        if active_channels.size == 0:
+            continue
         if n_time_steps >= 2:
-            metrics[n, k, metric_index["spend_hf"]] = _hf_ratio(x[None])[0]
-            metrics[n, k, metric_index["contrib_hf"]] = _hf_ratio(y[None])[0]
-            valid[n, k, [metric_index["spend_hf"], metric_index["contrib_hf"]]] = 1
-        ad_x = _adstock_numpy(x, fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
-        # Visibility intentionally compares once-adstocked observed spend; do
-        # not adstock a contribution that already contains the response.
-        if n_time_steps - l_max >= 3:
-            metrics[n, k, metric_index["spearman"]] = _spearman_abs(
-                ad_x[l_max:][None], y[l_max:][None]
-            )[0]
-            valid[n, k, metric_index["spearman"]] = 1
-        if adstock_burn_in < l_max and n_time_steps >= l_max + 3:
-            warm_range = y[:l_max].max() - y[:l_max].min()
-            suffix_std = y[l_max:].std()
-            if suffix_std != 0.0:
-                metrics[n, k, metric_index["warmup_ratio"]] = warm_range / suffix_std
-                valid[n, k, metric_index["warmup_ratio"]] = 1
-        if n_time_steps >= 2:
-            # Explained by the full reported window: intercept, baseline, and
-            # all *other* active direct contributions.
-            others = [j for j in np.flatnonzero(mask[n]) if j != k]
-            centered_y, centered_b = y - y.mean(), baseline[n] - baseline[n].mean()
-            centered_predictors = [centered_b] + [
-                contributions[n, :, j] - contributions[n, :, j].mean() for j in others
-            ]
-            design = np.column_stack(centered_predictors)
-            sst = float(centered_y @ centered_y)
-            if sst == 0.0:
-                # Persisted constants are exactly reproducible by the intercept.
-                metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1.0
-                valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
-            else:
-                design_rank = 1 + np.linalg.matrix_rank(design)
-                if n_time_steps > design_rank:
-                    fitted = design @ np.linalg.lstsq(design, centered_y, rcond=None)[0]
-                    ss_res = float(np.sum((centered_y - fitted) ** 2))
-                    r2 = float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
-                    metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
+            centered_b = baseline[n] - baseline[n].mean()
+            centered_contributions = {
+                k: contributions[n, :, k] - contributions[n, :, k].mean()
+                for k in active_channels
+            }
+        for k in active_channels:
+            x, y = spend[n, :, k], contributions[n, :, k]
+            std_x, std_y = x.std(), y.std()
+            spend_cv, spend_cv_valid = _coefficient_of_variation(x, std_x)
+            contrib_cv, contrib_cv_valid = _coefficient_of_variation(y, std_y)
+            values = {
+                "spend_cv": (spend_cv, spend_cv_valid),
+                "contrib_cv": (contrib_cv, contrib_cv_valid),
+                "contrib_rel_std": (std_y / scale[n], True),
+            }
+            for name, (value, is_valid) in values.items():
+                metrics[n, k, metric_index[name]] = value
+                valid[n, k, metric_index[name]] = is_valid
+            if n_time_steps >= 2:
+                metrics[n, k, metric_index["spend_hf"]] = _hf_ratio(x, std_x)
+                metrics[n, k, metric_index["contrib_hf"]] = _hf_ratio(y, std_y)
+                valid[n, k, [metric_index["spend_hf"], metric_index["contrib_hf"]]] = 1
+            ad_x = _adstock_numpy(x, fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
+            # Compare once-adstocked observed spend, not an already-transformed target.
+            if n_time_steps - l_max >= 3:
+                metrics[n, k, metric_index["spearman"]] = _spearman_abs(
+                    ad_x[l_max:][None], y[l_max:][None]
+                )[0]
+                valid[n, k, metric_index["spearman"]] = 1
+            if adstock_burn_in < l_max and n_time_steps >= l_max + 3:
+                warm_range = y[:l_max].max() - y[:l_max].min()
+                suffix_std = y[l_max:].std()
+                if suffix_std != 0.0:
+                    metrics[n, k, metric_index["warmup_ratio"]] = warm_range / suffix_std
+                    valid[n, k, metric_index["warmup_ratio"]] = 1
+            if n_time_steps >= 2:
+                centered_y = centered_contributions[k]
+                design = np.column_stack([
+                    centered_b,
+                    *(centered_contributions[j] for j in active_channels if j != k),
+                ])
+                sst = float(centered_y @ centered_y)
+                if sst == 0.0:
+                    # Persisted constants are exactly reproducible by the intercept.
+                    metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1.0
                     valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
-            denom = np.sqrt(np.sum(centered_y**2) * np.sum(centered_b**2))
-            metrics[n, k, metric_index["contrib_corr_baseline"]] = (
-                centered_y @ centered_b / denom if denom != 0.0 else 0.0
-            )
-            valid[n, k, metric_index["contrib_corr_baseline"]] = 1
+                else:
+                    coefficients, _, rank, _ = np.linalg.lstsq(design, centered_y, rcond=None)
+                    # Use the fitted solver's rank for residual degrees of freedom.
+                    if n_time_steps > 1 + rank:
+                        fitted = design @ coefficients
+                        ss_res = float(np.sum((centered_y - fitted) ** 2))
+                        r2 = float(np.clip(1.0 - ss_res / sst, 0.0, 1.0))
+                        metrics[n, k, metric_index["contrib_r2_explained_by_rest"]] = r2
+                        valid[n, k, metric_index["contrib_r2_explained_by_rest"]] = 1
+                denom = np.sqrt(np.sum(centered_y**2) * np.sum(centered_b**2))
+                metrics[n, k, metric_index["contrib_corr_baseline"]] = (
+                    centered_y @ centered_b / denom if denom != 0.0 else 0.0
+                )
+                valid[n, k, metric_index["contrib_corr_baseline"]] = 1
     return metrics, valid
 
 
@@ -672,21 +680,19 @@ def summarize_signal_metrics(
         fam, alpha, wlam, wk = _validated_adstock_metadata(
             adstock_family, adstock_alpha, weibull_lam, weibull_k, mask.shape
         )
-        pairs = list(zip(*np.nonzero(mask)))
-        frac_zero_contemporaneous_weight = float(
-            sum(
-                contemporaneous_weight(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max) < 1e-9
-                for n, k in pairs
-            )
-            / n_pairs
-        )
-        realized_support = max(
-            (
-                response_support_weeks(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
-                for n, k in pairs
-            ),
-            default=0,
-        )
+        zero_count = 0
+        realized_support = 0
+        for n, k in zip(*np.nonzero(mask)):
+            weights = _adstock_weights(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
+            if weights is None:
+                first_weight = 1.0 if fam[n, k] == 0 or l_max == 1 else 0.0
+            else:
+                first_weight = float(weights[0])
+                positive = np.flatnonzero(weights > 0.0)
+                if positive.size:
+                    realized_support = max(realized_support, int(positive[-1]))
+            zero_count += int(first_weight < 1e-9)
+        frac_zero_contemporaneous_weight = zero_count / n_pairs
     elif n_pairs and adstock_family is not None:
         fam = _validated_adstock_family_array(adstock_family, mask.shape)
     if adstock_burn_in == 0 or n_pairs == 0:

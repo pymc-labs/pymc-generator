@@ -40,6 +40,9 @@ While the project is on 0.x, minor versions may contain breaking changes.
 - Preallocate final corpus arrays instead of retaining padded per-world
   dictionaries. Preserve the float64 spend reductions and RNG schedule;
   all 353 captured numerical arrays remain exactly unchanged.
+- Reuse diagnostic standard deviations, centered predictors, and adstock kernels.
+  Residual degrees of freedom now use the fitted least-squares solver's rank;
+  captured metrics remain unchanged and rank-deficient boundary checks pass.
 
 ### Added
 
