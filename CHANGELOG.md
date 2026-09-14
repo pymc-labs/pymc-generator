@@ -13,6 +13,9 @@ read the migration notes before upgrading.
   uploads. Package tests exercise generation, persistence, and the installed CLI.
   On macOS arm64, all 353 preservation arrays match the original uv baseline
   and an environment recreated from an explicit 181-package conda lock.
+- Tag releases reuse CI's locked verification and native package build, then
+  prepare draft GitHub Releases with wheel, source archive, conda channel, and
+  SHA-256 checksums. PyPI/TestPyPI publishing and its unused permissions are removed.
 - Outcome distributions and generated-data diagnostics, with selectable quantities,
   pooled or per-world summaries, explicit validity masks, and optional signal gates.
 - Auditable world equations, realized parameters, and exogenous innovations;

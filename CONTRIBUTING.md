@@ -123,6 +123,13 @@ it is not interchangeable with `uv.lock`.
 
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`
   (Keep a Changelog format).
-- To release: move the `[Unreleased]` items under `## [X.Y.Z] - YYYY-MM-DD`,
-  bump `version` in `pyproject.toml`, and push tag `vX.Y.Z`. The release
-  workflow tests, builds, and publishes to PyPI via trusted publishing.
+- Move the release's `[Unreleased]` items under `## [X.Y.Z] - YYYY-MM-DD`,
+  update the package version, and push tag `vX.Y.Z` from a reviewed commit.
+- The tag workflow reuses CI's locked tests, lint/type checks, wheel smoke test,
+  and native conda build. Conda packages use that same verified source archive.
+  It creates a **draft GitHub Release** containing the wheel, source archive,
+  `conda-channel.tar.gz`, and `SHA256SUMS`; it does not upload to PyPI.
+- Review the draft, documentation checks, and installation evidence before
+  publishing it. uv and native conda are the primary installation paths.
+  Repository visibility is a separate final readiness decision, never an
+  automatic build or release step.

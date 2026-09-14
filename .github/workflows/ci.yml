@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_call:
 
 permissions:
   contents: read
@@ -91,3 +92,45 @@ jobs:
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+
+  native-conda:
+    runs-on: ubuntu-latest
+    needs: build
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      CONDA_SOLVER: libmamba
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@fc2d68f6413eb2d87b895e92f8584b5b94a10167 # v3
+        with:
+          miniforge-version: "26.1.1-0"
+          environment-file: conda/build-environment.yml
+          activate-environment: prior-generator-build
+          auto-activate: false
+          channel-priority: strict
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Build native packages from the verified source archive
+        run: |
+          python scripts/build_conda.py dist/prior_generator-*.tar.gz \
+            --conda "$CONDA_PREFIX/bin/conda"
+      - name: Exercise the completed native channel
+        run: |
+          "$CONDA_PREFIX/bin/conda" create --prefix "$RUNNER_TEMP/native-smoke" \
+            --override-channels --strict-channel-priority \
+            --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
+            "python=3.13" prior-generator --yes
+          "$CONDA_PREFIX/bin/conda" run --prefix "$RUNNER_TEMP/native-smoke" \
+            python -I scripts/smoke_install.py
+          "$CONDA_PREFIX/bin/conda" run --prefix "$RUNNER_TEMP/native-smoke" \
+            prior-generator --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-conda
+          path: dist/conda-channel/
+          if-no-files-found: error
