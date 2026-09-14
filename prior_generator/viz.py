@@ -168,14 +168,14 @@ def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
 
     ax = axes[0]
     for k in range(n_treatments):
-        ax.plot(weeks, d["channels"][:, k], color=PALETTE[k], lw=1.3, label=f"C{k + 1}")
+        ax.plot(weeks, d["channels"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}")
     ax.set_title(f"{title} — model inputs", fontsize=11, color=INK, loc="left")
     ax.set_ylabel("spend", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
     ax = axes[1]
     for m in range(n_covariates):
-        ax.plot(weeks, d["controls"][:, m], color=PALETTE[m], lw=1.3, label=f"Z{m + 1}")
+        ax.plot(weeks, d["controls"][:, m], color=PALETTE[m % len(PALETTE)], lw=1.3, label=f"Z{m + 1}")
     for j in range(n_latent):
         ax.plot(
             weeks,
@@ -229,7 +229,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     ax = axes[1]
     for k in range(n_treatments):
         if g["g_cy"][k]:  # only channels with a direct edge have a nonzero target
-            ax.plot(weeks, d["contributions"][:, k], color=PALETTE[k], lw=1.3, label=f"C{k + 1}")
+            ax.plot(weeks, d["contributions"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}")
     ax.set_ylabel("direct contributions", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
@@ -243,7 +243,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
                 color=EDGE_STYLE["db"][0],
                 lw=1.2,
                 ls=["-", "--"][j % 2],
-                label=f"D{j + 1}→B",
+                label=f"D{j + 1}→Y",
             )
     for m in range(n_covariates):
         if g["g_zb"][m]:
@@ -253,7 +253,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
                 color=EDGE_STYLE["zb"][0],
                 lw=1.2,
                 ls=["-", "--", ":", "-."][m % 4],
-                label=f"Z{m + 1}→B",
+                label=f"Z{m + 1}→Y",
             )
     ax.set_ylabel("baseline components", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=4, loc="upper left")
@@ -279,8 +279,17 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     plt.close(fig)
 
 
+def _mean_index(values: np.ndarray) -> tuple[np.ndarray, str]:
+    """Index by the absolute mean without inventing a scale for zero means."""
+    mean = abs(float(values.mean()))
+    return (values / mean, "/ |mean|") if mean else (values, "raw; zero mean")
+
+
 def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
-    """Per-channel spend vs true contribution, both indexed to mean 1."""
+    """Per-channel spend and contribution relative to their absolute mean.
+
+    Zero-mean series retain raw values and are labelled rather than divided.
+    """
     import matplotlib.pyplot as plt
 
     d, g, params = world.data, world.g, world.params
@@ -293,16 +302,16 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
     axes = np.atleast_1d(axes).ravel()
     for k in range(n_treatments):
         ax = axes[k]
-        spend = d["channels"][:, k]
-        ax.plot(weeks, spend / spend.mean(), color=MUTED, lw=1.0, label="spend (indexed)")
+        spend, spend_scale = _mean_index(d["channels"][:, k])
+        ax.plot(weeks, spend, color=MUTED, lw=1.0, label=f"spend ({spend_scale})")
         if g["g_cy"][k]:
-            contrib = d["contributions"][:, k]
+            contrib, contrib_scale = _mean_index(d["contributions"][:, k])
             ax.plot(
                 weeks,
-                contrib / max(abs(contrib.mean()), 1e-9),
-                color=PALETTE[k],
+                contrib,
+                color=PALETTE[k % len(PALETTE)],
                 lw=1.5,
-                label="true contribution (indexed)",
+                label=f"true contribution ({contrib_scale})",
             )
             tag = f"β={params['beta'][k]:.2f}"
         else:
@@ -313,7 +322,7 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
     for ax in axes[n_treatments:]:
         ax.axis("off")
     fig.suptitle(
-        f"{title} — per-channel spend vs true contribution (mean=1)", fontsize=11, color=INK
+        f"{title} — per-channel spend vs true contribution", fontsize=11, color=INK
     )
     fig.tight_layout()
     fig.savefig(path, dpi=130)

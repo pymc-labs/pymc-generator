@@ -28,6 +28,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   scalar positions retain their unit axis and share diagnostics normalization.
 - Validate quantile levels uniformly in construction and reports, including
   cached reports with NumPy arrays; reject empty, nonfinite, or repeated levels.
+- Cycle plot colors for arbitrary channel/control counts and label zero-mean
+  series without dividing by zero or imposing an artificial contribution scale.
 
 ### Added
 

@@ -86,7 +86,7 @@ from scm_docs import world, viz_html
 import prior_generator as pg
 
 print(viz_html(pg.viz.plot_channels, world(1, 0),
-         caption="channels.png — each channel's spend (grey) vs its true contribution (color), indexed to mean 1."))
+         caption="channels.png — each channel's spend (grey) and true contribution (color), divided by its absolute mean. Zero-mean series retain raw values and are labelled."))
 ```
 
 ## The five-scenario inspection set
