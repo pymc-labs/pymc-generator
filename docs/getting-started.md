@@ -1,8 +1,8 @@
 # Getting started
 
-This page takes you from a fresh install to a fully-audited world in a few
-minutes. Every code block below is executed while this site is built, so the
-numbers and figures you see are real output.
+This page takes you from an installed package to an audited world. Run the Python
+snippets in order in one session. World summaries and inline figures are generated
+during site builds; shell commands and file-writing snippets run locally.
 
 ## Install
 
@@ -33,7 +33,7 @@ pip install -e ".[dev]"      # or: uv pip install -e ".[dev]"
 A world is drawn from a **prior**. The quickest way to get a well-formed prior is
 a named audit scenario, each of which isolates one causal pathway.
 
-```python exec="1" source="material-block" result="text"
+```python exec="1" session="quickstart" source="material-block" result="text"
 import prior_generator as pg
 
 scenario = pg.SCENARIOS[1]                       # "confounded_spend"
@@ -53,11 +53,7 @@ print(f"drew world {scm.name!r}: {scm.n_treatments} channels, "
 DAG with drawn coefficients, node connectivity, per-channel mechanisms, the
 decomposition-identity check, and signal metrics.
 
-```python exec="1" source="material-block" result="text"
-import prior_generator as pg
-from scm_docs import world          # cached sampler shared across these docs
-scm = world(scenario=1, seed=0)
-
+```python exec="1" session="quickstart" source="material-block" result="text"
 text = pg.describe_scm(scm)
 print("\n".join(text.splitlines()[:22]))          # first 22 lines
 ```
@@ -67,20 +63,21 @@ print("\n".join(text.splitlines()[:22]))          # first 22 lines
 Every world renders four figures — the same ones a bundle writes to disk. Here is
 the causal graph and the observable series:
 
-```python exec="1" source="material-block" html="1"
-from scm_docs import world, viz_html
-import prior_generator as pg
+```python
+from prior_generator.viz import plot_dag, plot_timeseries
 
-print(viz_html(pg.viz.plot_dag, world(1, 0),
-         caption="Nodes: D latent demand · Z controls · C channels · B baseline · Y sales."))
+plot_dag(scm, "dag.png")
+plot_timeseries(scm, "timeseries.png")
 ```
 
-```python exec="1" source="material-block" html="1"
-from scm_docs import world, viz_html
-import prior_generator as pg
+```python exec="1" session="quickstart" html="1"
+from scm_docs import viz_html
+from prior_generator.viz import plot_dag, plot_timeseries
 
-print(viz_html(pg.viz.plot_timeseries, world(1, 0),
-         caption="Model inputs: spend, controls & latent demand, and sales."))
+print(viz_html(plot_dag, scm,
+    caption="Nodes: D latent demand · Z controls · C channels · B intercept · Y sales."))
+print(viz_html(plot_timeseries, scm,
+    caption="Model inputs: spend, controls & latent demand, and sales."))
 ```
 
 ## 4 · Trust it
@@ -88,10 +85,7 @@ print(viz_html(pg.viz.plot_timeseries, world(1, 0),
 The reason to *simulate* rather than collect data is that you get the answer —
 and it is exact. Sales equals the sum of its true components to float precision:
 
-```python exec="1" source="material-block" result="text"
-from scm_docs import world
-scm = world(1, 0)
-
+```python exec="1" session="quickstart" source="material-block" result="text"
 print("max |Σ components − sales| =", f"{scm.identity_error():.2e}")
 ```
 
@@ -106,6 +100,7 @@ import prior_generator as pg
 pg.write_scm_bundle(scm, "my_world/")
 # my_world/
 #   dataset.csv            model inputs (week, spend_C*, control_Z*, sales_Y)
+#   recipe.json            configuration, seed, and replay instructions
 #   true_components.csv    the full additive decomposition truth
 #   description.txt        the world's story
 #   dag.dot / dag.png      the causal graph
@@ -127,8 +122,8 @@ pipelines consume — the decomposition targets come baked in.
 import prior_generator as pg
 
 cfg = pg.make_scm_prior(n_treatments=8, n_covariates=4, n_latent=2,
-                        n_cells=50, draws_per_cell=20, seed=42)
-corpus = pg.sample_prior_predictive(cfg)          # dict of numpy arrays
+                        n_cells=2, draws_per_cell=2, n_time_steps=32, seed=42)
+corpus = pg.sample_prior_predictive(cfg)          # arrays plus diagnostic metadata
 pg.save_corpus(corpus, "corpus.npz")              # compressed, self-describing
 loaded = pg.load_corpus("corpus.npz")
 ```

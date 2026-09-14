@@ -21,11 +21,13 @@ high-frequency content a smooth baseline cannot mimic:
 from prior_generator import make_scm_prior
 
 cfg = make_scm_prior(            # the diverse preset already sets these
+    n_treatments=4, n_covariates=2, n_latent=1,
     control_hf_sigma_range=(0.1, 0.8),
     control_pulse_prob_range=(0.0, 0.25),
     control_pulse_amp_range=(0.5, 3.0),
 )
 smooth = make_scm_prior(         # pre-texture controls, byte-identical corpora
+    n_treatments=4, n_covariates=2, n_latent=1,
     control_hf_sigma_range=(0.0, 0.0),
     control_pulse_prob_range=(0.0, 0.0),
     control_pulse_amp_range=(0.0, 0.0),
@@ -80,7 +82,10 @@ A **censored** walk, not a softplus, so `B` can sit exactly *at* the floor —
 ```python
 from prior_generator import make_scm_prior
 
-cfg = make_scm_prior(baseline_floor=0.0)   # baseline >= 0 by construction
+cfg = make_scm_prior(
+    n_treatments=4, n_covariates=2, n_latent=1,
+    baseline_floor=0.0,  # intrinsic intercept B >= 0, not the aggregate baseline
+)
 ```
 
 Why this is safe: the intercept carries **no parents**. Latent demand and the
@@ -162,17 +167,23 @@ baseline_intrinsic + sales_noise + Σ control_contribution
 
 ## Baseline walk scale
 
-`rw_baseline_std_sigma: float | None = None` controls **only** the `RW_B`
-baseline-walk HalfNormal scale. Its effective value is dynamic: when it is
-`None`, it follows the current `rw_std_sigma`; when supplied, the explicit
-positive finite value overrides that baseline scale. It does not alter the
-demand, control, channel, or sales-noise walk settings.
+In `outcome_std_mode="absolute"`, `rw_baseline_std_sigma: float | None = None`
+controls the `RW_B` HalfNormal scale. `None` follows `rw_std_sigma`; an explicit
+positive finite value overrides that baseline scale. Under the default
+`"relative"` mode, `rw_baseline_std_range` instead scales the walk relative to
+the parameter-only media anchor. Neither option changes demand or sales noise.
 
 ```python
 from prior_generator import make_scm_prior
 
-cfg = make_scm_prior(rw_std_sigma=1.2)  # RW_B also uses 1.2
-cfg = make_scm_prior(rw_std_sigma=1.2, rw_baseline_std_sigma=0.35)
+cfg = make_scm_prior(
+    n_treatments=4, n_covariates=2, n_latent=1,
+    outcome_std_mode="absolute", rw_std_sigma=1.2,  # RW_B also uses 1.2
+)
+cfg = make_scm_prior(
+    n_treatments=4, n_covariates=2, n_latent=1,
+    outcome_std_mode="absolute", rw_std_sigma=1.2, rw_baseline_std_sigma=0.35,
+)
 ```
 
 ## Shared baseline/channel innovations
@@ -195,7 +206,10 @@ dtype `float32` (and is available in single-world data/parameters).
 ```python
 from prior_generator import make_scm_prior
 
-cfg = make_scm_prior(confounding_strength_range=(0.2, 0.5))
+cfg = make_scm_prior(
+    n_treatments=4, n_covariates=2, n_latent=1,
+    confounding_strength_range=(0.2, 0.5),
+)
 ```
 
 The posterior oracle is a plug-in model for observed channels and controls. It
@@ -212,6 +226,7 @@ The optional held-level intervention API is:
 from prior_generator import make_scm_prior
 
 cfg = make_scm_prior(
+    n_treatments=4, n_covariates=2, n_latent=1,
     n_channel_shocks=2,
     channel_shock_length_range=(2, 4),
     channel_shock_level_range=(0.0, 0.5),
