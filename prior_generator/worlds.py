@@ -16,6 +16,7 @@ structure draws and the per-round pm.draw seeds.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -107,7 +108,7 @@ class SCM:
         Drawn SCM parameters (edge coefficients, per-node random-walk
         params, per-channel mechanism families and texture).
     cfg : SCMPrior
-        The config the world was drawn from.
+        An independent snapshot of the config the world was drawn from.
     name, purpose : str
         Optional labels (set from a :class:`~prior_generator.scenarios.Scenario`)
         used by ``describe_scm`` and the bundle writer.
@@ -127,6 +128,9 @@ class SCM:
     seed: int | None = None
     extras: dict = field(default_factory=dict)
     _exogenous: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        self.cfg = deepcopy(self.cfg)
 
     @property
     def n_time_steps(self) -> int:
@@ -512,6 +516,17 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
     values["Y"] = {"iid_noise": _rw_parameters(params, "rw_y", 0)}
     if y_parents:
         values["Y"]["parents"] = y_parents
+    values["Y"]["non_media"] = {
+        "floor": world.cfg.baseline_floor,
+        "floor_scope": world.cfg.baseline_floor_scope,
+        "accumulation_order": ["B", *y_parents],
+        "attribution": (
+            "sequential_clipped_differences"
+            if world.cfg.baseline_floor is not None
+            and world.cfg.baseline_floor_scope == "non_media"
+            else "additive"
+        ),
+    }
     if "channel_shock" in params:
         schedule = params["channel_shock"]
         values["channel_shocks"] = {

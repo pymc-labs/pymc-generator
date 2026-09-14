@@ -76,6 +76,28 @@ def _config(**overrides):
     return make_scm_prior(**kwargs)
 
 
+def test_sampled_world_owns_its_configuration():
+    cfg = _config(baseline_floor=0.0)
+    world = sample_scm(cfg, seed=7)
+    before = world.equations
+    cfg.baseline_floor = 123.0
+    cfg.edge_budget["cy"] = (0, 0)
+    assert world.equations == before
+    assert world.equation_parameters["B"]["floor"] == 0.0
+    assert world.cfg.edge_budget["cy"] == (2, 2)
+
+
+@pytest.mark.parametrize("scope", ["intercept", "non_media"])
+def test_equation_audit_identifies_floor_operation(scope):
+    world = sample_scm(_config(baseline_floor=0.0, baseline_floor_scope=scope), seed=7)
+    audit = world.equation_parameters["Y"]["non_media"]
+    assert audit["floor_scope"] == scope
+    assert audit["accumulation_order"] == ["B"]
+    assert audit["attribution"] == (
+        "sequential_clipped_differences" if scope == "non_media" else "additive"
+    )
+
+
 def _fixed_world(g: dict, cfg, *, seed: int = 23) -> SCM:
     rng = np.random.default_rng(seed)
     structural = sample_structure(g, cfg, rng)

@@ -16,6 +16,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   accepting or saving it; valid numeric extensions remain supported.
 - Report malformed scalar kernel/noise metadata as validation errors instead of
   raising ambiguous NumPy truth-value exceptions.
+- Sampled SCMs own independent configuration snapshots. Equation audits identify
+  floor scope, non-media accumulation order, and clipped attribution semantics.
 
 ### Added
 
