@@ -1,12 +1,13 @@
-"""Apples-to-apples benchmark: per-cell compile vs one-compile-per-shard template.
+"""Compare per-cell compilation with a reusable template on identical structures.
 
-Uses the ``deA`` direct-effect prior (geometric x michaelis-menten, K=10/M=10/J=1,
-250 x 5 at production scale). The recipe is registered on pymc-pfn's
-``agent/direct-effect-legs`` branch; this script inlines the same ``SCMPrior`` so
-the benchmark is self-contained in prior-generator.
+Uses a representative direct-effect prior (geometric x michaelis-menten,
+K=10/M=10/J=1). Both paths receive the same precomputed DAGs, mechanism families,
+walk widths and draw seeds, and request the full corpus output set.
 
-Both paths draw the full 23-name corpus output set and skip the realism filter
-(identical numpy-only work on both sides).
+This measures candidate drawing, not accepted-corpus throughput: structure
+sampling, realism filtering, retries, normalization and serialization are
+excluded. Padded template RVs have different shapes; identical seeds do not
+imply identical numerical draws across these two implementations.
 
 Usage:
   python benchmarks/template_vs_per_world.py
@@ -39,14 +40,14 @@ from prior_generator.world_model import (
 from prior_generator.world_model_batched import (
     build_world_model_template,
     compile_template_draw_fn,
-    sample_cell_structures,
+    build_cell_inputs,
 )
 
 CORPUS_NAMES = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
 
 
 def dea_prior(*, n_cells: int, draws_per_cell: int = 5, seed: int = 999000):
-    """The ``deA`` leg-A prior (inlined from pymc-pfn ``agent/direct-effect-legs``)."""
+    """Representative direct-effect workload with variable active node counts."""
     return make_scm_prior(
         n_treatments=10,
         n_covariates=10,
@@ -126,39 +127,56 @@ class PathTiming:
         return self.total_s / self.n_worlds * 1000.0 if self.n_worlds else 0.0
 
 
-def run_production(cfg, *, draw_names: tuple[str, ...]) -> PathTiming:
-    """Per-cell ``build_world_model`` + one draw batch per cell (typical deA path)."""
+@dataclass(frozen=True)
+class CellWorkload:
+    g: dict[str, np.ndarray]
+    structure: dict
+    template_inputs: dict[str, np.ndarray]
+    seed: int
+
+
+def make_workload(cfg) -> list[CellWorkload]:
+    """Prepare concrete inputs once, outside both timed paths."""
+    rng = np.random.default_rng(cfg.seed)
+    cells = []
+    for _ in range(cfg.n_cells):
+        counts = [
+            int(rng.integers(lo, hi + 1))
+            for lo, hi in (
+                cfg.n_treatments_active_range_effective,
+                cfg.n_covariates_active_range_effective,
+                cfg.n_latent_active_range_effective,
+            )
+        ]
+        g = sample_g_additive(rng, cfg, cfg.layout, *counts)
+        g_active = _slice_g_active(g, *counts)
+        structure = sample_structure(g_active, cfg, rng)
+        cells.append(CellWorkload(
+            g_active, structure, build_cell_inputs(cfg, g, g, structure),
+            int(rng.integers(2**31 - 1)),
+        ))
+    return cells
+
+
+def run_production(cfg, cells: list[CellWorkload], *, draw_names: tuple[str, ...]) -> PathTiming:
+    """Build and draw each precomputed cell independently, without acceptance."""
     reset_world_model_caches()
     set_compile_cache_enabled(True)
-
-    rng = np.random.default_rng(cfg.seed)
-    layout = cfg.layout
-    n_time_steps = cfg.n_time_steps
 
     t_build = 0.0
     t0_total = time.perf_counter()
 
-    for _cell in range(cfg.n_cells):
-        tr = cfg.n_treatments_active_range_effective
-        cv = cfg.n_covariates_active_range_effective
-        lt = cfg.n_latent_active_range_effective
-        n_t = int(rng.integers(tr[0], tr[1] + 1))
-        n_c = int(rng.integers(cv[0], cv[1] + 1))
-        n_l = int(rng.integers(lt[0], lt[1] + 1))
-        g = sample_g_additive(rng, cfg, layout, n_t, n_c, n_l)
-        g_act = _slice_g_active(g, n_t, n_c, n_l)
-        structural = sample_structure(g_act, cfg, rng)
-
+    for cell in cells:
         t0 = time.perf_counter()
-        model, _out, _param = build_world_model(g_act, cfg, structural, n_time_steps)
+        model, _out, _param = build_world_model(cell.g, cfg, cell.structure, cfg.n_time_steps)
         t_build += time.perf_counter() - t0
 
-        draw_worlds(model, draw_names, seed=int(rng.integers(2**31 - 1)), draws=cfg.draws_per_cell)
+        draw_worlds(model, draw_names, seed=cell.seed, draws=cfg.draws_per_cell)
 
     total = time.perf_counter() - t0_total
     draw_s = total - t_build
     return PathTiming(
-        label="production (per-cell compile)",
+        label="per-cell compile (pre-filter)",
         n_cells=cfg.n_cells,
         draws_per_cell=cfg.draws_per_cell,
         build_s=t_build,
@@ -169,14 +187,13 @@ def run_production(cfg, *, draw_names: tuple[str, ...]) -> PathTiming:
     )
 
 
-def run_template(cfg, *, draw_names: tuple[str, ...]) -> PathTiming:
+def run_template(cfg, cells: list[CellWorkload], *, draw_names: tuple[str, ...]) -> PathTiming:
     """One template build + compile, then per-cell draws."""
     reset_world_model_caches()
     set_compile_cache_enabled(True)
 
     t0 = time.perf_counter()
-    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
-    model, _out, _param = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
+    model, _out, _param = build_world_model_template(cfg, cells[0].template_inputs, cfg.n_time_steps)
     t_build = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -184,8 +201,8 @@ def run_template(cfg, *, draw_names: tuple[str, ...]) -> PathTiming:
     t_compile = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    for i, cell in enumerate(cells):
-        draw(cell, seed=1000 + i, draws=cfg.draws_per_cell)
+    for cell in cells:
+        draw(cell.template_inputs, seed=cell.seed, draws=cfg.draws_per_cell)
     t_execute = time.perf_counter() - t0
 
     return PathTiming(
@@ -202,8 +219,8 @@ def run_template(cfg, *, draw_names: tuple[str, ...]) -> PathTiming:
 
 def print_timing(t: PathTiming) -> None:
     print(
-        f"  {t.label}: total {t.total_s:.1f}s | {t.worlds_per_min:.1f} worlds/min | "
-        f"{t.per_world_ms:.0f} ms/world | worlds={t.n_worlds}"
+        f"  {t.label}: total {t.total_s:.1f}s | {t.worlds_per_min:.1f} candidates/min | "
+        f"{t.per_world_ms:.0f} ms/candidate | candidates={t.n_worlds}"
     )
     if t.label.startswith("template"):
         print(
@@ -228,6 +245,7 @@ def main() -> None:
 
     print("=== deA prior: template vs production ===\n")
     print(f"Output set: {len(CORPUS_NAMES)} corpus names\n")
+    print("Pre-filter candidate drawing only; identical precomputed structures and seeds.\n")
 
     for n_cells in args.cells:
         cfg = dea_prior(
@@ -238,21 +256,14 @@ def main() -> None:
         print(
             f"--- {n_cells} cells x {args.draws_per_cell} draws = {n_cells * args.draws_per_cell} worlds ---"
         )
-        prod = run_production(cfg, draw_names=CORPUS_NAMES)
-        templ = run_template(cfg, draw_names=CORPUS_NAMES)
+        cells = make_workload(cfg)
+        prod = run_production(cfg, cells, draw_names=CORPUS_NAMES)
+        templ = run_template(cfg, cells, draw_names=CORPUS_NAMES)
         print_timing(prod)
         print_timing(templ)
         speedup = prod.total_s / templ.total_s if templ.total_s else 0.0
         print(f"  → speedup: {speedup:.2f}x\n")
 
-        prod_shard_s = prod.total_s * (250 / n_cells)
-        templ_shard_s = templ.build_s + templ.compile_s + (templ.execute_s / n_cells) * 250
-        print(
-            f"  Extrapolated deA shard (250 cells): "
-            f"production ~{prod_shard_s / 60:.1f} min | "
-            f"template ~{templ_shard_s / 60:.1f} min | "
-            f"~{prod_shard_s / templ_shard_s:.1f}x\n"
-        )
 
 
 if __name__ == "__main__":

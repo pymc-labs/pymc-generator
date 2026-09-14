@@ -550,47 +550,6 @@ def test_template_channels_are_non_negative(template):
         assert np.asarray(drawn["channels"]).min() >= 0.0
 
 
-def test_sample_cell_structures_matches_the_per_world_prologue():
-    """Template cells must be the SAME structures the per-world path would draw.
-
-    Both consume the config's RNG in the same order, so a template shard and a
-    per-world shard with one seed explore the same set of DAGs.
-    """
-    cfg = _cfg()
-    cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
-
-    # Replay the per-world prologue from prior_generator.sampler.
-    rng = np.random.default_rng(cfg.seed)
-    layout = cfg.layout
-    for cell in cells:
-        tr = cfg.n_treatments_active_range_effective
-        cv = cfg.n_covariates_active_range_effective
-        lt = cfg.n_latent_active_range_effective
-        n_t = int(rng.integers(tr[0], tr[1] + 1))
-        n_c = int(rng.integers(cv[0], cv[1] + 1))
-        n_l = int(rng.integers(lt[0], lt[1] + 1))
-        g = sample_g_additive(
-            rng,
-            cfg,
-            layout,
-            n_treatments_active=n_t,
-            n_covariates_active=n_c,
-            n_latent_active=n_l,
-        )
-        g_act = _slice_g_active(g, n_t, n_c, n_l)
-        structural = sample_structure(g_act, cfg, rng)
-        expected = build_cell_inputs(
-            cfg,
-            g,
-            {
-                "active_treatment": g["active_treatment"],
-                "active_covariate": g["active_covariate"],
-                "active_latent": g["active_latent"],
-            },
-            structural,
-        )
-        for name in TEMPLATE_STRUCTURE_INPUT_NAMES:
-            np.testing.assert_array_equal(cell[name], expected[name], err_msg=name)
 
 
 @pytest.mark.parametrize(

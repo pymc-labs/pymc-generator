@@ -1,11 +1,9 @@
-"""One-compile-per-shard world generation: a max-size template model.
+"""Experimental max-size template model with reusable compilation.
 
-:func:`prior_generator.world_model.build_world_model` builds and compiles a fresh
-PyTensor graph for every world, because the DAG, the mechanism families, and the
-random-walk kernel widths are all baked into the graph. Compilation then
-dominates corpus generation — it is roughly 80% of the wall time on a production
-shard, and it is repeated once per cell even though the cells differ only in
-that structure.
+Production corpus generation builds a graph per cell; this module is not its
+drop-in replacement. It supports a narrower configuration set and has its own
+random-number schedule. Benchmark both paths on concrete shared structures
+before comparing performance; a shared seed alone does not align their draws.
 
 :func:`build_world_model_template` instead builds ONE model at the layout's
 maximum node counts, with every structural choice as a ``pm.Data`` input:
@@ -20,19 +18,9 @@ families built behind ``pt.switch``, padded slots carried and zeroed rather than
 omitted — traded against paying compilation once instead of once per cell.
 
 Structure is passed as compiled-function arguments rather than via
-``pm.set_data``. Both were measured at the same execute cost; explicit arguments
-just make the contract visible and let the function be compiled eagerly.
-
-Approaches that did not pay off, so they are deliberately absent (measured at 10
-cells x 5 draws):
-
-* One unified model over all cells at once: 11x SLOWER (482s vs 44s). The graph
-  grows with the cell count, so compilation grows with it too.
-* Vectorizing the draw axis inside the template: 0.22x net (114.2s vs 24.7s).
-  Execute improved only 1.14x while compile cost 6x more — the serial draw loop
-  was only ~60 ms/cell, so the SCM forward pass, not Python overhead, dominates.
-* ``FAST_RUN`` instead of ``FAST_COMPILE``: compiles in 21s but the first
-  execute never returned (3+ min, ~32 GiB resident).
+``pm.set_data``, making the inputs explicit and allowing eager compilation.
+The benchmark reports measured candidate-drawing costs for this implementation,
+not end-to-end accepted-corpus throughput or projected production speedups.
 """
 
 from __future__ import annotations
@@ -161,14 +149,11 @@ def build_cell_inputs(
 
 
 def sample_cell_structures(cfg: SCMPrior, rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
-    """Draw every cell's structure, in the same RNG order as the per-world path.
+    """Draw all structures up front, using active node counts for prior shapes.
 
-    Mirrors the per-cell prologue of
-    :func:`prior_generator.sampler._generate_corpus_additive`: active node counts,
-    then the DAG, then the structural families and smoothness sampled against the
-    ACTIVE-sliced DAG. Sampling against the active slice (not the padded one) is
-    what keeps a template-generated cell's structure identical to the per-world
-    path's for the same seed.
+    Production instead interleaves each structure with draw-seed and support-mask
+    sampling. After the first cell these RNG schedules differ, so equal initial
+    seeds do not select the same sequence of production DAGs.
     """
     from .sampler import _slice_g_active, sample_g_additive
     from .world_model import sample_structure
@@ -209,10 +194,9 @@ def build_world_model_template(
     """One max-size model whose structure arrives as ``pm.Data`` at draw time.
 
     ``init_inputs`` (from :func:`build_cell_inputs`) only sizes and seeds the data
-    containers; every value is replaced per cell. The priors, noise, and
-    ``param_*`` reports are built by the same helpers
-    :func:`prior_generator.world_model.build_world_model` uses, so the two paths
-    draw the same parameters in the same order.
+    containers; every value is replaced per cell. Priors and noise use the same
+    helper definitions as :func:`prior_generator.world_model.build_world_model`,
+    but padded RV shapes do not promise samplewise equivalence to that path.
 
     Returns the model, its graph output names, and its ``param_*`` names.
     """

@@ -30,6 +30,9 @@ While the project is on 0.x, minor versions may contain breaking changes.
   cached reports with NumPy arrays; reject empty, nonfinite, or repeated levels.
 - Cycle plot colors for arbitrary channel/control counts and label zero-mean
   series without dividing by zero or imposing an artificial contribution scale.
+- Benchmark compilation paths on shared concrete structures and seeds, report
+  pre-filter candidate throughput, and remove unsupported equivalence and
+  extrapolated production-speed claims.
 
 ### Added
 
