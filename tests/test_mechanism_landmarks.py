@@ -1,25 +1,8 @@
-"""Mechanism landmarks: the closed forms the κ-relative wrappers must reproduce.
+"""Analytic saturation landmarks and fixed walk-amplitude calibration.
 
-Every saturation family in :mod:`prior_generator.mechanisms` is a thin
-κ-relative wrapper over a ``pymc_marketing`` transformer, and its whole reason
-to exist is a *stated* analytic property — a half point at a named multiple of
-the anchor ``mean_x``, a unit asymptote, scale freedom in the anchor. Those
-properties are what makes ``beta`` the channel's only amplitude and what lets
-:mod:`prior_generator.symbolic_graph` pin one saturation scale across the
-observed / base / intervention channel variants. They are documented in
-``mechanisms``' module docstring and in ``SATURATION_PRIOR_RANGES``' comment,
-and until now nothing asserted them: a silent argument swap inside a wrapper
-(``kappa`` for ``slope``, a dropped ``/ mean_x``) would keep every
-decomposition identity exact while changing what the family means.
-
-The same applies to the two dispatch tables that select a family at run time
-(``SATURATION_FAMILIES`` by name, ``SATURATION_FAMILY_KEYS`` by integer id) and
-to the random-walk basis: ``_walk_basis`` is normalized so ``std`` is the walk's
-EXPECTED per-week amplitude, which is the property that keeps ``eps -> walk``
-injective (see :func:`prior_generator.random_walk._centred_walk_scale`).
-
-These tests lock formulas that are already correct. They are landmark tests: no
-world is sampled, nothing is fitted, and every expected value is a closed form.
+A non-unit reference level catches dropped input scaling even when additive
+decomposition identities still hold. Expected values are closed forms, not
+snapshots of implementation output.
 """
 
 from __future__ import annotations
@@ -34,8 +17,8 @@ from prior_generator.sampler import SATURATION_FAMILY_KEYS
 from prior_generator.symbolic_graph import _saturate_col
 
 #: A deliberately non-unit anchor. Every landmark below is a multiple of
-#: ``mean_x``, so an anchor of 1.0 would let a dropped ``/ mean_x`` pass.
-MEAN_X = 3.0
+#: the reference level, so an anchor of 1.0 would hide dropped input scaling.
+REFERENCE_LEVEL = 3.0
 
 #: One mid-range shape parameterization per family, from
 #: :data:`~prior_generator.mechanisms.SATURATION_PRIOR_RANGES`.
@@ -53,30 +36,30 @@ def _evaluate(expression) -> np.ndarray:
     return np.asarray(expression.eval(), dtype=np.float64)
 
 
-def _family(name: str, x, mean_x=MEAN_X, **shape) -> np.ndarray:
+def _family(name: str, x, reference_level=REFERENCE_LEVEL, **shape) -> np.ndarray:
     """Evaluate one κ-relative family through the name dispatch table."""
-    return _evaluate(mechanisms.SATURATION_FAMILIES[name](x, mean_x, **shape))
+    return _evaluate(mechanisms.SATURATION_FAMILIES[name](x, reference_level, **shape))
 
 
 @pytest.mark.parametrize(
     ("name", "shape", "landmark_x", "landmark_y"),
     [
         # hill's κ IS its half point, for ANY slope: f(κ) = 0.5 exactly.
-        ("hill", {"slope": 0.5, "kappa_mult": 1.0}, MEAN_X, 0.5),
-        ("hill", {"slope": 3.0, "kappa_mult": 1.0}, MEAN_X, 0.5),
-        # logistic_saturation(u, lam) = tanh(lam·u/2) on u = x/mean_x, so the
+        ("hill", {"slope": 0.5, "kappa_mult": 1.0}, REFERENCE_LEVEL, 0.5),
+        ("hill", {"slope": 3.0, "kappa_mult": 1.0}, REFERENCE_LEVEL, 0.5),
+        # logistic_saturation(u, lam) = tanh(lam·u/2) on u = x/reference_level;
         # half point sits at u = ln(3)/lam.
-        ("logistic", {"lam": 0.5}, float(np.log(3.0) / 0.5) * MEAN_X, 0.5),
-        ("logistic", {"lam": 3.0}, float(np.log(3.0) / 3.0) * MEAN_X, 0.5),
-        # Michaelis-Menten with a unit asymptote: f(λ) = 0.5 at λ = kappa_mult·mean_x.
-        ("michaelis_menten", {"kappa_mult": 1.0}, MEAN_X, 0.5),
-        # tanh(x / (mean_x·c)) reaches 0.5 at x = atanh(0.5)·c·mean_x.
-        ("tanh", {"c": 0.3}, float(np.arctanh(0.5) * 0.3) * MEAN_X, 0.5),
-        ("tanh", {"c": 1.5}, float(np.arctanh(0.5) * 1.5) * MEAN_X, 0.5),
-        # root is the unbounded family: it is normalized to f(mean_x) = 1, not
+        ("logistic", {"lam": 0.5}, float(np.log(3.0) / 0.5) * REFERENCE_LEVEL, 0.5),
+        ("logistic", {"lam": 3.0}, float(np.log(3.0) / 3.0) * REFERENCE_LEVEL, 0.5),
+        # Michaelis-Menten reaches 0.5 at kappa_mult times the reference level.
+        ("michaelis_menten", {"kappa_mult": 1.0}, REFERENCE_LEVEL, 0.5),
+        # tanh reaches 0.5 at atanh(0.5) times c times the reference level.
+        ("tanh", {"c": 0.3}, float(np.arctanh(0.5) * 0.3) * REFERENCE_LEVEL, 0.5),
+        ("tanh", {"c": 1.5}, float(np.arctanh(0.5) * 1.5) * REFERENCE_LEVEL, 0.5),
+        # Root is normalized to 1 at the reference level, not
         # to an asymptote, for any exponent.
-        ("root", {"alpha": 0.3}, MEAN_X, 1.0),
-        ("root", {"alpha": 0.9}, MEAN_X, 1.0),
+        ("root", {"alpha": 0.3}, REFERENCE_LEVEL, 1.0),
+        ("root", {"alpha": 0.9}, REFERENCE_LEVEL, 1.0),
     ],
     ids=lambda value: repr(value) if isinstance(value, dict) else str(value),
 )
@@ -99,7 +82,7 @@ def test_family_is_strictly_monotone_in_x(name):
     shape parameter and collapsed to a constant) would still integrate into the
     graph and still satisfy every decomposition identity.
     """
-    x = np.linspace(0.0, 4.0 * MEAN_X, 97)
+    x = np.linspace(0.0, 4.0 * REFERENCE_LEVEL, 97)
     y = _family(name, x, **FAMILY_SHAPES[name])
     assert (np.diff(y) > 0.0).all(), f"{name} is not strictly increasing in x"
 
@@ -107,7 +90,7 @@ def test_family_is_strictly_monotone_in_x(name):
 @pytest.mark.parametrize("scale", [1e-3, 0.5, 2.0, 1e3])
 @pytest.mark.parametrize("name", sorted(FAMILY_SHAPES))
 def test_family_is_scale_free_in_its_anchor(name, scale):
-    """Scaling ``x`` and ``mean_x`` together leaves the response unchanged.
+    """Scaling ``x`` and ``reference_level`` together leaves the response unchanged.
 
     This is the whole point of the κ-relative parameterization (FINDINGS D7):
     the shape parameters are dimensionless, so the same prior ranges are
@@ -115,10 +98,10 @@ def test_family_is_scale_free_in_its_anchor(name, scale):
     that forgot to rescale its input would fail here while still passing every
     landmark at the fixed anchor above.
     """
-    x = np.linspace(0.05, 4.0 * MEAN_X, 41)
+    x = np.linspace(0.05, 4.0 * REFERENCE_LEVEL, 41)
     shape = FAMILY_SHAPES[name]
     base = _family(name, x, **shape)
-    rescaled = _family(name, x * scale, mean_x=MEAN_X * scale, **shape)
+    rescaled = _family(name, x * scale, reference_level=REFERENCE_LEVEL * scale, **shape)
     np.testing.assert_allclose(rescaled, base, rtol=1e-12, atol=0.0)
 
 
@@ -145,7 +128,7 @@ def _expected_family_column(name: str, x: np.ndarray) -> np.ndarray:
     anchor-relative ratio — so it is spelled out here rather than looked up.
     """
     if name == "linear":
-        return x / MEAN_X
+        return x / REFERENCE_LEVEL
     return _family(name, x, **FAMILY_SHAPES[name])
 
 
@@ -163,13 +146,13 @@ def test_saturate_col_routes_every_family_id_to_its_own_wrapper(family_id, dynam
     against the id, which is exactly where an index shift hides.
     """
     name = SATURATION_FAMILY_KEYS[family_id]
-    x = np.linspace(0.1, 3.0 * MEAN_X, 12)
+    x = np.linspace(0.1, 3.0 * REFERENCE_LEVEL, 12)
     params = dict(DISPATCH_PARAMS, sat_family=np.full(2, family_id))
 
     routed = _evaluate(
         _saturate_col(
             pt.as_tensor_variable(x),
-            pt.as_tensor_variable(MEAN_X),
+            pt.as_tensor_variable(REFERENCE_LEVEL),
             params,
             DISPATCH_K,
             dynamic_family=dynamic_family,

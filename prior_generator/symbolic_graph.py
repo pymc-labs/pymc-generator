@@ -357,7 +357,7 @@ def _reference_levels(
 
 
 def _saturate_family(
-    name: str, ad_col: TensorVariable, mean_ad: TensorVariable, params: dict, k: int
+    name: str, ad_col: TensorVariable, saturation_scale: TensorVariable, params: dict, k: int
 ) -> TensorVariable:
     """One named κ-relative saturation family evaluated on ``ad_col``.
 
@@ -366,27 +366,27 @@ def _saturate_family(
     wrapper's distinct shape parameters.
     """
     if name == "linear":
-        return cast(TensorVariable, ad_col / mean_ad)
+        return cast(TensorVariable, ad_col / saturation_scale)
     family = mechanisms.SATURATION_FAMILIES[name]
     if name == "hill":
         return family(
             ad_col,
-            mean_ad,
+            saturation_scale,
             slope=params["hill_slope"][k],
             kappa_mult=params["hill_kappa_mult"][k],
         )
     if name == "logistic":
-        return family(ad_col, mean_ad, lam=params["logistic_lam"][k])
+        return family(ad_col, saturation_scale, lam=params["logistic_lam"][k])
     if name == "michaelis_menten":
-        return family(ad_col, mean_ad, kappa_mult=params["mm_kappa_mult"][k])
+        return family(ad_col, saturation_scale, kappa_mult=params["mm_kappa_mult"][k])
     if name == "tanh":
-        return family(ad_col, mean_ad, c=params["tanh_c"][k])
-    return family(ad_col, mean_ad, alpha=params["root_alpha"][k])
+        return family(ad_col, saturation_scale, c=params["tanh_c"][k])
+    return family(ad_col, saturation_scale, alpha=params["root_alpha"][k])
 
 
 def _saturate_col(
     ad_col: TensorVariable,
-    mean_ad: TensorVariable,
+    saturation_scale: TensorVariable,
     params: dict,
     k: int,
     *,
@@ -394,7 +394,7 @@ def _saturate_col(
 ) -> TensorVariable:
     """κ-relative saturation of an adstocked column using a *given* scale.
 
-    ``mean_ad`` is passed in (rather than recomputed) so the SAME structural
+    ``saturation_scale`` is passed in so the same structural
     response function f_k can be evaluated on several channel variants — the
     observed channel, the base channel, and the telescoping intervention
     variants — with an identical, pinned saturation scale. This is what makes
@@ -406,16 +406,16 @@ def _saturate_col(
     """
     if dynamic_family:
         sat_fam = pt.as_tensor_variable(params["sat_family"])[k]
-        out = _saturate_family(SATURATION_FAMILY_KEYS[-1], ad_col, mean_ad, params, k)
+        out = _saturate_family(SATURATION_FAMILY_KEYS[-1], ad_col, saturation_scale, params, k)
         for idx in range(len(SATURATION_FAMILY_KEYS) - 2, -1, -1):
             out = pt.switch(
                 pt.eq(sat_fam, idx),
-                _saturate_family(SATURATION_FAMILY_KEYS[idx], ad_col, mean_ad, params, k),
+                _saturate_family(SATURATION_FAMILY_KEYS[idx], ad_col, saturation_scale, params, k),
                 out,
             )
         return out
     name = SATURATION_FAMILY_KEYS[int(params["sat_family"][k])]  # concrete structural family
-    return _saturate_family(name, ad_col, mean_ad, params, k)
+    return _saturate_family(name, ad_col, saturation_scale, params, k)
 
 
 def build_symbolic_graph(

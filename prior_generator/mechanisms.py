@@ -9,18 +9,14 @@ applies the library function along the time dim, and returns the underlying
 tensor via ``.values``. Parameters may be concrete floats or symbolic
 (pytensor / PyMC RV) scalars — both compose into the graph.
 
-κ-relative parameterization (FINDINGS D7, the ``kappa_adstock_adjusted``
-lesson): every family's half-point / scale parameter is expressed relative to
-the caller-supplied, parameter-only operating point ``mean_x`` — either an
-explicit ``kappa = kappa_mult * mean_x`` where the library function takes a
-half-saturation argument, or by rescaling the input to ``x / mean_x`` so the
-remaining shape parameters are scale-free. ``mean_x`` is an anchor, not a
-reduction over a realized series. Each wrapper has signature
-``f(x, mean_x, **shape_params) -> tensor``, is monotone increasing in ``x``,
-and stays O(1) when ``x`` is on its anchor scale.
+Each family's half-point or scale is relative to the caller-supplied
+``reference_level``: either ``kappa = kappa_mult * reference_level`` or input
+rescaling by ``x / reference_level``. This anchor depends on structural
+parameters, not a reduction over the realized series. Wrappers have signature
+``f(x, reference_level, **shape_params) -> tensor`` and are monotone in ``x``.
 
 Every family is normalized to a **unit asymptote** (or, for the unbounded
-``root``, to ``f(mean_x) = 1``), so the channel's single amplitude is the
+``root``, to ``f(reference_level) = 1``), so the channel's single amplitude is the
 structural coefficient ``beta`` in :mod:`prior_generator.symbolic_graph`.
 This mirrors pymc-marketing's own convention -- its wrappers add a ``beta``
 scale exactly to those families whose transformer is bounded, and omit it for
@@ -29,20 +25,19 @@ Carrying both would make ``beta`` and the family asymptote a pure product: the
 contribution identifies only ``beta * asymptote``, leaving each factor free to
 slide along a ridge.
 
-Family parameterizations (prior ranges in `SATURATION_PRIOR_RANGES`):
+Family parameterizations below use ``r = reference_level``:
 
 ==================  =========================================================
-``hill``            ``hill_function(x, slope, κ)`` with κ = kappa_mult·mean_x.
+``hill``            ``hill_function(x, slope, κ)`` with κ = kappa_mult·r.
                     f(κ) = 0.5 exactly for any slope; asymptote 1.
-``logistic``        ``logistic_saturation(x / mean_x, lam)``; half-point at
-                    x = ln(3)/lam · mean_x; asymptote 1.
+``logistic``        ``logistic_saturation(x / r, lam)``; half-point at
+                    x = ln(3)/lam · r; asymptote 1.
 ``michaelis_menten``  ``michaelis_menten(x, 1, κ)`` with
-                    κ = kappa_mult·mean_x. f(κ) = 0.5; asymptote 1.
-``tanh``            ``tanh_saturation(x / mean_x, 1, c)`` =
-                    tanh(x/(mean_x·c)); asymptote 1; initial slope
-                    1/(c·mean_x).
-``root``            ``root_saturation(x / mean_x, alpha)`` = (x/mean_x)^alpha;
-                    f(mean_x) = 1; concave for alpha < 1, no asymptote.
+                    κ = kappa_mult·r. f(κ) = 0.5; asymptote 1.
+``tanh``            ``tanh_saturation(x / r, 1, c)`` =
+                    tanh(x/(r·c)); asymptote 1; initial slope 1/(c·r).
+``root``            ``root_saturation(x / r, alpha)`` = (x/r)^alpha;
+                    f(r) = 1; concave for alpha < 1, no asymptote.
 ==================  =========================================================
 """
 
@@ -117,47 +112,47 @@ SATURATION_PRIOR_RANGES: dict[str, dict[str, tuple[float, float]]] = {
 }
 
 
-def hill_kappa_relative(x, mean_x, *, slope, kappa_mult) -> TensorVariable:
-    """`hill_function` with κ = kappa_mult · mean_x; f(κ) = 0.5, asymptote 1."""
-    safe_mean = pt.maximum(mean_x, 1e-8)
-    return hill_function(x, slope, kappa_mult * safe_mean)
+def hill_kappa_relative(x, reference_level, *, slope, kappa_mult) -> TensorVariable:
+    """Hill curve with κ = kappa_mult · reference_level; unit asymptote."""
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    return hill_function(x, slope, kappa_mult * safe_reference_level)
 
 
-def logistic_kappa_relative(x, mean_x, *, lam) -> TensorVariable:
-    """`logistic_saturation` on x / mean_x; half-point ln(3)/lam · mean_x."""
-    safe_mean = pt.maximum(mean_x, 1e-8)
-    return logistic_saturation(x / safe_mean, lam)
+def logistic_kappa_relative(x, reference_level, *, lam) -> TensorVariable:
+    """Logistic curve with half-point ln(3)/lam · reference_level."""
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    return logistic_saturation(x / safe_reference_level, lam)
 
 
-def michaelis_menten_kappa_relative(x, mean_x, *, kappa_mult) -> TensorVariable:
-    """`michaelis_menten` with λ = kappa_mult · mean_x; f(λ) = 0.5, asymptote 1.
+def michaelis_menten_kappa_relative(x, reference_level, *, kappa_mult) -> TensorVariable:
+    """Michaelis-Menten curve with λ = kappa_mult · reference_level.
 
     The library asymptote is pinned to 1 rather than exposed as a parameter:
     the structural ``beta`` gate is this channel's only amplitude.
     """
-    safe_mean = pt.maximum(mean_x, 1e-8)
-    return michaelis_menten(x, 1.0, kappa_mult * safe_mean)
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    return michaelis_menten(x, 1.0, kappa_mult * safe_reference_level)
 
 
-def tanh_kappa_relative(x, mean_x, *, c) -> TensorVariable:
-    """`tanh_saturation` on x / mean_x: tanh(x / (mean_x·c)); asymptote 1.
+def tanh_kappa_relative(x, reference_level, *, c) -> TensorVariable:
+    """Unit-asymptote tanh(x / (reference_level · c)).
 
     The library asymptote ``b`` is pinned to 1 for the same reason as
     ``michaelis_menten``: ``(b, c) -> (λb, c/λ)`` scales the response by ``λ``
     without changing its shape, so a free ``b`` only duplicates ``beta``.
     """
-    safe_mean = pt.maximum(mean_x, 1e-8)
-    return tanh_saturation(x / safe_mean, 1.0, c)
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    return tanh_saturation(x / safe_reference_level, 1.0, c)
 
 
-def root_kappa_relative(x, mean_x, *, alpha) -> TensorVariable:
-    """`root_saturation` on x / mean_x: (x / mean_x)^alpha; f(mean_x) = 1."""
-    safe_mean = pt.maximum(mean_x, 1e-8)
-    ratio = pt.maximum(x / safe_mean, 0.0)
+def root_kappa_relative(x, reference_level, *, alpha) -> TensorVariable:
+    """Root curve (x / reference_level)^alpha; f(reference_level) = 1."""
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    ratio = pt.maximum(x / safe_reference_level, 0.0)
     return root_saturation(ratio, alpha)
 
 
-#: name -> wrapper with uniform signature ``f(x, mean_x, **shape_params)``.
+#: Name -> wrapper with signature ``f(x, reference_level, **shape_params)``.
 SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
     "hill": hill_kappa_relative,
     "logistic": logistic_kappa_relative,

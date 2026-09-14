@@ -45,6 +45,8 @@ While the project is on 0.x, minor versions may contain breaking changes.
   captured metrics remain unchanged and rank-deficient boundary checks pass.
 - Remove the partial `true_contribution.csv` export. Bundle consumers should use
   `true_components.csv`, which includes the full additive decomposition.
+- Rename saturation-wrapper `mean_x` to `reference_level` and internal `mean_ad`
+  to `saturation_scale`; these are structural anchors, not realized means.
 
 ### Added
 

@@ -464,9 +464,9 @@ def test_saturation_anchor_has_no_noise_ancestors(monkeypatch):
     saturation_anchors = []
     original_saturate_col = symbolic_graph._saturate_col
 
-    def record_saturation_anchor(ad_col, mean_ad, params, k):
-        saturation_anchors.append(mean_ad)
-        return original_saturate_col(ad_col, mean_ad, params, k)
+    def record_saturation_anchor(ad_col, saturation_scale, params, k):
+        saturation_anchors.append(saturation_scale)
+        return original_saturate_col(ad_col, saturation_scale, params, k)
 
     monkeypatch.setattr(symbolic_graph, "_saturate_col", record_saturation_anchor)
     model, out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
