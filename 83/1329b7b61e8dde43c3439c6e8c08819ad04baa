@@ -1,0 +1,22 @@
+CHANGELOG.md
+  h_d36ca8649a0e95 60-67
+docs/guide/oracle.md
+  h_d36ca8649a0e95 12-14,158-165
+pymc_generator/world_model.py
+  h_d36ca8649a0e95 1220-1225
+pymc_generator/worlds.py
+  h_d36ca8649a0e95 207-210
+tests/test_oracle.py
+  h_d36ca8649a0e95 736-737,740-741,753-755
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "831329b7b61e8dde43c3439c6e8c08819ad04baa",
+  "prompts": {},
+  "humans": {
+    "h_d36ca8649a0e95": {
+      "author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
