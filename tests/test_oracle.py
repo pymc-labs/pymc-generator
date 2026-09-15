@@ -733,14 +733,12 @@ def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
 
 
 @pytest.mark.parametrize(
-    ("adstock_family", "has_gradient"),
-    [(0, True), (1, True), (2, False)],
+    "adstock_family",
+    (0, 1, 2),
     ids=("identity", "geometric", "weibull"),
 )
-def test_oracle_logp_and_gradient_capability_by_adstock_family(
-    adstock_family: int, has_gradient: bool
-):
-    """Only pymc-marketing's Weibull normalization prevents an oracle gradient."""
+def test_oracle_logp_and_gradient_capability_by_adstock_family(adstock_family: int):
+    """Every supported adstock family has a finite, nontrivial oracle gradient."""
     cfg = _small_cfg(n_treatments=1, n_time_steps=12, adstock_burn_in=0)
     g = _direct_only_graph(1)
     structural = sample_structure(g, cfg, np.random.default_rng(12))
@@ -752,13 +750,9 @@ def test_oracle_logp_and_gradient_capability_by_adstock_family(
     oracle = build_oracle_model(g, cfg, structural, data)
 
     assert np.isfinite(oracle.compile_logp()(oracle.initial_point()))
-    if has_gradient:
-        gradient = oracle.compile_dlogp()(oracle.initial_point())
-        assert np.isfinite(gradient).all()
-        assert np.max(np.abs(gradient)) > 0.0
-    else:
-        with pytest.raises(NotImplementedError, match=r"Min\{axis=0\}"):
-            oracle.compile_dlogp()
+    gradient = oracle.compile_dlogp()(oracle.initial_point())
+    assert np.isfinite(gradient).all()
+    assert np.max(np.abs(gradient)) > 0.0
 
 
 def test_oracle_rejects_bad_shapes(world_and_oracle):

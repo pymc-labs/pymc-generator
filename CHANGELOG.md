@@ -57,8 +57,14 @@ read the migration notes before upgrading.
   project, with dependencies from conda-forge and selected source-version parity
   with uv. On macOS arm64, all 353 arrays across eight preservation cases matched
   the original baseline exactly on both Python 3.13.9 and 3.14.0. Generation code,
-  seeds, samplers, and tolerances were unchanged. This measured result is not a
-  general numerical-equivalence guarantee across versions or platforms.
+  seeds, sampler settings, and numerical tolerances were unchanged. This measured
+  result is not a general numerical-equivalence guarantee across versions or
+  platforms.
+- **Oracle sampler eligibility:** the released stack supports gradients through
+  Weibull carryover, removing the previous forced Metropolis restriction. Update
+  the oracle regression test to require finite, nontrivial gradients for all
+  three adstock families. Automatic sampler selection and posterior draws can
+  change; NUTS eligibility is not a convergence guarantee.
 - **Project rename:** `pymc-generator` replaces `prior-generator`; update imports
   from `prior_generator` to `pymc_generator` and invoke the `pymc-generator` CLI.
   Reinstall from the renamed repository or native conda artifacts and select the
