@@ -195,7 +195,7 @@ def build_world_model_template(
 
     ``init_inputs`` (from :func:`build_cell_inputs`) only sizes and seeds the data
     containers; every value is replaced per cell. Priors and noise use the same
-    helper definitions as :func:`prior_generator.world_model.build_world_model`,
+    helper definitions as :func:`pymc_generator.world_model.build_world_model`,
     but padded RV shapes do not promise samplewise equivalence to that path.
 
     Returns the model, its graph output names, and its ``param_*`` names.

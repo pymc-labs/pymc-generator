@@ -57,7 +57,7 @@ def write_scm_bundle(
     Parameters
     ----------
     world : SCM
-        A sampled world (see :func:`prior_generator.sample_scm`).
+        A sampled world (see :func:`pymc_generator.sample_scm`).
     out_dir : path-like
         Empty target directory (created if missing). Nonempty targets are refused.
     title : str, optional
@@ -168,7 +168,7 @@ def write_scenario_bundles(
         scenario's ``connect_all_edge_budget`` then SUBSTITUTES its
         connectivity-feasible budget, because a budget tuned for isolated-null
         traps can put "every node reaches Y" out of reach — thinly budgeted,
-        even permanently (see :class:`~prior_generator.scenarios.Scenario`).
+        even permanently (see :class:`~pymc_generator.scenarios.Scenario`).
     plots : bool
         Render PNG figures per bundle.
     verbose : bool
@@ -256,14 +256,14 @@ def write_scenario_bundles(
     lines = [
         "# Inspection datasets",
         "",
-        f"Generated with prior-generator {__version__}. Full effective priors and",
+        f"Generated with pymc-generator {__version__}. Full effective priors and",
         "numerical-library versions are recorded in `recipe.json`.",
         "Reproduce with the same package revision and numerical environment.",
         "",
     ]
     if tuple(scenarios) == SCENARIOS:
         command = (
-            f"prior-generator --out reproduced-inspection-datasets --seed {seed} --t {n_time_steps}"
+            f"pymc-generator --out reproduced-inspection-datasets --seed {seed} --t {n_time_steps}"
         )
         if require_path_to_y:
             command += " --require-path-to-y"
@@ -277,7 +277,7 @@ def write_scenario_bundles(
             "```python",
             "import json",
             "from pathlib import Path",
-            "import prior_generator as pg",
+            "import pymc_generator as pg",
             "",
             'recipe = json.loads(Path("recipe.json").read_text())',
             'for entry in recipe["scenarios"]:',

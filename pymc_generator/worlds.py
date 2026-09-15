@@ -1,6 +1,6 @@
 """Single-world sampling: one accepted task, with its full ground truth.
 
-Where :func:`prior_generator.sample_prior_predictive` produces a padded ``n_tasks``-task corpus
+Where :func:`pymc_generator.sample_prior_predictive` produces a padded ``n_tasks``-task corpus
 for training, :func:`sample_scm` draws ONE accepted world at the config's
 max sizes and keeps everything a human (or exporter) needs: the active-size
 DAG blocks, the drawn SCM parameters, and named output series and metadata,
@@ -113,7 +113,7 @@ class SCM:
     cfg : SCMPrior
         An independent snapshot of the config the world was drawn from.
     name, purpose : str
-        Optional labels (set from a :class:`~prior_generator.scenarios.Scenario`)
+        Optional labels (set from a :class:`~pymc_generator.scenarios.Scenario`)
         used by ``describe_scm`` and the bundle writer.
     extras : dict
         Extra per-world records. With ``cfg.prior_conditioning`` enabled,
@@ -195,7 +195,7 @@ class SCM:
     def oracle_model(self, *, latent: Literal["marginal", "sampled"] = "marginal") -> pm.Model:
         """The observed-data posterior ``pm.Model`` for THIS world.
 
-        Rebuilds :func:`prior_generator.world_model.build_oracle_model` from
+        Rebuilds :func:`pymc_generator.world_model.build_oracle_model` from
         the world's own structure, config, observables and (when present)
         prior-conditioning intervals, so ``pm.sample(model=world.oracle_model())``
         yields the structure-known posterior on the world's dataset. The
@@ -747,10 +747,10 @@ def draw_feasible_graph(
     fully-isolated null nodes are admissible only when ``connect_all=False``.
 
     Each round consumes ``rng`` exactly once, through
-    :func:`~prior_generator.sampler.sample_g_additive`. A caller that hands
+    :func:`~pymc_generator.sampler.sample_g_additive`. A caller that hands
     over a freshly seeded generator therefore draws the very graph
     ``sample_scm`` would draw from that seed — which is what lets
-    :func:`prior_generator.bundles.write_scenario_bundles` pre-flight a
+    :func:`pymc_generator.bundles.write_scenario_bundles` pre-flight a
     scenario's feasibility EXACTLY instead of indicatively.
 
     Parameters

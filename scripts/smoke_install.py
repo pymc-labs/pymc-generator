@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-import prior_generator as pg
+import pymc_generator as pg
 
 
 def main() -> None:
@@ -26,7 +26,7 @@ def main() -> None:
     world = pg.sample_scm(config, seed=731)
     np.testing.assert_allclose(world.reconstruction(), world.data["sales"], rtol=1e-12, atol=1e-12)
     corpus = pg.sample_prior_predictive(config)
-    with TemporaryDirectory(prefix="prior-generator-smoke-") as directory:
+    with TemporaryDirectory(prefix="pymc-generator-smoke-") as directory:
         path = Path(directory) / "corpus.npz"
         pg.save_corpus(corpus, path)
         loaded = pg.load_corpus(path)
@@ -34,7 +34,7 @@ def main() -> None:
         if errors:
             raise AssertionError("Invalid persisted corpus:\n" + "\n".join(errors))
         np.testing.assert_array_equal(loaded["spend_raw"], corpus["spend_raw"])
-    print(f"prior-generator {pg.__version__}: generation, decomposition, and persistence pass")
+    print(f"pymc-generator {pg.__version__}: generation, decomposition, and persistence pass")
 
 
 if __name__ == "__main__":

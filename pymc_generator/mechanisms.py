@@ -17,7 +17,7 @@ parameters, not a reduction over the realized series. Wrappers have signature
 
 Every family is normalized to a **unit asymptote** (or, for the unbounded
 ``root``, to ``f(reference_level) = 1``), so the channel's single amplitude is the
-structural coefficient ``beta`` in :mod:`prior_generator.symbolic_graph`.
+structural coefficient ``beta`` in :mod:`pymc_generator.symbolic_graph`.
 This mirrors pymc-marketing's own convention -- its wrappers add a ``beta``
 scale exactly to those families whose transformer is bounded, and omit it for
 ``michaelis_menten`` / ``tanh`` whose transformer already exposes an asymptote.

@@ -7,10 +7,10 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
-from prior_generator import load_corpus, make_scm_prior, sample_prior_predictive, save_corpus
-from prior_generator.sampler import _additive_task_ok
-from prior_generator.symbolic_graph import _adstock_col, _clamp_channel
-from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
+from pymc_generator import load_corpus, make_scm_prior, sample_prior_predictive, save_corpus
+from pymc_generator.sampler import _additive_task_ok
+from pymc_generator.symbolic_graph import _adstock_col, _clamp_channel
+from pymc_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
 def _built(

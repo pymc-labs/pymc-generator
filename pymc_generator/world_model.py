@@ -6,7 +6,7 @@ per-node random-walk smoothness) in which every *continuous* SCM parameter is a
 PyMC distribution and every noise term is an RV — ``pm.Normal`` walk innovations
 and iid outcome/channel jitter, with campaign pulses as ``pm.Bernoulli``. The
 structural equations and the exact interventional decomposition are the SAME
-ones :func:`prior_generator.symbolic_graph.build_symbolic_graph` builds; this
+ones :func:`pymc_generator.symbolic_graph.build_symbolic_graph` builds; this
 module only supplies the priors + noise and exposes the outputs as
 ``pm.Deterministic`` so a single ``pm.draw`` yields params, series, and the full
 decomposition jointly (and reproducibly from a seed).
@@ -51,7 +51,7 @@ from .symbolic_graph import (
 # recycles ids after garbage collection, so a global would eventually hand a
 # stale function to a brand-new model. Attaching it also ties the cache's
 # lifetime to the model's, which is exactly the intended scope.
-_DRAW_FN_CACHE_ATTR = "_prior_generator_draw_fn_cache"
+_DRAW_FN_CACHE_ATTR = "_pymc_generator_draw_fn_cache"
 
 DRAW_FN_CACHE_HITS = 0
 DRAW_FN_CACHE_MISSES = 0
@@ -444,7 +444,7 @@ def _rw_prior_group(
     ``std_range`` and ``std_sigma`` are mutually exclusive scale definitions.
     A group is a random walk when it carries a smoothing timescale, given either
     as a concrete ``smoothness`` or as already-resolved ``width_index`` kernel
-    widths (see :func:`prior_generator.random_walk.walk_width_index`). Width
+    widths (see :func:`pymc_generator.random_walk.walk_width_index`). Width
     indices may be tensors, which is what lets the width stay a run-time value
     instead of a compile-time one. With neither, the group is iid noise and every
     random-walk-only field is deliberately omitted.
@@ -612,7 +612,7 @@ def _scm_params(
     """Every continuous SCM parameter, in the LOCKED RV creation order.
 
     Shared by :func:`build_world_model` and
-    :func:`prior_generator.world_model_template.build_world_model_template` so the
+    :func:`pymc_generator.world_model_template.build_world_model_template` so the
     per-world and one-compile-per-shard paths cannot drift apart.
 
     The order is load-bearing: ``reseed_rngs`` hands out random streams by
@@ -1109,7 +1109,7 @@ def build_oracle_model(
     PFN) is judged against. The priors and the media response transforms are
     the same definitions generation uses (:func:`_uniform_prior_specs`,
     :func:`_walk_priors`, and the adstock/saturation code from
-    :mod:`prior_generator.symbolic_graph`), so draw and oracle cannot drift.
+    :mod:`pymc_generator.symbolic_graph`), so draw and oracle cannot drift.
 
     Parameters
     ----------
@@ -1199,7 +1199,7 @@ def build_oracle_model(
        history. When burn-in is enabled it therefore discards the leading
        weeks whose response reaches outside the reported window — as many as
        the longest carryover its OWN adstock priors admit
-       (:func:`prior_generator.signal_diagnostics.admitted_response_support_weeks`
+       (:func:`pymc_generator.signal_diagnostics.admitted_response_support_weeks`
        over the direct channels), which is ``l_max - 1`` for a Weibull or an
        unpinned geometric channel and ``0`` when every direct channel is
        identity-adstock or its geometric decay prior is pinned at

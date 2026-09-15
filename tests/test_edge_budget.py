@@ -16,8 +16,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prior_generator import make_scm_prior, sample_prior_predictive
-from prior_generator.sampler import SCMPrior, sample_g_additive
+from pymc_generator import make_scm_prior, sample_prior_predictive
+from pymc_generator.sampler import SCMPrior, sample_g_additive
 
 
 def _cfg(edge_budget=None, *, n_treatments=5, n_covariates=5, n_latent=2, **kw) -> SCMPrior:

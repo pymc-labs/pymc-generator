@@ -30,7 +30,7 @@ true budget, not a set of loosely related ratios.
 
 Usage::
 
-    from prior_generator import outcome_distributions, sample_prior_predictive
+    from pymc_generator import outcome_distributions, sample_prior_predictive
 
     corpus = sample_prior_predictive(cfg)
     dist = outcome_distributions(corpus)
@@ -755,7 +755,7 @@ def outcome_distributions(
     source
         A corpus mapping (``sample_prior_predictive`` /
         ``DataGenerator.generate`` / ``load_corpus``) or a sequence of
-        :class:`~prior_generator.worlds.SCM` worlds sharing one horizon.
+        :class:`~pymc_generator.worlds.SCM` worlds sharing one horizon.
     quantities
         Subset of :data:`OUTCOME_QUANTITIES` to compute; default all, and an
         empty subset is rejected — there is nothing to report. Note

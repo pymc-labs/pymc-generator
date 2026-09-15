@@ -4,7 +4,7 @@ Five hand-built recipes, each isolating one causal pathway so a decomposition
 failure can be traced to the mechanism that broke. See the
 [Named scenarios guide](../guide/scenarios.md) for a rendered gallery.
 
-::: prior_generator.scenarios
+::: pymc_generator.scenarios
     options:
       show_root_heading: true
       show_root_toc_entry: false

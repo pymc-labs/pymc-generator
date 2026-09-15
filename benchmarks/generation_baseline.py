@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-import prior_generator as pg
+import pymc_generator as pg
 
 
 def cases():
@@ -72,7 +72,7 @@ def main() -> None:
         args.directory.mkdir(parents=True, exist_ok=False)
         versions = {
             name: importlib.metadata.version(name)
-            for name in ("prior-generator", "numpy", "scipy", "pymc", "pytensor", "pymc-marketing")
+            for name in ("pymc-generator", "numpy", "scipy", "pymc", "pytensor", "pymc-marketing")
         }
         (args.directory / "environment.json").write_text(json.dumps(versions, indent=2) + "\n")
     for name, prior in cases():

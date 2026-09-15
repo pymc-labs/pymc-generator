@@ -2157,81 +2157,6 @@ wheels = [
 ]
 
 [[package]]
-name = "prior-generator"
-source = { editable = "." }
-dependencies = [
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pymc" },
-    { name = "pymc-marketing" },
-    { name = "pytensor" },
-    { name = "scipy" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "graphviz" },
-    { name = "ipykernel" },
-    { name = "markdown-exec" },
-    { name = "mkdocs" },
-    { name = "mkdocs-jupyter" },
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
-    { name = "nbformat" },
-    { name = "pymdown-extensions" },
-]
-
-[package.dev-dependencies]
-build = [
-    { name = "build" },
-    { name = "setuptools" },
-    { name = "twine" },
-    { name = "wheel" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "graphviz", marker = "extra == 'docs'", specifier = ">=0.20" },
-    { name = "ipykernel", marker = "extra == 'docs'", specifier = ">=7.3.0" },
-    { name = "markdown-exec", marker = "extra == 'docs'", specifier = ">=1.12.3" },
-    { name = "matplotlib" },
-    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
-    { name = "mkdocs-jupyter", marker = "extra == 'docs'", specifier = ">=0.26.3" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
-    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=1.0.6" },
-    { name = "mypy", marker = "extra == 'dev'" },
-    { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.10.4" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pymc", specifier = "==6.0.1" },
-    { name = "pymc-marketing", git = "https://github.com/pymc-labs/pymc-marketing.git?rev=ff70aae62dea1933b758a55885c24a76a3e7a9a5" },
-    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=11.0.1" },
-    { name = "pytensor", specifier = "==3.0.7" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.18" },
-    { name = "scipy" },
-]
-provides-extras = ["dev", "docs"]
-
-[package.metadata.requires-dev]
-build = [
-    { name = "build" },
-    { name = "setuptools", specifier = ">=77" },
-    { name = "twine" },
-    { name = "wheel" },
-]
-
-[[package]]
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.org/simple" }
@@ -2429,6 +2354,81 @@ dependencies = [
     { name = "pydantic" },
     { name = "pymc" },
     { name = "pytensor" },
+]
+
+[[package]]
+name = "pymc-generator"
+source = { editable = "." }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pymc" },
+    { name = "pymc-marketing" },
+    { name = "pytensor" },
+    { name = "scipy" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "graphviz" },
+    { name = "ipykernel" },
+    { name = "markdown-exec" },
+    { name = "mkdocs" },
+    { name = "mkdocs-jupyter" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+    { name = "nbformat" },
+    { name = "pymdown-extensions" },
+]
+
+[package.dev-dependencies]
+build = [
+    { name = "build" },
+    { name = "setuptools" },
+    { name = "twine" },
+    { name = "wheel" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "graphviz", marker = "extra == 'docs'", specifier = ">=0.20" },
+    { name = "ipykernel", marker = "extra == 'docs'", specifier = ">=7.3.0" },
+    { name = "markdown-exec", marker = "extra == 'docs'", specifier = ">=1.12.3" },
+    { name = "matplotlib" },
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
+    { name = "mkdocs-jupyter", marker = "extra == 'docs'", specifier = ">=0.26.3" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7.6" },
+    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=1.0.6" },
+    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.10.4" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pymc", specifier = "==6.0.1" },
+    { name = "pymc-marketing", git = "https://github.com/pymc-labs/pymc-marketing.git?rev=ff70aae62dea1933b758a55885c24a76a3e7a9a5" },
+    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=11.0.1" },
+    { name = "pytensor", specifier = "==3.0.7" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.18" },
+    { name = "scipy" },
+]
+provides-extras = ["dev", "docs"]
+
+[package.metadata.requires-dev]
+build = [
+    { name = "build" },
+    { name = "setuptools", specifier = ">=77" },
+    { name = "twine" },
+    { name = "wheel" },
 ]
 
 [[package]]

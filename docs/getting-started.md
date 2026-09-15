@@ -10,8 +10,8 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then clon
 the repository and use its checked-in dependency lock:
 
 ```bash
-git clone https://github.com/pymc-labs/prior-generator.git
-cd prior-generator
+git clone https://github.com/pymc-labs/pymc-generator.git
+cd pymc-generator
 uv sync --frozen
 uv run --no-sync python
 ```
@@ -34,14 +34,14 @@ installation problem.
     needed for DAG image export and full documentation builds, not basic draws.
 
 Development and documentation profiles are described in
-[Contributing](https://github.com/pymc-labs/prior-generator/blob/main/CONTRIBUTING.md).
+[Contributing](https://github.com/pymc-labs/pymc-generator/blob/main/CONTRIBUTING.md).
 After selecting a profile with `uv sync`, use `uv run --no-sync` so running a
 command does not silently remove optional tools from that environment.
 
 ## Install with conda
 
 Use the native channel built from this repository or unpacked from a GitHub
-release's `conda-channel.tar.gz`. The channel contains `prior-generator` and
+release's `conda-channel.tar.gz`. The channel contains `pymc-generator` and
 exact-commit companion builds of pymc-marketing and pymc-extras; remaining
 native dependencies come from conda-forge. Core numerical and diagnostic source
 versions are pinned to match the uv lock.
@@ -49,17 +49,17 @@ versions are pinned to match the uv lock.
 From a checkout with a channel at `dist/conda-channel`:
 
 ```bash
-conda create --name prior-generator --override-channels --strict-channel-priority \
+conda create --name pymc-generator --override-channels --strict-channel-priority \
   --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
-  python=3.13 prior-generator=0.0.1
-conda activate prior-generator
-python -c "import prior_generator as pg; print(pg.__version__)"
-prior-generator --help
+  python=3.13 pymc-generator=0.0.1
+conda activate pymc-generator
+python -c "import pymc_generator as pg; print(pg.__version__)"
+pymc-generator --help
 ```
 
 For an unpacked release channel, substitute its absolute directory in the
 `file://` URL. While no release channel is available, follow the
-[native build instructions](https://github.com/pymc-labs/prior-generator/blob/main/CONTRIBUTING.md#conda-artifacts).
+[native build instructions](https://github.com/pymc-labs/pymc-generator/blob/main/CONTRIBUTING.md#conda-artifacts).
 This is a native conda install: it does not overlay a pip environment or
 replace the pinned development commits with released upstream versions.
 
@@ -67,7 +67,7 @@ Record a solved environment when reproducing a native run:
 
 ```bash
 conda list --explicit --sha256 > conda-platform.lock
-conda create --name prior-generator-replay --file conda-platform.lock
+conda create --name pymc-generator-replay --file conda-platform.lock
 ```
 
 An explicit conda lock is **platform-specific** and may contain absolute local
@@ -81,7 +81,7 @@ A world is drawn from a **prior**. The quickest way to get a well-formed prior i
 a named audit scenario, each of which isolates one causal pathway.
 
 ```python exec="1" session="quickstart" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 scenario = pg.SCENARIOS[1]                       # "confounded_spend"
 scm = pg.sample_scm(
@@ -111,7 +111,7 @@ Every world renders four figures — the same ones a bundle writes to disk. Here
 the causal graph and the observable series:
 
 ```python
-from prior_generator.viz import plot_dag, plot_timeseries
+from pymc_generator.viz import plot_dag, plot_timeseries
 
 plot_dag(scm, "dag.png")
 plot_timeseries(scm, "timeseries.png")
@@ -119,7 +119,7 @@ plot_timeseries(scm, "timeseries.png")
 
 ```python exec="1" session="quickstart" html="1"
 from scm_docs import viz_html
-from prior_generator.viz import plot_dag, plot_timeseries
+from pymc_generator.viz import plot_dag, plot_timeseries
 
 print(viz_html(plot_dag, scm,
     caption="Nodes: D latent demand · Z controls · C channels · B intercept · Y sales."))
@@ -142,7 +142,7 @@ Persist a world as a folder a human can inspect end-to-end — CSVs, the plain-t
 description, the DAG (`.dot` + `.png`), and diagnostic figures.
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 pg.write_scm_bundle(scm, "my_world/")
 # my_world/
@@ -157,7 +157,7 @@ pg.write_scm_bundle(scm, "my_world/")
 Or generate the full five-scenario inspection set from the command line:
 
 ```bash
-prior-generator --out inspection-datasets --seed 20260712
+pymc-generator --out inspection-datasets --seed 20260712
 ```
 
 ## 6 · Generate a training corpus
@@ -166,7 +166,7 @@ Stack many worlds into the tensor `.npz` format amortized-inference / PFN
 pipelines consume — the decomposition targets come baked in.
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(n_treatments=8, n_covariates=4, n_latent=2,
                         n_cells=2, draws_per_cell=2, n_time_steps=32, seed=42)

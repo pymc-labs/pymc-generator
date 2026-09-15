@@ -96,7 +96,7 @@ def _texture_label(params: dict) -> str:
     """Summarize the REALIZED texture: how many nodes drew each drive term.
 
     Never a preset name. The texture preset is not recorded on the world, and
-    a bare :class:`~prior_generator.sampler.SCMPrior` defaults every
+    a bare :class:`~pymc_generator.sampler.SCMPrior` defaults every
     high-frequency range to ``(0.0, 0.0)`` — so a hardcoded "diverse" label
     describes a world that may have none of it. The drawn ``use_*`` flags are
     the ground truth: they are what the structural equations branch on.

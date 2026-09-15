@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prior_generator import make_scm_prior, sample_prior_predictive
-from prior_generator.sampler import SCMPrior, _sample_g, sample_g_additive
+from pymc_generator import make_scm_prior, sample_prior_predictive
+from pymc_generator.sampler import SCMPrior, _sample_g, sample_g_additive
 
 # The recipe that motivated the knob: wide active range, wide cy range,
 # slots. Without a floor, every cell whose cy draw reaches its active count is
@@ -191,8 +191,8 @@ def test_direct_null_channels_have_exactly_zero_direct_contribution():
 
 
 def test_direct_null_floor_does_not_exclude_indirect_influence():
-    from prior_generator import sample_scm
-    from prior_generator.worlds import channel_role
+    from pymc_generator import sample_scm
+    from pymc_generator.worlds import channel_role
 
     cfg = make_scm_prior(
         n_treatments=2,

@@ -7,13 +7,13 @@ import warnings
 import numpy as np
 import pytest
 
-import prior_generator as pg
-from prior_generator.sampler import (
+import pymc_generator as pg
+from pymc_generator.sampler import (
     ADSTOCK_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
     SCMPrior,
 )
-from prior_generator.world_model import sample_structure
+from pymc_generator.world_model import sample_structure
 
 _DEFAULT_ADSTOCK_FAMILY_PROBS = {
     "none": 0.15,

@@ -26,7 +26,7 @@ jobs:
         run: |
           uv run --no-project --python 3.13 python - <<'PY'
           import os
-          from prior_generator import __version__
+          from pymc_generator import __version__
 
           expected = f"v{__version__}"
           actual = os.environ["GITHUB_REF_NAME"]
@@ -73,15 +73,15 @@ jobs:
           dist = Path("dist")
           version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
           wheel, = dist.glob("*.whl")
-          sdist, = dist.glob("prior_generator-*.tar.gz")
+          sdist, = dist.glob("pymc_generator-*.tar.gz")
           with zipfile.ZipFile(wheel) as archive:
-              wheel_metadata = archive.read(f"prior_generator-{version}.dist-info/METADATA")
+              wheel_metadata = archive.read(f"pymc_generator-{version}.dist-info/METADATA")
           with tarfile.open(sdist) as archive:
-              with archive.extractfile(f"prior_generator-{version}/PKG-INFO") as metadata:
+              with archive.extractfile(f"pymc_generator-{version}/PKG-INFO") as metadata:
                   sdist_metadata = metadata.read()
           for path, raw in ((wheel, wheel_metadata), (sdist, sdist_metadata)):
               metadata = email.parser.BytesParser().parsebytes(raw)
-              if (metadata["Name"], metadata["Version"]) != ("prior-generator", version):
+              if (metadata["Name"], metadata["Version"]) != ("pymc-generator", version):
                   raise SystemExit(f"Unexpected package identity in {path}")
 
           bundle = dist / "conda-channel.tar.gz"
@@ -103,6 +103,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            dist/*.whl dist/prior_generator-*.tar.gz \
+            dist/*.whl dist/pymc_generator-*.tar.gz \
             dist/conda-channel.tar.gz dist/SHA256SUMS \
             --verify-tag --draft --generate-notes --title "$GITHUB_REF_NAME"

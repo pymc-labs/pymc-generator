@@ -2,7 +2,7 @@
 
 Two families live here. The bundle figures (DAG, timeseries, decomposition,
 channels) render ONE world; the diagnostics figures render a
-:class:`~prior_generator.diagnostics.DataDiagnostics` report over many worlds
+:class:`~pymc_generator.diagnostics.DataDiagnostics` report over many worlds
 (dependence, series distributions, temporal structure, VIF, contributions).
 
 matplotlib is imported lazily inside each function so importing the package —
@@ -347,7 +347,7 @@ def plot_outcome_distributions(
 ) -> None:
     """Histogram grid over the QUANTITY axis: how large every outcome gets.
 
-    One panel per quantity of an :func:`~prior_generator.outcomes.outcome_distributions`
+    One panel per quantity of an :func:`~pymc_generator.outcomes.outcome_distributions`
     result. ``of="value"`` pools every drawn value across worlds and time;
     ``of="mean"`` shows the across-world spread of per-world levels;
     ``of="share"`` shows the share-of-sales budget (media/baseline/noise).
@@ -754,7 +754,7 @@ def plot_series_distributions(
     since consecutive weeks are dependent and worlds have different scales.
     It needs the raw series, so a report built with ``keep_series=False``
     raises. ``of`` may instead name one of the eight per-world slots
-    (:data:`~prior_generator.diagnostics.SERIES_SLOTS`), in which case the
+    (:data:`~pymc_generator.diagnostics.SERIES_SLOTS`), in which case the
     panel shows the across-world distribution of that slot over its valid
     worlds.
 

@@ -11,7 +11,7 @@ native conda installation paths described in the installation guide.
 
 Do not disclose vulnerabilities, credentials, or real datasets in public issues
 or pull requests. If GitHub offers **Security → Report a vulnerability**, use
-[private vulnerability reporting](https://github.com/pymc-labs/prior-generator/security/advisories/new).
+[private vulnerability reporting](https://github.com/pymc-labs/pymc-generator/security/advisories/new).
 Availability depends on repository settings, visibility, and the GitHub plan;
 this policy does not imply that the feature is enabled.
 

@@ -60,7 +60,7 @@ class Scenario:
         """Build the scenario's validated ``SCMPrior``.
 
         ``n_cells``/``draws_per_cell`` are placebo values — single-SCM sampling
-        goes through :func:`prior_generator.worlds.sample_scm`, which
+        goes through :func:`pymc_generator.worlds.sample_scm`, which
         bypasses the corpus loop — but they keep ``validate()`` happy.
 
         Parameters

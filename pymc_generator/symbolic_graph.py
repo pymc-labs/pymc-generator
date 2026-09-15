@@ -158,7 +158,7 @@ def _walk_column(eps_col, rw_group: dict, i: int, n_time_steps: int) -> TensorVa
 
     A ``width_index`` entry on the group switches to the kernel-by-index walk,
     which keeps smoothness a run-time value. Groups without it (every
-    :func:`prior_generator.world_model._walk_priors` group) resolve their kernel
+    :func:`pymc_generator.world_model._walk_priors` group) resolve their kernel
     width while the graph is built, as before.
     """
     width_index = rw_group.get("width_index")
@@ -407,7 +407,7 @@ def build_symbolic_graph(
     params : dict
         SCM parameters — the continuous ones may be symbolic (PyMC RV)
         tensors or concrete numpy; families/smoothness are concrete. Assembled
-        by :func:`prior_generator.world_model.build_world_model`.
+        by :func:`pymc_generator.world_model.build_world_model`.
     eps : dict
         The caller's noise RVs, each with leading dim
         ``n_time_steps_full = n_time_steps + burn_in``:

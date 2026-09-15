@@ -22,22 +22,22 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from prior_generator import make_scm_prior
-from prior_generator.sampler import (
+from pymc_generator import make_scm_prior
+from pymc_generator.sampler import (
     _ADDITIVE_OUT_NAMES,
     _CORPUS_PARAM_NAMES,
     _CORPUS_SHOCK_NAMES,
     _slice_g_active,
     sample_g_additive,
 )
-from prior_generator.world_model import (
+from pymc_generator.world_model import (
     build_world_model,
     draw_worlds,
     reset_world_model_caches,
     sample_structure,
     set_compile_cache_enabled,
 )
-from prior_generator.world_model_template import (
+from pymc_generator.world_model_template import (
     build_cell_inputs,
     build_world_model_template,
     compile_template_draw_fn,

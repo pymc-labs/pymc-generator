@@ -15,7 +15,7 @@ mechanism that broke. Each fixes graph sizes and per-edge-type arrow budgets.
 ## Build a scenario's prior
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 sc = pg.SCENARIOS[3]                               # channel_halo
 print("name       :", sc.name)
@@ -37,7 +37,7 @@ from scenario to scenario — that is the pathway each one isolates.
 
 ```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
-import prior_generator as pg
+import pymc_generator as pg
 
 for idx in range(len(pg.SCENARIOS)):
     sc = pg.SCENARIOS[idx]
@@ -55,7 +55,7 @@ are *never* generated.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import world
-from prior_generator.worlds import node_status
+from pymc_generator.worlds import node_status
 
 scm = world(scenario=3, seed=0)                    # channel_halo
 status = node_status(scm.g)
@@ -93,10 +93,10 @@ half-written.
 folder — see [Audit bundles](bundles.md#the-five-scenario-inspection-set).
 
 ```bash
-prior-generator --out inspection-datasets --seed 20260712
+pymc-generator --out inspection-datasets --seed 20260712
 ```
 
 !!! tip "Roll your own"
     Scenarios are just presets. Build any world you like directly with
-    [`make_scm_prior`](../reference/config.md#prior_generator.presets.make_scm_prior)
+    [`make_scm_prior`](../reference/config.md#pymc_generator.presets.make_scm_prior)
     and its `edge_budget` — see [Generating a corpus](corpus.md#dialing-complexity).

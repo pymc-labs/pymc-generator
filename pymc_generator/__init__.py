@@ -1,11 +1,11 @@
-"""prior-generator: synthetic MMM world simulation with exact causal decompositions.
+"""pymc-generator: synthetic MMM world simulation with exact causal decompositions.
 
 Simulate thousands of marketing-mix-model "worlds" — additive structural
 causal models over demand, controls, media channels, baseline and sales —
 with exact interventional decomposition targets, human-readable dataset
 bundles, and corpora in the format PFN training pipelines consume.
 
-Public symbols are lazy-loaded so ``import prior_generator`` stays light
+Public symbols are lazy-loaded so ``import pymc_generator`` stays light
 (no pytensor / scipy / pandas / matplotlib until actually used).
 """
 

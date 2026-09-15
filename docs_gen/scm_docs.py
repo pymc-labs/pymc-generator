@@ -24,13 +24,13 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import prior_generator as pg  # noqa: E402
+import pymc_generator as pg  # noqa: E402
 
-# Importing the submodule registers ``prior_generator.viz`` as an attribute of the
+# Importing the submodule registers ``pymc_generator.viz`` as an attribute of the
 # package, so the doc blocks (which all import this module) can reference
 # ``pg.viz.plot_dag`` — the package's public symbols are lazy-loaded and ``viz``
 # is not one of them, so ``pg.viz`` only resolves once the submodule is imported.
-import prior_generator.viz  # noqa: E402,F401
+import pymc_generator.viz  # noqa: E402,F401
 
 INK, MUTED, GRID = "#1f2937", "#64748b", "#e2e8f0"
 

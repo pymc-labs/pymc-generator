@@ -138,7 +138,7 @@ then the direct contributions, the baseline components, and the indirect sources
 
 ```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
-import prior_generator as pg
+import pymc_generator as pg
 
 print(viz_html(pg.viz.plot_decomposition, world(1, 0),
          caption="Top: sales vs Σ true components. Below: direct, baseline, and indirect effects."))

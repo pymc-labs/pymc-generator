@@ -16,16 +16,16 @@ import json
 import numpy as np
 import pytest
 
-import prior_generator as pg
-import prior_generator.world_model as world_model
-from prior_generator import DataGenerator
-from prior_generator.sampler import (
+import pymc_generator as pg
+import pymc_generator.world_model as world_model
+from pymc_generator import DataGenerator
+from pymc_generator.sampler import (
     ADSTOCK_FAMILY_KEYS,
     CORPUS_STORAGE_MAX,
     MAX_TOPUPS_PER_CELL,
     SCMPrior,
 )
-from prior_generator.slots import LEGACY_CORPUS_KEYS_V1
+from pymc_generator.slots import LEGACY_CORPUS_KEYS_V1
 
 
 def _tiny_config(**overrides):

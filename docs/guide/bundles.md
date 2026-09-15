@@ -1,7 +1,7 @@
 # Audit bundles
 
 A **bundle** is a folder a human can audit end-to-end. It is the artifact the
-`prior-generator` CLI writes, and the most direct way to hand a world to someone
+`pymc-generator` CLI writes, and the most direct way to hand a world to someone
 who wants to *read* it rather than load it.
 
 Destinations must be absent or empty; existing artifacts are never overwritten.
@@ -19,7 +19,7 @@ partial set. Use a new destination after investigating such a failure.
 ## Write one
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 scm = pg.sample_scm(pg.SCENARIOS[1].prior(n_time_steps=104, seed=0), seed=0,
                     name="confounded_spend")
@@ -32,7 +32,7 @@ produced:
 ```python exec="1" source="block" result="text"
 import tempfile, os
 from scm_docs import world
-import prior_generator as pg
+import pymc_generator as pg
 
 scm = world(scenario=1, seed=0)
 out = pg.write_scm_bundle(scm, os.path.join(tempfile.mkdtemp(), "confounded_spend"))
@@ -68,7 +68,7 @@ reported a decomposition error around `1e-15`.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import world
-import prior_generator as pg
+import pymc_generator as pg
 
 text = pg.describe_scm(world(1, 0))
 print("\n".join(text.splitlines()[:28]))
@@ -82,7 +82,7 @@ contains:
 
 ```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
-import prior_generator as pg
+import pymc_generator as pg
 
 print(viz_html(pg.viz.plot_channels, world(1, 0),
          caption="channels.png — each channel's spend (grey) and true contribution (color), divided by its absolute mean. Zero-mean series retain raw values and are labelled."))
@@ -94,12 +94,12 @@ print(viz_html(pg.viz.plot_channels, world(1, 0),
 `README.md`. This is what the CLI produces:
 
 ```bash
-prior-generator --out inspection-datasets --seed 20260712
+pymc-generator --out inspection-datasets --seed 20260712
 # README + 5 datasets under inspection-datasets
 ```
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 paths = pg.write_scenario_bundles("inspection-datasets", seed=20260712)
 # inspection-datasets/

@@ -1,4 +1,4 @@
-"""``prior-generator`` command-line interface.
+"""``pymc-generator`` command-line interface.
 
 Generates the five-scenario inspection bundles (the human-audit layout) —
 one numbered folder per scenario with CSVs, a plain-text description, the
@@ -6,7 +6,7 @@ DAG as ``.dot`` + ``.png``, and diagnostic figures.
 
 Usage::
 
-    prior-generator [--out inspection-datasets] [--seed 20260712] [--t 104]
+    pymc-generator [--out inspection-datasets] [--seed 20260712] [--t 104]
                     [--require-path-to-y] [--no-plots]
 """
 
@@ -17,7 +17,7 @@ import argparse
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="prior-generator",
+        prog="pymc-generator",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

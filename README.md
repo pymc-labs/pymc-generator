@@ -1,4 +1,4 @@
-# prior-generator
+# pymc-generator
 
 Synthetic marketing-mix-model (MMM) datasets with known structural ground truth.
 Each world contains media spend, observed controls, latent demand, and sales,
@@ -20,8 +20,8 @@ observations or recoverable by every fitted MMM.
 Use the checked-in lockfile rather than resolving a new modeling stack:
 
 ```bash
-git clone https://github.com/pymc-labs/prior-generator.git
-cd prior-generator
+git clone https://github.com/pymc-labs/pymc-generator.git
+cd pymc-generator
 uv sync --frozen
 uv run --no-sync python
 ```
@@ -38,10 +38,10 @@ and documentation environments.
 Use a locally built channel or a GitHub release's native channel archive:
 
 ```bash
-conda create --name prior-generator --override-channels --strict-channel-priority \
+conda create --name pymc-generator --override-channels --strict-channel-priority \
   --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
-  python=3.13 prior-generator=0.0.1
-conda activate prior-generator
+  python=3.13 pymc-generator=0.0.1
+conda activate pymc-generator
 ```
 
 The companion packages retain the exact pymc-marketing and pymc-extras commits
@@ -54,7 +54,7 @@ paths and platform-specific environment exports, or
 ## Quickstart
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(
     n_treatments=3,
@@ -86,7 +86,7 @@ configuration, seeds, environment, and replay instructions.
 The command-line interface generates named inspection scenarios:
 
 ```bash
-uv run --no-sync prior-generator --out inspection-datasets --seed 20260712
+uv run --no-sync pymc-generator --out inspection-datasets --seed 20260712
 ```
 
 ## Data contracts and interpretation

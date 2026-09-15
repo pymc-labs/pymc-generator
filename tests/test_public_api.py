@@ -8,9 +8,9 @@ import sys
 
 import pytest
 
-import prior_generator as pg
+import pymc_generator as pg
 
-# `prior_generator.diagnostics` is a submodule AND `data_diagnostics` is a lazy
+# `pymc_generator.diagnostics` is a submodule AND `data_diagnostics` is a lazy
 # public callable: importing the submodule (explicitly, or as the side effect of
 # the lazy __getattr__) binds it as a package attribute. A submodule named after
 # a public callable would shadow it, so the callable must stay a function under
@@ -32,14 +32,14 @@ def test_all_public_symbols_resolve():
 
 
 def test_version_matches_the_installed_distribution():
-    assert pg.__version__ == importlib.metadata.version("prior-generator")
+    assert pg.__version__ == importlib.metadata.version("pymc-generator")
 
 
 @pytest.mark.parametrize(
     "prologue",
     (
-        "import prior_generator as pg",
-        "import prior_generator.diagnostics; import prior_generator as pg",
+        "import pymc_generator as pg",
+        "import pymc_generator.diagnostics; import pymc_generator as pg",
     ),
     ids=("package-first", "submodule-first"),
 )
@@ -63,23 +63,23 @@ def test_all_advertises_the_diagnostics_entry_points():
 def test_import_is_light():
     # importing the package must not pull the heavy modeling / plotting stack.
     code = (
-        "import sys, prior_generator; "
+        "import sys, pymc_generator; "
         "heavy = [m for m in ('pytensor', 'pymc', 'pymc_marketing', 'scipy', 'pandas', 'matplotlib') "
         "if m in sys.modules]; "
         "sys.exit(1 if heavy else 0)"
     )
     r = subprocess.run([sys.executable, "-c", code])
-    assert r.returncode == 0, "import prior_generator pulled a heavy dependency at import time"
+    assert r.returncode == 0, "import pymc_generator pulled a heavy dependency at import time"
 
 
 def test_importing_the_diagnostics_module_stays_light():
     # diagnostics is pure numpy over retained arrays: pandas is TYPE_CHECKING-only
     # there and the frame helpers import it on demand.
     code = (
-        "import sys, prior_generator.diagnostics; "
+        "import sys, pymc_generator.diagnostics; "
         "heavy = [m for m in ('pytensor', 'pymc', 'pymc_marketing', 'scipy', 'pandas', 'matplotlib') "
         "if m in sys.modules]; "
         "sys.exit(1 if heavy else 0)"
     )
     r = subprocess.run([sys.executable, "-c", code])
-    assert r.returncode == 0, "prior_generator.diagnostics pulled a heavy dependency at import time"
+    assert r.returncode == 0, "pymc_generator.diagnostics pulled a heavy dependency at import time"

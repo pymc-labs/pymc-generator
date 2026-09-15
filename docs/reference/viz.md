@@ -1,7 +1,7 @@
 # Visualization
 
 Matplotlib renders in two families. The bundle figures take an
-[`SCM`](sampling.md#prior_generator.worlds.SCM) and a save path — the four
+[`SCM`](sampling.md#pymc_generator.worlds.SCM) and a save path — the four
 figures every bundle contains. The diagnostics figures take a
 [`DataDiagnostics`](diagnostics.md) report and a save path. matplotlib is
 imported lazily, and headless callers should select the `Agg` backend first
@@ -100,7 +100,7 @@ bands, no causal or forecast claims. The retained latent series (D, B) are
 labelled *retained latent truth* — ground truth kept for auditing, never model
 inputs.
 
-::: prior_generator.viz
+::: pymc_generator.viz
     options:
       show_root_heading: true
       show_root_toc_entry: false

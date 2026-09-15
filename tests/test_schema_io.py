@@ -7,17 +7,17 @@ import os
 import numpy as np
 import pytest
 
-import prior_generator as pg
-import prior_generator.world_model as world_model
-from prior_generator import DataGenerator
-from prior_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
-from prior_generator.signal_diagnostics import (
+import pymc_generator as pg
+import pymc_generator.world_model as world_model
+from pymc_generator import DataGenerator
+from pymc_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
+from pymc_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
     dense_signal_metrics,
     summarize_signal_metrics,
 )
-from prior_generator.slots import (
+from pymc_generator.slots import (
     CORPUS_SCHEMA_VERSION,
     EDGE_TYPES_EXTENDED,
     LEGACY_CORPUS_KEYS_V1,

@@ -11,7 +11,7 @@
 - [ ] Appropriate regression test or executable verification evidence included
 - [ ] Locked uv test commands pass; slow cases checked when relevant
 - [ ] `uv run --no-sync ruff check .` and `uv run --no-sync ruff format --check .` pass
-- [ ] `uv run --no-sync mypy prior_generator` passes without blanket exemptions
+- [ ] `uv run --no-sync mypy pymc_generator` passes without blanket exemptions
 - [ ] Public API, source notebooks, and user documentation reflect the change
 - [ ] `CHANGELOG.md` updated for user-visible changes
 - [ ] Same-environment numerical preservation verified, or intended differences

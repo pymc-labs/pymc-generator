@@ -20,11 +20,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import prior_generator as pg
-from prior_generator.bundles import write_scenario_bundles, write_scm_bundle
-from prior_generator.describe import describe_scm
-from prior_generator.sampler import SCMPrior
-from prior_generator.scenarios import SCENARIOS, Scenario
+import pymc_generator as pg
+from pymc_generator.bundles import write_scenario_bundles, write_scm_bundle
+from pymc_generator.describe import describe_scm
+from pymc_generator.sampler import SCMPrior
+from pymc_generator.scenarios import SCENARIOS, Scenario
 
 #: ``true_components.csv`` columns that are NOT additive terms of sales: the
 #: index, the reconstruction total itself, and the latent-input diagnostics
@@ -60,7 +60,7 @@ def _world(
 
 
 def test_exported_dag_keeps_the_intercept_parentless(tmp_path):
-    from prior_generator.worlds import edges_with_coeffs
+    from pymc_generator.worlds import edges_with_coeffs
 
     world = _world(4)
     edges = edges_with_coeffs(world.g, world.params)
@@ -295,7 +295,7 @@ def test_description_texture_reports_the_drawn_flags():
 
 def _cli(*argv: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "prior_generator.cli", *argv],
+        [sys.executable, "-m", "pymc_generator.cli", *argv],
         capture_output=True,
         text=True,
     )

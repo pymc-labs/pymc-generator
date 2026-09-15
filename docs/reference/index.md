@@ -8,23 +8,23 @@ it.
 
 | Symbol | Page | Purpose |
 | --- | --- | --- |
-| [`make_scm_prior`](config.md#prior_generator.presets.make_scm_prior) | [Configuration](config.md) | Build a validated additive-SCM prior. |
-| [`SCMPrior`](config.md#prior_generator.sampler.SCMPrior) | [Configuration](config.md) | The config: sizes, edge budgets, coefficient/noise ranges. |
-| [`sample_scm`](sampling.md#prior_generator.worlds.sample_scm) / [`SCM`](sampling.md#prior_generator.worlds.SCM) | [Sampling one world](sampling.md) | Draw one accepted world with its full ground truth. |
-| [`build_world_model`](world-model.md#prior_generator.world_model.build_world_model) / [`draw_worlds`](world-model.md#prior_generator.world_model.draw_worlds) | [World model](world-model.md) | The world as a drawable `pm.Model`. |
-| [`build_oracle_model`](world-model.md#prior_generator.world_model.build_oracle_model) | [World model](world-model.md) | Observed-data variant: the NUTS posterior oracle. |
+| [`make_scm_prior`](config.md#pymc_generator.presets.make_scm_prior) | [Configuration](config.md) | Build a validated additive-SCM prior. |
+| [`SCMPrior`](config.md#pymc_generator.sampler.SCMPrior) | [Configuration](config.md) | The config: sizes, edge budgets, coefficient/noise ranges. |
+| [`sample_scm`](sampling.md#pymc_generator.worlds.sample_scm) / [`SCM`](sampling.md#pymc_generator.worlds.SCM) | [Sampling one world](sampling.md) | Draw one accepted world with its full ground truth. |
+| [`build_world_model`](world-model.md#pymc_generator.world_model.build_world_model) / [`draw_worlds`](world-model.md#pymc_generator.world_model.draw_worlds) | [World model](world-model.md) | The world as a drawable `pm.Model`. |
+| [`build_oracle_model`](world-model.md#pymc_generator.world_model.build_oracle_model) | [World model](world-model.md) | Observed-data variant: the NUTS posterior oracle. |
 | [`sample_prior_predictive`](corpus.md) / [`DataGenerator`](corpus.md) | [Corpus generation](corpus.md) | Generate an `n_tasks`-world corpus (dict of arrays). |
 | [`save_corpus`](corpus.md) / [`load_corpus`](corpus.md) | [Corpus generation](corpus.md) | Compressed `.npz` persistence. |
 | [`describe_scm`](describe.md) | [Descriptions](describe.md) | Plain-text description of a world. |
 | [`write_scm_bundle`](bundles.md) / [`write_scenario_bundles`](bundles.md) | [Audit bundles](bundles.md) | Write auditable folders. |
 | [`SCENARIOS`](scenarios.md) | [Named scenarios](scenarios.md) | Five named audit scenarios. |
-| [`outcome_distributions`](outcomes.md#prior_generator.outcomes.outcome_distributions) | [Outcome distributions](outcomes.md) | Pool worlds along the quantity axis: outcome and contribution magnitudes. |
-| [`data_diagnostics`](diagnostics.md#prior_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
+| [`outcome_distributions`](outcomes.md#pymc_generator.outcomes.outcome_distributions) | [Outcome distributions](outcomes.md) | Pool worlds along the quantity axis: outcome and contribution magnitudes. |
+| [`data_diagnostics`](diagnostics.md#pymc_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
 
 ## Import surface
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 pg.make_scm_prior            # build a config
 pg.SCMPrior                  # the config dataclass
@@ -45,6 +45,6 @@ pg.outcome_distributions     # outcome/contribution magnitudes across worlds
 pg.data_diagnostics          # dependence / VIF / dynamics / contribution hierarchy
 ```
 
-Public symbols are lazy-loaded, so `import prior_generator` stays light — the
+Public symbols are lazy-loaded, so `import pymc_generator` stays light — the
 heavy stack (pytensor / scipy / pandas / matplotlib) is only imported when a
 symbol that needs it is first used.

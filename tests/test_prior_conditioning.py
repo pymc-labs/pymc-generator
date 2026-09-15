@@ -12,10 +12,10 @@ import dataclasses
 import numpy as np
 import pytest
 
-import prior_generator as pg
-from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.slots import PRIOR_COND_LAYOUT, PRIOR_COND_QUANTITIES
-from prior_generator.world_model import (
+import pymc_generator as pg
+from pymc_generator.sampler import _slice_g_active, sample_g_additive
+from pymc_generator.slots import PRIOR_COND_LAYOUT, PRIOR_COND_QUANTITIES
+from pymc_generator.world_model import (
     build_world_model,
     draw_worlds,
     sample_prior_cond,

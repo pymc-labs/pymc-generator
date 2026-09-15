@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "prior-generator"
+name = "pymc-generator"
 dynamic = ["version"]
 description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor / PyMC / pymc-marketing."
 # pymc 6.0.1 (the pinned modeling stack) requires Python >= 3.12.
@@ -51,8 +51,8 @@ docs = [
     # MkDocs Material site with docstring-driven API pages (mkdocstrings),
     # executable code blocks that render plots inline (markdown-exec), and the
     # examples notebook executed at build time (mkdocs-jupyter). The notebook
-    # runs in a registered Jupyter kernel named "prior-generator" — register it
-    # once with `python -m ipykernel install --user --name prior-generator`.
+    # runs in a registered Jupyter kernel named "pymc-generator" — register it
+    # once with `python -m ipykernel install --user --name pymc-generator`.
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.6",
     "mkdocstrings[python]>=1.0.6",
@@ -70,25 +70,25 @@ build = ["build", "twine", "setuptools>=77", "wheel"]
 
 [tool.uv]
 required-version = ">=0.9.10"
-cache-keys = [{file = "pyproject.toml"}, {file = "prior_generator/_version.py"}]
+cache-keys = [{file = "pyproject.toml"}, {file = "pymc_generator/_version.py"}]
 
 [project.scripts]
-prior-generator = "prior_generator.cli:main"
+pymc-generator = "pymc_generator.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["prior_generator*"]
+include = ["pymc_generator*"]
 
 [tool.setuptools.package-data]
-prior_generator = ["py.typed"]
+pymc_generator = ["py.typed"]
 
 [tool.setuptools.dynamic]
-version = {attr = "prior_generator._version.__version__"}
+version = {attr = "pymc_generator._version.__version__"}
 
 [project.urls]
-Homepage = "https://github.com/pymc-labs/prior-generator"
-Repository = "https://github.com/pymc-labs/prior-generator.git"
-Issues = "https://github.com/pymc-labs/prior-generator/issues"
-Changelog = "https://github.com/pymc-labs/prior-generator/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/pymc-labs/pymc-generator"
+Repository = "https://github.com/pymc-labs/pymc-generator.git"
+Issues = "https://github.com/pymc-labs/pymc-generator/issues"
+Changelog = "https://github.com/pymc-labs/pymc-generator/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -138,7 +138,7 @@ ignore = [
 "docs/examples/*.ipynb" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["prior_generator"]
+known-first-party = ["pymc_generator"]
 
 [tool.mypy]
 # No pinned python_version: check at the running interpreter so modern stub

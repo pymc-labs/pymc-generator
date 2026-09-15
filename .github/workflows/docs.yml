@@ -37,7 +37,7 @@ jobs:
 
       # mkdocs-jupyter executes the notebook in this named kernel.
       - name: Register Jupyter kernel
-        run: uv run --no-sync python -m ipykernel install --user --name prior-generator
+        run: uv run --no-sync python -m ipykernel install --user --name pymc-generator
 
       - name: Build site
         run: uv run --no-sync mkdocs build --clean --strict

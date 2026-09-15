@@ -111,14 +111,14 @@ It also records `l_max`, `adstock_burn_in`, `response_warmup_weeks`,
 without their original Python config object.
 
 ```python
-from prior_generator.signal_diagnostics import SIGNAL_METRIC_LAYOUT
+from pymc_generator.signal_diagnostics import SIGNAL_METRIC_LAYOUT
 
 metrics = corpus["identifiability"]["signal_metrics"]
 valid = corpus["identifiability"]["signal_metric_valid"].astype(bool)
 spearman = metrics[..., SIGNAL_METRIC_LAYOUT.index("spearman")]
 ```
 
-::: prior_generator.signal_diagnostics
+::: pymc_generator.signal_diagnostics
     options:
       show_root_heading: true
       show_root_toc_entry: false

@@ -17,7 +17,7 @@ a seed.
 <div class="pg-hero__cta" markdown>
 [Get started :material-arrow-right:](getting-started.md){ .pg-btn .pg-btn--primary }
 [Read the model](guide/foundation.md){ .pg-btn .pg-btn--ghost }
-[View on GitHub](https://github.com/pymc-labs/prior-generator){ .pg-btn .pg-btn--ghost }
+[View on GitHub](https://github.com/pymc-labs/pymc-generator){ .pg-btn .pg-btn--ghost }
 </div>
 </div>
 
@@ -63,7 +63,7 @@ observable series, and a machine-checked proof that the decomposition adds up.
 
 ```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
-import prior_generator as pg
+import pymc_generator as pg
 
 w = world(scenario=1, seed=0)          # "confounded_spend"
 print(viz_html(pg.viz.plot_dag, w, caption="The drawn causal graph (D confounds spend)."))
@@ -71,7 +71,7 @@ print(viz_html(pg.viz.plot_dag, w, caption="The drawn causal graph (D confounds 
 
 ```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html
-import prior_generator as pg
+import pymc_generator as pg
 
 w = world(scenario=1, seed=0)
 print(viz_html(pg.viz.plot_timeseries, w, caption="What a modeller observes: spend, controls & demand, sales."))

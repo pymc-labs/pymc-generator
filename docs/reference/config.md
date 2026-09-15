@@ -1,8 +1,8 @@
 # Configuration
 
-Build configs through [`make_scm_prior`](#prior_generator.presets.make_scm_prior)
+Build configs through [`make_scm_prior`](#pymc_generator.presets.make_scm_prior)
 — it pins the layout and enables the supported *diverse* channel **and control**
-texture — and reach for [`SCMPrior`](#prior_generator.sampler.SCMPrior) directly
+texture — and reach for [`SCMPrior`](#pymc_generator.sampler.SCMPrior) directly
 only when you need a field the preset does not surface.
 
 ## Control texture
@@ -18,7 +18,7 @@ against baseline drift and is only weakly identified. These three knobs add the
 high-frequency content a smooth baseline cannot mimic:
 
 ```python
-from prior_generator import make_scm_prior
+from pymc_generator import make_scm_prior
 
 cfg = make_scm_prior(            # the diverse preset already sets these
     n_treatments=4, n_covariates=2, n_latent=1,
@@ -80,7 +80,7 @@ A **censored** walk, not a softplus, so `B` can sit exactly *at* the floor —
 "zero or above, never below". `None` keeps the signed walk.
 
 ```python
-from prior_generator import make_scm_prior
+from pymc_generator import make_scm_prior
 
 cfg = make_scm_prior(
     n_treatments=4, n_covariates=2, n_latent=1,
@@ -174,7 +174,7 @@ positive finite value overrides that baseline scale. Under the default
 the parameter-only media anchor. Neither option changes demand or sales noise.
 
 ```python
-from prior_generator import make_scm_prior
+from pymc_generator import make_scm_prior
 
 cfg = make_scm_prior(
     n_treatments=4, n_covariates=2, n_latent=1,
@@ -204,7 +204,7 @@ The drawn scalar is persisted as `confounding_strength` with shape `(n_tasks,)` 
 dtype `float32` (and is available in single-world data/parameters).
 
 ```python
-from prior_generator import make_scm_prior
+from pymc_generator import make_scm_prior
 
 cfg = make_scm_prior(
     n_treatments=4, n_covariates=2, n_latent=1,
@@ -223,7 +223,7 @@ plug-in reference, not exact joint conditioning or a universal recovery bound.
 The optional held-level intervention API is:
 
 ```python
-from prior_generator import make_scm_prior
+from pymc_generator import make_scm_prior
 
 cfg = make_scm_prior(
     n_treatments=4, n_covariates=2, n_latent=1,
@@ -275,7 +275,7 @@ an absolute arrow count clamped to the eligible slots, so a cell drawing
 negative class at all.
 
 ```python
-from prior_generator import make_scm_prior
+from pymc_generator import make_scm_prior
 
 cfg = make_scm_prior(
     n_treatments=10, n_covariates=6, n_latent=3,
@@ -310,9 +310,9 @@ and `signal_metric_valid` arrays. Setting it to `False` omits that block while r
 `diagnostics["signal"]` quality report. It changes no model input, random draw,
 or generated observable array; use the disabled form for feature-only shards.
 
-::: prior_generator.presets.make_scm_prior
+::: pymc_generator.presets.make_scm_prior
 
-::: prior_generator.sampler.SCMPrior
+::: pymc_generator.sampler.SCMPrior
     options:
       show_source: false
       members: false

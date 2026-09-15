@@ -9,11 +9,11 @@ them?**
 `outcome_distributions` pools every world along the **quantity** axis instead
 of the parameter axis. It accepts a corpus (from
 [`sample_prior_predictive`](corpus.md), `DataGenerator.generate`, or
-`load_corpus`) or a list of [`SCM`](sampling.md#prior_generator.worlds.SCM)
+`load_corpus`) or a list of [`SCM`](sampling.md#pymc_generator.worlds.SCM)
 worlds sharing one horizon.
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 corpus = pg.sample_prior_predictive(cfg)
 dist = pg.outcome_distributions(corpus)
@@ -125,7 +125,7 @@ when you need those.
 table, and [`viz.plot_outcome_distributions`](viz.md) renders the histogram
 grid (`of="value" | "mean" | "share"`).
 
-::: prior_generator.outcomes
+::: pymc_generator.outcomes
     options:
       show_root_heading: true
       show_root_toc_entry: false

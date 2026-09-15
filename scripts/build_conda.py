@@ -14,7 +14,7 @@ def main() -> None:
     """Package the pinned companions and project without uploading anything."""
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sdist", type=Path, help="prior-generator source archive to package")
+    parser.add_argument("sdist", type=Path, help="pymc-generator source archive to package")
     parser.add_argument("--conda", default=os.environ.get("CONDA_EXE", "conda"))
     parser.add_argument("--output-folder", type=Path, default=root / "dist" / "conda-channel")
     args = parser.parse_args()
@@ -38,15 +38,15 @@ def main() -> None:
             parser.error("PKG-INFO must be a regular file")
         with metadata_stream:
             metadata = BytesParser().parse(metadata_stream)
-    if metadata["Name"] != "prior-generator" or not metadata["Version"]:
-        parser.error("source archive must identify the prior-generator distribution")
+    if metadata["Name"] != "pymc-generator" or not metadata["Version"]:
+        parser.error("source archive must identify the pymc-generator distribution")
     with sdist.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     environment = {
         **os.environ,
-        "PRIOR_GENERATOR_VERSION": metadata["Version"],
-        "PRIOR_GENERATOR_SDIST": sdist.as_uri(),
-        "PRIOR_GENERATOR_SDIST_SHA256": digest,
+        "PYMC_GENERATOR_VERSION": metadata["Version"],
+        "PYMC_GENERATOR_SDIST": sdist.as_uri(),
+        "PYMC_GENERATOR_SDIST_SHA256": digest,
         "CONDA_CHANNEL_PRIORITY": "strict",
         "CONDA_SOLVER": "libmamba",
     }
@@ -56,7 +56,7 @@ def main() -> None:
         workspace = Path(directory)
         channel = workspace / "channel"
         channel.mkdir()
-        for index, name in enumerate(("pymc-extras", "pymc-marketing", "prior-generator")):
+        for index, name in enumerate(("pymc-extras", "pymc-marketing", "pymc-generator")):
             channels = ["--channel", channel.as_uri()] if index else []
             subprocess.run(
                 [

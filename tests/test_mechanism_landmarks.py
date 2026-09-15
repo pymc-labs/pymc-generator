@@ -11,17 +11,17 @@ import numpy as np
 import pytensor.tensor as pt
 import pytest
 
-from prior_generator import mechanisms
-from prior_generator.random_walk import _kernel_width, _walk_basis, symbolic_random_walk
-from prior_generator.sampler import SATURATION_FAMILY_KEYS
-from prior_generator.symbolic_graph import _saturate_col
+from pymc_generator import mechanisms
+from pymc_generator.random_walk import _kernel_width, _walk_basis, symbolic_random_walk
+from pymc_generator.sampler import SATURATION_FAMILY_KEYS
+from pymc_generator.symbolic_graph import _saturate_col
 
 #: A deliberately non-unit anchor. Every landmark below is a multiple of
 #: the reference level, so an anchor of 1.0 would hide dropped input scaling.
 REFERENCE_LEVEL = 3.0
 
 #: One mid-range shape parameterization per family, from
-#: :data:`~prior_generator.mechanisms.SATURATION_PRIOR_RANGES`.
+#: :data:`~pymc_generator.mechanisms.SATURATION_PRIOR_RANGES`.
 FAMILY_SHAPES: dict[str, dict[str, float]] = {
     "hill": {"slope": 2.0, "kappa_mult": 1.2},
     "logistic": {"lam": 1.7},

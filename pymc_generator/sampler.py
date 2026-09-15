@@ -4,7 +4,7 @@ Each world (task) is an additive structural causal model over latent demand
 factors D, observed controls Z, media channels C, a baseline B and sales Y.
 The DAG is drawn per cell by :func:`sample_g_additive` (per-edge-type
 Bernoulli rates or "pot" budgets over the extended 8-block layout). Each world
-is then a PyMC model (:mod:`prior_generator.world_model`) whose continuous
+is then a PyMC model (:mod:`pymc_generator.world_model`) whose continuous
 priors are pm distributions and whose noise is pm RVs; drawing it yields the
 series with exact interventional decomposition targets — direct contributions,
 per-control / per-confounder contributions, ``baseline_intrinsic`` and the
@@ -12,7 +12,7 @@ telescoping 3-source indirect split ``(cc, zc, dc)``.
 
 The corpus schema is the dict-of-ndarrays documented in
 :func:`sample_prior_predictive` — the same format the structural-pfn training
-pipeline consumes (persist with ``prior_generator.save_corpus``).
+pipeline consumes (persist with ``pymc_generator.save_corpus``).
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def _minimum_valid_query_horizon(
     """Return the first valid candidate horizon at or above ``n_time_steps``, if bounded.
 
     ``response_support`` is the largest lag the admitted adstock kernels can
-    reach (see :func:`~prior_generator.signal_diagnostics.
+    reach (see :func:`~pymc_generator.signal_diagnostics.
     admitted_response_support_weeks`), i.e. the number of leading reported
     weeks whose media response depends on pre-window spend.
     """
@@ -205,7 +205,7 @@ class SCMPrior:
             nodes are zero-padded to the sizes above and masked.
 
     Prefer building configs through
-    :func:`prior_generator.presets.make_scm_prior`, which pins the
+    :func:`pymc_generator.presets.make_scm_prior`, which pins the
     layout and enables the supported "diverse" channel texture.
     """
 
@@ -233,7 +233,7 @@ class SCMPrior:
 
     # -- prior-range constants -------------------------------------------
     # Per-channel media-response mechanism priors (realized as PyMC
-    # distributions in prior_generator.world_model.build_world_model):
+    # distributions in pymc_generator.world_model.build_world_model):
     adstock_alpha_range: tuple[float, float] = (0.2, 0.8)
     # Adstock family probabilities by ``ADSTOCK_FAMILY_KEYS``.
     adstock_family_probs: dict[str, float] = field(default_factory=_default_adstock_family_probs)
@@ -1517,7 +1517,7 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
     Parameters
     ----------
     prior : SCMPrior
-        The prior over SCMs (see :func:`prior_generator.make_scm_prior`).
+        The prior over SCMs (see :func:`pymc_generator.make_scm_prior`).
     n : int, optional
         Number of worlds to return. If ``None`` (default), returns
         ``prior.n_cells * prior.draws_per_cell`` worlds. For ``n >= 2``, the

@@ -6,10 +6,10 @@ import numpy as np
 import pytensor.tensor as pt
 import pytest
 
-import prior_generator as pg
-from prior_generator.random_walk import symbolic_random_walk
-from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
+import pymc_generator as pg
+from pymc_generator.random_walk import symbolic_random_walk
+from pymc_generator.sampler import _slice_g_active, sample_g_additive
+from pymc_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
 @pytest.mark.parametrize(

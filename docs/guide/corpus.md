@@ -3,14 +3,14 @@
 A **corpus** stacks many worlds into a dict of numpy arrays over `n_tasks` tasks
 and `n_time_steps` weeks — the tensor format amortized-inference / PFN pipelines
 consume, with the decomposition targets baked in. Generate it functionally with
-[`sample_prior_predictive`](../reference/corpus.md#prior_generator.sampler.sample_prior_predictive)
-or through the [`DataGenerator`](../reference/corpus.md#prior_generator.data_generator.DataGenerator)
+[`sample_prior_predictive`](../reference/corpus.md#pymc_generator.sampler.sample_prior_predictive)
+or through the [`DataGenerator`](../reference/corpus.md#pymc_generator.data_generator.DataGenerator)
 facade.
 
 ## Generate one
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(n_treatments=5, n_covariates=3, n_latent=2,
                         edge_budget={"cy": (4, 4), "dc": (2, 2), "zc": (1, 2)},
@@ -212,7 +212,7 @@ pass `validate=False`.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import corpus
-from prior_generator.data_generator import DataGenerator
+from pymc_generator.data_generator import DataGenerator
 
 errors = DataGenerator.validate_corpus(corpus())
 print("validation errors:", errors or "none — schema OK ✅")
@@ -268,7 +268,7 @@ It is reported for inspection, not used to gate a corpus.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import corpus
-from prior_generator.signal_diagnostics import check_signal_gate
+from pymc_generator.signal_diagnostics import check_signal_gate
 
 signal = corpus()["diagnostics"]["signal"]
 ok, lines = check_signal_gate(signal)
@@ -297,7 +297,7 @@ round-trips as JSON); `load_corpus` reads it back.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import corpus
-import prior_generator as pg
+import pymc_generator as pg
 import tempfile, os, numpy as np
 
 c = corpus()
@@ -311,7 +311,7 @@ print("round-trips spend_raw exactly:",
 print("diagnostics restored as dict:", isinstance(loaded["diagnostics"], dict))
 ```
 
-The [`DataGenerator`](../reference/corpus.md#prior_generator.data_generator.DataGenerator)
+The [`DataGenerator`](../reference/corpus.md#pymc_generator.data_generator.DataGenerator)
 facade adds lazy batching (`iter_batches`) and generate-and-save
 (`generate_and_save`) on top of the same machinery.
 
@@ -432,8 +432,8 @@ conditioning features:
 
 ```python exec="1" source="block" result="text"
 import numpy as np
-import prior_generator as pg
-from prior_generator.slots import PRIOR_COND_LAYOUT
+import pymc_generator as pg
+from pymc_generator.slots import PRIOR_COND_LAYOUT
 
 cfg = pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=40,
                         n_cells=2, draws_per_cell=2, seed=7,

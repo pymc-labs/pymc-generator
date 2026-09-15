@@ -48,6 +48,11 @@ read the migration notes before upgrading.
 
 ### Changed — migration notes
 
+- **Project rename:** `pymc-generator` replaces `prior-generator`; update imports
+  from `prior_generator` to `pymc_generator` and invoke the `pymc-generator` CLI.
+  Reinstall from the renamed repository or native conda artifacts and select the
+  `pymc-generator` Jupyter kernel. No old import or CLI aliases are provided;
+  numerical behavior and persistence schemas are unchanged.
 - **Corpus schema v3:** readers migrate recognized v1/v2 metadata without changing
   numerical arrays or packed edge positions. Outcome edges are `dy`/`zy`, not
   `db`/`zb`, throughout graph keys, loadings, configuration, audits, and examples.

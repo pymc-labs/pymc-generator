@@ -17,9 +17,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import prior_generator as pg
-from prior_generator.scenarios import SCENARIOS
-from prior_generator.symbolic_graph import build_symbolic_graph
+import pymc_generator as pg
+from pymc_generator.scenarios import SCENARIOS
+from pymc_generator.symbolic_graph import build_symbolic_graph
 
 
 def _float32_storage_budget(*terms: np.ndarray) -> np.ndarray:
@@ -231,7 +231,7 @@ def _budget_bounds(allowance: int | tuple[int, int]) -> tuple[int, int]:
     """Normalize an ``edge_budget`` entry to inclusive ``(low, high)`` arrow counts.
 
     A bare int is an "up to" cap (the count is drawn uniformly in ``{0..cap}``);
-    a tuple is an explicit range. See :class:`~prior_generator.sampler.SCMPrior`.
+    a tuple is an explicit range. See :class:`~pymc_generator.sampler.SCMPrior`.
     """
     return (0, allowance) if isinstance(allowance, int) else allowance
 
@@ -240,7 +240,7 @@ def _budget_bounds(allowance: int | tuple[int, int]) -> tuple[int, int]:
 def test_scenario_isolates_the_pathway_it_names(scenario):
     """Every scenario honours its arrow budget and lights up only its own pathway.
 
-    Each :class:`~prior_generator.scenarios.Scenario` exists so a decomposition
+    Each :class:`~pymc_generator.scenarios.Scenario` exists so a decomposition
     failure can be traced to ONE causal route, which only works if the route it
     claims to isolate is the only live one. Two directions are asserted:
 

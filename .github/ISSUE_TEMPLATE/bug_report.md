@@ -32,7 +32,7 @@ paste traceback here
 
 ## Environment
 
-- prior-generator version (`python -c "import prior_generator; print(prior_generator.__version__)"`):
+- pymc-generator version (`python -c "import pymc_generator; print(pymc_generator.__version__)"`):
 - Python version:
 - PyTensor version:
 - OS:

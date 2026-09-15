@@ -23,8 +23,8 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (0.9.10 or
 newer), then use the committed lock rather than resolving dependencies afresh:
 
 ```bash
-git clone https://github.com/pymc-labs/prior-generator.git
-cd prior-generator
+git clone https://github.com/pymc-labs/pymc-generator.git
+cd pymc-generator
 uv sync --locked --extra dev
 uv run --no-sync pre-commit install
 ```
@@ -39,7 +39,7 @@ deliberately with evidence; do not use `uv lock --upgrade` as a routine setup st
 ```bash
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check .
-uv run --no-sync mypy prior_generator
+uv run --no-sync mypy pymc_generator
 uv run --no-sync pytest tests/
 uv run --no-sync pytest tests/ --runslow -m slow
 ```
@@ -55,11 +55,11 @@ The docs are a MkDocs Material site under `docs/`. The API pages are generated
 from docstrings (mkdocstrings), the guide pages execute real Python and render
 plots inline at build time (markdown-exec), and both notebooks under
 `docs/examples/` are executed by mkdocs-jupyter. The docs require the full
-modeling stack and a Jupyter kernel named `prior-generator`:
+modeling stack and a Jupyter kernel named `pymc-generator`:
 
 ```bash
 uv sync --locked --extra dev --extra docs
-uv run --no-sync python -m ipykernel install --user --name prior-generator
+uv run --no-sync python -m ipykernel install --user --name pymc-generator
 uv run --no-sync mkdocs serve            # http://127.0.0.1:8000
 uv run --no-sync mkdocs build --strict   # fails on documentation build warnings
 ```
@@ -122,16 +122,16 @@ environment or the locked uv modeling stack:
 
 ```bash
 conda env create --file conda/build-environment.yml
-conda activate prior-generator-build
+conda activate pymc-generator-build
 uv sync --locked --group build
 uv run --no-sync python -m build --sdist --no-isolation
-uv run --no-sync python scripts/build_conda.py dist/prior_generator-0.0.1.tar.gz \
+uv run --no-sync python scripts/build_conda.py dist/pymc_generator-0.0.1.tar.gz \
   --conda "$CONDA_PREFIX/bin/conda"
 ```
 
 Supply the exact source archive for the version being built. The script reads
 its version and SHA-256, builds and tests the two exact-commit upstream companion
-packages, then builds and tests `prior-generator`. All runtime packages are
+packages, then builds and tests `pymc-generator`. All runtime packages are
 native conda packages. Pip is used only as the build backend's installation
 frontend with dependency resolution and build isolation disabled.
 
@@ -178,7 +178,7 @@ no sensitive material.
 - User-visible changes get an entry under `## [Unreleased]` in `CHANGELOG.md`
   (Keep a Changelog format).
 - Move the release's `[Unreleased]` items under `## [X.Y.Z] - YYYY-MM-DD`,
-  update `prior_generator/_version.py`, run `uv sync --locked` to refresh installed
+  update `pymc_generator/_version.py`, run `uv sync --locked` to refresh installed
   metadata, and push tag `vX.Y.Z` from a reviewed commit. Build metadata and the
   public `__version__` both use this one version value.
 - The tag workflow reuses CI's locked tests, lint/type checks, wheel smoke test,

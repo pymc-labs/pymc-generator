@@ -43,7 +43,7 @@ def _linear_family_probs(family_keys: tuple[str, ...]) -> dict[str, float]:
 #: κ-relative saturation roughly halves relative variation at the knee, so
 #: channel CV must reach L1-like territory (~0.3-0.8) for contribution targets
 #: to carry signal. Validate any retuning against
-#: ``prior_generator.signal_diagnostics.check_signal_gate`` on a freshly
+#: ``pymc_generator.signal_diagnostics.check_signal_gate`` on a freshly
 #: generated corpus's ``diagnostics["signal"]`` block.
 #:
 #: Controls get the same two high-frequency terms, RELATIVE to each control's

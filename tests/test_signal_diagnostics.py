@@ -7,9 +7,9 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
-from prior_generator import DataGenerator, load_corpus, make_scm_prior, mechanisms, save_corpus
-from prior_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
-from prior_generator.signal_diagnostics import (
+from pymc_generator import DataGenerator, load_corpus, make_scm_prior, mechanisms, save_corpus
+from pymc_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
+from pymc_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
     _adstock_numpy,
@@ -327,8 +327,8 @@ def test_empty_signal_summary_has_none_quantiles():
 
 
 def test_generated_shard_labels_match_loaded_array_recomputation(tmp_path):
-    from prior_generator import make_scm_prior, sample_prior_predictive
-    from prior_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
+    from pymc_generator import make_scm_prior, sample_prior_predictive
+    from pymc_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
 
     cfg = make_scm_prior(
         n_treatments=2,

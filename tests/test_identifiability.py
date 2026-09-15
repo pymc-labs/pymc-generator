@@ -7,21 +7,21 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-import prior_generator as pg
-from prior_generator.sampler import (
+import pymc_generator as pg
+from pymc_generator.sampler import (
     _ADDITIVE_OUT_NAMES,
     _CORPUS_PARAM_NAMES,
     _CORPUS_SHOCK_NAMES,
     _slice_g_active,
     sample_g_additive,
 )
-from prior_generator.signal_diagnostics import (
+from pymc_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     check_signal_gate,
     dense_signal_metrics,
     summarize_signal_metrics,
 )
-from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
+from pymc_generator.world_model import build_world_model, draw_worlds, sample_structure
 
 
 def _corpus_arrays(**overrides) -> dict[str, np.ndarray]:

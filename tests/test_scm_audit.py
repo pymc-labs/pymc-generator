@@ -6,20 +6,20 @@ import numpy as np
 import pytest
 from pytensor.graph.traversal import ancestors
 
-import prior_generator.symbolic_graph as symbolic_graph
-from prior_generator import make_scm_prior, sample_scm
-from prior_generator.describe import describe_scm
-from prior_generator.random_walk import _kernel_width
-from prior_generator.sampler import _additive_task_ok
-from prior_generator.symbolic_graph import build_symbolic_graph
-from prior_generator.world_model import (
+import pymc_generator.symbolic_graph as symbolic_graph
+from pymc_generator import make_scm_prior, sample_scm
+from pymc_generator.describe import describe_scm
+from pymc_generator.random_walk import _kernel_width
+from pymc_generator.sampler import _additive_task_ok
+from pymc_generator.symbolic_graph import build_symbolic_graph
+from pymc_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
     _walk_basis,
     build_world_model,
     draw_worlds,
     sample_structure,
 )
-from prior_generator.worlds import (
+from pymc_generator.worlds import (
     _LEGACY_WORLD_PARAM_NAMES,
     SCM,
     _assemble_channel_shock_schedule,

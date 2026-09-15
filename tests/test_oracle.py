@@ -15,16 +15,16 @@ import pytensor
 import pytest
 from scipy.stats import Covariance, multivariate_normal
 
-import prior_generator as pg
-from prior_generator.random_walk import (
+import pymc_generator as pg
+from pymc_generator.random_walk import (
     _centred_walk_scale,
     _kernel_width,
     _smooth_columns_numpy,
     symbolic_random_walk,
 )
-from prior_generator.sampler import SCMPrior, _slice_g_active, sample_g_additive
-from prior_generator.signal_diagnostics import _adstock_numpy
-from prior_generator.world_model import (
+from pymc_generator.sampler import SCMPrior, _slice_g_active, sample_g_additive
+from pymc_generator.signal_diagnostics import _adstock_numpy
+from pymc_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
     ADSTOCK_FAMILY_PARAM_NAMES,
     SATURATION_FAMILY_PARAM_NAMES,

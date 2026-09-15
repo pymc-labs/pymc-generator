@@ -6,7 +6,7 @@ bound. It shares the generator's outcome-side prior definitions and response
 functions, while treating observed channels and controls as fixed inputs.
 Their likelihoods given latent demand or baseline innovations are omitted.
 
-Use [`build_oracle_model`](../reference/world-model.md#prior_generator.world_model.build_oracle_model)
+Use [`build_oracle_model`](../reference/world-model.md#pymc_generator.world_model.build_oracle_model)
 to compare a fitted reference posterior with known simulation truth. Interpret
 that comparison under the conditioning assumptions below and report convergence
 diagnostics. `pm.sample` generally uses NUTS; Weibull carryover parameters require
@@ -19,7 +19,7 @@ Draw a world, build its oracle from the world object itself, fit it with
 decomposition truth:
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=28)
 world = pg.sample_scm(cfg, seed=8)

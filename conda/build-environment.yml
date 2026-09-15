@@ -1,4 +1,4 @@
-name: prior-generator-build
+name: pymc-generator-build
 channels:
   - conda-forge
   - nodefaults

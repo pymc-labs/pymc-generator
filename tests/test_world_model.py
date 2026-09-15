@@ -12,10 +12,10 @@ import pymc as pm
 import pytensor.tensor as pt
 import pytest
 
-from prior_generator import make_scm_prior
-from prior_generator.random_walk import _kernel_width, symbolic_random_walk
-from prior_generator.sampler import _slice_g_active, sample_g_additive
-from prior_generator.world_model import (
+from pymc_generator import make_scm_prior
+from pymc_generator.random_walk import _kernel_width, symbolic_random_walk
+from pymc_generator.sampler import _slice_g_active, sample_g_additive
+from pymc_generator.world_model import (
     _rw_prior_group,
     build_world_model,
     draw_worlds,
@@ -384,7 +384,7 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
         return {"outputs": {"beta": pt.as_tensor_variable(0.0)}}
 
     monkeypatch.setattr(
-        "prior_generator.world_model.build_symbolic_graph",
+        "pymc_generator.world_model.build_symbolic_graph",
         graph_with_colliding_beta,
     )
     with pytest.raises(ValueError, match="collides with a different model variable"):

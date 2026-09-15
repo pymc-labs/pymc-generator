@@ -1,15 +1,15 @@
 # Sampling a world
 
-[`sample_scm`](../reference/sampling.md#prior_generator.worlds.sample_scm) draws
+[`sample_scm`](../reference/sampling.md#pymc_generator.worlds.sample_scm) draws
 **one accepted world** at the config's max sizes and returns an
-[`SCM`](../reference/sampling.md#prior_generator.worlds.SCM) — the object every
+[`SCM`](../reference/sampling.md#pymc_generator.worlds.SCM) — the object every
 description, bundle, and figure consumes. This page is a tour of what is inside
 it and how to reach every piece.
 
 ## Draw one
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 # Build a prior directly (or use a named scenario — see the Scenarios guide).
 cfg = pg.make_scm_prior(n_treatments=5, n_covariates=3, n_latent=2,
@@ -86,7 +86,7 @@ these are exactly what the description and DAG figure use.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import world
-from prior_generator.worlds import (
+from pymc_generator.worlds import (
     node_status, path_to_y, channel_role, mechanism_label, edges_with_coeffs,
 )
 

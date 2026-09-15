@@ -48,6 +48,6 @@ test:
 
 about:
   home: https://github.com/pymc-labs/pymc-marketing
-  summary: Exact pymc-marketing commit used by prior-generator's validated stack
+  summary: Exact pymc-marketing commit used by pymc-generator's validated stack
   license: Apache-2.0
   license_file: LICENSE

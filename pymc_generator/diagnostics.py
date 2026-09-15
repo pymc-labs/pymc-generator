@@ -2749,7 +2749,7 @@ def data_diagnostics(
     source
         A corpus mapping (``sample_prior_predictive`` /
         ``DataGenerator.generate`` / ``load_corpus``) or a sequence of
-        :class:`~prior_generator.worlds.SCM` worlds sharing one horizon.
+        :class:`~pymc_generator.worlds.SCM` worlds sharing one horizon.
     worlds
         World selector: None, a slice, an integer position, an integer
         position array or a boolean row mask. Duplicated positions are

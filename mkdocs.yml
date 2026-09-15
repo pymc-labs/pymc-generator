@@ -1,15 +1,15 @@
-site_name: prior-generator
+site_name: pymc-generator
 site_description: >-
   Simulate thousands of synthetic MMM worlds with exact causal decompositions —
   human-readable dataset bundles and PFN-ready corpora.
 site_author: PyMC Labs
-repo_url: https://github.com/pymc-labs/prior-generator
-repo_name: pymc-labs/prior-generator
+repo_url: https://github.com/pymc-labs/pymc-generator
+repo_name: pymc-labs/pymc-generator
 edit_uri: edit/main/docs/
 copyright: Copyright &copy; PyMC Labs — MIT licensed
 
 docs_dir: docs
-site_url: https://pymc-labs.github.io/prior-generator/
+site_url: https://pymc-labs.github.io/pymc-generator/
 
 theme:
   name: material
@@ -68,7 +68,7 @@ extra_javascript:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/pymc-labs/prior-generator
+      link: https://github.com/pymc-labs/pymc-generator
     - icon: fontawesome/solid/globe
       link: https://www.pymc-labs.com
   generator: false
@@ -82,7 +82,7 @@ plugins:
   - mkdocs-jupyter:
       include: ["*.ipynb"]
       execute: true
-      kernel_name: prior-generator
+      kernel_name: pymc-generator
       include_source: true
       ignore_h1_titles: true
       allow_errors: false

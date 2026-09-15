@@ -11,7 +11,7 @@ Design Principles:
 4. Modular - generate in batches or all at once
 
 Usage:
-    from prior_generator import DataGenerator, make_scm_prior
+    from pymc_generator import DataGenerator, make_scm_prior
 
     cfg = make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, n_cells=10, draws_per_cell=10)
     generator = DataGenerator(cfg)

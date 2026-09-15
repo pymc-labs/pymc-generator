@@ -7,8 +7,8 @@ the design is redundant, how the series move over time, and exactly what adds
 up to sales.
 
 ```python
-import prior_generator as pg
-from prior_generator import viz
+import pymc_generator as pg
+from pymc_generator import viz
 
 corpus = pg.sample_prior_predictive(cfg)
 rep = pg.data_diagnostics(corpus, scopes=("nodes", "decomposition"))
@@ -21,7 +21,7 @@ print(rep["differences"].series.table("roughness"))  # week-to-week texture
 
 It accepts a corpus (from [`sample_prior_predictive`](corpus.md),
 `DataGenerator.generate` or `load_corpus`) or a list of
-[`SCM`](sampling.md#prior_generator.worlds.SCM) worlds sharing one horizon.
+[`SCM`](sampling.md#pymc_generator.worlds.SCM) worlds sharing one horizon.
 Everything is strictly post-hoc over retained arrays: no generation, no RNG
 draw, no mutation of the source, nothing written.
 
@@ -221,7 +221,7 @@ silently misses MA(2)-style structure at lag 2 and annual recurrence at lag 52.
 methods render fixed-width text, and
 [`viz.plot_dependence_matrices`](viz.md) and friends render the figures.
 
-::: prior_generator.diagnostics
+::: pymc_generator.diagnostics
     options:
       show_root_heading: true
       show_root_toc_entry: false

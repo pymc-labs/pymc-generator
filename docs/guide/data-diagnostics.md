@@ -8,7 +8,7 @@ smooth drift with no week-to-week signal, or media may account for 2% of sales.
 report object, and every aspect of the data is a facet of it.
 
 ```python
-import prior_generator as pg
+import pymc_generator as pg
 
 corpus = pg.sample_prior_predictive(cfg)
 rep = pg.data_diagnostics(corpus, scopes=("nodes", "decomposition"))
@@ -29,7 +29,7 @@ corpus | [SCM, ...]
 ## A worked pass
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(
     n_treatments=3, n_covariates=2, n_latent=2,
@@ -48,7 +48,7 @@ training a model to find something that is barely there; if `Y_noise` sits at
 ### Is anything collinear?
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(
     n_treatments=3, n_covariates=2, n_latent=2,
@@ -67,7 +67,7 @@ routinely produce a level VIF above 10 with no shared structure at all.
 ### What depends on what?
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(
     n_treatments=3, n_covariates=2, n_latent=2,
@@ -95,7 +95,7 @@ dependence between innovations; dependence that collapses was shared trend.
 ### How do the series move?
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(
     n_treatments=3, n_covariates=2, n_latent=2,
@@ -122,7 +122,7 @@ observations.
 ### Drill into one world or one node
 
 ```python exec="1" source="block" result="text"
-import prior_generator as pg
+import pymc_generator as pg
 
 cfg = pg.make_scm_prior(
     n_treatments=3, n_covariates=2, n_latent=2,
@@ -144,7 +144,7 @@ rows add up.
 ## Plots
 
 ```python
-from prior_generator import viz
+from pymc_generator import viz
 
 viz.plot_dependence_matrices(rep, "dependence.png")
 viz.plot_series_distributions(rep, "distributions.png", of="value")

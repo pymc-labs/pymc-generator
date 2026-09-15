@@ -13,8 +13,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from prior_generator import viz
-from prior_generator.diagnostics import DEPENDENCE_METRICS, data_diagnostics
+from pymc_generator import viz
+from pymc_generator.diagnostics import DEPENDENCE_METRICS, data_diagnostics
 
 # ---------------------------------------------------------------------------
 # Fixtures: hand-built corpora with the exact structures under test

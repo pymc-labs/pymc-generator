@@ -15,9 +15,9 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-import prior_generator as pg
-from prior_generator import diagnostics as dg
-from prior_generator.diagnostics import (
+import pymc_generator as pg
+from pymc_generator import diagnostics as dg
+from pymc_generator.diagnostics import (
     CONTRIBUTION_FIELDS,
     DEFAULT_MAX_LAG,
     SERIES_SLOTS,

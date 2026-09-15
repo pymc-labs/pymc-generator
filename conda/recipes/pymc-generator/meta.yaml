@@ -1,17 +1,17 @@
 package:
-  name: prior-generator
-  version: {{ environ["PRIOR_GENERATOR_VERSION"] }}
+  name: pymc-generator
+  version: {{ environ["PYMC_GENERATOR_VERSION"] }}
 
 source:
-  url: {{ environ["PRIOR_GENERATOR_SDIST"] }}
-  sha256: {{ environ["PRIOR_GENERATOR_SDIST_SHA256"] }}
+  url: {{ environ["PYMC_GENERATOR_SDIST"] }}
+  sha256: {{ environ["PYMC_GENERATOR_SDIST_SHA256"] }}
 
 build:
   number: 0
   noarch: python
   script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -v
   entry_points:
-    - prior-generator = prior_generator.cli:main
+    - pymc-generator = pymc_generator.cli:main
 
 requirements:
   host:
@@ -48,10 +48,10 @@ test:
   commands:
     - python -m pip check
     - python -I scripts/smoke_install.py
-    - prior-generator --help
+    - pymc-generator --help
 
 about:
-  home: https://github.com/pymc-labs/prior-generator
+  home: https://github.com/pymc-labs/pymc-generator
   summary: Synthetic MMM worlds with known structural decompositions
   license: MIT
   license_file: LICENSE

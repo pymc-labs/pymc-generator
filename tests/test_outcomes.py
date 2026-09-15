@@ -7,8 +7,8 @@ import json
 import numpy as np
 import pytest
 
-import prior_generator as pg
-from prior_generator.outcomes import (
+import pymc_generator as pg
+from pymc_generator.outcomes import (
     ADDITIVE_QUANTITIES,
     OUTCOME_QUANTITIES,
     outcome_distributions,
@@ -455,7 +455,7 @@ def test_plot_outcome_distributions_writes_a_figure(dist, tmp_path):
     import matplotlib
 
     matplotlib.use("Agg")
-    from prior_generator.viz import plot_outcome_distributions
+    from pymc_generator.viz import plot_outcome_distributions
 
     for of in ("value", "mean", "share"):
         path = tmp_path / f"outcomes_{of}.png"

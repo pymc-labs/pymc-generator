@@ -16,24 +16,24 @@ import numpy as np
 import pytensor.tensor as pt
 import pytest
 
-import prior_generator.world_model as world_model
-from prior_generator import make_scm_prior
-from prior_generator.random_walk import (
+import pymc_generator.world_model as world_model
+from pymc_generator import make_scm_prior
+from pymc_generator.random_walk import (
     _walk_basis_stack,
     symbolic_random_walk,
     symbolic_random_walk_by_width,
     walk_width_index,
 )
-from prior_generator.sampler import (
+from pymc_generator.sampler import (
     _ADDITIVE_OUT_NAMES,
     _CORPUS_PARAM_NAMES,
     _CORPUS_SHOCK_NAMES,
     _slice_g_active,
     sample_g_additive,
 )
-from prior_generator.symbolic_graph import build_symbolic_graph
-from prior_generator.world_model import build_world_model, draw_worlds, sample_structure
-from prior_generator.world_model_template import (
+from pymc_generator.symbolic_graph import build_symbolic_graph
+from pymc_generator.world_model import build_world_model, draw_worlds, sample_structure
+from pymc_generator.world_model_template import (
     build_world_model_template,
     check_template_supported,
     compile_template_draw_fn,
