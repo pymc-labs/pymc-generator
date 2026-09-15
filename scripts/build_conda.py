@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 
 
 def main() -> None:
-    """Package the pinned companions and project without uploading anything."""
+    """Package the project with conda-forge dependencies without uploading anything."""
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sdist", type=Path, help="pymc-generator source archive to package")
@@ -56,30 +56,27 @@ def main() -> None:
         workspace = Path(directory)
         channel = workspace / "channel"
         channel.mkdir()
-        for index, name in enumerate(("pymc-extras", "pymc-marketing", "pymc-generator")):
-            channels = ["--channel", channel.as_uri()] if index else []
-            subprocess.run(
-                [
-                    args.conda,
-                    "build",
-                    str(root / "conda" / "recipes" / name),
-                    "--python",
-                    "3.13",
-                    "--package-format",
-                    "conda",
-                    "--no-anaconda-upload",
-                    "--override-channels",
-                    *channels,
-                    "--channel",
-                    "conda-forge",
-                    "--croot",
-                    str(workspace / "work"),
-                    "--output-folder",
-                    str(channel),
-                ],
-                env=environment,
-                check=True,
-            )
+        subprocess.run(
+            [
+                args.conda,
+                "build",
+                str(root / "conda" / "recipes" / "pymc-generator"),
+                "--python",
+                "3.13",
+                "--package-format",
+                "conda",
+                "--no-anaconda-upload",
+                "--override-channels",
+                "--channel",
+                "conda-forge",
+                "--croot",
+                str(workspace / "work"),
+                "--output-folder",
+                str(channel),
+            ],
+            env=environment,
+            check=True,
+        )
         channel.rename(output)
     print(f"Built and tested conda channel: {output}")
 

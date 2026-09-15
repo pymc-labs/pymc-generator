@@ -8,11 +8,13 @@ read the migration notes before upgrading.
 
 ### Added
 
-- Native conda packaging with exact-commit pymc-marketing/pymc-extras companions,
-  matching core numerical versions, isolated build tooling, and no automatic
-  uploads. Package tests exercise generation, persistence, and the installed CLI.
-  On macOS arm64, all 353 preservation arrays match the original uv baseline
-  and an environment recreated from an explicit 181-package conda lock.
+- Native conda packaging initially used exact-commit pymc-marketing/pymc-extras
+  companions, matching core numerical versions, isolated build tooling, and no
+  automatic uploads. Package tests exercise generation, persistence, and the
+  installed CLI. Historical evidence for that pre-compatibility stack on macOS
+  arm64: all 353 preservation arrays matched the original uv baseline and an
+  environment recreated from an explicit 181-package conda lock. This does not
+  establish numerical equivalence for the released stack below.
 - Tag releases reuse CI's locked verification and native package build, then
   prepare draft GitHub Releases with wheel, source archive, conda channel, and
   SHA-256 checksums. PyPI/TestPyPI publishing and its unused permissions are removed.
@@ -48,6 +50,15 @@ read the migration notes before upgrading.
 
 ### Changed — migration notes
 
+- **Released stack / Python floor (0.0.2 candidate):** require Python 3.13+ and
+  test Python 3.13/3.14 in CI. Replace Git development dependencies with registry
+  releases: PyMC 6.2.0, pymc-marketing 1.1.0, pymc-extras 0.14.0, PyTensor 3.2.4,
+  and PreliZ 0.27.1 in the lock. The native channel now contains only this
+  project, with dependencies from conda-forge and selected source-version parity
+  with uv. On macOS arm64, all 353 arrays across eight preservation cases matched
+  the original baseline exactly on both Python 3.13.9 and 3.14.0. Generation code,
+  seeds, samplers, and tolerances were unchanged. This measured result is not a
+  general numerical-equivalence guarantee across versions or platforms.
 - **Project rename:** `pymc-generator` replaces `prior-generator`; update imports
   from `prior_generator` to `pymc_generator` and invoke the `pymc-generator` CLI.
   Reinstall from the renamed repository or native conda artifacts and select the
@@ -99,11 +110,12 @@ read the migration notes before upgrading.
 
 ### Fixed
 
-- Use locked uv environments for development, CI, documentation, and build
-  tooling, with a tested Python 3.13 default and a 3.12/3.13 CI matrix.
-  Keep all 153 previously locked dependency versions and sources unchanged.
-  Exercise installed wheels through real generation and persistence, and block
-  Pages publication while the repository is private.
+- Initial release hardening used locked uv environments for development, CI,
+  documentation, and build tooling, with a tested Python 3.13 default and a
+  3.12/3.13 CI matrix. At that stage all 153 previously locked dependency versions
+  and sources were unchanged; the compatibility upgrade above supersedes that
+  stack and matrix. Installed wheels are exercised through real generation and
+  persistence, and Pages publication remains blocked while the repository is private.
 - Preserve the original 2024 Carlos Trujillo copyright from the upstream
   extraction alongside the 2026 PyMC Labs notice.
 - Enforce persistence versions before legacy migration. Reject partial legacy
@@ -119,8 +131,9 @@ read the migration notes before upgrading.
 - Include observation noise in printed and exported decomposition identities.
   Separate the structural intercept from the full non-media baseline in documentation.
 - Preserve same-seed numerical output while preallocating corpus storage and reusing
-  walk operators, diagnostic calculations, and requested outcome arrays. The release
-  hardening baseline covers **353 arrays across eight configurations**, all unchanged.
+  walk operators, diagnostic calculations, and requested outcome arrays. The
+  historical pre-compatibility release-hardening baseline covers **353 arrays
+  across eight configurations**, all unchanged at that stage.
 - Keep disabled pulses/confounding and nonbinding floors RNG-inert. Account for
   retried evaluations separately from rejected worlds, reject empty oracle likelihoods,
   and validate replay collisions, overlapping shocks, and feasible scenario connectivity.
