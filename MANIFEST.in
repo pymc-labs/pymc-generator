@@ -1,0 +1,13 @@
+include uv.lock .python-version
+include .gitignore .pre-commit-config.yaml Makefile
+include CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
+include mkdocs.yml mkdocs_hooks.py
+include scripts/*.py
+recursive-include conda *.yaml *.yml
+recursive-include tests *.py
+recursive-include benchmarks *.py
+recursive-include docs_gen *.py
+recursive-include docs *.md *.css *.js *.svg
+include docs/examples/*.ipynb
+recursive-include .github *.md *.yml
+include .github/CODEOWNERS

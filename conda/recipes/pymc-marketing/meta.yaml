@@ -1,0 +1,53 @@
+package:
+  name: pymc-marketing
+  version: 1.0.0.dev0
+
+source:
+  url: https://github.com/pymc-labs/pymc-marketing/archive/ff70aae62dea1933b758a55885c24a76a3e7a9a5.tar.gz
+  sha256: 2fe660ea0b03a77a5c90026bedcb06407d22f8e3693fa92b0a9f59b723624230
+
+build:
+  number: 0
+  string: ff70aae_0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -v
+
+requirements:
+  host:
+    - python
+    - pip
+    - hatchling <2
+    - hatch-fancy-pypi-readme
+  run:
+    - python >=3.12
+    - arviz >=1.2,<2
+    - arviz-plots >=1.2,<2
+    - matplotlib-base >=3.5.1,<3.11
+    - narwhals
+    - numpy >=2,<3
+    - pandas
+    - patsy
+    - pydantic >=2.1
+    - pymc ==6.0.1
+    - pytensor ==3.0.7
+    - scikit-learn >=1.1.1
+    - seaborn >=0.12.2
+    - tqdm
+    - xarray >=2024.1
+    - xarray-einstats >=0.5.1
+    - pyprojroot
+    - pymc-extras ==0.12.2.dev1+gee8cc37df ee8cc37_0
+    - preliz >=0.20,<1
+    - pyyaml
+
+test:
+  requires:
+    - python {{ python }}.*
+  imports:
+    - pymc_marketing.mmm.multidimensional
+
+about:
+  home: https://github.com/pymc-labs/pymc-marketing
+  summary: Exact pymc-marketing commit used by pymc-generator's validated stack
+  license: Apache-2.0
+  license_file: LICENSE

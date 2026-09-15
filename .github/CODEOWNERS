@@ -1,0 +1,3 @@
+# Default review owner. Automatic requests depend on GitHub feature availability.
+# Required human review is configured separately; authors cannot approve their own PRs.
+* @cetagostini

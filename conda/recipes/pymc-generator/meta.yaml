@@ -1,0 +1,57 @@
+package:
+  name: pymc-generator
+  version: {{ environ["PYMC_GENERATOR_VERSION"] }}
+
+source:
+  url: {{ environ["PYMC_GENERATOR_SDIST"] }}
+  sha256: {{ environ["PYMC_GENERATOR_SDIST_SHA256"] }}
+
+build:
+  number: 0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -v
+  entry_points:
+    - pymc-generator = pymc_generator.cli:main
+
+requirements:
+  host:
+    - python
+    - pip
+    - setuptools >=77
+    - wheel
+  run:
+    - python >=3.12
+    # Numerical and diagnostic source versions match uv.lock.
+    - numpy ==2.4.6
+    - scipy ==1.18.0
+    - pandas ==3.0.5
+    - matplotlib-base ==3.10.9
+    - arviz ==1.2.0
+    - arviz-base ==1.2.0
+    - arviz-plots ==1.2.0
+    - arviz-stats ==1.2.0
+    - numba ==0.65.1
+    - pydantic ==2.13.4
+    - scikit-learn ==1.9.0
+    - xarray ==2026.7.0
+    - preliz ==0.26.0
+    - pymc ==6.0.1
+    - pytensor ==3.0.7
+    - pymc-marketing ==1.0.0.dev0 ff70aae_0
+
+test:
+  requires:
+    - python {{ python }}.*
+    - pip
+  source_files:
+    - scripts/smoke_install.py
+  commands:
+    - python -m pip check
+    - python -I scripts/smoke_install.py
+    - pymc-generator --help
+
+about:
+  home: https://github.com/pymc-labs/pymc-generator
+  summary: Synthetic MMM worlds with known structural decompositions
+  license: MIT
+  license_file: LICENSE

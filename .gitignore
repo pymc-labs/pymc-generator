@@ -27,3 +27,8 @@ htmlcov/
 # Local scratch / generated data
 .dev/
 *.npz
+
+# Docs build
+site/
+build.log
+.cache/

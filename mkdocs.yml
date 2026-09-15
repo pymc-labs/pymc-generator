@@ -1,0 +1,175 @@
+site_name: pymc-generator
+site_description: >-
+  Simulate thousands of synthetic MMM worlds with exact causal decompositions —
+  human-readable dataset bundles and PFN-ready corpora.
+site_author: PyMC Labs
+repo_url: https://github.com/pymc-labs/pymc-generator
+repo_name: pymc-labs/pymc-generator
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; PyMC Labs — MIT licensed
+
+docs_dir: docs
+site_url: https://pymc-labs.github.io/pymc-generator/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - announce.dismiss
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pymc-labs/pymc-generator
+    - icon: fontawesome/solid/globe
+      link: https://www.pymc-labs.com
+  generator: false
+
+hooks:
+  - mkdocs_hooks.py
+
+plugins:
+  - search
+  - markdown-exec
+  - mkdocs-jupyter:
+      include: ["*.ipynb"]
+      execute: true
+      kernel_name: pymc-generator
+      include_source: true
+      ignore_h1_titles: true
+      allow_errors: false
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            members_order: source
+            filters: ["!^_"]
+            docstring_section_style: table
+            heading_level: 2
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guide:
+      - The causal model: guide/foundation.md
+      - Sampling a world: guide/worlds.md
+      - The exact decomposition: guide/decomposition.md
+      - Audit bundles: guide/bundles.md
+      - Named scenarios: guide/scenarios.md
+      - Generating a corpus: guide/corpus.md
+      - The posterior oracle: guide/oracle.md
+      - Interrogating the data: guide/data-diagnostics.md
+  - Examples:
+      - End-to-end tour: examples/index.ipynb
+      - MMM recovery case study: examples/simple-model.ipynb
+  - API reference:
+      - Overview: reference/index.md
+      - Configuration: reference/config.md
+      - Sampling one world: reference/sampling.md
+      - World model: reference/world-model.md
+      - Corpus generation: reference/corpus.md
+      - Audit bundles: reference/bundles.md
+      - Descriptions: reference/describe.md
+      - Named scenarios: reference/scenarios.md
+      - Visualization: reference/viz.md
+      - Signal diagnostics: reference/signal.md
+      - Outcome distributions: reference/outcomes.md
+      - Data diagnostics: reference/diagnostics.md
