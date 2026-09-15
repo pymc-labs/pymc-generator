@@ -1,0 +1,32 @@
+.github/workflows/ci.yml
+  h_d36ca8649a0e95 43,153
+CHANGELOG.md
+  h_d36ca8649a0e95 11-17,53-61,113-118,134-136
+CONTRIBUTING.md
+  h_d36ca8649a0e95 22-25,130,135-136,143-145,158
+README.md
+  h_d36ca8649a0e95 29-32,34,38,43,47-50
+conda/recipes/pymc-generator/meta.yaml
+  h_d36ca8649a0e95 23,37-41
+docs/getting-started.md
+  h_d36ca8649a0e95 23-30,33-34,46-51,58,67-68
+pymc_generator/_version.py
+  h_d36ca8649a0e95 3
+pyproject.toml
+  h_d36ca8649a0e95 9-10,24,29-33,104,144
+scripts/build_conda.py
+  h_d36ca8649a0e95 14,59-79
+uv.lock
+  h_d36ca8649a0e95 3,1923,1933,1935,2087,2101,2103,2108-2109,2118-2121,2179-2180,2182,2200-2201,2205,2223-2226,2273,2282,2284-2292
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1e4703f49186bcdf9f04e217b2e2933af2974f68",
+  "prompts": {},
+  "humans": {
+    "h_d36ca8649a0e95": {
+      "author": "Carlos Trujillo <carlangastr@gmail.com>"
+    }
+  }
+}
