@@ -1217,17 +1217,12 @@ def build_oracle_model(
        no exception: they clamp observed spend before the convolution and
        never touch response state, so ordinary carryover decays across a shock
        boundary exactly as it does anywhere else.
-    6. **Weibull sampler downgrade**: pymc-marketing's ``weibull_adstock``
-       min-max normalization contains a ``Min`` operation without a PyTensor
-       pullback. When any channel uses Weibull adstock, ``pm.sample``
-       therefore assigns Metropolis—not NUTS—to ``weibull_lam`` and
-       ``weibull_k``. Identity and geometric adstock channels remain
-       differentiable. This is upstream rather than from this package's
-       analytic Weibull guard, whose reductions differentiate cleanly; replacing
-       the library normalization would abandon load-bearing library parity.
-       Metropolis mixing on those two carryover parameters makes their ESS less
-       trustworthy, so prefer geometric-adstock worlds when using the oracle as
-       a reference posterior.
+    6. **Sampler eligibility**: the locked released stack supplies oracle
+       gradients for identity, geometric, and Weibull adstock. Weibull
+       carryover parameters no longer require a Metropolis step because of
+       missing upstream gradients. NUTS eligibility does not establish
+       convergence: inspect divergences, R-hat, and effective sample sizes.
+       Posterior draws need not reproduce those from the previous stack.
 
     **Marginal-mode cost.** Each gradient evaluation factors an
     ``n × n`` covariance, ``n = n_time_steps - warmup``, so it has an

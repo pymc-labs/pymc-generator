@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "pymc-generator"
 dynamic = ["version"]
 description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor / PyMC / pymc-marketing."
-# pymc 6.0.1 (the pinned modeling stack) requires Python >= 3.12.
-requires-python = ">=3.12"
+# Supported interpreter floor; CI exercises Python 3.13 and 3.14.
+requires-python = ">=3.13"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -20,18 +20,17 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "numpy",
-    # Preserve the validated numerical stack. The exact pymc-marketing commit
-    # is intentional even when newer releases exist; changes require generation
-    # and recovery evidence, not an opportunistic dependency upgrade.
-    "pytensor==3.0.7",
-    "pymc==6.0.1",
-    "pymc-marketing @ git+https://github.com/pymc-labs/pymc-marketing.git@ff70aae62dea1933b758a55885c24a76a3e7a9a5",
+    # Released packages keep registry installs possible. uv.lock records the
+    # validated numerical stack; dependency upgrades require fresh evidence.
+    "pytensor>=3.2.3,<4",
+    "pymc>=6.2,<7",
+    "pymc-marketing>=1.1,<2",
     "scipy",
     "pandas",
     "matplotlib",
@@ -102,7 +101,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 exclude = [
     ".git",
     ".venv",
@@ -142,7 +141,7 @@ known-first-party = ["pymc_generator"]
 
 [tool.mypy]
 # No pinned python_version: check at the running interpreter so modern stub
-# syntax (e.g. numpy's PEP 695 `type` statements) parses. The 3.12 floor
+# syntax (e.g. numpy's PEP 695 `type` statements) parses. The 3.13 floor
 # (requires-python) is guarded by the CI test matrix and ruff's target-version.
 warn_return_any = true
 warn_unused_configs = true
