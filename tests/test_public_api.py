@@ -74,7 +74,7 @@ def test_import_is_light():
 
 def test_importing_the_diagnostics_module_stays_light():
     # diagnostics is pure numpy over retained arrays: pandas is TYPE_CHECKING-only
-    # there and the frame helpers import it on demand.
+    # there and the frame helpers import it on latent_unobserved.
     code = (
         "import sys, pymc_generator.diagnostics; "
         "heavy = [m for m in ('pytensor', 'pymc', 'pymc_marketing', 'scipy', 'pandas', 'matplotlib') "

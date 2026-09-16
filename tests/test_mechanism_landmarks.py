@@ -66,7 +66,7 @@ def _family(name: str, x, reference_level=REFERENCE_LEVEL, **shape) -> np.ndarra
 def test_family_reproduces_its_analytic_landmark(name, shape, landmark_x, landmark_y):
     """Each family's documented anchor value is exact, not approximate.
 
-    These are the identities that let ``beta`` be read as "the channel's
+    These are the identities that let ``beta`` be read as "the treatment's
     contribution at its κ anchor": a family whose half point drifted with its
     shape parameter would make ``beta`` mean something different per draw.
     """
@@ -76,7 +76,7 @@ def test_family_reproduces_its_analytic_landmark(name, shape, landmark_x, landma
 
 @pytest.mark.parametrize("name", sorted(FAMILY_SHAPES))
 def test_family_is_strictly_monotone_in_x(name):
-    """Monotonicity is what makes a contribution attributable to its spend.
+    """Monotonicity is what makes a contribution attributable to its treatment.
 
     Asserted STRICTLY: a family that plateaued in float (or that read the wrong
     shape parameter and collapsed to a constant) would still integrate into the
@@ -94,7 +94,7 @@ def test_family_is_scale_free_in_its_anchor(name, scale):
 
     Under reference-relative parameterization,
     the shape parameters are dimensionless, so the same prior ranges are
-    meaningful for a channel spending 10 and one spending 10 million. A wrapper
+    meaningful for a treatment spending 10 and one spending 10 million. A wrapper
     that forgot to rescale its input would fail here while still passing every
     landmark at the fixed anchor above.
     """
@@ -105,11 +105,11 @@ def test_family_is_scale_free_in_its_anchor(name, scale):
     np.testing.assert_allclose(rescaled, base, rtol=1e-12, atol=0.0)
 
 
-#: Channel index used for the dispatch check. NOT 0: a wrapper that ignored the
-#: per-channel index would still read the right value at slot 0.
+#: Treatment index used for the dispatch check. NOT 0: a wrapper that ignored the
+#: per-treatment index would still read the right value at slot 0.
 DISPATCH_K = 1
 
-#: Every shape parameter ``_saturate_family`` can read, for two channels. Slot 0
+#: Every shape parameter ``_saturate_family`` can read, for two treatments. Slot 0
 #: deliberately holds a different value from slot ``DISPATCH_K``.
 DISPATCH_PARAMS: dict[str, np.ndarray] = {
     "hill_slope": np.array([1.1, FAMILY_SHAPES["hill"]["slope"]]),

@@ -1,7 +1,7 @@
-"""Media-response mechanism families (adstock + saturation).
+"""Treatment-response mechanism families (carryover + saturation).
 
 Thin κ-relative wrappers over ``pymc_marketing.mmm.transformers``: the
-adstock and saturation math is provided by pymc-marketing (``geometric_adstock``
+carryover and saturation math is provided by pymc-marketing (``geometric_adstock``
 / ``weibull_adstock`` and the standard saturation curves), not hand-rolled here.
 pymc-marketing 1.0's transformers are xtensor/named-dim based, so each wrapper
 bridges a plain ``(n_time_steps,)`` time column through ``as_xtensor(dims=("time",))``,
@@ -16,7 +16,7 @@ parameters, not a reduction over the realized series. Wrappers have signature
 ``f(x, reference_level, **shape_params) -> tensor`` and are monotone in ``x``.
 
 Every family is normalized to a **unit asymptote** (or, for the unbounded
-``root``, to ``f(reference_level) = 1``), so the channel's single amplitude is the
+``root``, to ``f(reference_level) = 1``), so the treatment's single amplitude is the
 structural coefficient ``beta`` in :mod:`pymc_generator.symbolic_graph`.
 This mirrors pymc-marketing's own convention -- its wrappers add a ``beta``
 scale exactly to those families whose transformer is bounded, and omit it for
@@ -132,7 +132,7 @@ def michaelis_menten_kappa_relative(x, reference_level, *, kappa_mult) -> Tensor
     """Michaelis-Menten curve with λ = kappa_mult · reference_level.
 
     The library asymptote is pinned to 1 rather than exposed as a parameter:
-    the structural ``beta`` gate is this channel's only amplitude.
+    the structural ``beta`` gate is this treatment's only amplitude.
     """
     safe_reference_level = pt.maximum(reference_level, 1e-8)
     return michaelis_menten(x, 1.0, kappa_mult * safe_reference_level)
@@ -167,14 +167,14 @@ SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
 
 
 # --------------------------------------------------------------------------
-# Adstock — pymc-marketing transformers over a single time column (axis 0)
+# Carryover — pymc-marketing transformers over a single time column (axis 0)
 # --------------------------------------------------------------------------
 
 
-def apply_geometric_adstock(
+def apply_geometric_carryover(
     x: TensorVariable, alpha: TensorVariable | float, l_max: int
 ) -> TensorVariable:
-    """Normalized geometric adstock of a ``(n_time_steps, 1)`` column over the time axis.
+    """Normalized geometric carryover of a ``(n_time_steps, 1)`` column over the time axis.
 
     Delegates to ``pymc_marketing.mmm.transformers.geometric_adstock`` (ConvMode
     ``After``, ``normalize=True``). ``alpha`` may be a float or a symbolic scalar.
@@ -186,19 +186,19 @@ def apply_geometric_adstock(
     return values
 
 
-def apply_weibull_pdf_adstock(
+def apply_weibull_pdf_carryover(
     x: TensorVariable, lam: TensorVariable | float, k: TensorVariable | float, l_max: int
 ) -> TensorVariable:
-    """Normalized min-max-rescaled Weibull-density adstock over the time axis.
+    """Normalized min-max-rescaled Weibull-density carryover over the time axis.
 
     Delegates to ``pymc_marketing.mmm.transformers.weibull_adstock`` with
     ``type="PDF"``, ``normalize=True``. The library min-max rescales the sampled
     density before sum-normalizing, so this kernel is not a Weibull PDF:
     ``min(w) == 0`` exactly and one or more lags are always annihilated. Under
     the default prior (``lam ~ U(2, 8)``, ``k ~ U(1.5, 4)``, ``l_max = 8``),
-    45.0% of channels have zero current-week weight and 38.5% peak at lag >= 5
+    45.0% of treatments have zero current-week weight and 38.5% peak at lag >= 5
     (measured over 200k draws). For a zero current-week weight,
-    ``contributions[t]`` is independent of ``channels[t]``;
+    ``contributions[t]`` is independent of ``treatments[t]``;
     ``frac_zero_contemporaneous_weight`` reports this diagnostic.
 
     ``l_max == 1`` deliberately returns ``x`` rather than calling the library:
@@ -231,9 +231,9 @@ def apply_weibull_pdf_adstock(
         normalize=True,
     )
     values = out.values[:, None]
-    # This guard MUST track signal_diagnostics._adstock_weights. The oracle passes
+    # This guard MUST track signal_diagnostics._carryover_weights. The oracle passes
     # symbolic value variables; a backend-dependent library-output guard would make
-    # FAST_COMPILE generation and the FAST_RUN oracle disagree whether a channel responds.
+    # FAST_COMPILE generation and the FAST_RUN oracle disagree whether a treatment responds.
     # 1e-300 is above the float64 denormal cliff (~5e-324), yet below any
     # normal-magnitude density, so the analytic replica detects only underflow.
     kernel_is_valid = pt.and_(

@@ -22,8 +22,8 @@ from pymc_generator.world_model import (
 from pymc_generator.worlds import (
     _LEGACY_WORLD_PARAM_NAMES,
     SCM,
-    _assemble_channel_shock_schedule,
     _assemble_params,
+    _assemble_treatment_shock_schedule,
 )
 
 _RAW_EPS_NAMES = (
@@ -38,18 +38,18 @@ _RAW_EPS_NAMES = (
     "eps_z_pulse",
 )
 _CORE_OUTPUTS = (
-    "demand",
-    "controls",
-    "channels",
-    "channels_base",
+    "latent_unobserved",
+    "covariates",
+    "treatments",
+    "treatments_base",
     "baseline",
     "baseline_intrinsic",
-    "sales_noise",
+    "outcome_noise",
     "contributions",
     "contributions_observed",
     "indirect_effects",
     "indirect_effects_by_source",
-    "sales",
+    "outcome",
 )
 
 
@@ -59,7 +59,7 @@ def _config(**overrides):
         "n_covariates": 2,
         "n_latent": 1,
         "n_time_steps": 16,
-        "adstock_burn_in": 4,
+        "carryover_burn_in": 4,
         "l_max": 4,
         "edge_budget": {
             "cy": (2, 2),
@@ -87,14 +87,14 @@ def test_sampled_world_owns_its_configuration():
     assert world.cfg.edge_budget["cy"] == (2, 2)
 
 
-@pytest.mark.parametrize("scope", ["intercept", "non_media"])
+@pytest.mark.parametrize("scope", ["intercept", "non_treatment"])
 def test_equation_audit_identifies_floor_operation(scope):
     world = sample_scm(_config(baseline_floor=0.0, baseline_floor_scope=scope), seed=7)
-    audit = world.equation_parameters["Y"]["non_media"]
+    audit = world.equation_parameters["Y"]["non_treatment"]
     assert audit["floor_scope"] == scope
     assert audit["accumulation_order"] == ["B"]
     assert audit["attribution"] == (
-        "sequential_clipped_differences" if scope == "non_media" else "additive"
+        "sequential_clipped_differences" if scope == "non_treatment" else "additive"
     )
 
 
@@ -128,7 +128,7 @@ def _replay(
         world.n_treatments,
         world.n_covariates,
         world.n_latent,
-        burn_in=world.cfg.adstock_burn_in,
+        burn_in=world.cfg.carryover_burn_in,
         eps=eps,
     )
     return {name: value.eval() for name, value in graph["outputs"].items()}
@@ -141,25 +141,25 @@ def test_sampled_data_owns_accepted_arrays():
     assert all(values.flags.owndata and values.base is None for values in world.data.values())
 
 
-def test_channel_shock_schedule_rejects_overlapping_windows():
+def test_treatment_shock_schedule_rejects_overlapping_windows():
     """Concrete replay scheduling must retain symbolic sum semantics."""
-    cfg = _config(n_channel_shocks=2)
+    cfg = _config(n_treatment_shocks=2)
     drawn = {
-        "channel_shock_channel": np.array([[0, 0]], dtype="int64"),
-        "channel_shock_start": np.array([[0, 1]], dtype="int64"),
-        "channel_shock_length": np.array([[2, 2]], dtype="int64"),
-        "channel_shock_level": np.array([[1.0, 1.0]]),
-        "channel_shock_mask_full": np.zeros(
-            (1, cfg.n_time_steps + cfg.adstock_burn_in, 2), dtype="int8"
+        "treatment_shock_index": np.array([[0, 0]], dtype="int64"),
+        "treatment_shock_start": np.array([[0, 1]], dtype="int64"),
+        "treatment_shock_length": np.array([[2, 2]], dtype="int64"),
+        "treatment_shock_level": np.array([[1.0, 1.0]]),
+        "treatment_shock_mask_full": np.zeros(
+            (1, cfg.n_time_steps + cfg.carryover_burn_in, 2), dtype="int8"
         ),
     }
 
     with pytest.raises(AssertionError, match="must not overlap"):
-        _assemble_channel_shock_schedule(drawn, 0, cfg)
+        _assemble_treatment_shock_schedule(drawn, 0, cfg)
 
 
 def test_expanded_audit_preserves_seeded_single_world_outputs():
-    cfg = _config(confounding_strength_range=(0.4, 0.4), spend_cv_floor=0.0)
+    cfg = _config(confounding_strength_range=(0.4, 0.4), treatment_cv_floor=0.0)
     g = {
         "g_cy": np.ones(2, dtype=int),
         "g_dc": np.zeros((1, 2), dtype=int),
@@ -215,10 +215,10 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
         "hf_sigma",
         "pulse_amp",
         "pulse_prob",
-        "control_hf_sigma",
-        "control_pulse_amp",
-        "control_pulse_prob",
-        "channel_level",
+        "covariate_hf_sigma",
+        "covariate_pulse_amp",
+        "covariate_pulse_prob",
+        "treatment_level",
         "confounding_strength",
         *(f"rw_{group}_{stat}" for group in ("d", "z", "c", "b", "y") for stat in ("mean", "std")),
     }
@@ -233,20 +233,20 @@ def test_report_specs_cover_every_continuous_parameter_with_expected_shapes():
     assert drawn["param_rw_c_mean"].shape == (1, 2)
     assert drawn["param_rw_b_std"].shape == (1, 1)
     assert drawn["param_rw_y_std"].shape == (1, 1)
-    assert drawn["param_control_hf_sigma"].shape == (1, 2)
-    assert drawn["param_control_pulse_amp"].shape == (1, 2)
-    assert drawn["param_control_pulse_prob"].shape == (1, 2)
+    assert drawn["param_covariate_hf_sigma"].shape == (1, 2)
+    assert drawn["param_covariate_pulse_amp"].shape == (1, 2)
+    assert drawn["param_covariate_pulse_prob"].shape == (1, 2)
 
 
 def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
     cfg = _config(
         confounding_strength_range=(0.2, 0.4),
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 3),
-        channel_shock_level_range=(0.5, 1.0),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 3),
+        treatment_shock_level_range=(0.5, 1.0),
     )
     world = sample_scm(cfg, seed=43, max_eps_draws=40)
-    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.carryover_burn_in
     exogenous = world.exogenous
     assert {name: value.shape for name, value in exogenous.items()} == {
         "eps_d": (n_time_steps_full, world.n_latent),
@@ -259,10 +259,10 @@ def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
         "eps_z_hf": (n_time_steps_full, world.n_covariates),
         "eps_z_pulse": (n_time_steps_full, world.n_covariates),
     }
-    schedule = world.params["channel_shock"]
+    schedule = world.params["treatment_shock"]
     assert schedule["mask_full"].shape == (n_time_steps_full, world.n_treatments)
     assert np.array_equal(
-        schedule["start_full"], world.data["channel_shock_start"] + cfg.adstock_burn_in
+        schedule["start_full"], world.data["treatment_shock_start"] + cfg.carryover_burn_in
     )
 
     rho = float(world.params["confounding_strength"])
@@ -272,22 +272,26 @@ def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
         np.testing.assert_allclose(replay[name], world.data[name], rtol=0.0, atol=1e-12)
 
     raw_replay = _replay(world, exogenous["eps_c"])
-    assert not np.allclose(raw_replay["channels"], world.data["channels"], rtol=0.0, atol=1e-12)
+    assert not np.allclose(raw_replay["treatments"], world.data["treatments"], rtol=0.0, atol=1e-12)
     assert not np.allclose(
-        world.data["channels"], world.data["channels_unshocked"], rtol=0.0, atol=1e-12
+        world.data["treatments"], world.data["treatments_unshocked"], rtol=0.0, atol=1e-12
     )
-    assert not np.allclose(world.data["sales"], world.data["sales_unshocked"], rtol=0.0, atol=1e-12)
+    assert not np.allclose(
+        world.data["outcome"], world.data["outcome_unshocked"], rtol=0.0, atol=1e-12
+    )
     flipped_pulses = 1 - exogenous["eps_c_pulse"]
     pulse_replay = _replay(world, eps_c_eff, eps_c_pulse=flipped_pulses)
-    assert not np.allclose(pulse_replay["channels"], world.data["channels"], rtol=0.0, atol=1e-12)
+    assert not np.allclose(
+        pulse_replay["treatments"], world.data["treatments"], rtol=0.0, atol=1e-12
+    )
 
 
 def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
     cfg = _config(
         confounding_strength_range=(0.5, 0.5),
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=(0.5, 0.5),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 2),
+        treatment_shock_level_range=(0.5, 0.5),
     )
     world = sample_scm(cfg, seed=47, max_eps_draws=40)
     rho = float(world.params["confounding_strength"])
@@ -302,20 +306,20 @@ def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
     exposed_eps["eps_z_pulse"][:] = 1.0
     exposed_params = world.equation_parameters
     exposed_params["C1"]["texture"]["hf_sigma"] = 1e9
-    exposed_params["channel_shocks"]["mask_full"][:] = 0
-    exposed_params["channel_shocks"]["level_full"][:] = 0.0
+    exposed_params["treatment_shocks"]["mask_full"][:] = 0
+    exposed_params["treatment_shocks"]["level_full"][:] = 0.0
     exposed_params["C1"]["random_walk"]["std"] = 1e9
     exposed_params["C1"]["response"]["saturation"]["scale"] = 1e9
-    exposed_params["Z1"]["texture"]["control_hf_sigma"] = 1e9
+    exposed_params["Z1"]["texture"]["covariate_hf_sigma"] = 1e9
 
     assert np.array_equal(world.exogenous["eps_c"], before_eps["eps_c"])
     assert np.array_equal(world.exogenous["eps_z_hf"], before_eps["eps_z_hf"])
     assert np.array_equal(world.exogenous["eps_z_pulse"], before_eps["eps_z_pulse"])
-    assert world.equation_parameters["Z1"]["texture"]["control_hf_sigma"] != 1e9
+    assert world.equation_parameters["Z1"]["texture"]["covariate_hf_sigma"] != 1e9
     assert world.equation_parameters["C1"]["texture"]["hf_sigma"] != 1e9
     assert world.equation_parameters["C1"]["random_walk"]["std"] != 1e9
     assert world.equation_parameters["C1"]["response"]["saturation"]["scale"] != 1e9
-    assert world.equation_parameters["channel_shocks"]["mask_full"].any()
+    assert world.equation_parameters["treatment_shocks"]["mask_full"].any()
     replay_after = _replay(world, eps_c_eff)
     for name in _CORE_OUTPUTS:
         np.testing.assert_array_equal(replay_after[name], replay_before[name])
@@ -375,9 +379,9 @@ def test_response_audit_contains_only_family_specific_shape_parameters():
         (1, 4, {"family", "l_max", "alpha"}, {"family", "scale", "c"}),
         (2, 5, {"family", "l_max", "lam", "k"}, {"family", "scale", "alpha"}),
     )
-    adstock_sources = {
+    carryover_sources = {
         0: {},
-        1: {"alpha": "adstock_alpha"},
+        1: {"alpha": "carryover_alpha"},
         2: {"lam": "weibull_lam", "k": "weibull_k"},
     }
     saturation_sources = {
@@ -388,18 +392,18 @@ def test_response_audit_contains_only_family_specific_shape_parameters():
         4: {"c": "tanh_c"},
         5: {"alpha": "root_alpha"},
     }
-    for adstock_id, saturation_id, adstock_keys, saturation_keys in cases:
-        world.params["adstock_family"][0] = adstock_id
+    for carryover_id, saturation_id, carryover_keys, saturation_keys in cases:
+        world.params["carryover_family"][0] = carryover_id
         world.params["sat_family"][0] = saturation_id
         response = world.equation_parameters["C1"]["response"]
-        assert set(response["adstock"]) == adstock_keys
+        assert set(response["carryover"]) == carryover_keys
         assert set(response["saturation"]) == saturation_keys
-        assert response["adstock"]["l_max"] == int(world.params["l_max"])
+        assert response["carryover"]["l_max"] == int(world.params["l_max"])
         assert response["saturation"]["scale"] == float(
             np.asarray(world.data["saturation_scale"])[0]
         )
-        for key, source in adstock_sources[adstock_id].items():
-            assert response["adstock"][key] == float(np.asarray(world.params[source])[0])
+        for key, source in carryover_sources[carryover_id].items():
+            assert response["carryover"][key] == float(np.asarray(world.params[source])[0])
         for key, source in saturation_sources[saturation_id].items():
             assert response["saturation"][key] == float(np.asarray(world.params[source])[0])
 
@@ -425,7 +429,7 @@ def test_random_walk_equation_uses_fixed_scale_divisor():
 
 
 def test_description_marks_unestimable_signal_metrics_not_applicable():
-    cfg = _config(n_time_steps=4, l_max=8, adstock_burn_in=0)
+    cfg = _config(n_time_steps=4, l_max=8, carryover_burn_in=0)
     world = _fixed_world(_edgeless_graph(), cfg)
 
     assert not world.signal()["spearman_valid"].any()
@@ -450,14 +454,14 @@ def test_saturation_anchor_has_no_noise_ancestors(monkeypatch):
 
     Deriving it from the realized series (its window mean) would make the
     "prior" a function of the noise it generates, and -- because the mean spans
-    the whole window -- would let spend at a late week move the response at an
+    the whole window -- would let treatment at a late week move the response at an
     early one. Record every saturation call, then inspect its anchor through
     every graph output, including the audit-only unshocked paths.
     """
     cfg = _config(
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=(0.5, 0.5),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 2),
+        treatment_shock_level_range=(0.5, 0.5),
     )
     g = _edgeless_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(5))
@@ -471,12 +475,12 @@ def test_saturation_anchor_has_no_noise_ancestors(monkeypatch):
     monkeypatch.setattr(symbolic_graph, "_saturate_col", record_saturation_anchor)
     model, out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
 
-    assert {"channels_unshocked", "sales_unshocked"} <= set(out_names)
+    assert {"treatments_unshocked", "outcome_unshocked"} <= set(out_names)
     assert saturation_anchors
     for output_name in out_names:
         output_ancestors = set(ancestors([model[output_name]])) | {model[output_name]}
         output_anchors = [anchor for anchor in saturation_anchors if anchor in output_ancestors]
-        if output_name == "sales_unshocked":
+        if output_name == "outcome_unshocked":
             assert output_anchors
         for anchor in output_anchors:
             anchor_ancestors = set(ancestors([anchor])) | {anchor}
@@ -492,7 +496,7 @@ def test_relative_outcome_scales_have_no_noise_ancestors():
     cfg = _config(
         outcome_std_mode="relative",
         rw_baseline_std_range=(0.04, 0.08),
-        rw_sales_std_range=(0.01, 0.03),
+        rw_outcome_std_range=(0.01, 0.03),
     )
     g = _edgeless_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(6))
@@ -515,7 +519,7 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     assert "smoothness" not in world.equation_parameters["Y"]["iid_noise"]
     assert "RW_full(eps_y" not in world.equations["Y"]
 
-    replacement_eps_y = np.linspace(-1.0, 1.0, world.n_time_steps + cfg.adstock_burn_in)
+    replacement_eps_y = np.linspace(-1.0, 1.0, world.n_time_steps + cfg.carryover_burn_in)
     replay = _replay(
         world,
         world.exogenous["eps_c"],
@@ -523,12 +527,13 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     )
     std = float(np.asarray(world.params["rw_y"]["std"])[0])
     expected_change = std * (
-        replacement_eps_y[cfg.adstock_burn_in :] - world.exogenous["eps_y"][cfg.adstock_burn_in :]
+        replacement_eps_y[cfg.carryover_burn_in :]
+        - world.exogenous["eps_y"][cfg.carryover_burn_in :]
     )
-    # The noise is its own column now, so it moves ``sales_noise`` and
+    # The noise is its own column now, so it moves ``outcome_noise`` and
     # ``baseline`` pointwise and leaves the intercept target alone.
     np.testing.assert_allclose(
-        replay["sales_noise"] - world.data["sales_noise"],
+        replay["outcome_noise"] - world.data["outcome_noise"],
         expected_change,
         rtol=0.0,
         atol=1e-12,
@@ -555,13 +560,13 @@ def test_saturation_anchor_equals_the_closed_form_reference_level():
     """Texture-free, upstream-free: the anchor is softplus(softplus(rw_c_mean)).
 
     That closed form is the PARAMETER-ONLY reference level, not ``E[C]``: the
-    channel walk is already softplus-transformed and the channel equation
+    treatment walk is already softplus-transformed and the treatment equation
     applies a second softplus, so the anchor nests ``softplus`` around a MEAN
-    where the realized channel takes the MEAN of a ``softplus``. Softplus is
+    where the realized treatment takes the MEAN of a ``softplus``. Softplus is
     strictly convex, so ``E[C] > anchor`` strictly; this test pins the anchor's
     closed form, not any moment of the drawn series.
     """
-    cfg = _config(channel_hf_sigma_range=(0.0, 0.0), channel_pulse_prob_range=(0.0, 0.0))
+    cfg = _config(treatment_hf_sigma_range=(0.0, 0.0), treatment_pulse_prob_range=(0.0, 0.0))
     world = sample_scm(cfg, seed=11)
     walk_mean = np.asarray(world.params["rw_c"]["mean"], dtype=float)
     expected = np.logaddexp(0.0, np.logaddexp(0.0, walk_mean))
@@ -570,88 +575,88 @@ def test_saturation_anchor_equals_the_closed_form_reference_level():
     )
 
 
-def test_control_texture_is_relative_to_the_control_walk_std():
-    """Both magnitudes are drawn as a factor of the control's OWN walk std.
+def test_covariate_texture_is_relative_to_the_covariate_walk_std():
+    """Both magnitudes are drawn as a factor of the covariate's OWN walk std.
 
-    A signed control has no positive level to anchor on (``rw_z_mean`` straddles
+    A signed covariate has no positive level to anchor on (``rw_z_mean`` straddles
     zero), so the scale-free anchor is its walk amplitude. Recovering the drawn
     factor from the reported magnitude proves the scaling is applied once, with
     the right denominator.
     """
     cfg = _config(
-        control_hf_sigma_range=(0.2, 0.6),
-        control_pulse_prob_range=(0.05, 0.25),
-        control_pulse_amp_range=(0.5, 2.0),
+        covariate_hf_sigma_range=(0.2, 0.6),
+        covariate_pulse_prob_range=(0.05, 0.25),
+        covariate_pulse_amp_range=(0.5, 2.0),
     )
     world = sample_scm(cfg, seed=13)
     walk_std = np.asarray(world.params["rw_z"]["std"], dtype=float)
     assert (walk_std > 0.0).all()
 
-    hf_factor = np.asarray(world.params["control_hf_sigma"], dtype=float) / walk_std
-    amp_factor = np.asarray(world.params["control_pulse_amp"], dtype=float) / walk_std
-    prob = np.asarray(world.params["control_pulse_prob"], dtype=float)
+    hf_factor = np.asarray(world.params["covariate_hf_sigma"], dtype=float) / walk_std
+    amp_factor = np.asarray(world.params["covariate_pulse_amp"], dtype=float) / walk_std
+    prob = np.asarray(world.params["covariate_pulse_prob"], dtype=float)
     for factor, (lo, hi) in (
-        (hf_factor, cfg.control_hf_sigma_range),
-        (amp_factor, cfg.control_pulse_amp_range),
-        (prob, cfg.control_pulse_prob_range),
+        (hf_factor, cfg.covariate_hf_sigma_range),
+        (amp_factor, cfg.covariate_pulse_amp_range),
+        (prob, cfg.covariate_pulse_prob_range),
     ):
         assert ((factor >= lo) & (factor <= hi)).all(), (factor, lo, hi)
-    assert world.params["use_control_hf"].all()
-    assert world.params["use_control_pulse"].all()
+    assert world.params["use_covariate_hf"].all()
+    assert world.params["use_covariate_pulse"].all()
 
     # Containment alone would survive a per-node mixup, so pin the identity on a
-    # degenerate-range world: the magnitude is EXACTLY factor * that control's
+    # degenerate-range world: the magnitude is EXACTLY factor * that covariate's
     # own walk std, and the fire probability is never scaled.
     pinned = sample_scm(
         _config(
-            control_hf_sigma_range=(0.4, 0.4),
-            control_pulse_prob_range=(0.2, 0.2),
-            control_pulse_amp_range=(1.5, 1.5),
+            covariate_hf_sigma_range=(0.4, 0.4),
+            covariate_pulse_prob_range=(0.2, 0.2),
+            covariate_pulse_amp_range=(1.5, 1.5),
         ),
         seed=13,
     )
     pinned_std = np.asarray(pinned.params["rw_z"]["std"], dtype=float)
-    assert np.ptp(pinned_std) > 1e-6  # the controls differ, so alignment is testable
+    assert np.ptp(pinned_std) > 1e-6  # the covariates differ, so alignment is testable
     np.testing.assert_allclose(
-        np.asarray(pinned.params["control_hf_sigma"], dtype=float),
+        np.asarray(pinned.params["covariate_hf_sigma"], dtype=float),
         0.4 * pinned_std,
         rtol=1e-12,
     )
     np.testing.assert_allclose(
-        np.asarray(pinned.params["control_pulse_amp"], dtype=float),
+        np.asarray(pinned.params["covariate_pulse_amp"], dtype=float),
         1.5 * pinned_std,
         rtol=1e-12,
     )
     np.testing.assert_allclose(
-        np.asarray(pinned.params["control_pulse_prob"], dtype=float), 0.2, rtol=1e-12
+        np.asarray(pinned.params["covariate_pulse_prob"], dtype=float), 0.2, rtol=1e-12
     )
 
 
-def test_control_pulse_is_centred_on_its_own_fire_probability():
+def test_covariate_pulse_is_centred_on_its_own_fire_probability():
     """The exact per-week own-drive delta is ``amp * (fire - prob)``.
 
-    Centring is what keeps a control's expected level at ``rw_z_mean``, so the
+    Centring is what keeps a covariate's expected level at ``rw_z_mean``, so the
     parameter-only saturation anchors stay valid. An uncentred pulse (the
-    channel form) would shift every control by ``+amp * prob``.
+    treatment form) would shift every covariate by ``+amp * prob``.
     """
     cfg = _config(
-        control_hf_sigma_range=(0.3, 0.3),
-        control_pulse_prob_range=(0.2, 0.2),
-        control_pulse_amp_range=(1.5, 1.5),
+        covariate_hf_sigma_range=(0.3, 0.3),
+        covariate_pulse_prob_range=(0.2, 0.2),
+        covariate_pulse_amp_range=(1.5, 1.5),
     )
     world = _fixed_world(_edgeless_graph(), cfg, seed=31)
     exogenous = world.exogenous
-    amp = np.asarray(world.params["control_pulse_amp"], dtype=float)
-    sigma = np.asarray(world.params["control_hf_sigma"], dtype=float)
-    prob = np.asarray(world.params["control_pulse_prob"], dtype=float)
+    amp = np.asarray(world.params["covariate_pulse_amp"], dtype=float)
+    sigma = np.asarray(world.params["covariate_hf_sigma"], dtype=float)
+    prob = np.asarray(world.params["covariate_pulse_prob"], dtype=float)
     zeros = np.zeros_like(exogenous["eps_z_pulse"])
 
-    # The controls are edgeless here, so each column IS its own drive. The
+    # The covariates are edgeless here, so each column IS its own drive. The
     # reference is the SAME world with both texture flags off, so the deltas
     # below are the texture's exact contribution, not a restatement of it.
     off_params = dict(world.params)
-    off_params["use_control_hf"] = np.zeros(world.n_covariates, dtype=bool)
-    off_params["use_control_pulse"] = np.zeros(world.n_covariates, dtype=bool)
+    off_params["use_covariate_hf"] = np.zeros(world.n_covariates, dtype=bool)
+    off_params["use_covariate_pulse"] = np.zeros(world.n_covariates, dtype=bool)
     walk_only = np.asarray(
         build_symbolic_graph(
             world.g,
@@ -660,14 +665,14 @@ def test_control_pulse_is_centred_on_its_own_fire_probability():
             world.n_treatments,
             world.n_covariates,
             world.n_latent,
-            burn_in=cfg.adstock_burn_in,
+            burn_in=cfg.carryover_burn_in,
             eps=exogenous,
-        )["outputs"]["controls"].eval(),
+        )["outputs"]["covariates"].eval(),
         dtype=float,
     )
-    never = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=zeros)["controls"]
+    never = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=zeros)["covariates"]
     always = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=np.ones_like(zeros))[
-        "controls"
+        "covariates"
     ]
 
     weeks = never.shape[0]
@@ -688,26 +693,26 @@ def test_control_pulse_is_centred_on_its_own_fire_probability():
         atol=1e-12,
     )
 
-    # One spiked COLUMN: the control must read its own innovation column, at its
+    # One spiked COLUMN: the covariate must read its own innovation column, at its
     # own magnitude, in that week only.
     spike = np.zeros_like(exogenous["eps_z_hf"])
-    week = cfg.adstock_burn_in + 3
+    week = cfg.carryover_burn_in + 3
     spike[week, 0] = 1.0
-    spiked = _replay(world, exogenous["eps_c"], eps_z_hf=spike, eps_z_pulse=zeros)["controls"]
+    spiked = _replay(world, exogenous["eps_c"], eps_z_hf=spike, eps_z_pulse=zeros)["covariates"]
     delta = spiked - never
     expected_week = np.zeros(world.n_covariates)
     expected_week[0] = sigma[0]
     np.testing.assert_allclose(
-        delta[week - cfg.adstock_burn_in], expected_week, rtol=0.0, atol=1e-12
+        delta[week - cfg.carryover_burn_in], expected_week, rtol=0.0, atol=1e-12
     )
     np.testing.assert_allclose(
-        np.delete(delta, week - cfg.adstock_burn_in, axis=0), 0.0, rtol=0.0, atol=1e-12
+        np.delete(delta, week - cfg.carryover_burn_in, axis=0), 0.0, rtol=0.0, atol=1e-12
     )
 
-    # Same for the pulse: one firing COLUMN moves only that control, by amp.
+    # Same for the pulse: one firing COLUMN moves only that covariate, by amp.
     one_fire = np.zeros_like(exogenous["eps_z_pulse"])
     one_fire[:, 0] = 1.0
-    fired = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=one_fire)["controls"]
+    fired = _replay(world, exogenous["eps_c"], eps_z_hf=zeros, eps_z_pulse=one_fire)["covariates"]
     expected_fire = np.zeros(world.n_covariates)
     expected_fire[0] = amp[0]
     np.testing.assert_allclose(
@@ -718,24 +723,24 @@ def test_control_pulse_is_centred_on_its_own_fire_probability():
     )
 
 
-def test_control_texture_leaves_the_parameter_only_saturation_anchor_exact():
-    """Enabled control texture must not be ADDED to the κ anchor.
+def test_covariate_texture_leaves_the_parameter_only_saturation_anchor_exact():
+    """Enabled covariate texture must not be ADDED to the κ anchor.
 
-    The anchor sums PARAMETER-only reference levels, and a control's level claim
-    is EXACT — a control applies no activation, and both texture terms are
+    The anchor sums PARAMETER-only reference levels, and a covariate's level claim
+    is EXACT — a covariate applies no activation, and both texture terms are
     mean-zero, so ``E[Z_m]`` is unchanged. The live check here is the "do not
-    mirror the uncentred channel pulse" one: a
-    ``+ amp * prob`` correction on the control levels would move the anchor by a
+    mirror the uncentred treatment pulse" one: a
+    ``+ amp * prob`` correction on the covariate levels would move the anchor by a
     measurable amount, asserted below. The graph-side centring that justifies
     the omission is pinned by
-    ``test_control_pulse_is_centred_on_its_own_fire_probability``.
+    ``test_covariate_pulse_is_centred_on_its_own_fire_probability``.
     """
     cfg = _config(
-        channel_hf_sigma_range=(0.0, 0.0),
-        channel_pulse_prob_range=(0.0, 0.0),
-        control_hf_sigma_range=(0.4, 0.8),
-        control_pulse_prob_range=(0.2, 0.25),
-        control_pulse_amp_range=(2.0, 3.0),
+        treatment_hf_sigma_range=(0.0, 0.0),
+        treatment_pulse_prob_range=(0.0, 0.0),
+        covariate_hf_sigma_range=(0.4, 0.8),
+        covariate_pulse_prob_range=(0.2, 0.25),
+        covariate_pulse_amp_range=(2.0, 3.0),
         edge_budget={
             "cy": (2, 2),
             "dc": (0, 0),
@@ -757,15 +762,15 @@ def test_control_texture_leaves_the_parameter_only_saturation_anchor_exact():
     expected = np.logaddexp(0.0, own + upstream)
 
     assert np.asarray(g["g_zc"]).sum() == 2  # the Z->C terms are live, not vacuous
-    assert world.params["use_control_pulse"].all()
+    assert world.params["use_covariate_pulse"].all()
     np.testing.assert_allclose(
         np.asarray(world.data["saturation_scale"], dtype=float), expected, rtol=1e-12
     )
 
-    # The uncentred-channel-style alternative is materially different, so the
+    # The uncentred-treatment-style alternative is materially different, so the
     # assertion above is not satisfied by a negligible term.
-    pulse_mean = np.asarray(params["control_pulse_amp"], dtype=float) * np.asarray(
-        params["control_pulse_prob"], dtype=float
+    pulse_mean = np.asarray(params["covariate_pulse_amp"], dtype=float) * np.asarray(
+        params["covariate_pulse_prob"], dtype=float
     )
     mirrored = np.logaddexp(
         0.0,
@@ -790,9 +795,9 @@ def test_intercept_is_censored_at_the_floor_and_the_parents_stay_exact():
         "outcome_std_mode": "absolute",
         "rw_baseline_mean_range": (0.5, 1.5),
         "rw_baseline_std_sigma": 1.5,
-        "rw_sales_std_sigma": 0.05,
+        "rw_outcome_std_sigma": 0.05,
         "n_time_steps": 52,
-        "adstock_burn_in": 4,
+        "carryover_burn_in": 4,
         "l_max": 4,
         "edge_budget": {
             "cy": (2, 2),
@@ -835,38 +840,38 @@ def test_intercept_is_censored_at_the_floor_and_the_parents_stay_exact():
         expected = (
             float(np.asarray(g["g_zy"])[m])
             * float(np.asarray(params["rho_zy"])[m])
-            * np.asarray(floored.data["controls"], dtype=float)[:, m]
+            * np.asarray(floored.data["covariates"], dtype=float)[:, m]
         )
         np.testing.assert_allclose(
-            np.asarray(floored.data["control_contribution"], dtype=float)[:, m],
+            np.asarray(floored.data["covariate_contribution"], dtype=float)[:, m],
             expected,
             rtol=0.0,
             atol=1e-12,
         )
 
 
-def test_sales_is_never_censored_and_the_filter_carries_non_negativity():
+def test_outcome_is_never_censored_and_the_filter_carries_non_negativity():
     """Y stays uncensored: a clamp there would censor the OBSERVATION.
 
-    ``sales == baseline + Σ observed contributions`` exactly, with no clip, so
+    ``outcome == baseline + Σ observed contributions`` exactly, with no clip, so
     every world stays inside the additive function class an MMM likelihood can
-    represent. Non-negative sales is the acceptance filter's job.
+    represent. Non-negative outcome is the acceptance filter's job.
     """
     world = sample_scm(_config(baseline_floor=0.0), seed=51, max_eps_draws=40)
     d = world.data
     np.testing.assert_allclose(
-        np.asarray(d["sales"], dtype=float),
+        np.asarray(d["outcome"], dtype=float),
         np.asarray(d["baseline"], dtype=float)
         + np.asarray(d["contributions_observed"], dtype=float).sum(1),
         rtol=0.0,
         atol=1e-12,
     )
-    assert (np.asarray(d["sales"], dtype=float) >= 0.0).all()
-    # The filter is what rejects a negative-sales draw, so it must still bite.
+    assert (np.asarray(d["outcome"], dtype=float) >= 0.0).all()
+    # The filter is what rejects a negative-outcome draw, so it must still bite.
     assert not _additive_task_ok(
-        spend=np.asarray(d["channels"], dtype=float),
-        sales=np.asarray(d["sales"], dtype=float) - float(d["sales"].max()) - 1.0,
-        arrays={"sales": np.asarray(d["sales"], dtype=float)},
+        treatment=np.asarray(d["treatments"], dtype=float),
+        outcome=np.asarray(d["outcome"], dtype=float) - float(d["outcome"].max()) - 1.0,
+        arrays={"outcome": np.asarray(d["outcome"], dtype=float)},
         g_cy_active=world.g["g_cy"],
         cv_floor=0.0,
     )
@@ -878,7 +883,7 @@ def _absorbing_stress(**overrides):
         "outcome_std_mode": "absolute",
         "rw_baseline_mean_range": (0.5, 1.5),
         "rw_baseline_std_sigma": 1.5,
-        "rw_sales_std_sigma": 0.05,
+        "rw_outcome_std_sigma": 0.05,
         "rw_std_sigma": 2.0,
         "n_time_steps": 52,
         "n_covariates": 3,
@@ -898,36 +903,36 @@ def _absorbing_stress(**overrides):
     return _config(**stress)
 
 
-def _non_media(world) -> np.ndarray:
+def _non_treatment(world) -> np.ndarray:
     d = world.data
     return (
         np.asarray(d["baseline_intrinsic"], dtype=float)
-        + np.asarray(d["control_contribution"], dtype=float).sum(1)
-        + np.asarray(d["confounder_contribution"], dtype=float).sum(1)
+        + np.asarray(d["covariate_contribution"], dtype=float).sum(1)
+        + np.asarray(d["latent_unobserved_contribution"], dtype=float).sum(1)
     )
 
 
-def test_absorbing_floor_makes_the_whole_non_media_total_non_negative():
-    """A negative control effect is credited only down to the floor.
+def test_absorbing_floor_makes_the_whole_non_treatment_total_non_negative():
+    """A negative covariate effect is credited only down to the floor.
 
     Flooring the intercept alone cannot stop a large negative ``rho_zy * Z``
-    from dragging the non-media total under; ``scope="non_media"`` clips the
+    from dragging the non-treatment total under; ``scope="non_treatment"`` clips the
     running total instead, so the excess is absorbed. The per-node columns
     become the telescoping difference each node caused, so they still sum
     EXACTLY to the total.
     """
     intercept_only = _absorbing_stress(baseline_floor=0.0)
-    absorbing = _absorbing_stress(baseline_floor=0.0, baseline_floor_scope="non_media")
+    absorbing = _absorbing_stress(baseline_floor=0.0, baseline_floor_scope="non_treatment")
 
     for seed in range(60, 80):
         signed = sample_scm(intercept_only, seed=seed, connect_all=False, max_eps_draws=40)
-        if (_non_media(signed) < -1e-12).any():
+        if (_non_treatment(signed) < -1e-12).any():
             break
     else:  # pragma: no cover - the stress fixture is calibrated to dip
         pytest.fail("intercept-only scope never dipped; the comparison would prove nothing")
 
     floored = sample_scm(absorbing, seed=seed, connect_all=False, max_eps_draws=40)
-    total = _non_media(floored)
+    total = _non_treatment(floored)
     assert (total >= -1e-12).all(), "the absorbing scope must hold the whole total at the floor"
     assert np.isclose(total, 0.0, atol=1e-12).any(), "the total must be able to sit AT the floor"
 
@@ -935,32 +940,32 @@ def test_absorbing_floor_makes_the_whole_non_media_total_non_negative():
     np.testing.assert_allclose(
         total,
         np.asarray(floored.data["baseline"], dtype=float)
-        - np.asarray(floored.data["sales_noise"], dtype=float),
+        - np.asarray(floored.data["outcome_noise"], dtype=float),
         rtol=0.0,
         atol=1e-12,
     )
     assert floored.identity_error() < 1e-9
     # Clipping can only raise the total, never lower it.
-    assert (total >= _non_media(signed) - 1e-12).all()
+    assert (total >= _non_treatment(signed) - 1e-12).all()
 
 
-@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+@pytest.mark.parametrize("scope", ("intercept", "non_treatment"))
 def test_a_floor_that_never_binds_leaves_every_column_alone(scope):
     """Both scopes are clips, so a non-binding floor changes nothing material."""
     plain = sample_scm(_config(), seed=9, max_eps_draws=40)
     assert (np.asarray(plain.data["baseline_intrinsic"], dtype=float) > 0.0).all()
-    assert (_non_media(plain) > 0.0).all(), "fixture already dips; pick a calmer one"
+    assert (_non_treatment(plain) > 0.0).all(), "fixture already dips; pick a calmer one"
 
     floored = sample_scm(
         _config(baseline_floor=0.0, baseline_floor_scope=scope), seed=9, max_eps_draws=40
     )
     for key in (
-        "sales",
+        "outcome",
         "baseline",
         "baseline_intrinsic",
-        "sales_noise",
-        "control_contribution",
-        "confounder_contribution",
+        "outcome_noise",
+        "covariate_contribution",
+        "latent_unobserved_contribution",
     ):
         np.testing.assert_allclose(
             np.asarray(floored.data[key], dtype=float),
@@ -971,17 +976,17 @@ def test_a_floor_that_never_binds_leaves_every_column_alone(scope):
         )
 
 
-def test_intercept_and_sales_noise_are_separate_decomposition_columns():
+def test_intercept_and_outcome_noise_are_separate_decomposition_columns():
     """``baseline_intrinsic`` is the intercept ALONE; the noise is its own column."""
     world = sample_scm(_config(), seed=57, max_eps_draws=40)
     d, params = world.data, world.params
-    burn_in = world.cfg.adstock_burn_in
+    burn_in = world.cfg.carryover_burn_in
     expected_noise = (
         float(np.asarray(params["rw_y"]["std"])[0])
         * np.asarray(world.exogenous["eps_y"], dtype=float)[burn_in:]
     )
     np.testing.assert_allclose(
-        np.asarray(d["sales_noise"], dtype=float), expected_noise, rtol=0.0, atol=1e-12
+        np.asarray(d["outcome_noise"], dtype=float), expected_noise, rtol=0.0, atol=1e-12
     )
     # intrinsic carries no observation noise any more, and no parent terms.
     assert not np.allclose(
@@ -991,44 +996,44 @@ def test_intercept_and_sales_noise_are_separate_decomposition_columns():
     np.testing.assert_allclose(
         np.asarray(d["baseline"], dtype=float),
         np.asarray(d["baseline_intrinsic"], dtype=float)
-        + np.asarray(d["sales_noise"], dtype=float)
-        + np.asarray(d["control_contribution"], dtype=float).sum(1)
-        + np.asarray(d["confounder_contribution"], dtype=float).sum(1),
+        + np.asarray(d["outcome_noise"], dtype=float)
+        + np.asarray(d["covariate_contribution"], dtype=float).sum(1)
+        + np.asarray(d["latent_unobserved_contribution"], dtype=float).sum(1),
         rtol=0.0,
         atol=1e-12,
     )
 
 
-def test_disabled_control_texture_renders_the_pre_texture_control_equation():
+def test_disabled_covariate_texture_renders_the_pre_texture_covariate_equation():
     """The rendered audit must show the exact executed own drive, or none."""
     enabled = sample_scm(
         _config(
-            control_hf_sigma_range=(0.3, 0.3),
-            control_pulse_prob_range=(0.2, 0.2),
-            control_pulse_amp_range=(1.0, 1.0),
+            covariate_hf_sigma_range=(0.3, 0.3),
+            covariate_pulse_prob_range=(0.2, 0.2),
+            covariate_pulse_amp_range=(1.0, 1.0),
         ),
         seed=5,
     )
     for m in (0, 1):
-        assert f"control_hf_sigma[{m}] * eps_z_hf[:, {m}]" in enabled.equations[f"Z{m + 1}"]
+        assert f"covariate_hf_sigma[{m}] * eps_z_hf[:, {m}]" in enabled.equations[f"Z{m + 1}"]
         assert (
-            f"control_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - control_pulse_prob[{m}])"
+            f"covariate_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - covariate_pulse_prob[{m}])"
             in enabled.equations[f"Z{m + 1}"]
         )
 
     disabled = sample_scm(
         _config(
-            control_hf_sigma_range=(0.0, 0.0),
-            control_pulse_prob_range=(0.0, 0.0),
-            control_pulse_amp_range=(0.0, 0.0),
+            covariate_hf_sigma_range=(0.0, 0.0),
+            covariate_pulse_prob_range=(0.0, 0.0),
+            covariate_pulse_amp_range=(0.0, 0.0),
         ),
         seed=5,
     )
     for m in (0, 1):
         assert "eps_z_hf" not in disabled.equations[f"Z{m + 1}"]
         assert "eps_z_pulse" not in disabled.equations[f"Z{m + 1}"]
-        assert f"use_control_hf[{m}]=False" in disabled.equations[f"Z{m + 1}"]
-        assert f"use_control_pulse[{m}]=False" in disabled.equations[f"Z{m + 1}"]
+        assert f"use_covariate_hf[{m}]=False" in disabled.equations[f"Z{m + 1}"]
+        assert f"use_covariate_pulse[{m}]=False" in disabled.equations[f"Z{m + 1}"]
 
 
 def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
@@ -1040,14 +1045,14 @@ def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
     equalling it -- that scatter is the price of keeping the innovations-to-path
     map injective. What is pinned is the expectation.
     """
-    cfg = _config(adstock_burn_in=0)
+    cfg = _config(carryover_burn_in=0)
     world = sample_scm(cfg, seed=0)
-    demand = np.asarray(world.data["demand"], dtype=float)
-    np.testing.assert_allclose(demand.mean(axis=0), 0.0, atol=1e-12)
+    latent_unobserved = np.asarray(world.data["latent_unobserved"], dtype=float)
+    np.testing.assert_allclose(latent_unobserved.mean(axis=0), 0.0, atol=1e-12)
     np.testing.assert_allclose(world.params["rw_d"]["mean"], 0.0, atol=0.0)
     np.testing.assert_allclose(world.params["rw_d"]["std"], 1.0, atol=0.0)
 
-    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.carryover_burn_in
     width = _kernel_width(
         float(world.params["rw_d"]["smoothness"][0]),
         n_time_steps_full,

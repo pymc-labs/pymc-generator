@@ -43,14 +43,14 @@ def built():
 def test_pm_draw_preserves_additive_identity(built):
     model, out_names = built
     d = {k: v[0] for k, v in draw_worlds(model, out_names, seed=123, draws=1).items()}
-    s = d["sales"]
+    s = d["outcome"]
     identity = np.abs(s - (d["baseline"] + d["contributions"].sum(1) + d["indirect_effects"])).max()
     telescoping = np.abs(d["indirect_effects_by_source"].sum(1) - d["indirect_effects"]).max()
     full = np.abs(
         d["baseline_intrinsic"]
-        + d["sales_noise"]
-        + d["confounder_contribution"].sum(1)
-        + d["control_contribution"].sum(1)
+        + d["outcome_noise"]
+        + d["latent_unobserved_contribution"].sum(1)
+        + d["covariate_contribution"].sum(1)
         + d["contributions"].sum(1)
         + d["indirect_effects_by_source"].sum(1)
         - s
@@ -60,10 +60,10 @@ def test_pm_draw_preserves_additive_identity(built):
     assert full < 1e-9
 
 
-def test_channels_positive(built):
+def test_treatments_positive(built):
     model, out_names = built
     d = draw_worlds(model, out_names, seed=1, draws=1)
-    assert (d["channels"] >= 0).all()
+    assert (d["treatments"] >= 0).all()
 
 
 def test_seed_determinism(built):
@@ -71,18 +71,18 @@ def test_seed_determinism(built):
     a = draw_worlds(model, out_names, seed=42, draws=1)
     b = draw_worlds(model, out_names, seed=42, draws=1)
     c = draw_worlds(model, out_names, seed=43, draws=1)
-    assert np.array_equal(a["sales"], b["sales"])
-    assert not np.array_equal(a["sales"], c["sales"])
+    assert np.array_equal(a["outcome"], b["outcome"])
+    assert not np.array_equal(a["outcome"], c["outcome"])
 
 
 def test_batched_draws_have_leading_axis(built):
     model, out_names = built
     d = draw_worlds(model, out_names, seed=7, draws=5)
-    assert d["sales"].shape == (5, 48)
+    assert d["outcome"].shape == (5, 48)
     assert d["contributions"].shape == (5, 48, 4)
 
 
-#: Innovation streams the channel texture reads, requested alongside the graph
+#: Innovation streams the treatment texture reads, requested alongside the graph
 #: outputs so the paired arms below can be checked for identical draws.
 TEXTURE_EPS_NAMES = ("eps_c", "eps_c_hf", "eps_c_pulse")
 
@@ -91,14 +91,14 @@ TEXTURE_EPS_NAMES = ("eps_c", "eps_c_hf", "eps_c_pulse")
 def texture_arms():
     """One world, three texture wirings, byte-identical draws.
 
-    ``sample_structure`` reads the per-channel texture ENABLE flags off the
+    ``sample_structure`` reads the per-treatment texture ENABLE flags off the
     config's ranges, but the MAGNITUDES (``hf_sigma``, ``pulse_amp``) and the
     Bernoulli fires are drawn either way. Flipping only the flags therefore
     leaves the RV set — and, at a fixed seed, every drawn value — identical
-    while rewiring the channel equation, which makes these three arms a
+    while rewiring the treatment equation, which makes these three arms a
     controlled experiment: any difference between them IS the texture.
 
-    ``cc``/``zc``/``dc`` are budgeted out so each channel column is its own
+    ``cc``/``zc``/``dc`` are budgeted out so each treatment column is its own
     exogenous drive through the softplus, leaving nothing else that a change
     could be attributed to.
     """
@@ -108,9 +108,9 @@ def texture_arms():
         n_latent=1,
         n_time_steps=104,
         edge_budget={"cy": (3, 3), "cc": 0, "zc": 0, "dc": 0},
-        channel_hf_sigma_range=(0.4, 0.4),
-        channel_pulse_prob_range=(0.15, 0.15),
-        channel_pulse_amp_range=(1.5, 1.5),
+        treatment_hf_sigma_range=(0.4, 0.4),
+        treatment_pulse_prob_range=(0.15, 0.15),
+        treatment_pulse_amp_range=(1.5, 1.5),
     )
     rng = np.random.default_rng(0)
     g = sample_g_additive(rng, cfg, cfg.layout)
@@ -147,7 +147,7 @@ def test_texture_arms_differ_only_in_their_wiring(texture_arms):
         "param_beta",
         "param_rw_c_mean",
         "param_rw_c_std",
-        "param_channel_level",
+        "param_treatment_level",
         "param_hf_sigma",
         "param_pulse_amp",
         "param_pulse_prob",
@@ -161,19 +161,19 @@ def test_texture_arms_differ_only_in_their_wiring(texture_arms):
 
 
 def test_high_frequency_texture_moves_every_week_in_the_sign_of_its_innovation(texture_arms):
-    """``use_hf`` adds ``hf_sigma * eps_c_hf`` inside the channel softplus.
+    """``use_hf`` adds ``hf_sigma * eps_c_hf`` inside the treatment softplus.
 
     The signature is mechanism-specific and exact: the term is iid WEEKLY, so
     every single week moves, and softplus is strictly increasing, so each week
     moves in the sign of its own innovation. A texture that had been wired to
     the wrong innovation, scaled to zero, or smoothed would break this while
-    still producing a perfectly plausible-looking jagged channel — which is
+    still producing a perfectly plausible-looking jagged treatment — which is
     what the previous ``cv.max() > 0.05`` check could not tell apart (it passes
     at 0.71 on the 'smooth' arm below, with the texture OFF).
     """
     cfg, arms = texture_arms
-    window = slice(cfg.adstock_burn_in, None)
-    delta = arms["jittery"]["channels"] - arms["smooth"]["channels"]
+    window = slice(cfg.carryover_burn_in, None)
+    delta = arms["jittery"]["treatments"] - arms["smooth"]["treatments"]
     jitter = arms["smooth"]["eps_c_hf"][window]
 
     assert (delta != 0.0).all(), "an iid weekly term must move every week"
@@ -184,22 +184,22 @@ def test_pulse_texture_moves_only_the_weeks_its_bernoulli_fires(texture_arms):
     """``use_pulse`` adds ``pulse_amp * eps_c_pulse`` with a 0/1 fire indicator.
 
     The complement of the high-frequency signature: a pulse is SPARSE, so the
-    channel must be untouched — bit for bit — on every non-fire week, and
+    treatment must be untouched — bit for bit — on every non-fire week, and
     strictly raised on every fire week (``pulse_amp > 0`` and softplus is
     strictly increasing). A pulse implemented as a threshold on continuous
-    noise, or centred like the CONTROL pulse, would fail here.
+    noise, or centred like the COVARIATE pulse, would fail here.
     """
     cfg, arms = texture_arms
-    window = slice(cfg.adstock_burn_in, None)
-    delta = arms["pulsed"]["channels"] - arms["smooth"]["channels"]
+    window = slice(cfg.carryover_burn_in, None)
+    delta = arms["pulsed"]["treatments"] - arms["smooth"]["treatments"]
     fired = arms["smooth"]["eps_c_pulse"][window] > 0
 
     # both classes must be represented, or one of the two claims below is vacuous
     assert fired.any(axis=0).all() and (~fired).any(axis=0).all(), (
-        f"every channel needs both fire and quiet weeks, got "
+        f"every treatment needs both fire and quiet weeks, got "
         f"{fired.sum(axis=0)} of {fired.shape[0]}"
     )
-    assert (delta[fired] > 0.0).all(), "every fire week must raise the channel"
+    assert (delta[fired] > 0.0).all(), "every fire week must raise the treatment"
     assert (delta[~fired] == 0.0).all(), "a non-fire week must be untouched"
 
 
@@ -208,7 +208,7 @@ def test_single_draw_has_leading_axis(built):
     # sample_scm(max_eps_draws=1) can index candidate 0 without hitting time.
     model, out_names = built
     d = draw_worlds(model, out_names, seed=9, draws=1)
-    assert d["sales"].shape == (1, 48)
+    assert d["outcome"].shape == (1, 48)
     assert d["contributions"].shape == (1, 48, 4)
 
 
@@ -288,7 +288,7 @@ def test_walk_scale_rejects_ambiguous_range_and_sigma():
         )
 
 
-def test_relative_outcome_scales_follow_the_media_amplitude():
+def test_relative_outcome_scales_follow_the_treatment_amplitude():
     cfg = make_scm_prior(
         n_treatments=2,
         n_covariates=1,
@@ -297,7 +297,7 @@ def test_relative_outcome_scales_follow_the_media_amplitude():
         edge_budget={"cy": (2, 2)},
         outcome_std_mode="relative",
         rw_baseline_std_range=(0.04, 0.08),
-        rw_sales_std_range=(0.01, 0.03),
+        rw_outcome_std_range=(0.01, 0.03),
     )
     g = {
         "g_cy": np.ones(2, dtype=int),
@@ -316,17 +316,17 @@ def test_relative_outcome_scales_follow_the_media_amplitude():
         ("beta", "rw_b_std_rel", "rw_y_std_rel", "rw_b_std", "rw_y_std"),
         seed=14,
     )
-    media_amplitude = np.sqrt(np.sum(drawn["beta"][0] ** 2))
+    treatment_amplitude = np.sqrt(np.sum(drawn["beta"][0] ** 2))
 
     np.testing.assert_allclose(
         drawn["rw_b_std"][0],
-        drawn["rw_b_std_rel"][0] * media_amplitude,
+        drawn["rw_b_std_rel"][0] * treatment_amplitude,
         rtol=0.0,
         atol=1e-14,
     )
     np.testing.assert_allclose(
         drawn["rw_y_std"][0],
-        drawn["rw_y_std_rel"][0] * media_amplitude,
+        drawn["rw_y_std_rel"][0] * treatment_amplitude,
         rtol=0.0,
         atol=1e-14,
     )
@@ -341,7 +341,7 @@ def test_absolute_outcome_scales_keep_halfnormal_semantics():
         edge_budget={"cy": (2, 2)},
         outcome_std_mode="absolute",
         rw_baseline_std_sigma=0.35,
-        rw_sales_std_sigma=0.12,
+        rw_outcome_std_sigma=0.12,
     )
     rng = np.random.default_rng(15)
     g = sample_g_additive(
@@ -370,7 +370,7 @@ def test_output_registration_rejects_nonidentity_name_collision(monkeypatch):
         n_covariates=1,
         n_latent=1,
         n_time_steps=12,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         edge_budget={"cy": (2, 2)},
     )
     rng = np.random.default_rng(31)

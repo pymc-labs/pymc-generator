@@ -1,24 +1,24 @@
 """PyTensor causal graph and exact additive decomposition.
 
-Latent demand D and observed controls Z are signed. Channels C apply softplus
+Latent latent_unobserved D and observed covariates Z are signed. Treatments C apply softplus
 to their own exogenous drive plus additive parent loadings. C->C and Z->Z
-edges run from lower to higher indices, so the graph is acyclic. Adstock and
+edges run from lower to higher indices, so the graph is acyclic. Carryover and
 saturation apply on direct C->Y paths; other loadings are linear on the
 child's pre-activation scale.
 
-The intercept B has no parents. Demand and controls enter sales Y directly,
-alongside media response and iid observation noise. The default floor scope
-clips B alone. Optional non-media flooring clips the aggregate incrementally,
-so its reported demand/control columns are clipped increments rather than
-unmodified linear loadings. Sales itself is not clamped.
+The intercept B has no parents. Latent_unobserved and covariates enter outcome Y directly,
+alongside treatment response and iid observation noise. The default floor scope
+clips B alone. Optional non-treatment flooring clips the aggregate incrementally,
+so its reported latent_unobserved/covariate columns are clipped increments rather than
+unmodified linear loadings. Outcome itself is not clamped.
 
-Each non-outcome node has a random-walk own drive. Channels can additionally
-have iid execution noise and campaign pulses; controls can have iid shocks
+Each non-outcome node has a random-walk own drive. Treatments can additionally
+have iid execution noise and campaign pulses; covariates can have iid shocks
 and centered pulses. These terms add higher-frequency variation but do not
 guarantee informative response curves or identification. Supplied innovations
-may be correlated by the configured baseline/channel confounding mechanism.
+may be correlated by the configured baseline/treatment confounding mechanism.
 
-``C_base`` removes all incoming channel interactions while retaining the same
+``C_base`` removes all incoming treatment interactions while retaining the same
 own-drive realizations, including any execution noise and pulses. With each
 response function fixed across counterfactual paths:
 
@@ -26,16 +26,16 @@ response function fixed across counterfactual paths:
 
     contributions_k = g_cy[k] * beta[k] * f_k(C_base_k)
     indirect_effects = sum_k g_cy[k] * beta[k] * (f_k(C_k) - f_k(C_base_k))
-    baseline_out = baseline_intrinsic + sales_noise
-                   + sum(confounder_contribution) + sum(control_contribution)
-    sales = baseline_out + sum(contributions) + indirect_effects
+    baseline_out = baseline_intrinsic + outcome_noise
+                   + sum(latent_unobserved_contribution) + sum(covariate_contribution)
+    outcome = baseline_out + sum(contributions) + indirect_effects
 
 The identity uses shared symbolic quantities, not a Taylor approximation,
 and holds up to floating-point error. The ordered telescoping indirect split
-attributes incoming channel interactions in ``(cc, zc, dc)`` order.
+attributes incoming treatment interactions in ``(cc, zc, dc)`` order.
 
 Saturation scales come from :func:`_reference_levels`. These parameter-only
-anchors are not expected or realized mean spend: nonlinear positivity
+anchors are not expected or realized mean treatment: nonlinear positivity
 transforms and stochastic variation generally separate those quantities.
 Anchors do not read realized series or future time windows.
 """
@@ -50,7 +50,7 @@ from pytensor.tensor import TensorVariable
 
 from . import mechanisms
 from .random_walk import symbolic_random_walk, symbolic_random_walk_by_width
-from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS
+from .sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
 __all__ = ["build_symbolic_graph", "inactive_zero"]
 
@@ -192,10 +192,10 @@ def _walk_column(eps_col, rw_group: dict, i: int, n_time_steps: int) -> TensorVa
     )
 
 
-def _adstock_col(
+def _carryover_col(
     c_col: TensorVariable, params: dict, k: int, *, dynamic_family: bool = False
 ) -> TensorVariable:
-    """Adstock transform of a single (n_time_steps,) channel column for channel k.
+    """Carryover transform of a single (n_time_steps,) treatment column for treatment k.
 
     With a concrete family only the selected transform is built, so the unused
     families' shape parameters stay out of the graph. Under ``dynamic_family``
@@ -205,22 +205,22 @@ def _adstock_col(
     l_max = params["l_max"]
     x2d = c_col[:, None]
     if dynamic_family:
-        ad_fam = pt.as_tensor_variable(params["adstock_family"])[k]
-        geometric = mechanisms.apply_geometric_adstock(x2d, params["adstock_alpha"][k], l_max)
-        weibull = mechanisms.apply_weibull_pdf_adstock(
+        ad_fam = pt.as_tensor_variable(params["carryover_family"])[k]
+        geometric = mechanisms.apply_geometric_carryover(x2d, params["carryover_alpha"][k], l_max)
+        weibull = mechanisms.apply_weibull_pdf_carryover(
             x2d, params["weibull_lam"][k], params["weibull_k"][k], l_max
         )
         out = pt.switch(
-            pt.eq(ad_fam, ADSTOCK_FAMILY_KEYS.index("geometric")),
+            pt.eq(ad_fam, CARRYOVER_FAMILY_KEYS.index("geometric")),
             geometric,
-            pt.switch(pt.eq(ad_fam, ADSTOCK_FAMILY_KEYS.index("weibull")), weibull, x2d),
+            pt.switch(pt.eq(ad_fam, CARRYOVER_FAMILY_KEYS.index("weibull")), weibull, x2d),
         )
         return cast(TensorVariable, out[:, 0])
-    ad_fam = int(params["adstock_family"][k])  # family is concrete/structural
+    ad_fam = int(params["carryover_family"][k])  # family is concrete/structural
     if ad_fam == 1:
-        out = mechanisms.apply_geometric_adstock(x2d, params["adstock_alpha"][k], l_max)
+        out = mechanisms.apply_geometric_carryover(x2d, params["carryover_alpha"][k], l_max)
     elif ad_fam == 2:
-        out = mechanisms.apply_weibull_pdf_adstock(
+        out = mechanisms.apply_weibull_pdf_carryover(
             x2d, params["weibull_lam"][k], params["weibull_k"][k], l_max
         )
     else:
@@ -228,9 +228,9 @@ def _adstock_col(
     return cast(TensorVariable, out[:, 0])
 
 
-def _clamp_channel(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
-    """Apply this channel's absolute held-level shock windows, when enabled."""
-    schedule = params.get("channel_shock")
+def _clamp_treatment(c_col: TensorVariable, params: dict, k: int) -> TensorVariable:
+    """Apply this treatment's absolute held-level shock windows, when enabled."""
+    schedule = params.get("treatment_shock")
     if schedule is None:
         return c_col
     return cast(
@@ -254,10 +254,10 @@ def _reference_levels(
     *,
     dynamic_g: bool = False,
 ) -> list[TensorVariable]:
-    """Per-channel saturation anchors from parameters alone.
+    """Per-treatment saturation anchors from parameters alone.
 
-    The κ-relative response needs one fixed operating point per channel. This
-    returns it: a parameter-only REFERENCE level, built by applying the channel
+    The κ-relative response needs one fixed operating point per treatment. This
+    returns it: a parameter-only REFERENCE level, built by applying the treatment
     softplus to
 
     * its own ``softplus(rw_c_mean)``;
@@ -265,14 +265,14 @@ def _reference_levels(
     * the weighted reference levels of the ``Z -> C`` and earlier ``C -> C``
       parents, accumulated in topological order.
 
-    It is NOT ``E[C_k]``, and the gap has a definite sign. The channel equation
-    is ``C_k = softplus(pre-activation)`` and the channel walk is itself
+    It is NOT ``E[C_k]``, and the gap has a definite sign. The treatment equation
+    is ``C_k = softplus(pre-activation)`` and the treatment walk is itself
     ``softplus(centred path + rw_c_mean)``, so this construction takes
     ``softplus`` of a MEAN where the world takes the MEAN of a ``softplus``,
     twice. Softplus is strictly convex, so Jensen gives ``E[C_k] > anchor_k``
     strictly (measured ``E[C_k]/anchor_k`` in [1.004, 1.099] over 36
-    (θ, channel) cells at 600 noise draws each, every cell above 1; for a
-    parentless, texture-free channel at relative walk std 0.8 the excess is
+    (θ, treatment) cells at 600 noise draws each, every cell above 1; for a
+    parentless, texture-free treatment at relative walk std 0.8 the excess is
     +6.0% to +7.8% across ``rw_c_mean`` in [0.3, 4.0]). Callers that need an
     expected level must average a realized series; this is a κ scale, not a
     moment.
@@ -281,12 +281,12 @@ def _reference_levels(
     factor is normalized to mean zero, and weekly jitter is mean-zero, so
     nothing here depends on the innovations: ``p(theta)`` is defined
     independently of the noise and the response at week ``t`` cannot depend on
-    spend at any ``t' > t``. A window statistic (the historical anchor) had both
+    treatment at any ``t' > t``. A window statistic (the historical anchor) had both
     defects.
 
-    The control texture needs no term here either: both of its terms are
-    mean-zero (its pulse is centred on its own fire probability). A control
-    applies NO activation, so unlike a channel its level claim is exact —
+    The covariate texture needs no term here either: both of its terms are
+    mean-zero (its pulse is centred on its own fire probability). A covariate
+    applies NO activation, so unlike a treatment its level claim is exact —
     ``E[Z_m]`` is ``rw_z_mean`` plus its upstream ``Z -> Z`` terms, which is
     exactly the ``z_levels`` recursion below.
     """
@@ -354,11 +354,11 @@ def _saturate_col(
     *,
     dynamic_family: bool = False,
 ) -> TensorVariable:
-    """κ-relative saturation of an adstocked column using a *given* scale.
+    """κ-relative saturation of an carryovered column using a *given* scale.
 
     ``saturation_scale`` is passed in so the same structural
-    response function f_k can be evaluated on several channel variants — the
-    observed channel, the base channel, and the telescoping intervention
+    response function f_k can be evaluated on several treatment variants — the
+    observed treatment, the base treatment, and the telescoping intervention
     variants — with an identical, pinned saturation scale. This is what makes
     the decomposition and the per-source indirect split exact.
 
@@ -413,17 +413,17 @@ def build_symbolic_graph(
         ``n_time_steps_full = n_time_steps + burn_in``:
         ``eps_d`` (n_time_steps_full, n_latent), ``eps_z`` (n_time_steps_full, n_covariates),
         ``eps_c`` (n_time_steps_full, n_treatments), ``eps_b`` (n_time_steps_full,),
-        ``eps_y`` (n_time_steps_full,), the channel-texture noise
+        ``eps_y`` (n_time_steps_full,), the treatment-texture noise
         ``eps_c_hf`` (weekly jitter) / ``eps_c_pulse`` (a 0/1 Bernoulli fire),
-        and the control-texture noise ``eps_z_hf`` (n_time_steps_full,
+        and the covariate-texture noise ``eps_z_hf`` (n_time_steps_full,
         n_covariates) / ``eps_z_pulse`` (a 0/1 Bernoulli fire, centred by the
-        control equation). The control pair is required only when the control
+        covariate equation). The covariate pair is required only when the covariate
         texture is enabled.
     n_time_steps, n_treatments, n_covariates, n_latent : int
         Time steps and node counts.
     burn_in : int
         Extra leading weeks simulated then dropped from every output. The
-        adstock convolution left-pads with zeros, so without burn-in each
+        carryover convolution left-pads with zeros, so without burn-in each
         contribution ramps 0 -> level over the first ``l_max`` weeks — an
         artifact that dominates smooth additive targets (measured 3–13x the
         steady-state std). Legal values are ``0`` (off) or ``>= l_max``; with
@@ -449,33 +449,33 @@ def build_symbolic_graph(
     -------
     dict with a single key ``outputs`` — the symbolic node outputs (sliced to
     the reported ``n_time_steps`` window):
-        ``demand`` (n_time_steps, n_latent),
-        ``controls`` (n_time_steps, n_covariates),
-        ``channels`` (n_time_steps, n_treatments),
-        ``channels_base`` (n_time_steps, n_treatments),
+        ``latent_unobserved`` (n_time_steps, n_latent),
+        ``covariates`` (n_time_steps, n_covariates),
+        ``treatments`` (n_time_steps, n_treatments),
+        ``treatments_base`` (n_time_steps, n_treatments),
         ``saturation_scale`` (n_treatments,), ``baseline`` (n_time_steps,),
         ``baseline_intrinsic`` (n_time_steps,),
-        ``control_contribution`` (n_time_steps, n_covariates),
-        ``confounder_contribution`` (n_time_steps, n_latent),
+        ``covariate_contribution`` (n_time_steps, n_covariates),
+        ``latent_unobserved_contribution`` (n_time_steps, n_latent),
         ``contributions`` (n_time_steps, n_treatments) — direct,
         ``contributions_observed`` (n_time_steps, n_treatments),
         ``indirect_effects`` (n_time_steps,),
         ``indirect_effects_by_source`` (n_time_steps, 3),
-        ``sales`` (n_time_steps,), ``sales_noise`` (n_time_steps,).
+        ``outcome`` (n_time_steps,), ``outcome_noise`` (n_time_steps,).
 
     Notes
     -----
     Per-node terms split the aggregated D->Y / Z->Y baseline-side terms:
-    ``control_contribution[:, m] = g_zy[m]·ρ[m]·Z[:, m]`` and
-    ``confounder_contribution[:, j] = g_dy[j]·δ[j]·D[:, j]``, with
+    ``covariate_contribution[:, m] = g_zy[m]·ρ[m]·Z[:, m]`` and
+    ``latent_unobserved_contribution[:, j] = g_dy[j]·δ[j]·D[:, j]``, with
     ``baseline_intrinsic = B`` (the floored intercept alone) and
-    ``sales_noise = RW_Y``, so
-    ``baseline_intrinsic + sales_noise + Σ_j confounder_contribution
-    + Σ_m control_contribution == baseline``.
+    ``outcome_noise = RW_Y``, so
+    ``baseline_intrinsic + outcome_noise + Σ_j latent_unobserved_contribution
+    + Σ_m covariate_contribution == baseline``.
 
     ``indirect_effects_by_source`` (n_time_steps, 3) is the telescoping 3-way
-    indirect split in the LOCKED order ``(cc, zc, dc)`` — channel->channel,
-    control->channel, hidden-confounder->channel — defined by sequential
+    indirect split in the LOCKED order ``(cc, zc, dc)`` — treatment->treatment,
+    covariate->treatment, hidden-confounder->treatment — defined by sequential
     graph-surgery interventions (see the inline derivation). The three columns
     sum exactly to ``indirect_effects``.
     """
@@ -509,8 +509,8 @@ def build_symbolic_graph(
         g_cc = np.asarray(g["g_cc"], dtype="float64").reshape(n_treatments, n_treatments)
         g_zz = np.asarray(g["g_zz"], dtype="float64").reshape(n_covariates, n_covariates)
 
-    # Channel texture. Magnitudes (hf_sigma, pulse_amp) may be symbolic (RV)
-    # params; the per-channel ENABLE flags are concrete structure, normally
+    # Treatment texture. Magnitudes (hf_sigma, pulse_amp) may be symbolic (RV)
+    # params; the per-treatment ENABLE flags are concrete structure, normally
     # passed in as ``use_hf`` / ``use_pulse`` (build_world_model sets them) and
     # derived from the magnitudes as a fallback when absent (a symbolic
     # magnitude has no concrete truth value). The pulse enters as a 0/1 FIRE
@@ -538,41 +538,43 @@ def build_symbolic_graph(
         use_pulse = (_pa != 0.0) & (_pp > 0.0)
     use_pulse = np.asarray(use_pulse).reshape(n_treatments)
 
-    # Control texture, the signed counterpart of the channel texture above:
-    # magnitudes (control_hf_sigma, control_pulse_amp) may be symbolic (RV)
-    # params, the per-control ENABLE flags are concrete structure (normally
-    # ``use_control_hf`` / ``use_control_pulse`` from build_world_model, derived
+    # Covariate texture, the signed counterpart of the treatment texture above:
+    # magnitudes (covariate_hf_sigma, covariate_pulse_amp) may be symbolic (RV)
+    # params, the per-covariate ENABLE flags are concrete structure (normally
+    # ``use_covariate_hf`` / ``use_covariate_pulse`` from build_world_model, derived
     # from concrete magnitudes as a fallback when absent). The pulse enters
-    # CENTRED — ``eps_z_pulse - control_pulse_prob`` with ``eps_z_pulse ~
-    # Bernoulli(control_pulse_prob)`` — so a control's expected level is still
-    # its walk mean (EXACTLY: a control applies no activation) and no
+    # CENTRED — ``eps_z_pulse - covariate_pulse_prob`` with ``eps_z_pulse ~
+    # Bernoulli(covariate_pulse_prob)`` — so a covariate's expected level is still
+    # its walk mean (EXACTLY: a covariate applies no activation) and no
     # parameter-only reference level moves.
-    control_hf_sigma = _arr(params.get("control_hf_sigma", np.zeros(n_covariates)), (n_covariates,))
-    control_pulse_amp = _arr(
-        params.get("control_pulse_amp", np.zeros(n_covariates)), (n_covariates,)
+    covariate_hf_sigma = _arr(
+        params.get("covariate_hf_sigma", np.zeros(n_covariates)), (n_covariates,)
     )
-    control_pulse_prob = _arr(
-        params.get("control_pulse_prob", np.zeros(n_covariates)), (n_covariates,)
+    covariate_pulse_amp = _arr(
+        params.get("covariate_pulse_amp", np.zeros(n_covariates)), (n_covariates,)
     )
-    use_control_hf = params.get("use_control_hf")
-    if use_control_hf is None:
-        use_control_hf = (
+    covariate_pulse_prob = _arr(
+        params.get("covariate_pulse_prob", np.zeros(n_covariates)), (n_covariates,)
+    )
+    use_covariate_hf = params.get("use_covariate_hf")
+    if use_covariate_hf is None:
+        use_covariate_hf = (
             np.asarray(
-                params.get("control_hf_sigma", np.zeros(n_covariates)), dtype="float64"
+                params.get("covariate_hf_sigma", np.zeros(n_covariates)), dtype="float64"
             ).reshape(n_covariates)
             > 0.0
         )
-    use_control_hf = np.asarray(use_control_hf).reshape(n_covariates)
-    use_control_pulse = params.get("use_control_pulse")
-    if use_control_pulse is None:
+    use_covariate_hf = np.asarray(use_covariate_hf).reshape(n_covariates)
+    use_covariate_pulse = params.get("use_covariate_pulse")
+    if use_covariate_pulse is None:
         _ca = np.asarray(
-            params.get("control_pulse_amp", np.zeros(n_covariates)), dtype="float64"
+            params.get("covariate_pulse_amp", np.zeros(n_covariates)), dtype="float64"
         ).reshape(n_covariates)
         _cp = np.asarray(
-            params.get("control_pulse_prob", np.zeros(n_covariates)), dtype="float64"
+            params.get("covariate_pulse_prob", np.zeros(n_covariates)), dtype="float64"
         ).reshape(n_covariates)
-        use_control_pulse = (_ca != 0.0) & (_cp > 0.0)
-    use_control_pulse = np.asarray(use_control_pulse).reshape(n_covariates)
+        use_covariate_pulse = (_ca != 0.0) & (_cp > 0.0)
+    use_covariate_pulse = np.asarray(use_covariate_pulse).reshape(n_covariates)
 
     # Per-node activity. Absent (the per-world path) every node is present and
     # `_mask` is the identity, so that path builds exactly the graph it did
@@ -603,17 +605,17 @@ def build_symbolic_graph(
 
     # Noise inputs are the caller's RVs — pm.Normal walks + weekly jitter and a
     # pm.Bernoulli 0/1 pulse — so the whole graph is drawn with no free inputs.
-    # Static shapes are required: the adstock convolution builds its
+    # Static shapes are required: the carryover convolution builds its
     # sliding-window index from the static time length.
     eps_d, eps_z, eps_c = eps["eps_d"], eps["eps_z"], eps["eps_c"]
     eps_b, eps_y = eps["eps_b"], eps["eps_y"]
     eps_c_hf, eps_c_pulse = eps["eps_c_hf"], eps["eps_c_pulse"]
-    # Control texture noise is optional for direct concrete callers: a config
-    # with the texture disabled builds the pre-texture control equation exactly
+    # Covariate texture noise is optional for direct concrete callers: a config
+    # with the texture disabled builds the pre-texture covariate equation exactly
     # and never reads these. An ENABLED term with no innovation is a caller bug,
     # not a silent fallback to zero.
-    eps_z_hf = _required_eps(eps, "eps_z_hf", bool(use_control_hf.any()))
-    eps_z_pulse = _required_eps(eps, "eps_z_pulse", bool(use_control_pulse.any()))
+    eps_z_hf = _required_eps(eps, "eps_z_hf", bool(use_covariate_hf.any()))
+    eps_z_pulse = _required_eps(eps, "eps_z_pulse", bool(use_covariate_pulse.any()))
 
     # -- confounders D (n_time_steps_full, n_latent): pure random walks -------------------------
     d_cols = [
@@ -622,28 +624,28 @@ def build_symbolic_graph(
     ]
     D = pt.stack(d_cols, axis=1) if n_latent > 0 else pt.zeros((n_time_steps_full, 0))
 
-    # -- controls Z (n_time_steps_full, n_covariates): D->Z + upstream Z->Z + own drive ---
+    # -- covariates Z (n_time_steps_full, n_covariates): D->Z + upstream Z->Z + own drive ---
     u_dz = _arr(params["u_dz"], (n_latent, n_covariates))
     gamma_zz = _arr(params["gamma_zz"], (n_covariates, n_covariates))
     z_cols: list[TensorVariable] = []
     for m in range(n_covariates):
         # Own exogenous drive = smoothed walk + iid weekly noise + centred
-        # calendar pulses. Without the high-frequency terms a control is a
+        # calendar pulses. Without the high-frequency terms a covariate is a
         # smoothed walk over the SAME function space as the baseline walk, so
         # rho_zy trades off against baseline drift and Z->Y is only weakly
         # identified. Both terms are mean-zero (the pulse subtracts its own fire
         # probability), so E[Z_m] is unchanged and _reference_levels stays exact.
         own = _walk_column(eps_z[:, m], params["rw_z"], m, n_time_steps_full)
-        if use_control_hf[m]:
-            own = own + control_hf_sigma[m] * eps_z_hf[:, m]
-        if use_control_pulse[m]:
-            own = own + control_pulse_amp[m] * (eps_z_pulse[:, m] - control_pulse_prob[m])
+        if use_covariate_hf[m]:
+            own = own + covariate_hf_sigma[m] * eps_z_hf[:, m]
+        if use_covariate_pulse[m]:
+            own = own + covariate_pulse_amp[m] * (eps_z_pulse[:, m] - covariate_pulse_prob[m])
         term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], n_time_steps_full, **dot_kw)
         term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], n_time_steps_full, **dot_kw)
         z_cols.append(_mask(active_m, m, term_d + term_z + own))
     Z = pt.stack(z_cols, axis=1) if n_covariates > 0 else pt.zeros((n_time_steps_full, 0))
 
-    # -- channels C (n_time_steps_full, n_treatments): D->C + Z->C + upstream C->C + own drive -----
+    # -- treatments C (n_time_steps_full, n_treatments): D->C + Z->C + upstream C->C + own drive -----
     # C_base: same walks, all incoming interaction terms zeroed (the
     # "no upstream" intervention used for the exact decomposition).
     w_dc = _arr(params["w_dc"], (n_latent, n_treatments))
@@ -653,11 +655,11 @@ def build_symbolic_graph(
     c_unshocked_cols: list[TensorVariable] = []
     c_base_cols: list[TensorVariable] = []
     # Telescoping intervention variants (see indirect_effects_by_source, below):
-    #   c_no_cc      = channel with the C->C term dropped
-    #   c_no_cc_zc   = channel with C->C and Z->C dropped
-    # These reuse the SAME term_d/term_z/walk as the observed channel; each just
+    #   c_no_cc      = treatment with the C->C term dropped
+    #   c_no_cc_zc   = treatment with C->C and Z->C dropped
+    # These reuse the SAME term_d/term_z/walk as the observed treatment; each just
     # omits the named upstream term (the C->C term references upstream OBSERVED
-    # channels, so dropping it is the "zero that interaction" intervention).
+    # treatments, so dropping it is the "zero that interaction" intervention).
     c_no_cc_cols: list[TensorVariable] = []
     c_no_cc_zc_cols: list[TensorVariable] = []
     for k in range(n_treatments):
@@ -674,32 +676,34 @@ def build_symbolic_graph(
         term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], n_time_steps_full, **dot_kw)
         # The natural recursion is retained solely for the realism reference.
         # The observed recursion instead sees already-clamped upstream parents,
-        # which is the SCM meaning of a channel intervention.
+        # which is the SCM meaning of a treatment intervention.
         term_c_unshocked = _dot_terms(
             c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full, **dot_kw
         )
         term_c = _dot_terms(c_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full, **dot_kw)
-        # softplus guard: spend-like channels must stay non-negative even
+        # softplus guard: treatment-like treatments must stay non-negative even
         # when signed upstream contributions push the pre-activation down
         c_unshocked_cols.append(
             _mask(active_c, k, pt.softplus(term_d + term_z + term_c_unshocked + own))
         )
         c_cols.append(
             _mask(
-                active_c, k, _clamp_channel(pt.softplus(term_d + term_z + term_c + own), params, k)
+                active_c,
+                k,
+                _clamp_treatment(pt.softplus(term_d + term_z + term_c + own), params, k),
             )
         )
-        c_base_cols.append(_mask(active_c, k, _clamp_channel(pt.softplus(own), params, k)))
+        c_base_cols.append(_mask(active_c, k, _clamp_treatment(pt.softplus(own), params, k)))
         c_no_cc_cols.append(
-            _mask(active_c, k, _clamp_channel(pt.softplus(term_d + term_z + own), params, k))
+            _mask(active_c, k, _clamp_treatment(pt.softplus(term_d + term_z + own), params, k))
         )
         c_no_cc_zc_cols.append(
-            _mask(active_c, k, _clamp_channel(pt.softplus(term_d + own), params, k))
+            _mask(active_c, k, _clamp_treatment(pt.softplus(term_d + own), params, k))
         )
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
 
-    # -- intercept B and the non-media aggregate, optionally floored -----------
+    # -- intercept B and the non-treatment aggregate, optionally floored -----------
     # D and Z do NOT enter the intercept: they attach directly to Y below, so
     # the intercept is a pure, separately reported level and Y reads as the
     # equation a standard MMM assumes.
@@ -707,17 +711,17 @@ def build_symbolic_graph(
     # ``baseline_floor_scope`` decides WHAT the floor clips.
     #
     # "intercept": clip the intercept walk only. Every other term stays exactly
-    #     linear in its node (``control_contribution[:, m] == g_zy·ρ·Z``), which
+    #     linear in its node (``covariate_contribution[:, m] == g_zy·ρ·Z``), which
     #     is the cheapest, most estimator-friendly option — but a large negative
-    #     ρ·Z can still drag the non-media total (and sales) below zero.
-    # "non_media": clip the RUNNING TOTAL as each parent is added, in the LOCKED
-    #     order intercept -> confounders (j ascending) -> controls (m ascending).
+    #     ρ·Z can still drag the non-treatment total (and outcome) below zero.
+    # "non_treatment": clip the RUNNING TOTAL as each parent is added, in the LOCKED
+    #     order intercept -> confounders (j ascending) -> covariates (m ascending).
     #     Each per-node column is then the telescoping difference it caused,
     #     ``A_i - A_{i-1}``, exactly as ``indirect_effects_by_source`` is defined
-    #     for channels. Three consequences, all of them the point:
-    #       * the non-media total is >= floor by construction, so a negative
-    #         control effect is credited only down to the floor and the excess is
-    #         absorbed rather than pushing sales negative;
+    #     for treatments. Three consequences, all of them the point:
+    #       * the non-treatment total is >= floor by construction, so a negative
+    #         covariate effect is credited only down to the floor and the excess is
+    #         absorbed rather than pushing outcome negative;
     #       * the columns still telescope EXACTLY, so the decomposition identity
     #         is untouched;
     #       * where the floor does not bind, every column is bit-identical to the
@@ -727,7 +731,7 @@ def build_symbolic_graph(
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)
     baseline_floor = params.get("baseline_floor")
     floor_scope = params.get("baseline_floor_scope", "intercept")
-    absorb = baseline_floor is not None and floor_scope == "non_media"
+    absorb = baseline_floor is not None and floor_scope == "non_treatment"
 
     def _clip(expr):
         return expr if baseline_floor is None else pt.maximum(expr, float(baseline_floor))
@@ -738,7 +742,7 @@ def build_symbolic_graph(
 
     # -- per-node direct baseline terms (an exact split of term_dy / term_zy) --
     if absorb:
-        # Sequential graph surgery on the running non-media total. ``running`` is
+        # Sequential graph surgery on the running non-treatment total. ``running`` is
         # the clipped total after each node joins; the column a node contributes
         # is the change it caused. Nodes with no edge are skipped outright rather
         # than added with a zero coefficient: a zero-gated term would still make
@@ -759,27 +763,27 @@ def build_symbolic_graph(
             nxt = _clip(running + (g_dy[j] * delta_dy[j]) * d_cols[j])
             confounder_contrib_cols.append(nxt - running)
             running = nxt
-        control_contrib_cols = []
+        covariate_contrib_cols = []
         for m in range(n_covariates):
             if not _edge_live(g_zy, m):
-                control_contrib_cols.append(zero_col)
+                covariate_contrib_cols.append(zero_col)
                 continue
             nxt = _clip(running + (g_zy[m] * rho_zy[m]) * z_cols[m])
-            control_contrib_cols.append(nxt - running)
+            covariate_contrib_cols.append(nxt - running)
             running = nxt
-        non_media = running
+        non_treatment = running
     else:
-        # column m of control_contribution   = g_zy[m]·ρ[m]·Z[:,m]  (sums to term_zy)
-        # column j of confounder_contribution = g_dy[j]·δ[j]·D[:,j] (sums to term_dy)
-        control_contrib_cols = [(g_zy[m] * rho_zy[m]) * z_cols[m] for m in range(n_covariates)]
+        # column m of covariate_contribution   = g_zy[m]·ρ[m]·Z[:,m]  (sums to term_zy)
+        # column j of latent_unobserved_contribution = g_dy[j]·δ[j]·D[:,j] (sums to term_dy)
+        covariate_contrib_cols = [(g_zy[m] * rho_zy[m]) * z_cols[m] for m in range(n_covariates)]
         confounder_contrib_cols = [(g_dy[j] * delta_dy[j]) * d_cols[j] for j in range(n_latent)]
-        non_media = intercept + term_dy + term_zy
-    control_contribution = (
-        pt.stack(control_contrib_cols, axis=1)
+        non_treatment = intercept + term_dy + term_zy
+    covariate_contribution = (
+        pt.stack(covariate_contrib_cols, axis=1)
         if n_covariates > 0
         else pt.zeros((n_time_steps_full, 0))
     )  # (n_time_steps_full, n_covariates)
-    confounder_contribution = (
+    latent_unobserved_contribution = (
         pt.stack(confounder_contrib_cols, axis=1)
         if n_latent > 0
         else pt.zeros((n_time_steps_full, 0))
@@ -796,36 +800,36 @@ def build_symbolic_graph(
     #   ie_zc = Y(zero c_from_c)                - Y(zero c_from_c, c_from_z)
     #   ie_dc = Y(zero c_from_c, c_from_z)      - Y(zero c_from_c, c_from_z, c_from_d)
     # These telescope exactly to indirect_effects because Y(zero all three) is
-    # baseline + the direct (base-channel) contributions.
+    # baseline + the direct (base-treatment) contributions.
     ie_cc_cols, ie_zc_cols, ie_dc_cols = [], [], []
-    channel_levels = _reference_levels(
+    treatment_levels = _reference_levels(
         params, g_zc, g_cc, g_zz, n_treatments, n_covariates, use_pulse, dynamic_g=dynamic_g
     )
     for k in range(n_treatments):
-        # Adstock over the full simulated horizon, then slice to the reported
+        # Carryover over the full simulated horizon, then slice to the reported
         # window: with burn_in >= l_max the window's convolution sees real
         # pre-window history instead of the zero padding (warmup artifact).
-        # Held-level shocks clamp the channel BEFORE this convolution and never
+        # Held-level shocks clamp the treatment BEFORE this convolution and never
         # touch its response state, so the same normalized causal kernel a
         # standard MMM applies reproduces this response exactly.
-        # The κ scale is the channel's PARAMETER-ONLY reference level, never a
+        # The κ scale is the treatment's PARAMETER-ONLY reference level, never a
         # statistic of the drawn series and never E[C_k] (softplus makes E[C_k]
         # strictly larger): that keeps theta independent of the noise and keeps
-        # the response at week t free of spend at t' > t.
-        ad_obs = _adstock_col(c_cols[k], params, k, **family_kw)[window]
-        scale_k = pt.maximum(channel_levels[k], 1e-8).copy(name=f"sat_scale_{k}")
+        # the response at week t free of treatment at t' > t.
+        ad_obs = _carryover_col(c_cols[k], params, k, **family_kw)[window]
+        scale_k = pt.maximum(treatment_levels[k], 1e-8).copy(name=f"sat_scale_{k}")
         sat_scale_cols.append(scale_k)
 
-        # ONE response function per channel, applied to every variant: the
+        # ONE response function per treatment, applied to every variant: the
         # telescoping split cancels the middle variants, so a divergence here
         # would pass the identity tests while corrupting the per-source split.
         def _f(ad_col, *, _scale=scale_k, _k=k):
             return _saturate_col(ad_col, _scale, params, _k, **family_kw)
 
         f_obs = _f(ad_obs)
-        f_base = _f(_adstock_col(c_base_cols[k], params, k, **family_kw)[window])
-        f_no_cc = _f(_adstock_col(c_no_cc_cols[k], params, k, **family_kw)[window])
-        f_no_cc_zc = _f(_adstock_col(c_no_cc_zc_cols[k], params, k, **family_kw)[window])
+        f_base = _f(_carryover_col(c_base_cols[k], params, k, **family_kw)[window])
+        f_no_cc = _f(_carryover_col(c_no_cc_cols[k], params, k, **family_kw)[window])
+        f_no_cc_zc = _f(_carryover_col(c_no_cc_zc_cols[k], params, k, **family_kw)[window])
         gate = g_cy[k] * beta[k]  # g concrete, beta possibly symbolic
         contrib_obs_cols.append(_mask(active_c, k, gate * f_obs))
         contrib_base_cols.append(_mask(active_c, k, gate * f_base))
@@ -856,62 +860,62 @@ def build_symbolic_graph(
     indirect_effects_by_source = pt.stack([ie_cc, ie_zc, ie_dc], axis=1)
 
     # ``as_tensor_variable`` matters on the concrete path: with numpy params AND
-    # numpy eps this product is a plain ndarray, and ``sales_noise`` is now an
+    # numpy eps this product is a plain ndarray, and ``outcome_noise`` is now an
     # OUTPUT in its own right, so every output must be a tensor.
     walk_y = pt.as_tensor_variable(params["rw_y"]["std"][0] * eps_y)
-    # ``baseline`` stays "everything that is not media": the intercept, the
-    # direct D->Y / Z->Y terms, and the iid sales noise.
-    baseline = (non_media + walk_y)[window]
+    # ``baseline`` stays "everything that is not treatment": the intercept, the
+    # direct D->Y / Z->Y terms, and the iid outcome noise.
+    baseline = (non_treatment + walk_y)[window]
     # The intercept ALONE — floored when a floor is configured, so this target
-    # is >= floor by construction. The iid sales noise is reported separately
-    # (``sales_noise``) instead of being folded in here, which is what keeps
+    # is >= floor by construction. The iid outcome noise is reported separately
+    # (``outcome_noise``) instead of being folded in here, which is what keeps
     # this a clean level rather than a level plus observation error.
     baseline_intrinsic = intercept[window]  # (n_time_steps,)
-    sales_noise = walk_y[window]  # (n_time_steps,)
-    sales = baseline + contributions_observed.sum(axis=1)
-    # identity: sales == baseline + contributions.sum(1) + indirect_effects
-    #        == baseline_intrinsic + sales_noise
-    #           + Σ confounder_contribution + Σ control_contribution
+    outcome_noise = walk_y[window]  # (n_time_steps,)
+    outcome = baseline + contributions_observed.sum(axis=1)
+    # identity: outcome == baseline + contributions.sum(1) + indirect_effects
+    #        == baseline_intrinsic + outcome_noise
+    #           + Σ latent_unobserved_contribution + Σ covariate_contribution
     #           + contributions.sum(1) + indirect_effects_by_source.sum(1)
     #
-    # Sales is deliberately NOT floored. A clamp on Y is a LIKELIHOOD-level
+    # Outcome is deliberately NOT floored. A clamp on Y is a LIKELIHOOD-level
     # change (censored observations), which would put every world outside the
     # additive-Gaussian class a standard MMM — and this package's own oracle —
-    # can represent. Non-negative sales stays enforced exactly by the
+    # can represent. Non-negative outcome stays enforced exactly by the
     # acceptance filter (``_additive_task_ok``).
 
     outputs = {
-        "demand": D[window],
-        "controls": Z[window],
-        "channels": C[window],
-        "channels_base": C_base[window],
+        "latent_unobserved": D[window],
+        "covariates": Z[window],
+        "treatments": C[window],
+        "treatments_base": C_base[window],
         "saturation_scale": pt.stack(sat_scale_cols),
         "baseline": baseline,
         "baseline_intrinsic": baseline_intrinsic,
-        "control_contribution": control_contribution[window],
-        "confounder_contribution": confounder_contribution[window],
+        "covariate_contribution": covariate_contribution[window],
+        "latent_unobserved_contribution": latent_unobserved_contribution[window],
         "contributions": contributions,
         "contributions_observed": contributions_observed,
         "indirect_effects": indirect_effects,
         "indirect_effects_by_source": indirect_effects_by_source,
-        "sales": sales,
+        "outcome": outcome,
         # Appended last: output order fixes PyTensor's RNG traversal, so a new
         # output must not displace an existing one.
-        "sales_noise": sales_noise,
+        "outcome_noise": outcome_noise,
     }
     # These are intentionally audit-only paths.  They are drawn to decide
     # whether the *natural* world is realistic, never persisted in corpora.
-    if params.get("channel_shock") is not None:
+    if params.get("treatment_shock") is not None:
         # Reuse the pinned parameter-only anchors. This leaves every persisted
         # response array unchanged; only these audit-only outputs and
         # realism-filter acceptance can move.
         unshocked_contribs = []
         for k in range(n_treatments):
-            ad_unshocked = _adstock_col(c_unshocked_cols[k], params, k)[window]
+            ad_unshocked = _carryover_col(c_unshocked_cols[k], params, k)[window]
             scale_k = sat_scale_cols[k]
             unshocked_contribs.append(
                 g_cy[k] * beta[k] * _saturate_col(ad_unshocked, scale_k, params, k)
             )
-        outputs["channels_unshocked"] = pt.stack(c_unshocked_cols, axis=1)[window]
-        outputs["sales_unshocked"] = baseline + pt.stack(unshocked_contribs, axis=1).sum(axis=1)
+        outputs["treatments_unshocked"] = pt.stack(c_unshocked_cols, axis=1)[window]
+        outputs["outcome_unshocked"] = baseline + pt.stack(unshocked_contribs, axis=1).sum(axis=1)
     return {"outputs": outputs}

@@ -31,78 +31,80 @@ from pymc_generator.diagnostics import (
 
 def make_corpus(
     *,
-    spend: np.ndarray,
-    controls: np.ndarray,
-    demand: np.ndarray,
+    treatment: np.ndarray,
+    covariates: np.ndarray,
+    latent_unobserved: np.ndarray,
     contributions: np.ndarray,
-    control_contribution: np.ndarray,
-    confounder_contribution: np.ndarray,
+    covariate_contribution: np.ndarray,
+    latent_unobserved_contribution: np.ndarray,
     indirect_by_source: np.ndarray,
     baseline_intrinsic: np.ndarray,
-    sales_noise: np.ndarray,
-    channel_mask: np.ndarray,
-    control_mask: np.ndarray,
+    outcome_noise: np.ndarray,
+    treatment_mask: np.ndarray,
+    covariate_mask: np.ndarray,
     latent_mask: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """A minimal current-schema corpus whose sales identity holds exactly."""
+    """A minimal current-schema corpus whose outcome identity holds exactly."""
     baseline = (
-        baseline_intrinsic + confounder_contribution.sum(axis=2) + control_contribution.sum(axis=2)
+        baseline_intrinsic
+        + latent_unobserved_contribution.sum(axis=2)
+        + covariate_contribution.sum(axis=2)
     )
-    sales = baseline + sales_noise + contributions.sum(axis=2) + indirect_by_source.sum(axis=2)
+    outcome = baseline + outcome_noise + contributions.sum(axis=2) + indirect_by_source.sum(axis=2)
     return {
-        "spend_raw": spend,
-        "controls": controls,
-        "demand": demand,
-        "sales_raw": sales,
+        "treatment_raw": treatment,
+        "covariates": covariates,
+        "latent_unobserved": latent_unobserved,
+        "outcome_raw": outcome,
         "baseline_raw": baseline,
         "baseline_intrinsic": baseline_intrinsic,
-        "sales_noise": sales_noise,
-        "control_contribution": control_contribution,
-        "confounder_contribution": confounder_contribution,
-        "contributions_raw": contributions,
+        "outcome_noise": outcome_noise,
+        "covariate_contribution": covariate_contribution,
+        "latent_unobserved_contribution": latent_unobserved_contribution,
+        "treatment_contribution_raw": contributions,
         "indirect_effects_by_source": indirect_by_source,
         "indirect_effects": indirect_by_source.sum(axis=2),
-        "sales_scale": np.maximum(sales.std(axis=1), 1e-3),
-        "treatment_active_mask": channel_mask.astype(np.uint8),
-        "covariate_active_mask": control_mask.astype(np.uint8),
+        "outcome_scale": np.maximum(outcome.std(axis=1), 1e-3),
+        "treatment_active_mask": treatment_mask.astype(np.uint8),
+        "covariate_active_mask": covariate_mask.astype(np.uint8),
         "latent_active_mask": latent_mask.astype(np.uint8),
     }
 
 
 def toy_corpus(
-    *, n_worlds: int = 3, n_time: int = 12, seed: int = 7, inactive_last_channel: bool = True
+    *, n_worlds: int = 3, n_time: int = 12, seed: int = 7, inactive_last_treatment: bool = True
 ) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(seed)
     shape2 = (n_worlds, n_time)
-    spend = rng.normal(size=(*shape2, 3))
-    controls = rng.normal(size=(*shape2, 2))
-    demand = rng.normal(size=(*shape2, 2))
+    treatment = rng.normal(size=(*shape2, 3))
+    covariates = rng.normal(size=(*shape2, 2))
+    latent_unobserved = rng.normal(size=(*shape2, 2))
     contributions = rng.normal(size=(*shape2, 3))
-    control_contribution = rng.normal(size=(*shape2, 2))
-    confounder_contribution = rng.normal(size=(*shape2, 2))
+    covariate_contribution = rng.normal(size=(*shape2, 2))
+    latent_unobserved_contribution = rng.normal(size=(*shape2, 2))
     indirect = rng.normal(size=(*shape2, 3))
-    channel_mask = np.ones((n_worlds, 3), dtype=bool)
-    control_mask = np.ones((n_worlds, 2), dtype=bool)
+    treatment_mask = np.ones((n_worlds, 3), dtype=bool)
+    covariate_mask = np.ones((n_worlds, 2), dtype=bool)
     latent_mask = np.ones((n_worlds, 2), dtype=bool)
-    if inactive_last_channel:
-        channel_mask[:, 2] = False
-        spend[:, :, 2] = 0.0
+    if inactive_last_treatment:
+        treatment_mask[:, 2] = False
+        treatment[:, :, 2] = 0.0
         contributions[:, :, 2] = 0.0
-        control_mask[-1, 1] = False
-        controls[-1, :, 1] = 0.0
-        control_contribution[-1, :, 1] = 0.0
+        covariate_mask[-1, 1] = False
+        covariates[-1, :, 1] = 0.0
+        covariate_contribution[-1, :, 1] = 0.0
     return make_corpus(
-        spend=spend,
-        controls=controls,
-        demand=demand,
+        treatment=treatment,
+        covariates=covariates,
+        latent_unobserved=latent_unobserved,
         contributions=contributions,
-        control_contribution=control_contribution,
-        confounder_contribution=confounder_contribution,
+        covariate_contribution=covariate_contribution,
+        latent_unobserved_contribution=latent_unobserved_contribution,
         indirect_by_source=indirect,
         baseline_intrinsic=rng.normal(size=shape2),
-        sales_noise=rng.normal(size=shape2),
-        channel_mask=channel_mask,
-        control_mask=control_mask,
+        outcome_noise=rng.normal(size=shape2),
+        treatment_mask=treatment_mask,
+        covariate_mask=covariate_mask,
         latent_mask=latent_mask,
     )
 
@@ -147,7 +149,7 @@ def test_exact_zero_padding_is_accepted(toy):
 @pytest.mark.parametrize("poison", [7.5, np.nan, np.inf])
 def test_junk_inactive_padding_is_rejected_before_the_companion(toy, monkeypatch, poison):
     corpus = deepcopy(toy)
-    corpus["spend_raw"][0, 3, 2] = poison
+    corpus["treatment_raw"][0, 3, 2] = poison
 
     def explode(*args, **kwargs):  # pragma: no cover - must never run
         raise AssertionError("outcome_distributions was called before preflight finished")
@@ -158,18 +160,20 @@ def test_junk_inactive_padding_is_rejected_before_the_companion(toy, monkeypatch
     with pytest.raises(ValueError, match=r"non-zero inactive padding at world 0, column 2"):
         data_diagnostics(corpus)
     # rejection, never sanitation
-    assert corpus["spend_raw"][0, 3, 2] == poison or math.isnan(corpus["spend_raw"][0, 3, 2])
+    assert corpus["treatment_raw"][0, 3, 2] == poison or math.isnan(
+        corpus["treatment_raw"][0, 3, 2]
+    )
 
 
 def test_missing_key_and_bad_shapes_are_named(toy):
     corpus = deepcopy(toy)
-    del corpus["demand"]
-    with pytest.raises(KeyError, match="demand"):
+    del corpus["latent_unobserved"]
+    with pytest.raises(KeyError, match="latent_unobserved"):
         data_diagnostics(corpus)
 
     corpus = deepcopy(toy)
-    corpus["controls"] = corpus["controls"][:, :, :1]
-    with pytest.raises(ValueError, match="controls must have shape"):
+    corpus["covariates"] = corpus["covariates"][:, :, :1]
+    with pytest.raises(ValueError, match="covariates must have shape"):
         data_diagnostics(corpus)
 
     corpus = deepcopy(toy)
@@ -194,7 +198,7 @@ def test_counterfactual_scope_needs_scm_worlds(toy):
 
 
 def test_single_time_step_gives_empty_differences():
-    corpus = toy_corpus(n_time=1, inactive_last_channel=False)
+    corpus = toy_corpus(n_time=1, inactive_last_treatment=False)
     report = data_diagnostics(corpus)
     assert report["levels"].series.n_time_steps == 1
     assert report["differences"].series.n_time_steps == 0
@@ -283,7 +287,7 @@ def test_keys_are_unique_ordered_and_separate_from_labels(toy):
     assert len(set(keys)) == len(keys)
     assert keys[:7] == ("C1", "C2", "C3", "Z1", "Z2", "D1", "D2")
     assert keys[7:9] == ("B", "Y")
-    assert "C1_direct_y" in keys and "Z1_baseline_alloc" in keys and "media_total" in keys
+    assert "C1_direct_y" in keys and "Z1_baseline_alloc" in keys and "treatment_total" in keys
     # display labels are NOT unique selectors: two keys, one human reading.
     assert report.descriptor("C1").display_label != report.descriptor("C1_direct_y").display_label
     assert report.descriptor("Z1_baseline_alloc").display_label.endswith(
@@ -309,8 +313,8 @@ def test_key_universe_is_derived_before_world_selection(toy):
 def test_float64_variation_below_float32_resolution_survives():
     n_time = 8
     base = 1.0 + np.arange(n_time) * 1e-9
-    corpus = toy_corpus(n_worlds=1, n_time=n_time, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = base
+    corpus = toy_corpus(n_worlds=1, n_time=n_time, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = base
     assert np.float32(base).std() == 0.0  # float32 would erase the whole signal
     report = data_diagnostics(corpus, views=("levels",))
     values = report["levels"].series.values("C1")
@@ -332,7 +336,7 @@ def test_companion_is_called_once_without_series(toy, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["keep_series"] is False
     assert report.outcomes.n_worlds == 2
-    assert report.outcomes["sales"].series is None
+    assert report.outcomes["outcome"].series is None
 
 
 @pytest.mark.parametrize("selector", [None, [1, 2], [2, 0], [2, 1, 0], [0]])
@@ -345,8 +349,8 @@ def test_companion_rows_line_up_with_the_report(toy, selector):
     report = data_diagnostics(toy, worlds=selector, scopes=("nodes", "decomposition"))
     assert np.array_equal(report.outcomes.world_ids, report.world_ids)
     assert np.allclose(
-        report.outcomes["sales"].unit_total,
-        report.contributions.sales_total,
+        report.outcomes["outcome"].unit_total,
+        report.contributions.outcome_total,
         rtol=1e-9,
         atol=1e-9,
     )
@@ -357,12 +361,12 @@ def test_raw_values_are_the_eligible_rows(toy):
     index = report.keys.index("Z2")
     eligible = np.array([True, True, False])
     assert np.array_equal(report["levels"].series.eligible[:, index], eligible)
-    expected = toy["controls"][eligible, :, 1].reshape(-1)
+    expected = toy["covariates"][eligible, :, 1].reshape(-1)
     assert np.array_equal(report["levels"].series.values("Z2"), expected)
-    diffs = np.diff(toy["controls"][eligible, :, 1], axis=1).reshape(-1)
+    diffs = np.diff(toy["covariates"][eligible, :, 1], axis=1).reshape(-1)
     assert np.array_equal(report["differences"].series.values("Z2"), diffs)
     # differences never cross a world boundary
-    assert report["differences"].series.values("Z2").size == 2 * (toy["controls"].shape[1] - 1)
+    assert report["differences"].series.values("Z2").size == 2 * (toy["covariates"].shape[1] - 1)
 
 
 def test_lean_mode_changes_only_raw_access(toy):
@@ -399,8 +403,8 @@ def test_lean_mode_changes_only_raw_access(toy):
 
 def test_eight_slots_against_literal_oracles():
     series = np.array([0.0, 2.0, 1.0, 5.0, 4.0, 4.0, 3.0, 20.0])
-    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = series
+    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = series
     slots = data_diagnostics(corpus, views=("levels",))["levels"].series.slots[0, 0]
 
     assert slots[SERIES_SLOTS.index("mean")] == pytest.approx(39.0 / 8.0)
@@ -431,8 +435,8 @@ def test_eight_slots_against_literal_oracles():
     ],
 )
 def test_roughness_and_spike_edge_cases(series, roughness, spike):
-    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = series
+    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = series
     slots = data_diagnostics(corpus, views=("levels",))["levels"].series.slots[0, 0]
     if roughness is not None:
         assert slots[SERIES_SLOTS.index("roughness")] == pytest.approx(roughness)
@@ -470,9 +474,9 @@ def test_finite_summaries_exclude_infinities_and_ledgers_balance():
 
 def _dependence_for(rows: np.ndarray):
     n_time = rows.shape[1]
-    corpus = toy_corpus(n_worlds=1, n_time=n_time, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = rows[0]
-    corpus["spend_raw"][0, :, 1] = rows[1]
+    corpus = toy_corpus(n_worlds=1, n_time=n_time, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = rows[0]
+    corpus["treatment_raw"][0, :, 1] = rows[1]
     report = data_diagnostics(corpus, views=("levels",))
     return report["levels"].dependence, report.keys
 
@@ -503,8 +507,8 @@ def test_constant_series_and_diagonal_are_not_available():
 
 def test_eligible_but_undefined_is_invalid_not_absent():
     """A constant active series was ASKED and had no answer; say that."""
-    corpus = toy_corpus(inactive_last_channel=False)
-    corpus["spend_raw"][:, :, 0] = 3.0
+    corpus = toy_corpus(inactive_last_treatment=False)
+    corpus["treatment_raw"][:, :, 0] = 3.0
     report = data_diagnostics(corpus, views=("levels",))
     levels = report["levels"]
     _, dependence = levels.dependence.pair("C1", "C2", "pearson")
@@ -675,15 +679,15 @@ def test_xi_matrix_orientation_is_predictor_row_target_column():
 
 
 def test_default_lag_axis_is_contiguous_and_capped(toy):
-    assert data_diagnostics(toy).lags == tuple(range(1, toy["sales_raw"].shape[1] // 2 + 1))
-    long = toy_corpus(n_worlds=1, n_time=200, inactive_last_channel=False)
+    assert data_diagnostics(toy).lags == tuple(range(1, toy["outcome_raw"].shape[1] // 2 + 1))
+    long = toy_corpus(n_worlds=1, n_time=200, inactive_last_treatment=False)
     assert data_diagnostics(long, views=("levels",)).lags == tuple(range(1, DEFAULT_MAX_LAG + 1))
 
 
 def test_acf_matches_a_literal_oracle():
     series = np.array([0.0, 1.0, 4.0, 9.0, 16.0])
-    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = series
+    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = series
     report = data_diagnostics(corpus, views=("levels",), lags=(1,))
     assert report["levels"].temporal.acf[0, 0, 0] == pytest.approx(32.0 / 87.0)
 
@@ -692,16 +696,16 @@ def test_contiguous_axis_sees_lag_two_and_annual_structure():
     rng = np.random.default_rng(19)
     noise = rng.normal(size=406)
     ma2 = noise[2:] + noise[:-2]  # ACF(1) = 0, ACF(2) = 0.5 in the population
-    corpus = toy_corpus(n_worlds=1, n_time=ma2.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = ma2
+    corpus = toy_corpus(n_worlds=1, n_time=ma2.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = ma2
     temporal = data_diagnostics(corpus, views=("levels",))["levels"].temporal
     assert temporal.acf[0, 0, temporal.lags.index(2)] > 0.35
     assert abs(temporal.acf[0, 0, temporal.lags.index(1)]) < 0.15
 
     block = rng.normal(size=52)
     annual = np.tile(block, 4)
-    corpus = toy_corpus(n_worlds=1, n_time=annual.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = annual
+    corpus = toy_corpus(n_worlds=1, n_time=annual.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = annual
     temporal = data_diagnostics(corpus, views=("levels",))["levels"].temporal
     assert temporal.acf[0, 0, temporal.lags.index(52)] > 0.6
     assert 52 in temporal.lags  # a sparse (1, 4, 13, 26) axis would miss it
@@ -712,15 +716,15 @@ def test_lag_xi_finds_nonlinear_serial_structure():
     x[0] = 0.4
     for t in range(1, x.size):
         x[t] = 4.0 * x[t - 1] * (1.0 - x[t - 1])  # logistic map: ACF ~ 0, xi ~ 1
-    corpus = toy_corpus(n_worlds=1, n_time=x.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = x
+    corpus = toy_corpus(n_worlds=1, n_time=x.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = x
     temporal = data_diagnostics(corpus, views=("levels",), lags=(1,))["levels"].temporal
     assert abs(temporal.acf[0, 0, 0]) < 0.2
     assert temporal.lag_xi[0, 0, 0] > 0.8
 
 
 def test_lag_validity_follows_the_three_pair_report_policy():
-    corpus = toy_corpus(n_worlds=1, n_time=4, inactive_last_channel=False)
+    corpus = toy_corpus(n_worlds=1, n_time=4, inactive_last_treatment=False)
     report = data_diagnostics(corpus, views=("levels", "differences"), lags=(1, 2))
     levels = report["levels"].temporal
     assert levels.acf_valid[0, 0, 0]  # T=4, lag 1 -> 3 pairs
@@ -858,9 +862,9 @@ def test_each_vif_scope_is_verified_independently(toy, report):
 
 def toy_key_series(corpus, key: str) -> np.ndarray:
     source = {
-        "C": ("spend_raw", 0),
-        "Z": ("controls", 0),
-        "D": ("demand", 0),
+        "C": ("treatment_raw", 0),
+        "Z": ("covariates", 0),
+        "D": ("latent_unobserved", 0),
     }[key[0]]
     return corpus[source[0]][:, :, int(key[1:]) - 1]
 
@@ -872,16 +876,16 @@ def toy_key_series(corpus, key: str) -> np.ndarray:
 
 def test_all_six_contribution_fields_from_unique_atomic_paths(toy):
     budget = data_diagnostics(toy).contributions
-    component = toy["contributions_raw"][:, :, 0]
-    sales_total = toy["sales_raw"].sum(axis=1)
-    n_time = toy["sales_raw"].shape[1]
+    component = toy["treatment_contribution_raw"][:, :, 0]
+    outcome_total = toy["outcome_raw"].sum(axis=1)
+    n_time = toy["outcome_raw"].shape[1]
 
     assert budget.values("C1_direct_y", measure="total") == pytest.approx(component.sum(axis=1))
     assert budget.values("C1_direct_y", measure="mean_per_period") == pytest.approx(
         component.sum(axis=1) / n_time
     )
     assert budget.values("C1_direct_y", measure="share") == pytest.approx(
-        component.sum(axis=1) / sales_total
+        component.sum(axis=1) / outcome_total
     )
     assert budget.values("C1_direct_y", measure="total", mode="gross") == pytest.approx(
         np.abs(component).sum(axis=1)
@@ -890,80 +894,80 @@ def test_all_six_contribution_fields_from_unique_atomic_paths(toy):
         np.abs(component).sum(axis=1) / n_time
     )
     assert budget.values("C1_direct_y", measure="share", mode="gross") == pytest.approx(
-        np.abs(component).sum(axis=1) / np.abs(sales_total)
+        np.abs(component).sum(axis=1) / np.abs(outcome_total)
     )
 
 
-def test_top_cut_closes_against_sales_and_media_rolls_up(toy):
+def test_top_cut_closes_against_outcome_and_treatment_rolls_up(toy):
     budget = data_diagnostics(toy).contributions
     closure = budget.closure("top")
     assert closure.complete and closure.children == (
-        "media_total",
-        "controls_baseline_alloc_total",
-        "demand_baseline_alloc_total",
+        "treatment_total",
+        "covariates_baseline_alloc_total",
+        "latent_unobserved_baseline_alloc_total",
         "B_intrinsic",
         "Y_noise",
     )
     assert closure.max_abs_residual("net_total") == pytest.approx(0.0, abs=1e-9)
     assert closure.max_abs_residual("net_share") == pytest.approx(0.0, abs=1e-12)
-    assert closure.residuals["gross_total"] is None  # sales has no gross decomposition
+    assert closure.residuals["gross_total"] is None  # outcome has no gross decomposition
 
-    media = budget.closure("media_children")
-    assert media.max_abs_residual("net_total") == pytest.approx(0.0, abs=1e-9)
-    assert media.max_abs_residual("gross_total") == pytest.approx(0.0, abs=1e-9)
+    treatment = budget.closure("treatment_children")
+    assert treatment.max_abs_residual("net_total") == pytest.approx(0.0, abs=1e-9)
+    assert treatment.max_abs_residual("gross_total") == pytest.approx(0.0, abs=1e-9)
 
 
 def test_parent_gross_sums_atomic_children_and_keeps_cancellation():
     n_time = 4
-    corpus = toy_corpus(n_worlds=1, n_time=n_time, inactive_last_channel=False)
-    corpus["contributions_raw"][0] = 0.0
-    corpus["contributions_raw"][0, :, 0] = np.array([10.0, 0.0, 0.0, 0.0])
-    corpus["contributions_raw"][0, :, 1] = np.array([-10.0, 0.0, 0.0, 0.0])
+    corpus = toy_corpus(n_worlds=1, n_time=n_time, inactive_last_treatment=False)
+    corpus["treatment_contribution_raw"][0] = 0.0
+    corpus["treatment_contribution_raw"][0, :, 0] = np.array([10.0, 0.0, 0.0, 0.0])
+    corpus["treatment_contribution_raw"][0, :, 1] = np.array([-10.0, 0.0, 0.0, 0.0])
     corpus["indirect_effects_by_source"][0] = 0.0
     corpus["indirect_effects"] = corpus["indirect_effects_by_source"].sum(axis=2)
     corpus = make_corpus(
-        spend=corpus["spend_raw"],
-        controls=corpus["controls"],
-        demand=corpus["demand"],
-        contributions=corpus["contributions_raw"],
-        control_contribution=corpus["control_contribution"],
-        confounder_contribution=corpus["confounder_contribution"],
+        treatment=corpus["treatment_raw"],
+        covariates=corpus["covariates"],
+        latent_unobserved=corpus["latent_unobserved"],
+        contributions=corpus["treatment_contribution_raw"],
+        covariate_contribution=corpus["covariate_contribution"],
+        latent_unobserved_contribution=corpus["latent_unobserved_contribution"],
         indirect_by_source=corpus["indirect_effects_by_source"],
         baseline_intrinsic=corpus["baseline_intrinsic"],
-        sales_noise=corpus["sales_noise"],
-        channel_mask=corpus["treatment_active_mask"].astype(bool),
-        control_mask=corpus["covariate_active_mask"].astype(bool),
+        outcome_noise=corpus["outcome_noise"],
+        treatment_mask=corpus["treatment_active_mask"].astype(bool),
+        covariate_mask=corpus["covariate_active_mask"].astype(bool),
         latent_mask=corpus["latent_active_mask"].astype(bool),
     )
     budget = data_diagnostics(corpus).contributions
-    assert budget.values("channels_direct_y_total", measure="total")[0] == pytest.approx(0.0)
+    assert budget.values("treatments_direct_y_total", measure="total")[0] == pytest.approx(0.0)
     # abs(sum) would report 0 activity; the sum of atomic gross keeps both legs
-    assert budget.values("channels_direct_y_total", measure="total", mode="gross")[
+    assert budget.values("treatments_direct_y_total", measure="total", mode="gross")[
         0
     ] == pytest.approx(20.0)
 
 
-def test_complete_gross_over_net_sales_is_at_least_one(toy):
+def test_complete_gross_over_net_outcome_is_at_least_one(toy):
     budget = data_diagnostics(toy).contributions
     top = [d.key for d in budget.descriptors if d.sibling_set == "top"]
     total = sum(budget.values(key, measure="share", mode="gross") for key in top)
     assert (total >= 1.0 - 1e-9).all()
 
-    # equality when nothing cancels: one positive atomic row carries all of sales
+    # equality when nothing cancels: one positive atomic row carries all of outcome
     n_time = 5
     zeros = np.zeros((1, n_time, 2))
     corpus = make_corpus(
-        spend=np.zeros((1, n_time, 1)),
-        controls=np.zeros((1, n_time, 1)),
-        demand=np.zeros((1, n_time, 1)),
+        treatment=np.zeros((1, n_time, 1)),
+        covariates=np.zeros((1, n_time, 1)),
+        latent_unobserved=np.zeros((1, n_time, 1)),
         contributions=np.zeros((1, n_time, 1)),
-        control_contribution=np.zeros((1, n_time, 1)),
-        confounder_contribution=np.zeros((1, n_time, 1)),
+        covariate_contribution=np.zeros((1, n_time, 1)),
+        latent_unobserved_contribution=np.zeros((1, n_time, 1)),
         indirect_by_source=np.zeros((1, n_time, 3)),
         baseline_intrinsic=np.full((1, n_time), 2.0),
-        sales_noise=np.zeros((1, n_time)),
-        channel_mask=np.ones((1, 1), dtype=bool),
-        control_mask=np.ones((1, 1), dtype=bool),
+        outcome_noise=np.zeros((1, n_time)),
+        treatment_mask=np.ones((1, 1), dtype=bool),
+        covariate_mask=np.ones((1, 1), dtype=bool),
         latent_mask=np.ones((1, 1), dtype=bool),
     )
     del zeros
@@ -993,7 +997,7 @@ def test_macro_micro_and_activity_populations(toy):
 
     micro, _ = budget.stats(key, measure="share", weighting="micro")
     totals = budget.values(key, measure="total")
-    assert micro["value"] == pytest.approx(totals.sum() / budget.sales_total.sum())
+    assert micro["value"] == pytest.approx(totals.sum() / budget.outcome_total.sum())
     assert micro["value"] != pytest.approx(per_world.mean())  # pooled != mean of ratios
 
 
@@ -1002,8 +1006,8 @@ def test_projection_is_partial_and_suppresses_closure(toy):
     projected = budget.select(("C2_direct_y", "C1_direct_y"))
     assert projected.keys == ("C2_direct_y", "C1_direct_y")  # caller order
     assert projected.is_partial_projection
-    assert "media_total" in projected.omitted_keys
-    assert not projected.closure("channel_direct_children").complete
+    assert "treatment_total" in projected.omitted_keys
+    assert not projected.closure("treatment_direct_children").complete
     assert np.array_equal(
         projected.values("C1_direct_y", measure="total"),
         budget.values("C1_direct_y", measure="total"),
@@ -1015,47 +1019,47 @@ def test_projection_is_partial_and_suppresses_closure(toy):
     with pytest.raises(TypeError, match="bare string"):
         budget.select("C1_direct_y")
     with pytest.raises(ValueError, match="alternative reading"):
-        budget.select(("C1_direct_y",), basis="observed_path_media")
+        budget.select(("C1_direct_y",), basis="observed_path_treatment")
 
 
 def test_reprojection_keeps_saying_it_is_partial():
     """Projecting a projection omits nothing NEW — the old omissions remain."""
-    corpus = toy_corpus(inactive_last_channel=False)
+    corpus = toy_corpus(inactive_last_treatment=False)
     budget = data_diagnostics(corpus).contributions
-    kept = ("channels_direct_y_total", "C1_direct_y", "C2_direct_y")
+    kept = ("treatments_direct_y_total", "C1_direct_y", "C2_direct_y")
     once = budget.select(kept)
     twice = once.select(kept)
     assert twice.is_partial_projection
     assert set(once.omitted_keys) <= set(twice.omitted_keys)
 
-    dropped = twice.closure("channel_direct_children")
+    dropped = twice.closure("treatment_direct_children")
     assert not dropped.complete
-    # the dropped TRAILING channel is still named, and the residual is real
+    # the dropped TRAILING treatment is still named, and the residual is real
     assert "C3_direct_y" in dropped.omitted_keys
     residual = dropped.residuals["net_total"]
     assert residual is not None
     assert np.allclose(residual, budget.values("C3_direct_y", measure="total"))
     assert dropped.max_abs_residual("net_total") > 0.0
-    assert "partial projection" in twice.table(sibling_set="channel_direct_children")
+    assert "partial projection" in twice.table(sibling_set="treatment_direct_children")
 
 
-def test_zero_sales_invalidates_shares_only():
+def test_zero_outcome_invalidates_shares_only():
     n_time = 4
     corpus = make_corpus(
-        spend=np.ones((1, n_time, 1)),
-        controls=np.ones((1, n_time, 1)),
-        demand=np.ones((1, n_time, 1)),
+        treatment=np.ones((1, n_time, 1)),
+        covariates=np.ones((1, n_time, 1)),
+        latent_unobserved=np.ones((1, n_time, 1)),
         contributions=np.tile(np.array([1.0, -1.0, 1.0, -1.0])[None, :, None], (1, 1, 1)),
-        control_contribution=np.zeros((1, n_time, 1)),
-        confounder_contribution=np.zeros((1, n_time, 1)),
+        covariate_contribution=np.zeros((1, n_time, 1)),
+        latent_unobserved_contribution=np.zeros((1, n_time, 1)),
         indirect_by_source=np.zeros((1, n_time, 3)),
         baseline_intrinsic=np.zeros((1, n_time)),
-        sales_noise=np.zeros((1, n_time)),
-        channel_mask=np.ones((1, 1), dtype=bool),
-        control_mask=np.ones((1, 1), dtype=bool),
+        outcome_noise=np.zeros((1, n_time)),
+        treatment_mask=np.ones((1, 1), dtype=bool),
+        covariate_mask=np.ones((1, 1), dtype=bool),
         latent_mask=np.ones((1, 1), dtype=bool),
     )
-    assert corpus["sales_raw"].sum() == 0.0
+    assert corpus["outcome_raw"].sum() == 0.0
     budget = data_diagnostics(corpus).contributions
     assert budget.values("C1_direct_y", measure="total")[0] == pytest.approx(0.0)
     assert budget.values("C1_direct_y", measure="total", mode="gross")[0] == pytest.approx(4.0)
@@ -1067,7 +1071,7 @@ def test_zero_sales_invalidates_shares_only():
 def test_contribution_table_and_frame(toy):
     budget = data_diagnostics(toy).contributions
     text = budget.table(sibling_set="top")
-    assert "contributions to sales" in text and "media_total" in text
+    assert "contributions to outcome" in text and "treatment_total" in text
     frame = budget.to_frame()
     assert set(CONTRIBUTION_FIELDS).issubset(frame.columns)
     assert len(frame) == 3 * len(budget.descriptors)
@@ -1088,8 +1092,8 @@ def test_summary_is_strictly_json_serializable(report):
 
 def test_infinite_values_are_counted_not_hidden():
     series = np.array([0.0] * 5 + [1.0] + [0.0] * 4)
-    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_channel=False)
-    corpus["spend_raw"][0, :, 0] = series
+    corpus = toy_corpus(n_worlds=1, n_time=series.size, inactive_last_treatment=False)
+    corpus["treatment_raw"][0, :, 0] = series
     report = data_diagnostics(corpus, views=("levels",))
     stats, ledger = report["levels"].series.stats("C1", "spike")
     assert stats["mean"] is None  # no FINITE value to average
@@ -1134,9 +1138,9 @@ def test_report_is_pure(toy, monkeypatch, tmp_path):
 
 def test_generated_corpus_report_is_consistent(generated_corpus):
     report = data_diagnostics(generated_corpus, scopes=("nodes", "decomposition"))
-    assert report.n_worlds == generated_corpus["sales_raw"].shape[0]
+    assert report.n_worlds == generated_corpus["outcome_raw"].shape[0]
     closure = report.contributions.closure("top")
-    scale = float(np.abs(report.contributions.sales_total).max())
+    scale = float(np.abs(report.contributions.outcome_total).max())
     assert closure.max_abs_residual("net_total") == pytest.approx(0.0, abs=1e-4 * scale)
     assert closure.complete
 
@@ -1157,23 +1161,23 @@ def test_scm_worlds_add_the_counterfactual_scope():
     assert report.source_kind == "worlds"
     assert "C1_base" in report.keys and "C1_observed_y" in report.keys
     assert report.descriptor("C1_base").scope == "counterfactual"
-    assert "observed_path_media" in report.contribution_bases
+    assert "observed_path_treatment" in report.contribution_bases
 
-    observed = report.contribution_bases["observed_path_media"]
+    observed = report.contribution_bases["observed_path_treatment"]
     closure = observed.closure("observed_path_children")
-    assert closure.parent == "media_total_observed_path"
+    assert closure.parent == "treatment_total_observed_path"
     assert closure.max_abs_residual("net_total") == pytest.approx(0.0, abs=1e-6)
 
     # the two bases are alternative readings, never additive alongside
     assert observed.basis != report.contributions.basis
     with pytest.raises(ValueError, match="alternative reading"):
-        report.contributions.select(("C1_direct_y",), basis="observed_path_media")
+        report.contributions.select(("C1_direct_y",), basis="observed_path_treatment")
 
 
 def test_scm_optional_paths_absent_stay_known_and_ineligible():
     cfg = pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=32, seed=99)
     world = pg.sample_scm(cfg, seed=5)
-    assert "channels_unshocked" not in world.data  # no shock schedule in this config
+    assert "treatments_unshocked" not in world.data  # no shock schedule in this config
     report = data_diagnostics([world], scopes=("nodes", "counterfactual"))
     assert "C1_unshocked" in report.keys
     assert not report.descriptor("C1_unshocked").available

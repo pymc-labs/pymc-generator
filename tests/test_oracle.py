@@ -23,10 +23,10 @@ from pymc_generator.random_walk import (
     symbolic_random_walk,
 )
 from pymc_generator.sampler import SCMPrior, _slice_g_active, sample_g_additive
-from pymc_generator.signal_diagnostics import _adstock_numpy
+from pymc_generator.signal_diagnostics import _carryover_numpy
 from pymc_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
-    ADSTOCK_FAMILY_PARAM_NAMES,
+    CARRYOVER_FAMILY_PARAM_NAMES,
     SATURATION_FAMILY_PARAM_NAMES,
     _live_mechanism_param_names,
     _walk_basis,
@@ -40,7 +40,7 @@ SHARED_RV_NAMES = (
     "beta",
     "delta_dy",
     "rho_zy",
-    "adstock_alpha",
+    "carryover_alpha",
     "weibull_lam",
     "weibull_k",
     "hill_slope",
@@ -91,7 +91,7 @@ def _small_cfg(**overrides):
 
 
 def _direct_only_graph(n_treatments: int = 2) -> dict[str, np.ndarray]:
-    """Return a one-control, one-latent graph with direct-only media effects."""
+    """Return a one-covariate, one-latent graph with direct-only treatment effects."""
     return {
         "g_cy": np.ones(n_treatments, dtype=int),
         "g_dc": np.zeros((1, n_treatments), dtype=int),
@@ -141,9 +141,9 @@ def world_and_oracle():
     drawn = pg.draw_worlds(gen_model, out_names + SHARED_RV_NAMES, seed=17, draws=1)
     world = {name: drawn[name][0] for name in drawn}
     data = {
-        "channels": world["channels"],
-        "controls": world["controls"],
-        "sales": world["sales"],
+        "treatments": world["treatments"],
+        "covariates": world["covariates"],
+        "outcome": world["outcome"],
         "saturation_scale": world["saturation_scale"],
     }
     oracle_marginal = build_oracle_model(g_act, cfg, structural, data)
@@ -151,7 +151,7 @@ def world_and_oracle():
     return gen_model, oracle_marginal, oracle_sampled, world
 
 
-@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+@pytest.mark.parametrize("scope", ("intercept", "non_treatment"))
 def test_floored_intercept_rejects_the_analytic_marginal_oracle(scope):
     """A censored walk is not Gaussian, so marginalising it would be wrong.
 
@@ -170,7 +170,7 @@ def test_floored_intercept_rejects_the_analytic_marginal_oracle(scope):
     gen_model, out_names, _ = build_world_model(g_act, cfg, structural, cfg.n_time_steps)
     drawn = pg.draw_worlds(gen_model, out_names + SHARED_RV_NAMES, seed=17, draws=1)
     world = {name: value[0] for name, value in drawn.items()}
-    data = {key: world[key] for key in ("channels", "controls", "sales", "saturation_scale")}
+    data = {key: world[key] for key in ("treatments", "covariates", "outcome", "saturation_scale")}
 
     with pytest.raises(ValueError, match="latent='marginal' cannot represent a floored intercept"):
         build_oracle_model(g_act, cfg, structural, data)
@@ -180,7 +180,8 @@ def test_floored_intercept_rejects_the_analytic_marginal_oracle(scope):
     oracle = build_oracle_model(g_act, cfg, structural, data, latent="sampled")
     np.testing.assert_allclose(
         _oracle_deterministic_at_truth(oracle, world, "baseline"),
-        np.asarray(world["baseline"], dtype=float) - np.asarray(world["sales_noise"], dtype=float),
+        np.asarray(world["baseline"], dtype=float)
+        - np.asarray(world["outcome_noise"], dtype=float),
         rtol=0.0,
         atol=1e-10,
     )
@@ -205,7 +206,7 @@ def test_default_unshocked_oracle_uses_marginal_free_rvs(world_and_oracle):
     assert {"rw_b_std_rel", "rw_y_std_rel"} <= free_names
     assert not {"rw_b_std", "rw_y_std"} & free_names
     assert not {"eps_d", "eps_b"} & free_names
-    assert not any(name.startswith("channel_shock") for name in free_names)
+    assert not any(name.startswith("treatment_shock") for name in free_names)
 
 
 def test_baseline_walk_override_is_shared_by_generation_and_oracle():
@@ -229,9 +230,9 @@ def test_baseline_walk_override_is_shared_by_generation_and_oracle():
         cfg,
         structural,
         {
-            "channels": np.zeros((cfg.n_time_steps, 2)),
-            "controls": np.zeros((cfg.n_time_steps, 1)),
-            "sales": np.zeros(cfg.n_time_steps),
+            "treatments": np.zeros((cfg.n_time_steps, 2)),
+            "covariates": np.zeros((cfg.n_time_steps, 1)),
+            "outcome": np.zeros(cfg.n_time_steps),
             "saturation_scale": np.ones(2),
         },
     )
@@ -247,7 +248,7 @@ def test_relative_outcome_scale_is_shared_by_generation_and_oracle():
     cfg = _small_cfg(
         beta_additive_range=(1.2, 1.2),
         rw_baseline_std_range=(0.07, 0.07),
-        rw_sales_std_range=(0.02, 0.02),
+        rw_outcome_std_range=(0.02, 0.02),
     )
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(16))
@@ -257,18 +258,20 @@ def test_relative_outcome_scale_is_shared_by_generation_and_oracle():
         cfg,
         structural,
         {
-            "channels": np.zeros((cfg.n_time_steps, 2)),
-            "controls": np.zeros((cfg.n_time_steps, 1)),
-            "sales": np.zeros(cfg.n_time_steps),
+            "treatments": np.zeros((cfg.n_time_steps, 2)),
+            "covariates": np.zeros((cfg.n_time_steps, 1)),
+            "outcome": np.zeros(cfg.n_time_steps),
             "saturation_scale": np.ones(2),
         },
     )
-    media_amplitude = np.sqrt(2.0 * 1.2**2)
+    treatment_amplitude = np.sqrt(2.0 * 1.2**2)
 
     for group, relative_std in (("rw_b", 0.07), ("rw_y", 0.02)):
         generated = np.asarray(pm.draw(generative[f"{group}_std"], draws=1, random_seed=17))
         inferred = np.asarray(pm.draw(oracle[f"{group}_std"], draws=1, random_seed=18))
-        np.testing.assert_allclose(generated, relative_std * media_amplitude, rtol=0.0, atol=1e-14)
+        np.testing.assert_allclose(
+            generated, relative_std * treatment_amplitude, rtol=0.0, atol=1e-14
+        )
         np.testing.assert_allclose(inferred, generated, rtol=0.0, atol=1e-14)
 
 
@@ -282,20 +285,20 @@ def test_oracle_logp_finite_at_truth(world_and_oracle):
 
 def test_oracle_deterministics_shapes(world_and_oracle):
     _gen_model, marginal, sampled, world = world_and_oracle
-    n_time_steps, n_treatments = world["channels"].shape
-    n_latent = world["demand"].shape[1]
+    n_time_steps, n_treatments = world["treatments"].shape
+    n_latent = world["latent_unobserved"].shape[1]
 
     marginal_names = {d.name for d in marginal.deterministics}
-    assert {"contributions", "sales_mu"} <= marginal_names
-    assert not {"baseline", "demand"} & marginal_names
+    assert {"contributions", "outcome_mu"} <= marginal_names
+    assert not {"baseline", "latent_unobserved"} & marginal_names
     assert tuple(marginal["contributions"].shape.eval()) == (n_time_steps, n_treatments)
-    assert tuple(marginal["sales_mu"].shape.eval()) == (n_time_steps,)
+    assert tuple(marginal["outcome_mu"].shape.eval()) == (n_time_steps,)
 
     sampled_names = {d.name for d in sampled.deterministics}
-    assert {"contributions", "baseline", "sales_mu", "demand"} <= sampled_names
+    assert {"contributions", "baseline", "outcome_mu", "latent_unobserved"} <= sampled_names
     assert {"eps_d", "eps_b"} <= {rv.name for rv in sampled.free_RVs}
     assert tuple(sampled["contributions"].shape.eval()) == (n_time_steps, n_treatments)
-    assert tuple(sampled["demand"].shape.eval()) == (n_time_steps, n_latent)
+    assert tuple(sampled["latent_unobserved"].shape.eval()) == (n_time_steps, n_latent)
 
 
 @pytest.mark.parametrize(
@@ -368,13 +371,13 @@ def test_walk_horizon_below_two_weeks_is_rejected_not_silently_nan():
     np.testing.assert_allclose(walk.mean(), 3.0, rtol=0.0, atol=1e-12)
 
 
-def test_marginal_sales_logp_matches_numpy_mvn():
-    """The marginal sales factor is the independently assembled exact MvNormal."""
+def test_marginal_outcome_logp_matches_numpy_mvn():
+    """The marginal outcome factor is the independently assembled exact MvNormal."""
     cfg = _small_cfg(
         n_treatments=1,
         n_time_steps=12,
         l_max=2,
-        adstock_burn_in=2,
+        carryover_burn_in=2,
         nonlinearity="linear",
         outcome_std_mode="absolute",
     )
@@ -382,13 +385,13 @@ def test_marginal_sales_logp_matches_numpy_mvn():
     g["g_dy"][:] = 1
     g["g_zy"][:] = 1
     structural = sample_structure(g, cfg, np.random.default_rng(31))
-    structural["adstock_family"][:] = 0
+    structural["carryover_family"][:] = 0
     structural["sat_family"][:] = 0
     structural["smoothness_d"][:] = 0.0
     structural["smoothness_b"][:] = 0.5
 
-    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
-    rows = np.arange(cfg.adstock_burn_in, n_time_steps_full)
+    n_time_steps_full = cfg.n_time_steps + cfg.carryover_burn_in
+    rows = np.arange(cfg.carryover_burn_in, n_time_steps_full)
     values = {
         "beta": np.array([1.2]),
         "delta_dy": np.array([0.3]),
@@ -397,24 +400,24 @@ def test_marginal_sales_logp_matches_numpy_mvn():
         "rw_b_std": np.array([0.4]),
         "rw_y_std": np.array([0.1]),
     }
-    channels = np.linspace(0.5, 3.0, cfg.n_time_steps)[:, None]
-    controls = np.linspace(-0.4, 0.6, cfg.n_time_steps)[:, None]
-    mean_for_sales = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zy"][0]
-    mean_for_sales = mean_for_sales + values["beta"][0] * channels[:, 0] / 2.0
+    treatments = np.linspace(0.5, 3.0, cfg.n_time_steps)[:, None]
+    covariates = np.linspace(-0.4, 0.6, cfg.n_time_steps)[:, None]
+    mean_for_outcome = values["rw_b_mean"][0] + covariates[:, 0] * values["rho_zy"][0]
+    mean_for_outcome = mean_for_outcome + values["beta"][0] * treatments[:, 0] / 2.0
     residual = 0.15 * np.sin(np.arange(cfg.n_time_steps))
-    sales = mean_for_sales + residual - residual.mean()
+    outcome = mean_for_outcome + residual - residual.mean()
     oracle = build_oracle_model(
         g,
         cfg,
         structural,
         {
-            "channels": channels,
-            "controls": controls,
-            "sales": sales,
+            "treatments": treatments,
+            "covariates": covariates,
+            "outcome": outcome,
             "saturation_scale": np.array([2.0]),
         },
     )
-    likelihood = oracle.compile_logp(vars=[oracle["sales"]])(_oracle_truth_point(oracle, values))
+    likelihood = oracle.compile_logp(vars=[oracle["outcome"]])(_oracle_truth_point(oracle, values))
 
     def gram(smoothness: float) -> np.ndarray:
         width = _kernel_width(
@@ -429,8 +432,8 @@ def test_marginal_sales_logp_matches_numpy_mvn():
         restricted = basis[rows]
         return restricted @ restricted.T
 
-    mu = values["rw_b_mean"][0] + controls[:, 0] * values["rho_zy"][0]
-    mu = mu + values["beta"][0] * channels[:, 0] / 2.0
+    mu = values["rw_b_mean"][0] + covariates[:, 0] * values["rho_zy"][0]
+    mu = mu + values["beta"][0] * treatments[:, 0] / 2.0
     covariance = (values["rw_b_std"][0] ** 2) * gram(float(structural["smoothness_b"][0]))
     covariance = covariance + (values["rw_y_std"][0] ** 2) * np.eye(rows.size)
     covariance = covariance + (values["delta_dy"][0] ** 2) * gram(
@@ -438,7 +441,7 @@ def test_marginal_sales_logp_matches_numpy_mvn():
     )
     covariance = covariance + 1e-12 * np.eye(rows.size)
     expected = multivariate_normal.logpdf(
-        sales,
+        outcome,
         mean=mu,
         cov=Covariance.from_cholesky(np.linalg.cholesky(covariance)),
     )
@@ -448,31 +451,31 @@ def test_marginal_sales_logp_matches_numpy_mvn():
 
 def test_oracle_registers_only_live_mechanism_shape_params():
     """Mechanism priors follow the concrete family union, not all families."""
-    cfg = _small_cfg(n_treatments=2, n_time_steps=12, adstock_burn_in=0)
+    cfg = _small_cfg(n_treatments=2, n_time_steps=12, carryover_burn_in=0)
     g = _direct_only_graph(2)
     data = {
-        "channels": np.zeros((cfg.n_time_steps, 2)),
-        "controls": np.zeros((cfg.n_time_steps, 1)),
-        "sales": np.zeros(cfg.n_time_steps),
+        "treatments": np.zeros((cfg.n_time_steps, 2)),
+        "covariates": np.zeros((cfg.n_time_steps, 1)),
+        "outcome": np.zeros(cfg.n_time_steps),
         "saturation_scale": np.ones(2),
     }
 
-    def oracle_with_families(adstock_family: int, sat_family: int):
+    def oracle_with_families(carryover_family: int, sat_family: int):
         structural = sample_structure(g, cfg, np.random.default_rng(32))
-        structural["adstock_family"][:] = adstock_family
+        structural["carryover_family"][:] = carryover_family
         structural["sat_family"][:] = sat_family
         return structural, build_oracle_model(g, cfg, structural, data)
 
-    assert ADSTOCK_FAMILY_PARAM_NAMES["geometric"] == ("adstock_alpha",)
+    assert CARRYOVER_FAMILY_PARAM_NAMES["geometric"] == ("carryover_alpha",)
     assert SATURATION_FAMILY_PARAM_NAMES["michaelis_menten"] == ("mm_kappa_mult",)
 
     geometric_mm_structure, geometric_mm = oracle_with_families(1, 3)
     geometric_mm_names = {rv.name for rv in geometric_mm.free_RVs}
     assert _live_mechanism_param_names(geometric_mm_structure) == (
-        "adstock_alpha",
+        "carryover_alpha",
         "mm_kappa_mult",
     )
-    assert {"adstock_alpha", "mm_kappa_mult"} <= geometric_mm_names
+    assert {"carryover_alpha", "mm_kappa_mult"} <= geometric_mm_names
     assert (
         not {
             "weibull_lam",
@@ -495,26 +498,26 @@ def test_oracle_registers_only_live_mechanism_shape_params():
         "hill_kappa_mult",
     )
     assert {"weibull_lam", "weibull_k", "hill_slope", "hill_kappa_mult"} <= weibull_hill_names
-    assert not {"adstock_alpha", "mm_kappa_mult"} & weibull_hill_names
+    assert not {"carryover_alpha", "mm_kappa_mult"} & weibull_hill_names
 
 
 def test_oracle_likelihood_starts_at_first_reproducible_response_week():
-    """The likelihood begins after, but not before, unpersisted adstock history."""
+    """The likelihood begins after, but not before, unpersisted carryover history."""
     cfg = _small_cfg(
         n_time_steps=8,
         l_max=4,
-        adstock_burn_in=4,
+        carryover_burn_in=4,
         nonlinearity="linear",
-        adstock_family_probs={
+        carryover_family_probs={
             "none": 0.0,
             "geometric": 1.0,
             "weibull": 0.0,
         },
-        adstock_alpha_range=(0.79, 0.81),
+        carryover_alpha_range=(0.79, 0.81),
     )
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(20))
-    assert np.all(structural["adstock_family"] == 1)
+    assert np.all(structural["carryover_family"] == 1)
     generative, output_names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = {
         name: value[0]
@@ -526,17 +529,17 @@ def test_oracle_likelihood_starts_at_first_reproducible_response_week():
         g,
         cfg,
         structural,
-        {key: drawn[key] for key in ("channels", "controls", "sales", "saturation_scale")},
+        {key: drawn[key] for key in ("treatments", "covariates", "outcome", "saturation_scale")},
         latent="sampled",
     )
 
     warmup = cfg.l_max - 1
     oracle_contributions = _oracle_deterministic_at_truth(oracle, drawn, "contributions")
     truth = drawn["contributions_observed"]
-    assert tuple(oracle["sales"].shape.eval()) == (cfg.n_time_steps - warmup,)
+    assert tuple(oracle["outcome"].shape.eval()) == (cfg.n_time_steps - warmup,)
     assert tuple(oracle["contributions"].shape.eval()) == (cfg.n_time_steps, 2)
     assert tuple(oracle["baseline"].shape.eval()) == (cfg.n_time_steps,)
-    assert tuple(oracle["sales_mu"].shape.eval()) == (cfg.n_time_steps,)
+    assert tuple(oracle["outcome_mu"].shape.eval()) == (cfg.n_time_steps,)
     np.testing.assert_allclose(oracle_contributions[warmup], truth[warmup], rtol=0.0, atol=1e-15)
     before_warmup_error = np.abs(oracle_contributions[warmup - 1] - truth[warmup - 1]).max()
     assert before_warmup_error > 1e-3
@@ -551,8 +554,8 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
         n_latent=1,
         n_time_steps=4,
         l_max=5,
-        adstock_burn_in=5,
-        adstock_family_probs={
+        carryover_burn_in=5,
+        carryover_family_probs={
             "none": 0.0,
             "geometric": 1.0,
             "weibull": 0.0,
@@ -560,7 +563,7 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
     )
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(21))
-    assert np.all(structural["adstock_family"] == 1)
+    assert np.all(structural["carryover_family"] == 1)
 
     with pytest.raises(ValueError, match="no reproducible observations"):
         build_oracle_model(
@@ -568,16 +571,16 @@ def test_oracle_rejects_likelihood_without_reproducible_weeks():
             cfg,
             structural,
             {
-                "channels": np.zeros((cfg.n_time_steps, 2)),
-                "controls": np.zeros((cfg.n_time_steps, 1)),
-                "sales": np.zeros(cfg.n_time_steps),
+                "treatments": np.zeros((cfg.n_time_steps, 2)),
+                "covariates": np.zeros((cfg.n_time_steps, 1)),
+                "outcome": np.zeros(cfg.n_time_steps),
                 "saturation_scale": np.ones(2),
             },
         )
 
 
-def test_oracle_warmup_exempts_identity_adstock():
-    """With burn-in, only non-identity direct adstock loses response history."""
+def test_oracle_warmup_exempts_identity_carryover():
+    """With burn-in, only non-identity direct carryover loses response history."""
     shapes = {}
     for name, family, family_probs in (
         ("identity", 0, {"none": 1.0, "geometric": 0.0, "weibull": 0.0}),
@@ -590,7 +593,7 @@ def test_oracle_warmup_exempts_identity_adstock():
             n_time_steps=20,
             l_max=5,
             nonlinearity="linear",
-            adstock_family_probs=family_probs,
+            carryover_family_probs=family_probs,
             edge_budget={
                 "cy": (1, 1),
                 "dc": 0,
@@ -602,19 +605,19 @@ def test_oracle_warmup_exempts_identity_adstock():
                 "zz": 0,
             },
         )
-        assert cfg.adstock_burn_in == cfg.l_max
+        assert cfg.carryover_burn_in == cfg.l_max
         world = pg.sample_scm(cfg, seed=23, max_eps_draws=4)
-        assert np.array_equal(world.params["adstock_family"], np.array([family]))
+        assert np.array_equal(world.params["carryover_family"], np.array([family]))
 
         oracle = world.oracle_model()
-        shapes[name] = tuple(oracle["sales"].shape.eval())
+        shapes[name] = tuple(oracle["outcome"].shape.eval())
         if family == 0:
             truth_values = {**world.params, **world.exogenous}
-            media_amplitude = np.sqrt(np.sum((world.g["g_cy"] * world.params["beta"]) ** 2))
+            treatment_amplitude = np.sqrt(np.sum((world.g["g_cy"] * world.params["beta"]) ** 2))
             for group in ("rw_b", "rw_y"):
                 truth_values[f"{group}_mean"] = world.params[group]["mean"]
                 truth_values[f"{group}_std"] = world.params[group]["std"]
-                truth_values[f"{group}_std_rel"] = world.params[group]["std"] / media_amplitude
+                truth_values[f"{group}_std_rel"] = world.params[group]["std"] / treatment_amplitude
             oracle_contributions = _oracle_deterministic_at_truth(
                 oracle, truth_values, "contributions"
             )
@@ -629,7 +632,7 @@ def test_oracle_warmup_exempts_identity_adstock():
 
 
 def test_oracle_warmup_follows_the_carryover_its_own_priors_admit():
-    """The discarded prefix is the priors' reach, not the adstock family label.
+    """The discarded prefix is the priors' reach, not the carryover family label.
 
     The oracle's families are fixed but its kernel SHAPE parameters are free
     RVs, so the unreproducible prefix is as long as the longest carryover any
@@ -644,33 +647,33 @@ def test_oracle_warmup_follows_the_carryover_its_own_priors_admit():
     for name, family, family_probs, alpha_range, prior_cond in (
         ("geometric", 1, geometric, (0.2, 0.8), None),
         ("pinned_range", 1, geometric, (0.0, 0.0), None),
-        ("pinned_prior_cond", 1, geometric, (0.0, 0.8), {"adstock_alpha": (0.0, 0.0)}),
+        ("pinned_prior_cond", 1, geometric, (0.0, 0.8), {"carryover_alpha": (0.0, 0.0)}),
         ("weibull", 2, weibull, (0.2, 0.8), None),
     ):
         cfg = _small_cfg(
             n_time_steps=20,
             l_max=5,
             nonlinearity="linear",
-            adstock_family_probs=family_probs,
-            adstock_alpha_range=alpha_range,
+            carryover_family_probs=family_probs,
+            carryover_alpha_range=alpha_range,
         )
-        assert cfg.adstock_burn_in == cfg.l_max
+        assert cfg.carryover_burn_in == cfg.l_max
         g = _direct_only_graph()
         structural = sample_structure(g, cfg, np.random.default_rng(20))
-        assert np.all(structural["adstock_family"] == family)
+        assert np.all(structural["carryover_family"] == family)
         oracle = build_oracle_model(
             g,
             cfg,
             structural,
             {
-                "channels": np.zeros((cfg.n_time_steps, 2)),
-                "controls": np.zeros((cfg.n_time_steps, 1)),
-                "sales": np.zeros(cfg.n_time_steps),
+                "treatments": np.zeros((cfg.n_time_steps, 2)),
+                "covariates": np.zeros((cfg.n_time_steps, 1)),
+                "outcome": np.zeros(cfg.n_time_steps),
                 "saturation_scale": np.ones(2),
             },
             prior_cond=prior_cond,
         )
-        rows[name] = tuple(oracle["sales"].shape.eval())
+        rows[name] = tuple(oracle["outcome"].shape.eval())
 
     assert rows == {
         "geometric": (16,),
@@ -696,8 +699,8 @@ def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
         n_time_steps=20,
         l_max=5,
         nonlinearity="linear",
-        adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
-        adstock_alpha_range=(0.0, 0.0),
+        carryover_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        carryover_alpha_range=(0.0, 0.0),
         edge_budget={
             "cy": (1, 1),
             "dc": 0,
@@ -709,20 +712,20 @@ def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
             "zz": 0,
         },
     )
-    assert cfg.adstock_burn_in == cfg.l_max
+    assert cfg.carryover_burn_in == cfg.l_max
     world = pg.sample_scm(cfg, seed=23, max_eps_draws=4)
-    assert np.array_equal(world.params["adstock_family"], np.array([1]))
-    assert np.array_equal(world.params["adstock_alpha"], np.array([0.0]))
+    assert np.array_equal(world.params["carryover_family"], np.array([1]))
+    assert np.array_equal(world.params["carryover_alpha"], np.array([0.0]))
 
     oracle = world.oracle_model()
-    assert tuple(oracle["sales"].shape.eval()) == (cfg.n_time_steps,)
+    assert tuple(oracle["outcome"].shape.eval()) == (cfg.n_time_steps,)
 
     truth_values = {**world.params, **world.exogenous}
-    media_amplitude = np.sqrt(np.sum((world.g["g_cy"] * world.params["beta"]) ** 2))
+    treatment_amplitude = np.sqrt(np.sum((world.g["g_cy"] * world.params["beta"]) ** 2))
     for group in ("rw_b", "rw_y"):
         truth_values[f"{group}_mean"] = world.params[group]["mean"]
         truth_values[f"{group}_std"] = world.params[group]["std"]
-        truth_values[f"{group}_std_rel"] = world.params[group]["std"] / media_amplitude
+        truth_values[f"{group}_std_rel"] = world.params[group]["std"] / treatment_amplitude
     oracle_contributions = _oracle_deterministic_at_truth(oracle, truth_values, "contributions")
     np.testing.assert_allclose(
         oracle_contributions,
@@ -733,20 +736,22 @@ def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
 
 
 @pytest.mark.parametrize(
-    "adstock_family",
+    "carryover_family",
     (0, 1, 2),
     ids=("identity", "geometric", "weibull"),
 )
-def test_oracle_logp_and_gradient_capability_by_adstock_family(adstock_family: int):
-    """Every supported adstock family has a finite, nontrivial oracle gradient."""
-    cfg = _small_cfg(n_treatments=1, n_time_steps=12, adstock_burn_in=0)
+def test_oracle_logp_and_gradient_capability_by_carryover_family(carryover_family: int):
+    """Every supported carryover family has a finite, nontrivial oracle gradient."""
+    cfg = _small_cfg(n_treatments=1, n_time_steps=12, carryover_burn_in=0)
     g = _direct_only_graph(1)
     structural = sample_structure(g, cfg, np.random.default_rng(12))
-    structural["adstock_family"][:] = adstock_family
+    structural["carryover_family"][:] = carryover_family
     structural["sat_family"][:] = 0
     model, output_names, parameter_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = pg.draw_worlds(model, output_names + parameter_names, seed=19, draws=1)
-    data = {name: drawn[name][0] for name in ("channels", "controls", "sales", "saturation_scale")}
+    data = {
+        name: drawn[name][0] for name in ("treatments", "covariates", "outcome", "saturation_scale")
+    }
     oracle = build_oracle_model(g, cfg, structural, data)
 
     assert np.isfinite(oracle.compile_logp()(oracle.initial_point()))
@@ -765,45 +770,45 @@ def test_oracle_rejects_bad_shapes(world_and_oracle):
     g_act = _slice_g_active(g, 2, 1, 1)
     structural = sample_structure(g_act, cfg, rng)
     missing_scale = {
-        "channels": world["channels"],
-        "controls": world["controls"],
-        "sales": world["sales"],
+        "treatments": world["treatments"],
+        "covariates": world["covariates"],
+        "outcome": world["outcome"],
     }
     with pytest.raises(ValueError, match="saturation_scale"):
         build_oracle_model(g_act, cfg, structural, missing_scale)
 
     bad = {
-        "channels": world["channels"][:, :1],  # wrong n_treatments
-        "controls": world["controls"],
-        "sales": world["sales"],
+        "treatments": world["treatments"][:, :1],  # wrong n_treatments
+        "covariates": world["covariates"],
+        "outcome": world["outcome"],
         "saturation_scale": world["saturation_scale"],
     }
     with pytest.raises(ValueError, match="data shapes"):
         build_oracle_model(g_act, cfg, structural, bad)
 
-    bad_sales = {
-        "channels": world["channels"],
-        "controls": world["controls"],
-        "sales": world["sales"][:, None],
+    bad_outcome = {
+        "treatments": world["treatments"],
+        "covariates": world["covariates"],
+        "outcome": world["outcome"][:, None],
         "saturation_scale": world["saturation_scale"],
     }
-    with pytest.raises(ValueError, match="sales must have shape"):
-        build_oracle_model(g_act, cfg, structural, bad_sales)
+    with pytest.raises(ValueError, match="outcome must have shape"):
+        build_oracle_model(g_act, cfg, structural, bad_outcome)
 
     empty = {
-        "channels": np.empty((0, 2)),
-        "controls": np.empty((0, 1)),
-        "sales": np.empty(0),
+        "treatments": np.empty((0, 2)),
+        "covariates": np.empty((0, 1)),
+        "outcome": np.empty(0),
         "saturation_scale": np.ones(2),
     }
     with pytest.raises(ValueError, match="at least one observation"):
         build_oracle_model(g_act, cfg, structural, empty)
 
-    for key, fill in (("channels", np.nan), ("controls", np.inf), ("sales", np.nan)):
+    for key, fill in (("treatments", np.nan), ("covariates", np.inf), ("outcome", np.nan)):
         nonfinite = {
-            "channels": world["channels"].copy(),
-            "controls": world["controls"].copy(),
-            "sales": world["sales"].copy(),
+            "treatments": world["treatments"].copy(),
+            "covariates": world["covariates"].copy(),
+            "outcome": world["outcome"].copy(),
             "saturation_scale": world["saturation_scale"].copy(),
         }
         nonfinite[key].flat[0] = fill
@@ -835,18 +840,18 @@ def test_scm_oracle_model_roundtrip():
     """SCM.oracle_model() rebuilds the oracle from the recorded extras."""
     cfg = _small_cfg(
         prior_conditioning=True,
-        adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        carryover_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
     )
     world = pg.sample_scm(cfg, seed=3)
     assert world.data["saturation_scale"].shape == (world.n_treatments,)
     assert (world.data["saturation_scale"] > 0.0).all()
     oracle = world.oracle_model()
-    # the conditioned prior narrows adstock_alpha to the recorded interval
-    lo, width = world.extras["prior_cond"]["adstock_alpha"]
+    # the conditioned prior narrows carryover_alpha to the recorded interval
+    lo, width = world.extras["prior_cond"]["carryover_alpha"]
     outside = np.full(world.n_treatments, lo - 0.05)
     inside = np.full(world.n_treatments, lo + width / 2)
-    assert not np.isfinite(pm.logp(oracle["adstock_alpha"], outside).eval()).all()
-    assert np.isfinite(pm.logp(oracle["adstock_alpha"], inside).eval()).all()
+    assert not np.isfinite(pm.logp(oracle["carryover_alpha"], outside).eval()).all()
+    assert np.isfinite(pm.logp(oracle["carryover_alpha"], inside).eval()).all()
 
 
 def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
@@ -856,10 +861,10 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
         n_covariates=1,
         n_latent=1,
         n_time_steps=12,
-        adstock_burn_in=0,
-        n_channel_shocks=n_shocks,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=level,
+        carryover_burn_in=0,
+        n_treatment_shocks=n_shocks,
+        treatment_shock_length_range=(2, 2),
+        treatment_shock_level_range=level,
         edge_budget={"cy": (1, 1)},
     )
     g = {
@@ -873,7 +878,7 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
         "g_zz": np.zeros((1, 1), dtype=int),
     }
     structural = sample_structure(g, cfg, np.random.default_rng(4))
-    structural["adstock_family"][:] = 1
+    structural["carryover_family"][:] = 1
     structural["sat_family"][:] = 0
     model, names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     drawn = {
@@ -883,18 +888,18 @@ def _shocked_oracle_world(*, n_shocks=1, level=(0.0, 0.0)):
     data = {
         key: drawn[key]
         for key in (
-            "channels",
-            "controls",
-            "sales",
+            "treatments",
+            "covariates",
+            "outcome",
             "saturation_scale",
-            "channel_shock_channel",
-            "channel_shock_start",
-            "channel_shock_length",
-            "channel_shock_level_multiplier",
-            "channel_shock_level",
+            "treatment_shock_index",
+            "treatment_shock_start",
+            "treatment_shock_length",
+            "treatment_shock_level_multiplier",
+            "treatment_shock_level",
         )
     }
-    data["channel_level"] = drawn["param_channel_level"]
+    data["treatment_level"] = drawn["param_treatment_level"]
     return cfg, g, structural, drawn, data
 
 
@@ -902,100 +907,100 @@ def test_shocked_oracle_uses_known_schedule_without_schedule_rvs():
     cfg, g, structural, drawn, data = _shocked_oracle_world()
     oracle = build_oracle_model(g, cfg, structural, data)
 
-    assert not any(rv.name.startswith("channel_shock") for rv in oracle.free_RVs)
-    # A held window clamps spend and nothing else, so pre-window carryover
+    assert not any(rv.name.startswith("treatment_shock") for rv in oracle.free_RVs)
+    # A held window clamps treatment and nothing else, so pre-window carryover
     # decays into the intervention window instead of being discarded.
-    mask = drawn["channel_shock_mask"][:, 0].astype(bool)
+    mask = drawn["treatment_shock_mask"][:, 0].astype(bool)
     start = int(np.flatnonzero(mask)[0])
     contribution = pm.draw(oracle["contributions"], draws=1, random_seed=17)
     assert (contribution[mask, 0] >= 0.0).all()
-    if start > 0 and data["channels"][start - 1, 0] > 0.0:
+    if start > 0 and data["treatments"][start - 1, 0] > 0.0:
         assert contribution[start, 0] > 0.0
 
 
-def test_shocked_oracle_response_matches_plain_adstock_of_the_clamped_series():
+def test_shocked_oracle_response_matches_plain_carryover_of_the_clamped_series():
     cfg, g, structural, _drawn, data = _shocked_oracle_world(n_shocks=2, level=(0.5, 0.5))
     # Make the response independent of a random schedule realization.
     data.update(
         {
-            "channels": np.array(
+            "treatments": np.array(
                 [[4.0], [3.0], [0.5], [0.5], [7.0], [8.0], [0.5], [0.5], [1.0], [1.0], [1.0], [1.0]]
             ),
-            "channel_shock_channel": np.array([0, 0], dtype="int64"),
-            "channel_shock_start": np.array([2, 6], dtype="int64"),
-            "channel_shock_length": np.array([2, 2], dtype="int64"),
-            "channel_shock_level_multiplier": np.array([0.5, 0.5]),
-            "channel_shock_level": np.array([0.5, 0.5]),
-            "channel_level": np.array([1.0]),
+            "treatment_shock_index": np.array([0, 0], dtype="int64"),
+            "treatment_shock_start": np.array([2, 6], dtype="int64"),
+            "treatment_shock_length": np.array([2, 2], dtype="int64"),
+            "treatment_shock_level_multiplier": np.array([0.5, 0.5]),
+            "treatment_shock_level": np.array([0.5, 0.5]),
+            "treatment_level": np.array([1.0]),
             "saturation_scale": np.array([3.0]),
         }
     )
     oracle = build_oracle_model(g, cfg, structural, data)
     with oracle:
         got, alpha, beta = pm.draw(
-            [oracle["contributions"][:, 0], oracle["adstock_alpha"], oracle["beta"]],
+            [oracle["contributions"][:, 0], oracle["carryover_alpha"], oracle["beta"]],
             draws=1,
             random_seed=29,
         )
-    adstock = _adstock_numpy(
-        data["channels"][:, 0],
+    carryover = _carryover_numpy(
+        data["treatments"][:, 0],
         family=1,
         alpha=alpha[0],
         lam=1.0,
         shape=1.0,
         l_max=cfg.l_max,
     )
-    expected = beta[0] * adstock / data["saturation_scale"][0]
+    expected = beta[0] * carryover / data["saturation_scale"][0]
     np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-14)
 
 
 def test_shocked_oracle_rejects_missing_or_malformed_schedule_metadata():
     cfg, g, structural, _drawn, data = _shocked_oracle_world(level=(0.0, 1.0))
     missing = dict(data)
-    del missing["channel_shock_start"]
-    with pytest.raises(ValueError, match="channel_shock_start"):
+    del missing["treatment_shock_start"]
+    with pytest.raises(ValueError, match="treatment_shock_start"):
         build_oracle_model(g, cfg, structural, missing)
     malformed = dict(data)
-    malformed["channel_shock_length"] = np.array([1, 2], dtype="int64")
-    with pytest.raises(ValueError, match="channel_shock_length"):
+    malformed["treatment_shock_length"] = np.array([1, 2], dtype="int64")
+    with pytest.raises(ValueError, match="treatment_shock_length"):
         build_oracle_model(g, cfg, structural, malformed)
     malformed_scale = dict(data)
     malformed_scale["saturation_scale"] = np.array([np.nan])
     with pytest.raises(ValueError, match="saturation_scale"):
         build_oracle_model(g, cfg, structural, malformed_scale)
     contradictory = dict(data)
-    contradictory["channels"] = contradictory["channels"].copy()
-    start = int(contradictory["channel_shock_start"][0])
-    contradictory["channels"][start : start + 2, 0] = 1.0
-    with pytest.raises(ValueError, match="held level does not match observed spend"):
+    contradictory["treatments"] = contradictory["treatments"].copy()
+    start = int(contradictory["treatment_shock_start"][0])
+    contradictory["treatments"][start : start + 2, 0] = 1.0
+    with pytest.raises(ValueError, match="held level does not match observed treatment"):
         build_oracle_model(g, cfg, structural, contradictory)
     contradictory_multiplier = dict(data)
-    original_multiplier = float(data["channel_shock_level_multiplier"][0])
-    contradictory_multiplier["channel_shock_level_multiplier"] = np.array(
+    original_multiplier = float(data["treatment_shock_level_multiplier"][0])
+    contradictory_multiplier["treatment_shock_level_multiplier"] = np.array(
         [0.0 if original_multiplier > 0.5 else 1.0]
     )
-    with pytest.raises(ValueError, match=r"multiplier \* channel_level"):
+    with pytest.raises(ValueError, match=r"multiplier \* treatment_level"):
         build_oracle_model(g, cfg, structural, contradictory_multiplier)
 
 
 def test_scm_oracle_model_roundtrip_with_shocks():
     cfg = _small_cfg(
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=(0.0, 0.0),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 2),
+        treatment_shock_level_range=(0.0, 0.0),
     )
     world = pg.sample_scm(cfg, seed=15, max_eps_draws=4)
     marginal = world.oracle_model()
     marginal_names = {deterministic.name for deterministic in marginal.deterministics}
-    assert {"contributions", "sales_mu"} <= marginal_names
-    assert not {"baseline", "demand"} & marginal_names
+    assert {"contributions", "outcome_mu"} <= marginal_names
+    assert not {"baseline", "latent_unobserved"} & marginal_names
 
     sampled = world.oracle_model(latent="sampled")
-    assert {"baseline", "contributions", "sales_mu", "demand"} <= {
+    assert {"baseline", "contributions", "outcome_mu", "latent_unobserved"} <= {
         deterministic.name for deterministic in sampled.deterministics
     }
     for oracle in (marginal, sampled):
-        assert not any(rv.name.startswith("channel_shock") for rv in oracle.free_RVs)
+        assert not any(rv.name.startswith("treatment_shock") for rv in oracle.free_RVs)
 
 
 @pytest.mark.slow
@@ -1004,7 +1009,7 @@ def test_nuts_smoke_recovers_params():
     cfg = _small_cfg(
         outcome_std_mode="absolute",
         rw_baseline_std_sigma=0.05,
-        rw_sales_std_sigma=0.02,
+        rw_outcome_std_sigma=0.02,
     )
     world = pg.sample_scm(cfg, seed=8)
     with world.oracle_model(latent="sampled"):
@@ -1024,13 +1029,13 @@ def test_nuts_smoke_recovers_params():
     std = post["beta"].std(("chain", "draw")).values
     # wide bounds: the truth within +/- 4 posterior sd of the posterior mean
     assert (np.abs(mean - true_beta)[direct] <= 4.0 * std[direct] + 0.25).all()
-    # The fitted sales mean tracks the observed likelihood window.
+    # The fitted outcome mean tracks the observed likelihood window.
     warmup = (
         cfg.l_max - 1
-        if cfg.adstock_burn_in > 0
-        and np.any(direct & (np.asarray(world.params["adstock_family"]) != 0))
+        if cfg.carryover_burn_in > 0
+        and np.any(direct & (np.asarray(world.params["carryover_family"]) != 0))
         else 0
     )
-    mu = post["sales_mu"].mean(("chain", "draw")).values
-    r = np.corrcoef(mu[warmup:], world.data["sales"][warmup:])[0, 1]
+    mu = post["outcome_mu"].mean(("chain", "draw")).values
+    r = np.corrcoef(mu[warmup:], world.data["outcome"][warmup:])[0, 1]
     assert r > 0.8

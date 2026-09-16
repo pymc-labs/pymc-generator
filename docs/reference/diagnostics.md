@@ -4,7 +4,7 @@
 answers the questions that need the **series themselves** and the relations
 **between** them: how each series is shaped, what depends on what, how much of
 the design is redundant, how the series move over time, and exactly what adds
-up to sales.
+up to outcome.
 
 ```python
 import pymc_generator as pg
@@ -44,16 +44,16 @@ draw, no mutation of the source, nothing written.
 Keys are globally unique ASCII tokens fixed from the FULL source before any
 world selection, and they are the only selector raw access and plots accept —
 display labels are not unique (`C1`, `C1_direct_y` and `C1_base` all read as
-"channel 1" to a human).
+"treatment 1" to a human).
 
 | Scope | Keys |
 | --- | --- |
-| `nodes` (always on) | `C1..CK` spend, `Z1..ZM` controls, `D1..DJ` latent demand, `B` retained baseline, `Y` sales |
-| `decomposition` | `B_intrinsic`, `Y_noise`, `Zm_baseline_alloc`, `Dj_baseline_alloc`, `Ck_direct_y`, `indirect_cc/zc/dc`, `indirect_total`, `media_total` |
+| `nodes` (always on) | `C1..CK` treatment, `Z1..ZM` covariates, `D1..DJ` latent-unobserved factors, `B` retained baseline, `Y` outcome |
+| `decomposition` | `B_intrinsic`, `Y_noise`, `Zm_baseline_alloc`, `Dj_baseline_alloc`, `Ck_direct_y`, `indirect_cc/zc/dc`, `indirect_total`, `treatment_total` |
 | `counterfactual` (SCM only) | `Ck_base`, `Ck_observed_y`, and — when shocks were drawn — `Ck_unshocked`, `Y_unshocked` |
 
 `Zm_baseline_alloc` and `Dj_baseline_alloc` are the **retained baseline
-allocation**, not necessarily the raw linear edge term: under a non-media
+allocation**, not necessarily the raw linear edge term: under a non-treatment
 baseline floor they are locked-order clipped telescoping increments, and the
 corpus does not retain the floor metadata needed to undo that.
 
@@ -75,10 +75,10 @@ as zero.
 | | `xi` | how much the column (target Y) is a **function** of the row (predictor X); asymmetric by construction |
 | | `xi_max` | symmetric "is there any functional relation", for heatmaps |
 | VIF | `observed` (active C+Z) | redundancy a real model would face among visible predictors |
-| | `oracle` (active C+Z+D) | the extra redundancy hidden latent demand injects; `+inf` = exact collinearity |
-| Contributions | `net_share` | signed fraction of Σ sales; a complete top cut sums to 1 per world |
-| | `net_total`, `net_mean_per_period` | the same in sales units — equal shares can hide 100× magnitude gaps |
-| | `gross_over_net_sales` | activity magnitude including cancellation; ≥ 1 for a complete valid top cut |
+| | `oracle` (active C+Z+D) | the extra redundancy hidden latent-unobserved factors inject; `+inf` = exact collinearity |
+| Contributions | `net_share` | signed fraction of Σ outcome; a complete top cut sums to 1 per world |
+| | `net_total`, `net_mean_per_period` | the same in outcome units — equal shares can hide 100× magnitude gaps |
+| | `gross_over_net_outcome` | activity magnitude including cancellation; ≥ 1 for a complete valid top cut |
 
 ## Chatterjee's xi, precisely
 
@@ -154,13 +154,13 @@ of making a closure claim.
 Basis `base_direct_plus_indirect` (default):
 
 ```text
-media_total                          ← top cut
-├── channels_direct_y_total
+treatment_total                          ← top cut
+├── treatments_direct_y_total
 │   └── Ck_direct_y                  (one per active channel)
 ├── indirect_cc / indirect_zc / indirect_dc
-controls_baseline_alloc_total        ← top cut
+covariates_baseline_alloc_total        ← top cut
 └── Zm_baseline_alloc
-demand_baseline_alloc_total          ← top cut
+latent_unobserved_baseline_alloc_total          ← top cut
 └── Dj_baseline_alloc
 B_intrinsic                          ← top cut
 Y_noise                              ← top cut
@@ -169,15 +169,15 @@ Y_noise                              ← top cut
 Parents roll up from their **atomic descendants'** gross totals:
 `abs(Σ children)` would erase cancellation (children `[+10, −10]` are 20 units
 of activity, not 0). A complete valid top cut therefore has
-`Σ gross_over_net_sales ≥ 1`, with equality exactly when nothing cancels;
+`Σ gross_over_net_outcome ≥ 1`, with equality exactly when nothing cancels;
 an arbitrary subset has no such bound.
 
-Per-channel rows are the **direct / base-path** effect. The aggregate indirect
+Per-treatment rows are the **direct / base-path** effect. The aggregate indirect
 terms (`indirect_cc`, `indirect_zc`, `indirect_dc`) cannot be attributed to
 individual nodes from a corpus, and this API never pretends otherwise. A
 sequence of `SCM` worlds additionally exposes the alternative
-`observed_path_media` basis (`media_total_observed_path` → `Ck_observed_y`),
-which is a different *reading* of the same media effect and is never additive
+`observed_path_treatment` basis (`treatment_total_observed_path` → `Ck_observed_y`),
+which is a different *reading* of the same treatment effect and is never additive
 alongside the default one.
 
 ```python
@@ -185,11 +185,11 @@ budget = rep.contributions
 budget.table(sibling_set="top")                       # macro, share, net
 budget.stats("C1_direct_y", measure="total", weighting="micro")
 budget.select(("C1_direct_y", "C3_direct_y")).table(measure="total")
-budget.closure("media_children").max_abs_residual("net_total")
+budget.closure("treatment_children").max_abs_residual("net_total")
 ```
 
 `weighting="macro"` is the equal-world distribution; `"micro"` pools numerator
-and denominator (a sales-weighted ratio, never a mean of ratios).
+and denominator (an outcome-weighted ratio, never a mean of ratios).
 `population="conditional_on_active"` restricts to the worlds where a row
 exists; `"unconditional"` (default) encodes absence as an exact zero. An active
 structural zero stays included either way — it is real data.

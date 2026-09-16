@@ -4,7 +4,7 @@ Generate thousands of "worlds" — additive structural causal models over latent
 confounders, observed covariates, treatments, a baseline intercept and one
 outcome — with exact interventional decomposition targets, human-readable
 dataset bundles, and stacked padded tensor corpora. The default vocabulary is
-marketing-mix-model-shaped (channels, spend, sales); the machinery is not.
+marketing-mix-model-shaped (treatments, treatment, outcome); the machinery is not.
 
 Public symbols are lazy-loaded so ``import pymc_generator`` stays light
 (no pytensor / scipy / pandas / matplotlib until actually used).
@@ -66,7 +66,7 @@ _LAZY_IMPORTS = {
     "QuantityDistribution": (".outcomes", "QuantityDistribution"),
     "OUTCOME_QUANTITIES": (".outcomes", "OUTCOME_QUANTITIES"),
     # post-hoc diagnostics over the generated series (shape, dependence,
-    # collinearity, dynamics, contributions to sales)
+    # collinearity, dynamics, contributions to outcome)
     "data_diagnostics": (".diagnostics", "data_diagnostics"),
     "DataDiagnostics": (".diagnostics", "DataDiagnostics"),
     "describe_scm": (".describe", "describe_scm"),

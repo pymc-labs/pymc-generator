@@ -7,9 +7,9 @@ mechanism that broke. Each fixes graph sizes and per-edge-type arrow budgets.
 | # | Scenario | Isolates |
 | --- | --- | --- |
 | 0 | `direct_only` | Pure `C→Y`; no interactions — indirect effects are exactly zero |
-| 1 | `confounded_spend` | Latent demand drives both spend (`D→C`) and sales (`D→Y`) |
-| 2 | `promo_drives_spend` | Controls push spend (`Z→C`) and sales (`Z→Y`); demand moves controls (`D→Z`) |
-| 3 | `channel_halo` | Channel-to-channel amplification (`C→C`); feeder & isolated-null channels |
+| 1 | `confounded_treatment` | Latent-unobserved factor drives both treatments (`D→C`) and outcome (`D→Y`) |
+| 2 | `promo_drives_treatment` | Covariates push treatments (`Z→C`) and outcome (`Z→Y`); latent-unobserved factor moves covariates (`D→Z`) |
+| 3 | `treatment_halo` | Treatment-to-treatment amplification (`C→C`); feeder & isolated-null treatments |
 | 4 | `kitchen_sink` | Everything at once at sparse budgets — the hardest decomposition |
 
 ## Build a scenario's prior
@@ -17,7 +17,7 @@ mechanism that broke. Each fixes graph sizes and per-edge-type arrow budgets.
 ```python exec="1" source="block" result="text"
 import pymc_generator as pg
 
-sc = pg.SCENARIOS[3]                               # channel_halo
+sc = pg.SCENARIOS[3]                               # treatment_halo
 print("name       :", sc.name)
 print("sizes      :", f"n_treatments={sc.n_treatments}, "
                       f"n_covariates={sc.n_covariates}, n_latent={sc.n_latent}")
@@ -48,7 +48,7 @@ for idx in range(len(pg.SCENARIOS)):
 
 ## Isolated nulls are deliberate
 
-`channel_halo` and `kitchen_sink` set `connect_all=False`, which permits
+`treatment_halo` and `kitchen_sink` set `connect_all=False`, which permits
 **fully-isolated null nodes** (no edges at all) as zero-attribution traps — a
 model must credit them exactly nothing. Dead-end nodes (edges that never reach Y)
 are *never* generated.
@@ -57,7 +57,7 @@ are *never* generated.
 from scm_docs import world
 from pymc_generator.worlds import node_status
 
-scm = world(scenario=3, seed=0)                    # channel_halo
+scm = world(scenario=3, seed=0)                    # treatment_halo
 status = node_status(scm.g)
 print("node status:", status)
 iso = [n for n, s in status.items() if s == "isolated"]
@@ -68,18 +68,18 @@ print("isolated nulls:", iso or "none this draw")
 
 `connect_all=True` rejects any draw with an isolated node, and for a scenario
 designed around isolated nulls that can be infeasible: with `zc = zz = dz = 0`,
-`channel_halo`'s only route from a control to `Y` is its own `Z→Y` arrow, so its
-`zy=(1, 1)` budget left the second control permanently isolated — 0.00% of draws
+`treatment_halo`'s only route from a covariate to `Y` is its own `Z→Y` arrow, so its
+`zy=(1, 1)` budget left the second covariate permanently isolated — 0.00% of draws
 were feasible, and the CLI's `--require-path-to-y` died with
-`RuntimeError: world 'channel_halo': no DAG satisfying the connectivity rule in
+`RuntimeError: world 'treatment_halo': no DAG satisfying the connectivity rule in
 2000 draws` after having already written folders `0`, `1`, `2`.
 
 Scenarios therefore carry a second, connectivity-only budget in
 `Scenario.connect_all_edge_budget`, and `Scenario.prior(..., connect_all=...)`
 substitutes its entries over `edge_budget` **only when connectivity is forced**.
-`channel_halo` supplies `{"zy": (2, 2)}` (feasible fraction 0.00% → 17.07%) and
+`treatment_halo` supplies `{"zy": (2, 2)}` (feasible fraction 0.00% → 17.07%) and
 `kitchen_sink` supplies `{"cc": (3, 4)}` — with `cy = 4` of 6, the two feeder
-channels each need an outgoing halo arrow and a `(1, 2)` budget can draw just
+treatments each need an outgoing halo arrow and a `(1, 2)` budget can draw just
 one (0.85% → 5.89%). Default, unforced worlds are bit-identical to before.
 
 `write_scenario_bundles` is also atomic: it pre-flights every scenario's graph

@@ -1,17 +1,17 @@
 """The world as a PyMC model: priors are distributions, worlds are draws.
 
 ``build_world_model`` assembles one :class:`pymc.Model` for a fixed causal
-structure (a DAG ``g`` plus the concrete per-channel mechanism families and
+structure (a DAG ``g`` plus the concrete per-treatment mechanism families and
 per-node random-walk smoothness) in which every *continuous* SCM parameter is a
 PyMC distribution and every noise term is an RV — ``pm.Normal`` walk innovations
-and iid outcome/channel jitter, with campaign pulses as ``pm.Bernoulli``. The
+and iid outcome/treatment jitter, with campaign pulses as ``pm.Bernoulli``. The
 structural equations and the exact interventional decomposition are the SAME
 ones :func:`pymc_generator.symbolic_graph.build_symbolic_graph` builds; this
 module only supplies the priors + noise and exposes the outputs as
 ``pm.Deterministic`` so a single ``pm.draw`` yields params, series, and the full
 decomposition jointly (and reproducibly from a seed).
 
-Discrete/structural choices — which edges exist, each channel's adstock and
+Discrete/structural choices — which edges exist, each treatment's carryover and
 saturation family, and each random-walk node's smoothness — are drawn concretely
 per world by :func:`sample_structure` (they set the graph's shape), matching the
 design: continuous priors are distributions; structure is drawn per world.
@@ -36,10 +36,10 @@ from pytensor.tensor.sharedvar import SharedVariable
 
 from . import mechanisms
 from .random_walk import _kernel_width, _walk_basis
-from .sampler import ADSTOCK_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
+from .sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
 from .signal_diagnostics import admitted_response_support_weeks
 from .symbolic_graph import (
-    _adstock_col,
+    _carryover_col,
     _saturate_col,
     _walk_column,
     build_symbolic_graph,
@@ -189,9 +189,9 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     n_covariates = len(g_active["g_zy"])
     n_latent = len(g_active["g_dy"])
     ad_fam = rng.choice(
-        len(ADSTOCK_FAMILY_KEYS),
+        len(CARRYOVER_FAMILY_KEYS),
         size=n_treatments,
-        p=np.asarray([cfg.adstock_family_probs[key] for key in ADSTOCK_FAMILY_KEYS]),
+        p=np.asarray([cfg.carryover_family_probs[key] for key in CARRYOVER_FAMILY_KEYS]),
     )
     sat_fam = rng.choice(
         len(SATURATION_FAMILY_KEYS),
@@ -202,12 +202,12 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     def _smooth(n: int) -> np.ndarray:
         return rng.beta(cfg.rw_smoothness_alpha, cfg.rw_smoothness_beta, size=n)
 
-    hf_on = float(cfg.channel_hf_sigma_range[1]) > 0.0
-    pulse_on = float(cfg.channel_pulse_prob_range[1]) > 0.0
-    control_hf_on = float(cfg.control_hf_sigma_range[1]) > 0.0
-    control_pulse_on = float(cfg.control_pulse_prob_range[1]) > 0.0
+    hf_on = float(cfg.treatment_hf_sigma_range[1]) > 0.0
+    pulse_on = float(cfg.treatment_pulse_prob_range[1]) > 0.0
+    covariate_hf_on = float(cfg.covariate_hf_sigma_range[1]) > 0.0
+    covariate_pulse_on = float(cfg.covariate_pulse_prob_range[1]) > 0.0
     return {
-        "adstock_family": ad_fam.astype(int),
+        "carryover_family": ad_fam.astype(int),
         "sat_family": sat_fam.astype(int),
         "smoothness_d": _smooth(n_latent),
         "smoothness_z": _smooth(n_covariates),
@@ -215,8 +215,8 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
         "smoothness_b": _smooth(1),
         "use_hf": np.full(n_treatments, hf_on),
         "use_pulse": np.full(n_treatments, pulse_on),
-        "use_control_hf": np.full(n_covariates, control_hf_on),
-        "use_control_pulse": np.full(n_covariates, control_pulse_on),
+        "use_covariate_hf": np.full(n_covariates, covariate_hf_on),
+        "use_covariate_pulse": np.full(n_covariates, covariate_pulse_on),
     }
 
 
@@ -263,39 +263,39 @@ def _uniform(name: str, lo: float, hi: float, shape):
     return pm.Uniform(name, lo, hi, shape=shape)
 
 
-def _channel_shock_schedule(
+def _treatment_shock_schedule(
     cfg: SCMPrior, g_cy: np.ndarray, n_time_steps: int, burn_in: int, c_level
 ) -> dict[str, Any]:
-    """Build the symbolic intervention schedule for configured channel shocks.
+    """Build the symbolic intervention schedule for configured treatment shocks.
 
     The disjoint chronological slots make overlap impossible even when the
-    same direct channel is selected repeatedly. The full-horizon mask and
-    level matrix are internal inputs to the channel equations.
+    same direct treatment is selected repeatedly. The full-horizon mask and
+    level matrix are internal inputs to the treatment equations.
     """
-    n_shocks = int(cfg.n_channel_shocks)
+    n_shocks = int(cfg.n_treatment_shocks)
     n_treatments = len(g_cy)
     if n_shocks == 0:
         return {}
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1).astype("int64")
     if not len(direct):
-        raise ValueError("enabled channel shocks require at least one direct g_cy channel")
-    len_lo, len_hi = cfg.channel_shock_length_range
-    level_lo, level_hi = cfg.channel_shock_level_range
+        raise ValueError("enabled treatment shocks require at least one direct g_cy treatment")
+    len_lo, len_hi = cfg.treatment_shock_length_range
+    level_lo, level_hi = cfg.treatment_shock_level_range
     if len_lo == len_hi:
         lengths = pt.as_tensor_variable(np.full(n_shocks, len_lo, dtype="int64"))
     else:
-        lengths = pm.DiscreteUniform("channel_shock_length", len_lo, len_hi, shape=n_shocks)
+        lengths = pm.DiscreteUniform("treatment_shock_length", len_lo, len_hi, shape=n_shocks)
     if len(direct) == 1:
         ranks = pt.zeros((n_shocks,), dtype="int64")
     else:
-        ranks = pm.DiscreteUniform("channel_shock_channel_rank", 0, len(direct) - 1, shape=n_shocks)
-    channels = pt.cast(pt.as_tensor_variable(direct)[ranks], "int64")
+        ranks = pm.DiscreteUniform("treatment_shock_index_rank", 0, len(direct) - 1, shape=n_shocks)
+    treatments = pt.cast(pt.as_tensor_variable(direct)[ranks], "int64")
     if level_lo == level_hi:
         multipliers = pt.as_tensor_variable(np.full(n_shocks, level_lo, dtype="float64"))
     else:
         multipliers = pm.Uniform(
-            "channel_shock_level_multiplier", level_lo, level_hi, shape=n_shocks
+            "treatment_shock_level_multiplier", level_lo, level_hi, shape=n_shocks
         )
 
     starts = []
@@ -307,17 +307,17 @@ def _channel_shock_schedule(
             starts.append(pt.as_tensor_variable(np.asarray(slot_lo, dtype="int64")))
         else:
             starts.append(
-                pm.DiscreteUniform(f"channel_shock_start_{s}", slot_lo, slot_hi - lengths[s])
+                pm.DiscreteUniform(f"treatment_shock_start_{s}", slot_lo, slot_hi - lengths[s])
             )
     starts_t = pt.stack(starts)
-    levels = multipliers * c_level[channels]
+    levels = multipliers * c_level[treatments]
 
     def _event_mask(n_time: int, offset: int):
         time = pt.arange(n_time)[:, None]
         active = (time >= (starts_t + offset)[None, :]) & (
             time < (starts_t + lengths + offset)[None, :]
         )
-        selected = pt.eq(pt.arange(n_treatments)[:, None], channels[None, :]).T
+        selected = pt.eq(pt.arange(n_treatments)[:, None], treatments[None, :]).T
         return active[:, :, None] & selected[None, :, :]
 
     event_mask = _event_mask(n_time_steps, 0)
@@ -330,34 +330,34 @@ def _channel_shock_schedule(
     )
     return {
         "level_full": level_full,
-        "channel_shock_mask": mask,
-        "channel_shock_mask_full": mask_full,
-        "channel_shock_channel": channels,
-        "channel_shock_start": starts_t,
-        "channel_shock_length": lengths,
-        "channel_shock_level_multiplier": multipliers,
-        "channel_shock_level": levels,
+        "treatment_shock_mask": mask,
+        "treatment_shock_mask_full": mask_full,
+        "treatment_shock_index": treatments,
+        "treatment_shock_start": starts_t,
+        "treatment_shock_length": lengths,
+        "treatment_shock_level_multiplier": multipliers,
+        "treatment_shock_level": levels,
     }
 
 
-def _validate_oracle_channel_shocks(
+def _validate_oracle_treatment_shocks(
     cfg: SCMPrior, g_cy: np.ndarray, data: dict[str, np.ndarray], n_time_steps: int
 ) -> None:
     """Validate a world's reported-window held-level schedule for the oracle.
 
-    Channel shocks are known intervention-design state, not latent variables in
-    the observed-data model. They clamp observed spend and nothing else, so the
-    oracle needs no schedule tensors — it reads the already-clamped channels as
+    Treatment shocks are known intervention-design state, not latent variables in
+    the observed-data model. They clamp observed treatment and nothing else, so the
+    oracle needs no schedule tensors — it reads the already-clamped treatments as
     data. This still checks the complete reported schedule and its held levels
-    against that observed spend so corrupt metadata fails loudly.
+    against that observed treatment so corrupt metadata fails loudly.
     """
-    n_shocks = int(cfg.n_channel_shocks)
+    n_shocks = int(cfg.n_treatment_shocks)
     if n_shocks == 0:
         return
 
     def _event_int(name: str) -> np.ndarray:
         if name not in data:
-            raise ValueError(f"enabled channel shocks require data[{name!r}] metadata")
+            raise ValueError(f"enabled treatment shocks require data[{name!r}] metadata")
         value = np.asarray(data[name])
         if value.shape != (n_shocks,) or not np.issubdtype(value.dtype, np.integer):
             raise ValueError(
@@ -366,60 +366,62 @@ def _validate_oracle_channel_shocks(
             )
         return value.astype("int64", copy=False)
 
-    channel = _event_int("channel_shock_channel")
-    start = _event_int("channel_shock_start")
-    length = _event_int("channel_shock_length")
-    if "channel_shock_level_multiplier" not in data:
+    treatment = _event_int("treatment_shock_index")
+    start = _event_int("treatment_shock_start")
+    length = _event_int("treatment_shock_length")
+    if "treatment_shock_level_multiplier" not in data:
         raise ValueError(
-            "enabled channel shocks require data['channel_shock_level_multiplier'] metadata"
+            "enabled treatment shocks require data['treatment_shock_level_multiplier'] metadata"
         )
-    multiplier = np.asarray(data["channel_shock_level_multiplier"], dtype="float64")
+    multiplier = np.asarray(data["treatment_shock_level_multiplier"], dtype="float64")
     if multiplier.shape != (n_shocks,) or not np.isfinite(multiplier).all():
         raise ValueError(
-            "data['channel_shock_level_multiplier'] must be a finite array "
+            "data['treatment_shock_level_multiplier'] must be a finite array "
             f"with shape {(n_shocks,)}, got {multiplier.shape}"
         )
-    if "channel_shock_level" not in data:
-        raise ValueError("enabled channel shocks require data['channel_shock_level'] metadata")
-    level = np.asarray(data["channel_shock_level"], dtype="float64")
+    if "treatment_shock_level" not in data:
+        raise ValueError("enabled treatment shocks require data['treatment_shock_level'] metadata")
+    level = np.asarray(data["treatment_shock_level"], dtype="float64")
     if level.shape != (n_shocks,) or not np.isfinite(level).all():
         raise ValueError(
-            f"data['channel_shock_level'] must be a finite array with shape {(n_shocks,)}, "
+            f"data['treatment_shock_level'] must be a finite array with shape {(n_shocks,)}, "
             f"got {level.shape}"
         )
-    if "channel_level" not in data:
-        raise ValueError("enabled channel shocks require data['channel_level'] metadata")
-    channel_level = np.asarray(data["channel_level"], dtype="float64")
-    if channel_level.shape != g_cy.shape or not (
-        np.isfinite(channel_level).all() and (channel_level > 0.0).all()
+    if "treatment_level" not in data:
+        raise ValueError("enabled treatment shocks require data['treatment_level'] metadata")
+    treatment_level = np.asarray(data["treatment_level"], dtype="float64")
+    if treatment_level.shape != g_cy.shape or not (
+        np.isfinite(treatment_level).all() and (treatment_level > 0.0).all()
     ):
         raise ValueError(
-            "data['channel_level'] must be finite and positive with shape "
-            f"{g_cy.shape}, got {channel_level.shape}"
+            "data['treatment_level'] must be finite and positive with shape "
+            f"{g_cy.shape}, got {treatment_level.shape}"
         )
 
     direct = np.flatnonzero(np.asarray(g_cy) == 1)
-    if not np.isin(channel, direct).all():
-        raise ValueError("channel shock metadata must select only direct g_cy channels")
-    len_lo, len_hi = cfg.channel_shock_length_range
+    if not np.isin(treatment, direct).all():
+        raise ValueError("treatment shock metadata must select only direct g_cy treatments")
+    len_lo, len_hi = cfg.treatment_shock_length_range
     if ((length < len_lo) | (length > len_hi)).any():
-        raise ValueError("channel shock metadata length is outside the configured range")
-    level_lo, level_hi = cfg.channel_shock_level_range
+        raise ValueError("treatment shock metadata length is outside the configured range")
+    level_lo, level_hi = cfg.treatment_shock_level_range
     if ((multiplier < level_lo) | (multiplier > level_hi)).any():
-        raise ValueError("channel shock metadata level multiplier is outside the configured range")
-    if not np.allclose(level, multiplier * channel_level[channel], rtol=1e-6, atol=1e-7):
-        raise ValueError("channel shock level does not match multiplier * channel_level")
+        raise ValueError(
+            "treatment shock metadata level multiplier is outside the configured range"
+        )
+    if not np.allclose(level, multiplier * treatment_level[treatment], rtol=1e-6, atol=1e-7):
+        raise ValueError("treatment shock level does not match multiplier * treatment_level")
     for s in range(n_shocks):
         slot_lo = s * n_time_steps // n_shocks
         slot_hi = (s + 1) * n_time_steps // n_shocks
         if not slot_lo <= start[s] <= slot_hi - length[s]:
             raise ValueError(
-                f"channel shock metadata start {start[s]} is infeasible for "
+                f"treatment shock metadata start {start[s]} is infeasible for "
                 f"slot {s} and length {length[s]}"
             )
-        observed = np.asarray(data["channels"])[start[s] : start[s] + length[s], channel[s]]
+        observed = np.asarray(data["treatments"])[start[s] : start[s] + length[s], treatment[s]]
         if not np.allclose(observed, level[s], rtol=1e-6, atol=1e-7):
-            raise ValueError("channel shock held level does not match observed spend")
+            raise ValueError("treatment shock held level does not match observed treatment")
 
 
 def _rw_prior_group(
@@ -490,8 +492,8 @@ def _walk_priors(
 ) -> dict[str, dict]:
     """Walk-prior groups per node type, registered in the LOCKED d/z/c/b/y order.
 
-    Sizes follow the :class:`SCMPrior` vocabulary — ``n_treatments`` media
-    channels, ``n_covariates`` observed controls, ``n_latent`` hidden
+    Sizes follow the :class:`SCMPrior` vocabulary — ``n_treatments`` treatment
+    treatments, ``n_covariates`` observed covariates, ``n_latent`` hidden
     confounders. ``include`` selects the groups a model needs (the oracle
     skips the ones replaced by observed data); relative order is always
     preserved.
@@ -512,10 +514,10 @@ def _walk_priors(
         # factor to mean 0 / scale 1 puts the whole D->* magnitude in the
         # loadings, which is what the data identifies.
         # The graph also admits a sign flip: negating eps_d together with w_dc,
-        # u_dz, and delta_dy flips demand's sign while leaving every other output
+        # u_dz, and delta_dy flips latent_unobserved's sign while leaving every other output
         # unchanged. The supported prior
         # assigns all three loading families strictly positive ranges, so the
-        # reflection is outside support and demand's sign is identified. If a
+        # reflection is outside support and latent_unobserved's sign is identified. If a
         # user widens dy_coeff_range / dc_coeff_range / dz_coeff_range to admit
         # negatives, only |D| and the loading magnitudes are recoverable.
         out["rw_d"] = _rw_prior_group(
@@ -533,7 +535,7 @@ def _walk_priors(
             "rw_z",
             n_covariates,
             False,
-            cfg.rw_control_mean_range,
+            cfg.rw_covariate_mean_range,
             structural.get("smoothness_z"),
             std_sigma=cfg.rw_std_sigma,
             rw_smoothness_max_weeks=rw_smoothness_max_weeks,
@@ -547,7 +549,7 @@ def _walk_priors(
             cfg.rw_positive_mean_range,
             structural.get("smoothness_c"),
             rw_smoothness_max_weeks=rw_smoothness_max_weeks,
-            std_range=cfg.rw_channel_std_range,
+            std_range=cfg.rw_treatment_std_range,
             relative=True,
             width_index=widths.get("rw_c"),
         )
@@ -582,7 +584,7 @@ def _walk_priors(
                 1,
                 False,
                 (0.0, 0.0),
-                std_range=cfg.rw_sales_std_range,
+                std_range=cfg.rw_outcome_std_range,
                 std_name="rw_y_std_rel",
             )
         else:
@@ -591,7 +593,7 @@ def _walk_priors(
                 1,
                 False,
                 (0.0, 0.0),
-                std_sigma=cfg.rw_sales_std_sigma,
+                std_sigma=cfg.rw_outcome_std_sigma,
             )
     return out
 
@@ -602,12 +604,12 @@ def _scm_params(
     rw: dict[str, dict],
     c_level,
     *,
-    adstock_family,
+    carryover_family,
     sat_family,
     use_hf,
     use_pulse,
-    use_control_hf,
-    use_control_pulse,
+    use_covariate_hf,
+    use_covariate_pulse,
 ) -> dict[str, Any]:
     """Every continuous SCM parameter, in the LOCKED RV creation order.
 
@@ -640,31 +642,31 @@ def _scm_params(
         "rw_c": rw["rw_c"],
         "rw_b": rw["rw_b"],
         "rw_y": rw["rw_y"],
-        "adstock_family": adstock_family,
+        "carryover_family": carryover_family,
         "sat_family": sat_family,
         **{name: _uniform(*specs[name]) for name in _MECHANISM_PARAM_NAMES},
-        # channel texture: magnitudes relative to the channel level; fires
+        # treatment texture: magnitudes relative to the treatment level; fires
         # are Bernoulli(pulse_prob)
         "hf_sigma": _uniform(*specs["hf_sigma"]) * c_level,
         "pulse_amp": _uniform(*specs["pulse_amp"]) * c_level,
         "pulse_prob": pulse_prob,
         "use_hf": use_hf,
         "use_pulse": use_pulse,
-        # control texture: magnitudes relative to the control's OWN walk std
-        # (a signed control has no positive level anchor to scale by); fires
-        # are Bernoulli(control_pulse_prob) and are centred in the structural
-        # equation, so the control's expected level stays rw_z_mean.
+        # covariate texture: magnitudes relative to the covariate's OWN walk std
+        # (a signed covariate has no positive level anchor to scale by); fires
+        # are Bernoulli(covariate_pulse_prob) and are centred in the structural
+        # equation, so the covariate's expected level stays rw_z_mean.
         # These draws leave seeded corpora alone ONLY while their ranges are
         # degenerate: _uniform then emits a constant and no RNG node exists.
         # There is no stream-stable position for a live draw — reseed_rngs
         # walks collect_default_updates' graph-traversal order, not this
         # creation order — so enabling the texture deliberately reseeds every
         # world (see tests/test_identifiability.py's two hash contracts).
-        "control_hf_sigma": _uniform(*specs["control_hf_sigma"]) * rw["rw_z"]["std"],
-        "control_pulse_amp": _uniform(*specs["control_pulse_amp"]) * rw["rw_z"]["std"],
-        "control_pulse_prob": _uniform(*specs["control_pulse_prob"]),
-        "use_control_hf": use_control_hf,
-        "use_control_pulse": use_control_pulse,
+        "covariate_hf_sigma": _uniform(*specs["covariate_hf_sigma"]) * rw["rw_z"]["std"],
+        "covariate_pulse_amp": _uniform(*specs["covariate_pulse_amp"]) * rw["rw_z"]["std"],
+        "covariate_pulse_prob": _uniform(*specs["covariate_pulse_prob"]),
+        "use_covariate_hf": use_covariate_hf,
+        "use_covariate_pulse": use_covariate_pulse,
     }
 
 
@@ -674,7 +676,7 @@ def _scm_eps(
     n_covariates: int,
     n_latent: int,
     pulse_prob,
-    control_pulse_prob,
+    covariate_pulse_prob,
 ) -> dict[str, Any]:
     """The graph's noise RVs, in the LOCKED creation order (see :func:`_scm_params`)."""
     return {
@@ -689,15 +691,15 @@ def _scm_eps(
             p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
             shape=(n_time_steps_full, n_treatments),
         ).astype("float64"),
-        # Control texture noise. A disabled config still creates these RVs (the
-        # channel texture noise behaves identically): the graph then references
+        # Covariate texture noise. A disabled config still creates these RVs (the
+        # treatment texture noise behaves identically): the graph then references
         # neither, so they reach no output, collect no RNG stream, and leave
         # every seeded draw byte-identical — while keeping the audit schema
         # (SCM.exogenous) the same shape for every config.
         "eps_z_hf": pm.Normal("eps_z_hf", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
         "eps_z_pulse": pm.Bernoulli(
             "eps_z_pulse",
-            p=pt.broadcast_to(control_pulse_prob, (n_time_steps_full, n_covariates)),
+            p=pt.broadcast_to(covariate_pulse_prob, (n_time_steps_full, n_covariates)),
             shape=(n_time_steps_full, n_covariates),
         ).astype("float64"),
     }
@@ -725,22 +727,22 @@ def _register_param_reports(
         "gamma_zz": params["gamma_zz"],
         "delta_dy": params["delta_dy"],
         "rho_zy": params["rho_zy"],
-        # every per-channel mechanism shape parameter
+        # every per-treatment mechanism shape parameter
         **{name: params[name] for name in _MECHANISM_PARAM_NAMES},
-        # channel texture magnitudes and fire probability
+        # treatment texture magnitudes and fire probability
         "hf_sigma": params["hf_sigma"],
         "pulse_amp": params["pulse_amp"],
         "pulse_prob": params["pulse_prob"],
-        # control texture magnitudes (already scaled by rw_z_std) and fire
+        # covariate texture magnitudes (already scaled by rw_z_std) and fire
         # probability, so a world replays without re-deriving the scale
-        "control_hf_sigma": params["control_hf_sigma"],
-        "control_pulse_amp": params["control_pulse_amp"],
-        "control_pulse_prob": params["control_pulse_prob"],
+        "covariate_hf_sigma": params["covariate_hf_sigma"],
+        "covariate_pulse_amp": params["covariate_pulse_amp"],
+        "covariate_pulse_prob": params["covariate_pulse_prob"],
     }
     for group_name in ("rw_d", "rw_z", "rw_c", "rw_b", "rw_y"):
         report_specs[f"{group_name}_mean"] = rw[group_name]["mean"]
         report_specs[f"{group_name}_std"] = rw[group_name]["std"]
-    report_specs["channel_level"] = c_level
+    report_specs["treatment_level"] = c_level
     report_specs["confounding_strength"] = confounding_strength
     for key, tensor in report_specs.items():
         pm.Deterministic(f"param_{key}", tensor)
@@ -750,31 +752,31 @@ def _register_param_reports(
 def _disabled_shock_outputs(
     n_time_steps: int, n_time_steps_full: int, n_treatments: int
 ) -> dict[str, Any]:
-    """Zero-sized stand-ins for the channel-shock outputs, for configs without shocks.
+    """Zero-sized stand-ins for the treatment-shock outputs, for configs without shocks.
 
     Corpora always carry the shock columns, but a disabled schedule must stay out
     of the structural graph and the RV stream entirely, so these are constants
     rather than a degenerate schedule.
     """
     return {
-        "channel_shock_mask": pt.zeros((n_time_steps, n_treatments), dtype="int8"),
-        "channel_shock_mask_full": pt.zeros((n_time_steps_full, n_treatments), dtype="int8"),
-        "channel_shock_channel": pt.zeros((0,), dtype="int64"),
-        "channel_shock_start": pt.zeros((0,), dtype="int64"),
-        "channel_shock_length": pt.zeros((0,), dtype="int64"),
-        "channel_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
-        "channel_shock_level": pt.zeros((0,), dtype="float64"),
+        "treatment_shock_mask": pt.zeros((n_time_steps, n_treatments), dtype="int8"),
+        "treatment_shock_mask_full": pt.zeros((n_time_steps_full, n_treatments), dtype="int8"),
+        "treatment_shock_index": pt.zeros((0,), dtype="int64"),
+        "treatment_shock_start": pt.zeros((0,), dtype="int64"),
+        "treatment_shock_length": pt.zeros((0,), dtype="int64"),
+        "treatment_shock_level_multiplier": pt.zeros((0,), dtype="float64"),
+        "treatment_shock_level": pt.zeros((0,), dtype="float64"),
     }
 
 
-def _confounded_channel_eps(cfg: SCMPrior, eps: dict[str, Any]):
+def _confounded_treatment_eps(cfg: SCMPrior, eps: dict[str, Any]):
     """Resolve the per-world confounding strength and mix it into ``eps_c``.
 
     Preserves the legacy innovation dictionary and graph path exactly when
     confounding is disabled, including its explicit ``(0.0, 0.0)`` spelling.
-    When enabled, rho is a single per-world value and only the channel
+    When enabled, rho is a single per-world value and only the treatment
     innovation supplied to the graph changes. The orthonormal mixture leaves
-    every channel innovation's marginal variance at one while correlating it
+    every treatment innovation's marginal variance at one while correlating it
     with the baseline innovation.
     """
     if cfg.confounding_strength_range is None:
@@ -809,17 +811,17 @@ def _apply_outcome_std_scale(
             f"outcome_std_mode must be 'relative' or 'absolute', got {cfg.outcome_std_mode!r}"
         )
     g_cy_t = pt.as_tensor_variable(g_cy)
-    media_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
+    treatment_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
     for group_name in ("rw_b", "rw_y"):
         rw[group_name]["std"] = pm.Deterministic(
             f"{prefix}{group_name}_std",
-            rw[group_name]["std"] * media_amplitude,
+            rw[group_name]["std"] * treatment_amplitude,
         )
 
 
-#: The per-channel media-response shape params (spec keys), canonical order.
+#: The per-treatment treatment-response shape params (spec keys), canonical order.
 _MECHANISM_PARAM_NAMES: tuple[str, ...] = (
-    "adstock_alpha",
+    "carryover_alpha",
     "weibull_lam",
     "weibull_k",
     "hill_slope",
@@ -831,11 +833,11 @@ _MECHANISM_PARAM_NAMES: tuple[str, ...] = (
 )
 
 
-#: Shape-parameter spec keys consumed by each canonical adstock family.
+#: Shape-parameter spec keys consumed by each canonical carryover family.
 #: ``"weibull"`` is the canonical family key for the Weibull-PDF transform.
-ADSTOCK_FAMILY_PARAM_NAMES: dict[str, tuple[str, ...]] = {
+CARRYOVER_FAMILY_PARAM_NAMES: dict[str, tuple[str, ...]] = {
     "none": (),
-    "geometric": ("adstock_alpha",),
+    "geometric": ("carryover_alpha",),
     "weibull": ("weibull_lam", "weibull_k"),
 }
 
@@ -853,8 +855,8 @@ SATURATION_FAMILY_PARAM_NAMES: dict[str, tuple[str, ...]] = {
 def _live_mechanism_param_names(structural: dict) -> tuple[str, ...]:
     """Return the canonical-order shape params consumed by this structure."""
     live: set[str] = set()
-    for family_id in np.asarray(structural["adstock_family"]):
-        live.update(ADSTOCK_FAMILY_PARAM_NAMES[ADSTOCK_FAMILY_KEYS[int(family_id)]])
+    for family_id in np.asarray(structural["carryover_family"]):
+        live.update(CARRYOVER_FAMILY_PARAM_NAMES[CARRYOVER_FAMILY_KEYS[int(family_id)]])
     for family_id in np.asarray(structural["sat_family"]):
         live.update(SATURATION_FAMILY_PARAM_NAMES[SATURATION_FAMILY_KEYS[int(family_id)]])
     return tuple(name for name in _MECHANISM_PARAM_NAMES if name in live)
@@ -874,17 +876,17 @@ def _uniform_prior_specs(
     (:func:`build_oracle_model`) create their RVs as ``_uniform(*spec)`` from
     this table, so the priors cannot drift between the two. Also resolves the
     prior-conditioning narrowing (``prior_cond``) for the conditioned set.
-    Sizes follow the :class:`SCMPrior` vocabulary (``n_treatments`` media
-    channels / ``n_covariates`` controls / ``n_latent`` hidden confounders).
+    Sizes follow the :class:`SCMPrior` vocabulary (``n_treatments`` treatment
+    treatments / ``n_covariates`` covariates / ``n_latent`` hidden confounders).
     """
     spr = mechanisms.SATURATION_PRIOR_RANGES
     n_t, n_c, n_l = n_treatments, n_covariates, n_latent
-    adstock_alpha_range = cfg.adstock_alpha_range
+    carryover_alpha_range = cfg.carryover_alpha_range
     hill_shape_range = spr["hill"]["slope"]
     if prior_cond is not None:
-        if "adstock_alpha" in prior_cond:
-            lo, width = prior_cond["adstock_alpha"]
-            adstock_alpha_range = (lo, lo + width)
+        if "carryover_alpha" in prior_cond:
+            lo, width = prior_cond["carryover_alpha"]
+            carryover_alpha_range = (lo, lo + width)
         if "hill_shape" in prior_cond:
             lo, width = prior_cond["hill_shape"]
             hill_shape_range = (lo, lo + width)
@@ -898,8 +900,13 @@ def _uniform_prior_specs(
         "delta_dy": ("delta_dy", cfg.dy_coeff_range[0], cfg.dy_coeff_range[1], n_l),
         "rho_zy": ("rho_zy", cfg.zy_coeff_range[0], cfg.zy_coeff_range[1], n_c),
         "beta": ("beta", cfg.beta_additive_range[0], cfg.beta_additive_range[1], n_t),
-        # per-channel mechanism shape priors (adstock + saturation families)
-        "adstock_alpha": ("adstock_alpha", adstock_alpha_range[0], adstock_alpha_range[1], n_t),
+        # per-treatment mechanism shape priors (carryover + saturation families)
+        "carryover_alpha": (
+            "carryover_alpha",
+            carryover_alpha_range[0],
+            carryover_alpha_range[1],
+            n_t,
+        ),
         "weibull_lam": ("weibull_lam", cfg.weibull_lam_range[0], cfg.weibull_lam_range[1], n_t),
         "weibull_k": ("weibull_k", cfg.weibull_k_range[0], cfg.weibull_k_range[1], n_t),
         "hill_slope": ("hill_slope", hill_shape_range[0], hill_shape_range[1], n_t),
@@ -923,42 +930,42 @@ def _uniform_prior_specs(
         ),
         "tanh_c": ("tanh_c", spr["tanh"]["c"][0], spr["tanh"]["c"][1], n_t),
         "root_alpha": ("root_alpha", spr["root"]["alpha"][0], spr["root"]["alpha"][1], n_t),
-        # channel texture factors (relative to the channel level)
+        # treatment texture factors (relative to the treatment level)
         "hf_sigma": (
             "hf_sigma",
-            cfg.channel_hf_sigma_range[0],
-            cfg.channel_hf_sigma_range[1],
+            cfg.treatment_hf_sigma_range[0],
+            cfg.treatment_hf_sigma_range[1],
             n_t,
         ),
         "pulse_amp": (
             "pulse_amp",
-            cfg.channel_pulse_amp_range[0],
-            cfg.channel_pulse_amp_range[1],
+            cfg.treatment_pulse_amp_range[0],
+            cfg.treatment_pulse_amp_range[1],
             n_t,
         ),
         "pulse_prob": (
             "pulse_prob",
-            cfg.channel_pulse_prob_range[0],
-            cfg.channel_pulse_prob_range[1],
+            cfg.treatment_pulse_prob_range[0],
+            cfg.treatment_pulse_prob_range[1],
             n_t,
         ),
-        # control texture factors (relative to the control's own walk std)
-        "control_hf_sigma": (
-            "control_hf_sigma",
-            cfg.control_hf_sigma_range[0],
-            cfg.control_hf_sigma_range[1],
+        # covariate texture factors (relative to the covariate's own walk std)
+        "covariate_hf_sigma": (
+            "covariate_hf_sigma",
+            cfg.covariate_hf_sigma_range[0],
+            cfg.covariate_hf_sigma_range[1],
             n_c,
         ),
-        "control_pulse_amp": (
-            "control_pulse_amp",
-            cfg.control_pulse_amp_range[0],
-            cfg.control_pulse_amp_range[1],
+        "covariate_pulse_amp": (
+            "covariate_pulse_amp",
+            cfg.covariate_pulse_amp_range[0],
+            cfg.covariate_pulse_amp_range[1],
             n_c,
         ),
-        "control_pulse_prob": (
-            "control_pulse_prob",
-            cfg.control_pulse_prob_range[0],
-            cfg.control_pulse_prob_range[1],
+        "covariate_pulse_prob": (
+            "covariate_pulse_prob",
+            cfg.covariate_pulse_prob_range[0],
+            cfg.covariate_pulse_prob_range[1],
             n_c,
         ),
     }
@@ -987,11 +994,11 @@ def build_world_model(
         Output of :func:`sample_structure` (concrete families / smoothness /
         texture-enable flags).
     n_time_steps : int
-        Reported weeks (the graph simulates ``n_time_steps + cfg.adstock_burn_in``).
+        Reported weeks (the graph simulates ``n_time_steps + cfg.carryover_burn_in``).
     prior_cond : dict, optional
         Output of :func:`sample_prior_cond` — per-cell narrowed prior
         intervals ``{quantity: (low, width)}``. When given, the conditioned
-        quantities (``adstock_alpha`` → the geometric decay,
+        quantities (``carryover_alpha`` → the geometric decay,
         ``hill_shape`` → the Hill slope) are drawn as
         ``pm.Uniform(low, low + width)`` instead of their global supports.
         ``None`` (default) keeps the unconditioned priors.
@@ -1005,7 +1012,7 @@ def build_world_model(
     n_treatments = len(g_active["g_cy"])
     n_covariates = len(g_active["g_zy"])
     n_latent = len(g_active["g_dy"])
-    burn_in = cfg.adstock_burn_in
+    burn_in = cfg.carryover_burn_in
     n_time_steps_full = n_time_steps + burn_in
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
 
@@ -1013,8 +1020,8 @@ def build_world_model(
         rw = _walk_priors(cfg, structural, n_treatments, n_covariates, n_latent)
         rw_c = rw["rw_c"]
 
-        c_level = pt.softplus(rw_c["mean"])  # per-channel level anchor for texture
-        shock_outputs = _channel_shock_schedule(
+        c_level = pt.softplus(rw_c["mean"])  # per-treatment level anchor for texture
+        shock_outputs = _treatment_shock_schedule(
             cfg, g_active["g_cy"], n_time_steps, burn_in, c_level
         )
         params = _scm_params(
@@ -1022,17 +1029,17 @@ def build_world_model(
             specs,
             rw,
             c_level,
-            adstock_family=structural["adstock_family"],
+            carryover_family=structural["carryover_family"],
             sat_family=structural["sat_family"],
             use_hf=structural["use_hf"],
             use_pulse=structural["use_pulse"],
-            use_control_hf=structural["use_control_hf"],
-            use_control_pulse=structural["use_control_pulse"],
+            use_covariate_hf=structural["use_covariate_hf"],
+            use_covariate_pulse=structural["use_covariate_pulse"],
         )
         _apply_outcome_std_scale(cfg, rw, g_active["g_cy"], params["beta"])
-        if cfg.n_channel_shocks:
-            params["channel_shock"] = {
-                "mask_full": shock_outputs["channel_shock_mask_full"],
+        if cfg.n_treatment_shocks:
+            params["treatment_shock"] = {
+                "mask_full": shock_outputs["treatment_shock_mask_full"],
                 "level_full": shock_outputs["level_full"],
             }
 
@@ -1042,9 +1049,9 @@ def build_world_model(
             n_covariates,
             n_latent,
             params["pulse_prob"],
-            params["control_pulse_prob"],
+            params["covariate_pulse_prob"],
         )
-        confounding_strength = _confounded_channel_eps(cfg, eps)
+        confounding_strength = _confounded_treatment_eps(cfg, eps)
 
         graph = build_symbolic_graph(
             g_active,
@@ -1057,18 +1064,18 @@ def build_world_model(
             eps=eps,
         )
         graph["outputs"]["confounding_strength"] = confounding_strength
-        if cfg.n_channel_shocks:
+        if cfg.n_treatment_shocks:
             graph["outputs"].update(
                 {
                     key: shock_outputs[key]
                     for key in (
-                        "channel_shock_mask",
-                        "channel_shock_mask_full",
-                        "channel_shock_channel",
-                        "channel_shock_start",
-                        "channel_shock_length",
-                        "channel_shock_level_multiplier",
-                        "channel_shock_level",
+                        "treatment_shock_mask",
+                        "treatment_shock_mask_full",
+                        "treatment_shock_index",
+                        "treatment_shock_start",
+                        "treatment_shock_length",
+                        "treatment_shock_level_multiplier",
+                        "treatment_shock_level",
                     )
                 }
             )
@@ -1108,7 +1115,7 @@ def build_oracle_model(
     parameters that form the identification floor an amortized model is judged
     against. The priors and the treatment response transforms are
     the same definitions generation uses (:func:`_uniform_prior_specs`,
-    :func:`_walk_priors`, and the adstock/saturation code from
+    :func:`_walk_priors`, and the carryover/saturation code from
     :mod:`pymc_generator.symbolic_graph`), so draw and oracle cannot drift.
 
     Parameters
@@ -1122,18 +1129,18 @@ def build_oracle_model(
         mechanism families and walk smoothness). ``sample_scm`` records it in
         ``SCM.extras["structural"]``.
     data : dict
-        The world's observables — ``"channels"`` (n_time_steps, n_treatments),
-        ``"controls"`` (n_time_steps, n_covariates) and ``"sales"``
+        The world's observables — ``"treatments"`` (n_time_steps, n_treatments),
+        ``"covariates"`` (n_time_steps, n_covariates) and ``"outcome"``
         (n_time_steps,) — e.g. straight from ``SCM.data``. The required
         ``"saturation_scale"`` (n_treatments,) pins the exact generation-time
-        nonlinear response anchor. When channel shocks are enabled, it must
+        nonlinear response anchor. When treatment shocks are enabled, it must
         also carry the world's known design metadata:
-        ``channel_shock_channel``, ``channel_shock_start``,
-        ``channel_shock_length``, ``channel_shock_level_multiplier``, and
-        ``channel_shock_level``, each with one entry per configured shock, plus
-        per-channel ``channel_level``. The absolute level must match both
-        observed spend throughout its event window and the multiplier-relative
-        channel level.
+        ``treatment_shock_index``, ``treatment_shock_start``,
+        ``treatment_shock_length``, ``treatment_shock_level_multiplier``, and
+        ``treatment_shock_level``, each with one entry per configured shock, plus
+        per-treatment ``treatment_level``. The absolute level must match both
+        observed treatment throughout its event window and the multiplier-relative
+        treatment level.
     prior_cond : dict, optional
         The world's prior-conditioning intervals (``SCM.extras["prior_cond"]``)
         so the oracle runs under the SAME narrowed prior the world was drawn
@@ -1142,7 +1149,7 @@ def build_oracle_model(
         ``"marginal"`` integrates the Gaussian ``RW_D``, ``RW_B``, and
         ``RW_Y`` paths analytically into the exact observed-window covariance.
         ``"sampled"`` preserves the previous latent-innovation representation
-        and exposes posterior ``demand`` and ``baseline`` series.
+        and exposes posterior ``latent_unobserved`` and ``baseline`` series.
 
     Returns
     -------
@@ -1150,11 +1157,11 @@ def build_oracle_model(
         In marginal mode, free RVs are the outcome-side priors (``beta``,
         live mechanism shapes, ``delta_dy``, ``rho_zy``, and walk parameters)
         without latent walk innovations. Deterministics ``contributions``
-        (n_time_steps, n_treatments) and ``sales_mu`` (n_time_steps,) remain;
-        ``sales_mu`` is ``E[sales | theta]`` and excludes latent walk
+        (n_time_steps, n_treatments) and ``outcome_mu`` (n_time_steps,) remain;
+        ``outcome_mu`` is ``E[outcome | theta]`` and excludes latent walk
         realizations. Sampled mode additionally has ``eps_d`` / ``eps_b`` and
-        deterministic ``demand`` (n_time_steps, n_latent) / ``baseline``
-        (n_time_steps,), with the pre-existing ``sales_mu`` meaning.
+        deterministic ``latent_unobserved`` (n_time_steps, n_latent) / ``baseline``
+        (n_time_steps,), with the pre-existing ``outcome_mu`` meaning.
 
     Notes
     -----
@@ -1166,13 +1173,13 @@ def build_oracle_model(
        smoothness are supplied. This is a useful reference fit, not a
        universal upper bound on recovery: it omits input-likelihood information
        that another method may use. Marginalizing over graphs is out of scope.
-    2. **Plug-in conditioning on the observed inputs**: ``channels`` and
-       ``controls`` enter as data (constants). The information they carry
-       about latent demand through ``p(C | D)`` / ``p(Z | D)`` is not modeled
-       — including baseline information encoded through the channel–baseline
+    2. **Plug-in conditioning on the observed inputs**: ``treatments`` and
+       ``covariates`` enter as data (constants). The information they carry
+       about latent latent_unobserved through ``p(C | D)`` / ``p(Z | D)`` is not modeled
+       — including baseline information encoded through the treatment–baseline
        correlation (rho, configured here as confounding strength). In sampled
-       mode demand is inferred from the sales residual via ``D -> Y`` only; in
-       marginal mode that same demand path is integrated through the residual
+       mode latent_unobserved is inferred from the outcome residual via ``D -> Y`` only; in
+       marginal mode that same latent_unobserved path is integrated through the residual
        covariance. Neither mode posits ``p(C | eps_b)`` or claims exact
        conditioning.
     3. **Outcome-side Gaussian representation**: ``RW_Y`` is iid
@@ -1181,44 +1188,44 @@ def build_oracle_model(
        ``latent="marginal"`` mode, ``RW_D`` and ``RW_B`` are integrated with
        their exact observed-window covariances and the iid ``RW_Y`` variance is
        added to the diagonal. ``latent="sampled"`` retains the exact
-       full-horizon demand/baseline walk transforms and the same exact iid
+       full-horizon latent_unobserved/baseline walk transforms and the same exact iid
        ``RW_Y`` likelihood. Marginal mode adds ``1e-12 I`` as a numerical
        factorization guard. Its ``1e-6`` standard-deviation scale must be
-       assessed relative to the chosen sales units; it is not always negligible.
-    4. **Posterior-series labels**: marginal mode has no ``demand`` or
-       ``baseline`` deterministic. Its full-length ``sales_mu`` is
-       ``E[sales | theta]`` and excludes every latent walk realization.
+       assessed relative to the chosen outcome units; it is not always negligible.
+    4. **Posterior-series labels**: marginal mode has no ``latent_unobserved`` or
+       ``baseline`` deterministic. Its full-length ``outcome_mu`` is
+       ``E[outcome | theta]`` and excludes every latent walk realization.
        Sampled mode's ``baseline`` aggregates the intrinsic intercept ``B``
        and attributed ``D -> Y`` / ``Z -> Y`` effects, excluding ``RW_Y``.
-       Persisted ``data["baseline"]`` additionally includes ``sales_noise``;
+       Persisted ``data["baseline"]`` additionally includes ``outcome_noise``;
        subtract it before comparing. ``contributions`` is exactly comparable with
        ``world.data["contributions_observed"]`` in both modes; compare
-       ``sales_mu`` with observed ``sales`` for total fit.
+       ``outcome_mu`` with observed ``outcome`` for total fit.
     5. **Reproducible likelihood window**: the oracle convolves only reported
-       spend with a zero-padded start, whereas generation used real burn-in
+       treatment with a zero-padded start, whereas generation used real burn-in
        history. When burn-in is enabled it therefore discards the leading
        weeks whose response reaches outside the reported window — as many as
-       the longest carryover its OWN adstock priors admit
+       the longest carryover its OWN carryover priors admit
        (:func:`pymc_generator.signal_diagnostics.admitted_response_support_weeks`
-       over the direct channels), which is ``l_max - 1`` for a Weibull or an
-       unpinned geometric channel and ``0`` when every direct channel is
-       identity-adstock or its geometric decay prior is pinned at
+       over the direct treatments), which is ``l_max - 1`` for a Weibull or an
+       unpinned geometric treatment and ``0`` when every direct treatment is
+       identity-carryover or its geometric decay prior is pinned at
        ``alpha == 0``. The bound is the priors' reach, not the generating
        draw's: the oracle infers the kernel shape parameters, so a slice
        fitted to the truth's realized reach would keep rows the sampler can
        visit values for that cannot reproduce them. With a zero warmup,
-       persisted spend reproduces the full response and it observes all sales.
-       ``contributions`` and ``sales_mu`` remain full-length deterministics in
+       persisted treatment reproduces the full response and it observes all outcome.
+       ``contributions`` and ``outcome_mu`` remain full-length deterministics in
        both modes; ``baseline`` is full-length in sampled mode only. For
        non-identity kernels at the truth, residual sd was 0.238 for weeks
        before ``l_max`` versus 0.0093 after, compared with
        ``rw_y_std=0.0126``; ``|z|`` reached 57 sigma and full-window sigma
        MLEs were inflated 1.65x–8.4x across five seeds. Held-level shocks are
-       no exception: they clamp observed spend before the convolution and
+       no exception: they clamp observed treatment before the convolution and
        never touch response state, so ordinary carryover decays across a shock
        boundary exactly as it does anywhere else.
     6. **Sampler eligibility**: the locked released stack supplies oracle
-       gradients for identity, geometric, and Weibull adstock. Weibull
+       gradients for identity, geometric, and Weibull carryover. Weibull
        carryover parameters no longer require a Metropolis step because of
        missing upstream gradients. NUTS eligibility does not establish
        convergence: inspect divergences, R-hat, and effective sample sizes.
@@ -1228,35 +1235,35 @@ def build_oracle_model(
     ``n × n`` covariance, ``n = n_time_steps - warmup``, so it has an
     ``O(n**3)`` Cholesky cost. That is cheap at weekly horizons and expensive
     for very long ``n_time_steps``; use ``latent="sampled"`` when posterior
-    ``demand`` or ``baseline`` paths are needed.
+    ``latent_unobserved`` or ``baseline`` paths are needed.
     """
     if latent not in ("marginal", "sampled"):
         raise ValueError(f"latent must be 'marginal' or 'sampled', got {latent!r}")
 
-    n_treatments = len(g_active["g_cy"])  # media channels (the interventions)
-    n_covariates = len(g_active["g_zy"])  # observed controls
+    n_treatments = len(g_active["g_cy"])  # treatment treatments (the interventions)
+    n_covariates = len(g_active["g_zy"])  # observed covariates
     n_latent = len(g_active["g_dy"])  # hidden confounders
-    channels = np.asarray(data["channels"], dtype="float64")
-    controls = np.asarray(data["controls"], dtype="float64")
-    sales = np.asarray(data["sales"], dtype="float64")
-    if sales.ndim != 1:
-        raise ValueError(f"data sales must have shape (n_time_steps,), got {sales.shape}")
-    n_time_steps = int(sales.shape[0])
+    treatments = np.asarray(data["treatments"], dtype="float64")
+    covariates = np.asarray(data["covariates"], dtype="float64")
+    outcome = np.asarray(data["outcome"], dtype="float64")
+    if outcome.ndim != 1:
+        raise ValueError(f"data outcome must have shape (n_time_steps,), got {outcome.shape}")
+    n_time_steps = int(outcome.shape[0])
     if n_time_steps < 1:
-        raise ValueError("data sales must contain at least one observation")
-    if channels.shape != (n_time_steps, n_treatments) or controls.shape != (
+        raise ValueError("data outcome must contain at least one observation")
+    if treatments.shape != (n_time_steps, n_treatments) or covariates.shape != (
         n_time_steps,
         n_covariates,
     ):
         raise ValueError(
-            f"data shapes must be channels (n_time_steps, n_treatments)="
+            f"data shapes must be treatments (n_time_steps, n_treatments)="
             f"{n_time_steps, n_treatments}, "
-            f"controls (n_time_steps, n_covariates)={n_time_steps, n_covariates}, "
-            f"sales (n_time_steps,)={(n_time_steps,)}; "
-            f"got channels {channels.shape}, controls {controls.shape}"
+            f"covariates (n_time_steps, n_covariates)={n_time_steps, n_covariates}, "
+            f"outcome (n_time_steps,)={(n_time_steps,)}; "
+            f"got treatments {treatments.shape}, covariates {covariates.shape}"
         )
-    if not all(np.isfinite(value).all() for value in (channels, controls, sales)):
-        raise ValueError("data channels, controls, and sales must contain only finite values")
+    if not all(np.isfinite(value).all() for value in (treatments, covariates, outcome)):
+        raise ValueError("data treatments, covariates, and outcome must contain only finite values")
     if "saturation_scale" not in data:
         raise ValueError("data requires a saturation_scale")
     saturation_scale = np.asarray(data["saturation_scale"], dtype="float64")
@@ -1268,25 +1275,25 @@ def build_oracle_model(
             f"{(n_treatments,)}, got {saturation_scale!r}"
         )
     g_cy = np.asarray(g_active["g_cy"], dtype="float64")
-    adstock_family = np.asarray(structural["adstock_family"])
-    burn_in = cfg.adstock_burn_in
+    carryover_family = np.asarray(structural["carryover_family"])
+    burn_in = cfg.carryover_burn_in
     g_dy = np.asarray(g_active["g_dy"], dtype="float64")
     g_zy = np.asarray(g_active["g_zy"], dtype="float64")
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
     # How far back the response reaches decides how many leading weeks the
-    # zero-padded convolution of reported spend cannot reproduce. The families
-    # are fixed per channel, but the kernel SHAPE parameters are free RVs here,
+    # zero-padded convolution of reported treatment cannot reproduce. The families
+    # are fixed per treatment, but the kernel SHAPE parameters are free RVs here,
     # so the discard must cover the longest reach any admitted draw can have —
     # not the generating draw's realized reach, which the oracle never sees and
     # the sampler is free to move away from. `_uniform_prior_specs` has already
     # resolved `prior_cond`, so reading the geometric decay range back out of it
     # ties the slice to the exact inference prior the oracle registers below.
-    _, adstock_alpha_lo, adstock_alpha_hi, _ = specs["adstock_alpha"]
+    _, carryover_alpha_lo, carryover_alpha_hi, _ = specs["carryover_alpha"]
     warmup = (
         admitted_response_support_weeks(
-            adstock_family[g_cy != 0.0],
+            carryover_family[g_cy != 0.0],
             cfg.l_max,
-            adstock_alpha_range=(adstock_alpha_lo, adstock_alpha_hi),
+            carryover_alpha_range=(carryover_alpha_lo, carryover_alpha_hi),
         )
         if burn_in > 0
         else 0
@@ -1297,14 +1304,14 @@ def build_oracle_model(
         raise ValueError(
             "oracle likelihood has no reproducible observations: "
             f"n_time_steps={n_time_steps} must exceed warmup={warmup}, the response "
-            "support admitted by the oracle's adstock priors "
-            f"(l_max={cfg.l_max}, adstock_burn_in={burn_in}, "
-            f"adstock_alpha_range={(adstock_alpha_lo, adstock_alpha_hi)})"
+            "support admitted by the oracle's carryover priors "
+            f"(l_max={cfg.l_max}, carryover_burn_in={burn_in}, "
+            f"carryover_alpha_range={(carryover_alpha_lo, carryover_alpha_hi)})"
         )
     n_time_steps_full = n_time_steps + burn_in
     window = slice(burn_in, None)
     rows = np.arange(burn_in + warmup, n_time_steps_full)
-    _validate_oracle_channel_shocks(cfg, g_cy, data, n_time_steps)
+    _validate_oracle_treatment_shocks(cfg, g_cy, data, n_time_steps)
     mech_names = _live_mechanism_param_names(structural)
 
     def _walk_gram(smoothness: float) -> np.ndarray:
@@ -1329,27 +1336,27 @@ def build_oracle_model(
         mech: dict[str, Any] = {name: _uniform(*specs[name]) for name in mech_names}
         mech_params: dict[str, Any] = {
             "l_max": cfg.l_max,
-            "adstock_family": structural["adstock_family"],
+            "carryover_family": structural["carryover_family"],
             "sat_family": structural["sat_family"],
             **{name: np.zeros(n_treatments) for name in _MECHANISM_PARAM_NAMES},
             **mech,
         }
 
-        # Observed inputs enter as constants (static shapes — the adstock
+        # Observed inputs enter as constants (static shapes — the carryover
         # convolution indexes by the static time length).
-        channels_t = pt.as_tensor_variable(channels)
+        treatments_t = pt.as_tensor_variable(treatments)
 
-        # Media response on the OBSERVED spend: the same adstock / κ-relative
+        # Treatment response on the OBSERVED treatment: the same carryover / κ-relative
         # saturation code as generation. Held-level windows are already baked
-        # into the observed channel matrix, so no schedule tensors are needed.
+        # into the observed treatment matrix, so no schedule tensors are needed.
         contrib_cols = []
         for k in range(n_treatments):
-            ad_obs = _adstock_col(channels_t[:, k], mech_params, k)
+            ad_obs = _carryover_col(treatments_t[:, k], mech_params, k)
             scale_k = pt.as_tensor_variable(saturation_scale[k])
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
             contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
-        term_zy = pt.dot(pt.as_tensor_variable(controls), g_zy * rho_zy)  # (n_time_steps,)
+        term_zy = pt.dot(pt.as_tensor_variable(covariates), g_zy * rho_zy)  # (n_time_steps,)
 
         if latent == "marginal":
             if cfg.baseline_floor is not None:
@@ -1360,8 +1367,8 @@ def build_oracle_model(
                     "covariance. Use latent='sampled', which applies the same "
                     "floor as generation."
                 )
-            sales_mu = pm.Deterministic(
-                "sales_mu",
+            outcome_mu = pm.Deterministic(
+                "outcome_mu",
                 rw["rw_b"]["mean"][0] + term_zy + contributions.sum(axis=1),
             )
             covariance = (rw["rw_b"]["std"][0] ** 2) * pt.as_tensor_variable(
@@ -1381,13 +1388,13 @@ def build_oracle_model(
             # is too small to provide material likelihood information.
             covariance = covariance + 1e-12 * pt.eye(rows.size, dtype="float64")
             pm.MvNormal(
-                "sales",
-                mu=sales_mu[warmup:],
+                "outcome",
+                mu=outcome_mu[warmup:],
                 cov=covariance,
-                observed=sales[warmup:],
+                observed=outcome[warmup:],
             )
         else:
-            # Latent demand + baseline walks: the SAME transform generation
+            # Latent latent_unobserved + baseline walks: the SAME transform generation
             # uses, simulated over n_time_steps_full and sliced to the reported window.
             eps_d = pm.Normal("eps_d", 0.0, 1.0, shape=(n_time_steps_full, n_latent))
             eps_b = pm.Normal("eps_b", 0.0, 1.0, shape=(n_time_steps_full,))
@@ -1396,7 +1403,7 @@ def build_oracle_model(
             ]
             D_full = pt.stack(d_cols, axis=1)  # (n_time_steps_full, n_latent)
             walk_b = _walk_column(eps_b, rw["rw_b"], 0, n_time_steps_full)
-            pm.Deterministic("demand", D_full[window])
+            pm.Deterministic("latent_unobserved", D_full[window])
 
             # The SAME clip generation applies, so the oracle stays exactly the
             # generative model rather than an approximation of it.
@@ -1405,26 +1412,26 @@ def build_oracle_model(
             def _clip(expr, _floor=floor):
                 return expr if _floor is None else pt.maximum(expr, float(_floor))
 
-            if floor is not None and cfg.baseline_floor_scope == "non_media":
+            if floor is not None and cfg.baseline_floor_scope == "non_treatment":
                 # Absorbing scope: clip the running total as each parent joins,
-                # in the same locked order (confounders, then controls).
+                # in the same locked order (confounders, then covariates).
                 running = _clip(walk_b[window])
                 for j in range(n_latent):
                     running = _clip(running + (g_dy[j] * delta_dy[j]) * D_full[window][:, j])
                 for m in range(n_covariates):
                     running = _clip(
-                        running + (g_zy[m] * rho_zy[m]) * pt.as_tensor_variable(controls)[:, m]
+                        running + (g_zy[m] * rho_zy[m]) * pt.as_tensor_variable(covariates)[:, m]
                     )
                 baseline = pm.Deterministic("baseline", running)
             else:
                 term_dy = pt.dot(D_full[window], g_dy * delta_dy)  # (n_time_steps,)
                 baseline = pm.Deterministic("baseline", term_dy + term_zy + _clip(walk_b)[window])
-            sales_mu = pm.Deterministic("sales_mu", baseline + contributions.sum(axis=1))
+            outcome_mu = pm.Deterministic("outcome_mu", baseline + contributions.sum(axis=1))
             pm.Normal(
-                "sales",
-                mu=sales_mu[warmup:],
+                "outcome",
+                mu=outcome_mu[warmup:],
                 sigma=rw["rw_y"]["std"][0],
-                observed=sales[warmup:],
+                observed=outcome[warmup:],
             )
 
     return model

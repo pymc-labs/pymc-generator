@@ -1,4 +1,4 @@
-"""Direct-null channels have zero direct contribution but may remain feeders."""
+"""Direct-null treatments have zero direct contribution but may remain feeders."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def _cfg(*, min_no_direct: int, active: tuple[int, int] = WIDE_ACTIVE, **kw) -> 
         n_latent=3,
         n_treatments_active_range=active,
         edge_budget=kw.pop("edge_budget", WIDE_CY),
-        min_no_direct_effect_channels=min_no_direct,
+        min_no_direct_effect_treatments=min_no_direct,
         n_time_steps=52,
         n_cells=2,
         draws_per_cell=1,
@@ -52,13 +52,13 @@ def test_unfloored_wide_ranges_collapse_the_negative_class():
     assert sum(1 for cy in cells if cy.all()) > 0
 
 
-def test_floor_leaves_a_direct_null_channel_in_every_cell():
+def test_floor_leaves_a_direct_null_treatment_in_every_cell():
     for cy in _cells(_cfg(min_no_direct=1), 400):
         n_live = int(cy.sum())
         assert 1 <= n_live <= cy.size - 1, f"{n_live} live of {cy.size} active"
 
 
-def test_floor_two_leaves_two_direct_null_channels():
+def test_floor_two_leaves_two_direct_null_treatments():
     for cy in _cells(_cfg(min_no_direct=2, active=(3, 10)), 400):
         assert cy.size - int(cy.sum()) >= 2
 
@@ -73,7 +73,7 @@ def test_floor_keeps_the_live_range_wide():
     assert live == set(range(1, 10))
 
 
-def test_direct_null_channels_are_not_a_slot_position():
+def test_direct_null_treatments_are_not_a_slot_position():
     """Slot index must not predict the label, or the negative class is trivial."""
     no_direct_slots: set[int] = set()
     live_slots: set[int] = set()
@@ -85,7 +85,7 @@ def test_direct_null_channels_are_not_a_slot_position():
 
 
 def test_floor_binds_on_the_bernoulli_path_too():
-    """No cy budget: surplus live channels are demoted after the per-slot draw."""
+    """No cy budget: surplus live treatments are demoted after the per-slot draw."""
     cfg = _cfg(
         min_no_direct=4,
         active=(10, 10),
@@ -96,8 +96,8 @@ def test_floor_binds_on_the_bernoulli_path_too():
         assert int(cy.sum()) == 6
 
 
-def test_floor_never_starves_the_last_live_channel():
-    """``n_treatments_active`` below the floor still yields one live channel, not zero."""
+def test_floor_never_starves_the_last_live_treatment():
+    """``n_treatments_active`` below the floor still yields one live treatment, not zero."""
     cfg = _cfg(min_no_direct=1, active=(2, 10))
     rng = np.random.default_rng(0)
     for _ in range(20):
@@ -110,7 +110,7 @@ def test_floor_never_starves_the_last_live_channel():
 def test_default_floor_is_inert():
     """Zero floor must not perturb the draw or the RNG stream."""
     cfg = _cfg(min_no_direct=0)
-    assert cfg.min_no_direct_effect_channels == 0
+    assert cfg.min_no_direct_effect_treatments == 0
     floored = _sample_g(
         np.random.default_rng(3), cfg.layout, 7, 3, 2, budget=cfg.edge_budget, min_no_direct=0
     )
@@ -121,18 +121,18 @@ def test_default_floor_is_inert():
 
 @pytest.mark.parametrize("min_no_direct", [-1, 1.0, True, np.float64(2.0)])
 def test_validate_rejects_non_integer_floors(min_no_direct):
-    with pytest.raises(ValueError, match="min_no_direct_effect_channels"):
-        SCMPrior(min_no_direct_effect_channels=min_no_direct).validate()
+    with pytest.raises(ValueError, match="min_no_direct_effect_treatments"):
+        SCMPrior(min_no_direct_effect_treatments=min_no_direct).validate()
 
 
 @pytest.mark.parametrize("active", [(2, 10), (3, 3)])
 def test_validate_rejects_an_unsatisfiable_floor(active):
     """A floor that the smallest drawable cell cannot honour is a config error."""
-    with pytest.raises(ValueError, match="min_no_direct_effect_channels"):
+    with pytest.raises(ValueError, match="min_no_direct_effect_treatments"):
         SCMPrior(
             n_treatments=10,
             n_treatments_active_range=active,
-            min_no_direct_effect_channels=active[0],
+            min_no_direct_effect_treatments=active[0],
         ).validate()
 
 
@@ -140,18 +140,18 @@ def test_validate_accepts_the_largest_satisfiable_floor():
     SCMPrior(
         n_treatments=10,
         n_treatments_active_range=(4, 10),
-        min_no_direct_effect_channels=3,
+        min_no_direct_effect_treatments=3,
     ).validate()
 
 
-def test_corpus_carries_a_direct_null_channel_per_task():
+def test_corpus_carries_a_direct_null_treatment_per_task():
     cfg = make_scm_prior(
         n_treatments=6,
         n_covariates=2,
         n_latent=1,
         n_treatments_active_range=(2, 6),
         edge_budget={"cy": (1, 6)},
-        min_no_direct_effect_channels=1,
+        min_no_direct_effect_treatments=1,
         n_time_steps=52,
         n_cells=4,
         draws_per_cell=2,
@@ -163,12 +163,12 @@ def test_corpus_carries_a_direct_null_channel_per_task():
     n_active = corpus["n_treatments_active"]
     assert np.all(n_live >= 1)
     assert np.all(n_live <= n_active - 1)
-    # Direct-null channels are active nodes, not padding.
+    # Direct-null treatments are active nodes, not padding.
     assert np.array_equal(cy, cy * corpus["treatment_active_mask"])
-    assert corpus["diagnostics"]["min_no_direct_effect_channels"] == 1
+    assert corpus["diagnostics"]["min_no_direct_effect_treatments"] == 1
 
 
-def test_direct_null_channels_have_exactly_zero_direct_contribution():
+def test_direct_null_treatments_have_exactly_zero_direct_contribution():
     """The negative class must be a true zero target, not a small one."""
     cfg = make_scm_prior(
         n_treatments=5,
@@ -176,7 +176,7 @@ def test_direct_null_channels_have_exactly_zero_direct_contribution():
         n_latent=1,
         n_treatments_active_range=(2, 5),
         edge_budget={"cy": (1, 5)},
-        min_no_direct_effect_channels=1,
+        min_no_direct_effect_treatments=1,
         n_time_steps=52,
         n_cells=3,
         draws_per_cell=1,
@@ -186,13 +186,13 @@ def test_direct_null_channels_have_exactly_zero_direct_contribution():
     cy = corpus["g"][:, cfg.layout.slices["cy"]]
     no_direct = (cy == 0) & (corpus["treatment_active_mask"] == 1)
     assert no_direct.any()
-    for task, channel in zip(*np.nonzero(no_direct)):
-        assert np.all(corpus["contributions_raw"][task, :, channel] == 0.0)
+    for task, treatment in zip(*np.nonzero(no_direct)):
+        assert np.all(corpus["treatment_contribution_raw"][task, :, treatment] == 0.0)
 
 
 def test_direct_null_floor_does_not_exclude_indirect_influence():
     from pymc_generator import sample_scm
-    from pymc_generator.worlds import channel_role
+    from pymc_generator.worlds import treatment_role
 
     cfg = make_scm_prior(
         n_treatments=2,
@@ -200,7 +200,7 @@ def test_direct_null_floor_does_not_exclude_indirect_influence():
         n_latent=1,
         n_time_steps=24,
         nonlinearity="linear",
-        min_no_direct_effect_channels=1,
+        min_no_direct_effect_treatments=1,
         edge_budget={
             "cy": (1, 1),
             "cc": (1, 1),
@@ -213,7 +213,7 @@ def test_direct_null_floor_does_not_exclude_indirect_influence():
         },
     )
     world = sample_scm(cfg, seed=3, connect_all=True)
-    assert channel_role(world.g, 0) == "feeder"
+    assert treatment_role(world.g, 0) == "feeder"
     assert np.all(world.data["contributions"][:, 0] == 0.0)
     assert np.any(world.data["indirect_effects_by_source"][:, 0] > 0.0)
     assert world.identity_error() < 1e-10

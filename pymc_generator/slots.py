@@ -32,16 +32,16 @@ import numpy as np
 # --------------------------------------------------------------------------
 # Demo sizes — M0 milestone scale (KANBAN P1.1: fixed sizes, no padding)
 # --------------------------------------------------------------------------
-N_TREATMENTS_DEMO = 4  # treatments (media channels)
-N_COVARIATES_DEMO = 2  # covariates (observed controls)
-N_LATENT_DEMO = 1  # latent factors (latent demand)
+N_TREATMENTS_DEMO = 4  # treatments (treatment treatments)
+N_COVARIATES_DEMO = 2  # covariates (observed covariates)
+N_LATENT_DEMO = 1  # latent factors (latent latent_unobserved)
 N_TIME_STEPS_DEMO = 104  # time steps (weeks) per task (design doc §6.1: 104–156)
 
 # --------------------------------------------------------------------------
 # Edge-slot Bernoulli base rates (KANBAN P0.5 / design doc §5)
 # --------------------------------------------------------------------------
-P_CY = 0.8  # C_k -> Y   (null channels possible: 1 - 0.8)
-P_DC = 0.5  # D_j -> C_k (endogenous spend)
+P_CY = 0.8  # C_k -> Y   (null treatments possible: 1 - 0.8)
+P_DC = 0.5  # D_j -> C_k (endogenous treatment)
 P_DY = 0.5  # D_j -> Y   (confounding path)
 P_ZY = 0.4  # Z_m -> Y
 P_ZC = 0.3  # Z_m -> C_k (extended layout, unused in demo)
@@ -73,9 +73,11 @@ _SQUARE_TYPES: dict[str, str] = {"cc": "n_treatments", "zz": "n_covariates"}
 # 1: symbolic dimension keys (``K_active``, ``M_active``, ``J_active``,
 #    ``active_c_mask``, ``active_m_mask``, ``active_j_mask``).
 # 2: descriptive dimension keys, with legacy db/zb outcome-edge names.
-# 3: dy/zy outcome-edge names and an explicitly direct-null channel floor.
+# 3: dy/zy outcome-edge names and an explicitly direct-null treatment floor.
+# 4: domain-neutral names — spend/sales/channel/control/demand/adstock become
+#    treatment/outcome/covariate/latent_unobserved/carryover.
 # Packed graph positions and all numeric arrays are unchanged.
-CORPUS_SCHEMA_VERSION: int = 3
+CORPUS_SCHEMA_VERSION: int = 4
 
 #: v1 corpus key -> v2 canonical key, applied by ``load_corpus``.
 LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
@@ -91,6 +93,48 @@ LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
 LEGACY_EDGE_TYPES_V2: tuple[str, ...] = ("cy", "dc", "dz", "db", "zb", "zc", "cc", "zz")
 LEGACY_EDGE_KEYS_V2: dict[str, str] = {"db": "dy", "zb": "zy"}
 
+#: v3 marketing-vocabulary corpus key -> v4 domain-neutral key, applied by
+#: ``load_corpus``. Array contents, dtypes and shapes are untouched: this is a
+#: pure renaming of the persisted vocabulary.
+LEGACY_CORPUS_KEYS_V3: dict[str, str] = {
+    "spend_raw": "treatment_raw",
+    "spend_norm": "treatment_norm",
+    "spend_share": "treatment_share",
+    "spend_means": "treatment_means",
+    "controls": "covariates",
+    "sales_raw": "outcome_raw",
+    "sales_norm": "outcome_norm",
+    "sales_scale": "outcome_scale",
+    "sales_noise": "outcome_noise",
+    "demand": "latent_unobserved",
+    "contributions_raw": "treatment_contribution_raw",
+    "control_contribution": "covariate_contribution",
+    "confounder_contribution": "latent_unobserved_contribution",
+    "channel_active": "treatment_active",
+    "channel_level": "treatment_level",
+    "channel_shock_mask": "treatment_shock_mask",
+    "channel_shock_channel": "treatment_shock_index",
+    "channel_shock_start": "treatment_shock_start",
+    "channel_shock_length": "treatment_shock_length",
+    "channel_shock_level": "treatment_shock_level",
+    "channel_shock_level_multiplier": "treatment_shock_level_multiplier",
+    "adstock_family": "carryover_family",
+    "adstock_alpha": "carryover_alpha",
+}
+
+#: v3 diagnostics metadata key -> v4 key, applied alongside the arrays.
+LEGACY_DIAGNOSTIC_KEYS_V3: dict[str, str] = {
+    "min_no_direct_effect_channels": "min_no_direct_effect_treatments",
+    "adstock_kernel_version": "carryover_kernel_version",
+    "adstock_kernel_semantics": "carryover_kernel_semantics",
+}
+
+#: v3 ``prior_cond`` column name -> v4 column name.
+LEGACY_PRIOR_COND_COLUMNS_V3: dict[str, str] = {
+    "adstock_alpha_low": "carryover_alpha_low",
+    "adstock_alpha_width": "carryover_alpha_width",
+}
+
 # --------------------------------------------------------------------------
 # Prior-conditioning (ACE) layout — design-freeze constants (to-do 01)
 # --------------------------------------------------------------------------
@@ -99,15 +143,15 @@ LEGACY_EDGE_KEYS_V2: dict[str, str] = {"db": "dy", "zb": "zy"}
 # quantities (e.g. Weibull lam/k, other saturation families) extend the tail;
 # consumers index columns by name via PRIOR_COND_LAYOUT, never by position
 # literals.
-PRIOR_COND_QUANTITIES: tuple[str, ...] = ("adstock_alpha", "hill_shape")
+PRIOR_COND_QUANTITIES: tuple[str, ...] = ("carryover_alpha", "hill_shape")
 
 #: Column names of the corpus ``prior_cond`` key, shape
 #: (n_tasks, len(PRIOR_COND_LAYOUT)) — the packed
 #: ``(low, width)`` pairs per conditioned quantity, canonical order (LOCKED,
 #: append-only).
 PRIOR_COND_LAYOUT: tuple[str, ...] = (
-    "adstock_alpha_low",
-    "adstock_alpha_width",
+    "carryover_alpha_low",
+    "carryover_alpha_width",
     "hill_shape_low",
     "hill_shape_width",
 )
@@ -115,20 +159,20 @@ PRIOR_COND_LAYOUT: tuple[str, ...] = (
 #: Required corpus arrays: named axes and storage dtype. Optional metadata
 #: blocks are validated separately; ``prior_cond`` follows PRIOR_COND_LAYOUT.
 CORPUS_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
-    "spend_raw": (("task", "time", "treatment"), np.float32),
-    "spend_norm": (("task", "time", "treatment"), np.float32),
-    "spend_share": (("task", "time", "treatment"), np.float32),
-    "controls": (("task", "time", "covariate"), np.float32),
-    "sales_raw": (("task", "time"), np.float32),
-    "sales_norm": (("task", "time"), np.float32),
+    "treatment_raw": (("task", "time", "treatment"), np.float32),
+    "treatment_norm": (("task", "time", "treatment"), np.float32),
+    "treatment_share": (("task", "time", "treatment"), np.float32),
+    "covariates": (("task", "time", "covariate"), np.float32),
+    "outcome_raw": (("task", "time"), np.float32),
+    "outcome_norm": (("task", "time"), np.float32),
     "support_mask": (("task", "time"), np.uint8),
     "is_future": (("task",), np.uint8),
     "g": (("task", "edge"), np.uint8),
-    "contributions_raw": (("task", "time", "treatment"), np.float32),
+    "treatment_contribution_raw": (("task", "time", "treatment"), np.float32),
     "baseline_raw": (("task", "time"), np.float32),
-    "demand": (("task", "time", "latent"), np.float32),
-    "spend_means": (("task", "treatment"), np.float32),
-    "sales_scale": (("task",), np.float32),
+    "latent_unobserved": (("task", "time", "latent"), np.float32),
+    "treatment_means": (("task", "treatment"), np.float32),
+    "outcome_scale": (("task",), np.float32),
     "is_val": (("task",), np.uint8),
     "cell_id": (("task",), np.int32),
     "treatment_active_mask": (("task", "treatment"), np.uint8),
@@ -139,22 +183,22 @@ CORPUS_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
     "n_latent_active": (("task",), np.int32),
     "confounding_strength": (("task",), np.float32),
     "indirect_effects": (("task", "time"), np.float32),
-    "channel_active": (("task", "treatment"), np.uint8),
-    "control_contribution": (("task", "time", "covariate"), np.float32),
-    "confounder_contribution": (("task", "time", "latent"), np.float32),
+    "treatment_active": (("task", "treatment"), np.uint8),
+    "covariate_contribution": (("task", "time", "covariate"), np.float32),
+    "latent_unobserved_contribution": (("task", "time", "latent"), np.float32),
     "baseline_intrinsic": (("task", "time"), np.float32),
-    "sales_noise": (("task", "time"), np.float32),
+    "outcome_noise": (("task", "time"), np.float32),
     "indirect_effects_by_source": (("task", "time", "indirect_source"), np.float32),
-    "channel_shock_mask": (("task", "time", "treatment"), np.uint8),
-    "channel_shock_channel": (("task", "shock"), np.int32),
-    "channel_shock_start": (("task", "shock"), np.int32),
-    "channel_shock_length": (("task", "shock"), np.int32),
-    "channel_shock_level_multiplier": (("task", "shock"), np.float32),
-    "channel_shock_level": (("task", "shock"), np.float32),
-    "channel_level": (("task", "treatment"), np.float32),
+    "treatment_shock_mask": (("task", "time", "treatment"), np.uint8),
+    "treatment_shock_index": (("task", "shock"), np.int32),
+    "treatment_shock_start": (("task", "shock"), np.int32),
+    "treatment_shock_length": (("task", "shock"), np.int32),
+    "treatment_shock_level_multiplier": (("task", "shock"), np.float32),
+    "treatment_shock_level": (("task", "shock"), np.float32),
+    "treatment_level": (("task", "treatment"), np.float32),
     "saturation_scale": (("task", "treatment"), np.float32),
-    "adstock_family": (("task", "treatment"), np.uint8),
-    "adstock_alpha": (("task", "treatment"), np.float32),
+    "carryover_family": (("task", "treatment"), np.uint8),
+    "carryover_alpha": (("task", "treatment"), np.float32),
     "weibull_lam": (("task", "treatment"), np.float32),
     "weibull_k": (("task", "treatment"), np.float32),
 }

@@ -2,8 +2,8 @@
 
 A :class:`Scenario` fixes graph sizes and per-edge-type arrow budgets so a
 decomposition failure can be traced to the pathway that broke. The five
-default scenarios cover: pure direct effects, demand-confounded spend, promo-driven spend,
-channel halo, and everything at once.
+default scenarios cover: pure direct effects, latent_unobserved-confounded treatment, promo-driven treatment,
+treatment halo, and everything at once.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class Scenario:
     purpose : str
         What the scenario isolates — written into ``description.txt``.
     n_treatments, n_covariates, n_latent : int
-        Channels / controls / demand factors (all active).
+        Treatments / covariates / latent_unobserved factors (all active).
     connect_all : bool
         When True, every node must have a directed path to Y (no isolated
         nulls). When False, fully-isolated null nodes are allowed as
@@ -36,7 +36,7 @@ class Scenario:
         Per-edge-type budget entries that OVERRIDE ``edge_budget`` when
         connectivity is forced (``prior(connect_all=True)``). A scenario tuned
         for isolated-null traps can budget an edge type so thinly that "every
-        node reaches Y" is unsatisfiable — a control with no ``zy``/``zc``/
+        node reaches Y" is unsatisfiable — a covariate with no ``zy``/``zc``/
         ``zz``/``dz`` arrow available cannot reach Y at any draw count — so
         forcing connectivity has to substitute a budget that admits it.
         Entries are chosen empirically as the smallest change reaching a
@@ -98,8 +98,8 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         name="direct_only",
         purpose=(
-            "Pure C→Y channels; NO channel-input interactions (dc=zc=cc=dz=zz=0). "
-            "Controls/demand act on the baseline only. The model should attribute "
+            "Pure C→Y treatments; NO treatment-input interactions (dc=zc=cc=dz=zz=0). "
+            "Covariates/latent_unobserved act on the baseline only. The model should attribute "
             "everything to direct contributions + baseline; indirect effects are "
             "exactly zero."
         ),
@@ -119,11 +119,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         },
     ),
     Scenario(
-        name="confounded_spend",
+        name="confounded_treatment",
         purpose=(
-            "Classic MMM confounding: latent demand drives BOTH spend (D→C) and "
-            "sales (D→Y). The dc indirect column carries the demand-through-spend "
-            "effect; naive attribution overcredits channels."
+            "Classic MMM confounding: latent latent_unobserved drives BOTH treatment (D→C) and "
+            "outcome (D→Y). The dc indirect column carries the latent_unobserved-through-treatment "
+            "effect; naive attribution overcredits treatments."
         ),
         n_treatments=4,
         n_covariates=2,
@@ -141,11 +141,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         },
     ),
     Scenario(
-        name="promo_drives_spend",
+        name="promo_drives_treatment",
         purpose=(
-            "Observed controls push spend (Z→C, e.g. promo calendar triggers media) "
-            "AND sales (Z→Y), with demand also moving the controls (D→Z). "
-            "The zc indirect column carries the control-through-spend effect."
+            "Observed covariates push treatment (Z→C, e.g. promo calendar triggers treatment) "
+            "AND outcome (Z→Y), with latent_unobserved also moving the covariates (D→Z). "
+            "The zc indirect column carries the covariate-through-treatment effect."
         ),
         n_treatments=4,
         n_covariates=3,
@@ -163,10 +163,10 @@ SCENARIOS: tuple[Scenario, ...] = (
         },
     ),
     Scenario(
-        name="channel_halo",
+        name="treatment_halo",
         purpose=(
-            "Channel-to-channel halo (C→C): upstream channels amplify downstream "
-            "spend. Channels without a direct C→Y edge are feeders (their outgoing "
+            "Treatment-to-treatment halo (C→C): upstream treatments amplify downstream "
+            "treatment. Treatments without a direct C→Y edge are feeders (their outgoing "
             "C→C reaches Y through the cascade) — their DIRECT attribution must "
             "still be zero. The cc indirect column carries the halo effect. May "
             "also keep fully-ISOLATED null nodes (no edges at all) as "
@@ -188,10 +188,10 @@ SCENARIOS: tuple[Scenario, ...] = (
             "zz": 0,
         },
         # Forced connectivity (``prior(connect_all=True)``): with zc=zz=dz=0 a
-        # control's ONLY route to Y is its own Z->Y arrow, so zy=(1,1) leaves
-        # the second control edgeless — permanently isolated, at any draw
+        # covariate's ONLY route to Y is its own Z->Y arrow, so zy=(1,1) leaves
+        # the second covariate edgeless — permanently isolated, at any draw
         # count. Budgeting both arrows is the whole fix; nothing else needs to
-        # move. The channels already cope: g_cc is strict upper triangular
+        # move. The treatments already cope: g_cc is strict upper triangular
         # (src index < dst index), so C5 has no outgoing halo arrow and must
         # take one of the three cy arrows, which leaves the two feeders to be
         # covered by three cc arrows. Measured per-draw feasible fraction
@@ -203,10 +203,10 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         name="kitchen_sink",
         purpose=(
-            "Everything at once at sparse budgets: confounded spend, "
-            "control-driven spend, channel halo, control chains. The hardest "
+            "Everything at once at sparse budgets: confounded treatment, "
+            "covariate-driven treatment, treatment halo, covariate chains. The hardest "
             "decomposition; all three indirect sources are live. May keep "
-            "fully-ISOLATED null channels/controls (no edges at all) as "
+            "fully-ISOLATED null treatments/covariates (no edges at all) as "
             "zero-attribution traps; every non-isolated node has a real path to "
             "Y and dead-ends are never generated. See 'Node connectivity' in "
             "description.txt."
@@ -224,8 +224,8 @@ SCENARIOS: tuple[Scenario, ...] = (
             "zz": (1, 2),
         },
         # Forced connectivity: nothing here is structurally impossible, only
-        # rare. The binding constraint is cc: cy=(4,4) of 6 channels leaves 2
-        # feeders, each of which needs an OUTGOING halo arrow into a channel
+        # rare. The binding constraint is cc: cy=(4,4) of 6 treatments leaves 2
+        # feeders, each of which needs an OUTGOING halo arrow into a treatment
         # that reaches Y, and a (1, 2) budget can draw a single arrow — which
         # cannot cover two feeders at all. Widening cc keeps the scenario's
         # character (sparse cy, so the zero-direct-attribution feeders stay)

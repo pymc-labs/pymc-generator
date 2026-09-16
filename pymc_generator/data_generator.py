@@ -49,8 +49,11 @@ from .slots import (
     CORPUS_SCHEMA_VERSION,
     EDGE_TYPES_EXTENDED,
     LEGACY_CORPUS_KEYS_V1,
+    LEGACY_CORPUS_KEYS_V3,
+    LEGACY_DIAGNOSTIC_KEYS_V3,
     LEGACY_EDGE_KEYS_V2,
     LEGACY_EDGE_TYPES_V2,
+    LEGACY_PRIOR_COND_COLUMNS_V3,
     PRIOR_COND_LAYOUT,
     PRIOR_COND_QUANTITIES,
     SlotLayout,
@@ -322,7 +325,13 @@ class DataGenerator:
         if errors:
             return errors
 
-        for key in ("spend_raw", "controls", "demand", "g", "channel_shock_channel"):
+        for key in (
+            "treatment_raw",
+            "covariates",
+            "latent_unobserved",
+            "g",
+            "treatment_shock_index",
+        ):
             ndim = len(CORPUS_ARRAY_FIELDS[key][0])
             value = corpus[key]
             if value.ndim != ndim:
@@ -332,18 +341,18 @@ class DataGenerator:
             return errors
 
         # Get dimensions
-        n_tasks = corpus["spend_raw"].shape[0]
-        n_time_steps = corpus["spend_raw"].shape[1]
-        n_treatments = corpus["spend_raw"].shape[2]
-        n_covariates = corpus["controls"].shape[2]
-        n_latent = corpus["demand"].shape[2]
+        n_tasks = corpus["treatment_raw"].shape[0]
+        n_time_steps = corpus["treatment_raw"].shape[1]
+        n_treatments = corpus["treatment_raw"].shape[2]
+        n_covariates = corpus["covariates"].shape[2]
+        n_latent = corpus["latent_unobserved"].shape[2]
         layout = SlotLayout(
             n_treatments=n_treatments,
             n_covariates=n_covariates,
             n_latent=n_latent,
             edge_types=EDGE_TYPES_EXTENDED,
         )
-        n_channel_shocks = corpus["channel_shock_channel"].shape[1]
+        n_treatment_shocks = corpus["treatment_shock_index"].shape[1]
 
         dimensions = {
             "task": n_tasks,
@@ -352,7 +361,7 @@ class DataGenerator:
             "covariate": n_covariates,
             "latent": n_latent,
             "edge": layout.n_slots,
-            "shock": n_channel_shocks,
+            "shock": n_treatment_shocks,
             "indirect_source": 3,
         }
         field_specs = {
@@ -428,42 +437,46 @@ class DataGenerator:
                 elif not np.isfinite(value).all():
                     errors.append(f"identifiability.{key} contains NaN or Inf")
 
-        positive_sales_scale = (corpus["sales_scale"] > 0.0).all()
-        if not positive_sales_scale:
-            errors.append("sales_scale must be positive")
-        spend_raw = corpus["spend_raw"].astype(np.float64)
-        expected_spend_means = spend_raw.mean(axis=1)
-        if not np.allclose(corpus["spend_means"], expected_spend_means, rtol=1e-6, atol=1e-7):
-            errors.append("spend_means != mean(spend_raw, axis=1)")
-        spend_means = corpus["spend_means"].astype(np.float64)
-        expected_spend_norm = np.divide(
-            spend_raw,
-            spend_means[:, None, :],
-            out=np.zeros_like(spend_raw),
-            where=spend_means[:, None, :] != 0.0,
+        positive_outcome_scale = (corpus["outcome_scale"] > 0.0).all()
+        if not positive_outcome_scale:
+            errors.append("outcome_scale must be positive")
+        treatment_raw = corpus["treatment_raw"].astype(np.float64)
+        expected_treatment_means = treatment_raw.mean(axis=1)
+        if not np.allclose(
+            corpus["treatment_means"], expected_treatment_means, rtol=1e-6, atol=1e-7
+        ):
+            errors.append("treatment_means != mean(treatment_raw, axis=1)")
+        treatment_means = corpus["treatment_means"].astype(np.float64)
+        expected_treatment_norm = np.divide(
+            treatment_raw,
+            treatment_means[:, None, :],
+            out=np.zeros_like(treatment_raw),
+            where=treatment_means[:, None, :] != 0.0,
         )
-        if not np.allclose(corpus["spend_norm"], expected_spend_norm, rtol=1e-5, atol=1e-7):
-            errors.append("spend_norm does not match spend_raw / spend_means")
-        active_spend_sum = (spend_raw * corpus["treatment_active_mask"][:, None, :]).sum(
+        if not np.allclose(corpus["treatment_norm"], expected_treatment_norm, rtol=1e-5, atol=1e-7):
+            errors.append("treatment_norm does not match treatment_raw / treatment_means")
+        active_treatment_sum = (treatment_raw * corpus["treatment_active_mask"][:, None, :]).sum(
             axis=-1, keepdims=True
         )
-        expected_spend_share = (
+        expected_treatment_share = (
             np.divide(
-                spend_raw,
-                active_spend_sum,
-                out=np.zeros_like(spend_raw),
-                where=active_spend_sum != 0.0,
+                treatment_raw,
+                active_treatment_sum,
+                out=np.zeros_like(treatment_raw),
+                where=active_treatment_sum != 0.0,
             )
             * corpus["treatment_active_mask"][:, None, :]
         )
-        if not np.allclose(corpus["spend_share"], expected_spend_share, rtol=1e-5, atol=1e-7):
-            errors.append("spend_share does not match active-channel spend shares")
+        if not np.allclose(
+            corpus["treatment_share"], expected_treatment_share, rtol=1e-5, atol=1e-7
+        ):
+            errors.append("treatment_share does not match active-treatment treatment shares")
 
-        sales = corpus["sales_raw"].astype(np.float64)
-        if positive_sales_scale:
-            expected_norm = sales / corpus["sales_scale"].astype(np.float64)[:, None]
-            if not np.allclose(corpus["sales_norm"], expected_norm, rtol=1e-5):
-                errors.append("sales_norm != sales_raw / sales_scale")
+        outcome = corpus["outcome_raw"].astype(np.float64)
+        if positive_outcome_scale:
+            expected_norm = outcome / corpus["outcome_scale"].astype(np.float64)[:, None]
+            if not np.allclose(corpus["outcome_norm"], expected_norm, rtol=1e-5):
+                errors.append("outcome_norm != outcome_raw / outcome_scale")
 
         # These arrays have already been validated as uint8.
         for key in ("support_mask", "is_future", "g"):
@@ -496,18 +509,20 @@ class DataGenerator:
             if not np.array_equal(corpus["support_mask"], expected_support):
                 errors.append("support_mask does not match the recorded temporal split")
 
-            expected_sales_scale = np.asarray(
-                [sales[i, expected_support[i] == 1].std() for i in range(n_tasks)],
+            expected_outcome_scale = np.asarray(
+                [outcome[i, expected_support[i] == 1].std() for i in range(n_tasks)],
                 dtype=np.float64,
             )
-            bad_scale = ~(np.isfinite(expected_sales_scale) & (expected_sales_scale > 0.0))
+            bad_scale = ~(np.isfinite(expected_outcome_scale) & (expected_outcome_scale > 0.0))
             if bad_scale.any():
-                full_std = sales[bad_scale].std(axis=1)
-                expected_sales_scale[bad_scale] = np.where(
+                full_std = outcome[bad_scale].std(axis=1)
+                expected_outcome_scale[bad_scale] = np.where(
                     np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0
                 )
-            if not np.allclose(corpus["sales_scale"], expected_sales_scale, rtol=1e-5, atol=1e-7):
-                errors.append("sales_scale does not match supported sales observations")
+            if not np.allclose(
+                corpus["outcome_scale"], expected_outcome_scale, rtol=1e-5, atol=1e-7
+            ):
+                errors.append("outcome_scale does not match supported outcome observations")
 
         is_val = corpus["is_val"]
         if (is_val > 1).any():
@@ -515,21 +530,21 @@ class DataGenerator:
         elif not 0 < is_val.sum() < n_tasks:
             errors.append("is_val must contain at least one training and one validation world")
         # Top-level shock audit metadata is intentionally sufficient to
-        # reconstruct every held-spend intervention without persisting the
+        # reconstruct every held-treatment intervention without persisting the
         # full burn-in mask or natural (unshocked) paths.
-        shock_mask = corpus["channel_shock_mask"]
+        shock_mask = corpus["treatment_shock_mask"]
         if not np.isin(shock_mask, (0, 1)).all():
-            errors.append("channel_shock_mask is not binary")
-        if (corpus["channel_shock_level_multiplier"] < 0).any():
-            errors.append("channel_shock_level_multiplier contains negative values")
-        if (corpus["channel_shock_level"] < 0).any():
-            errors.append("channel_shock_level contains negative values")
+            errors.append("treatment_shock_mask is not binary")
+        if (corpus["treatment_shock_level_multiplier"] < 0).any():
+            errors.append("treatment_shock_level_multiplier contains negative values")
+        if (corpus["treatment_shock_level"] < 0).any():
+            errors.append("treatment_shock_level contains negative values")
         if not (
             (corpus["confounding_strength"] >= 0.0) & (corpus["confounding_strength"] <= 0.95)
         ).all():
             errors.append("confounding_strength must be in [0, 0.95]")
-        if not np.isin(corpus["adstock_family"], (0, 1, 2)).all():
-            errors.append("adstock_family contains invalid family ids")
+        if not np.isin(corpus["carryover_family"], (0, 1, 2)).all():
+            errors.append("carryover_family contains invalid family ids")
         if has_signal_labels:
             signal_metrics = identifiability["signal_metrics"]
             signal_metric_valid = identifiability["signal_metric_valid"]
@@ -616,10 +631,10 @@ class DataGenerator:
             if not _is_integer(signal_diagnostics.get("l_max")) or signal_diagnostics["l_max"] < 1:
                 errors.append("diagnostics signal l_max must be a positive integer")
             if (
-                not _is_integer(signal_diagnostics.get("adstock_burn_in"))
-                or signal_diagnostics["adstock_burn_in"] < 0
+                not _is_integer(signal_diagnostics.get("carryover_burn_in"))
+                or signal_diagnostics["carryover_burn_in"] < 0
             ):
-                errors.append("diagnostics signal adstock_burn_in must be a nonnegative integer")
+                errors.append("diagnostics signal carryover_burn_in must be a nonnegative integer")
             response_warmup_weeks = signal_diagnostics.get("response_warmup_weeks")
             if (
                 not _is_integer(response_warmup_weeks)
@@ -642,7 +657,12 @@ class DataGenerator:
                     "in [0, 1]"
                 )
             for prefix, label, semantics, version in (
-                ("adstock_kernel", "adstock kernel", "normalized-causal-minmax-weibull-density", 3),
+                (
+                    "carryover_kernel",
+                    "carryover kernel",
+                    "normalized-causal-minmax-weibull-density",
+                    3,
+                ),
                 ("outcome_noise", "outcome noise", OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION),
             ):
                 actual_semantics = signal_diagnostics.get(f"{prefix}_semantics")
@@ -678,7 +698,7 @@ class DataGenerator:
             "n_treatments_active",
             "n_covariates_active",
             "n_latent_active",
-            "channel_active",
+            "treatment_active",
             "is_val",
         )
         for cell in cell_ids:
@@ -764,7 +784,7 @@ class DataGenerator:
             ("treatment_active_mask", active_treatment),
             ("covariate_active_mask", active_covariate),
             ("latent_active_mask", active_latent),
-            ("channel_active", corpus["channel_active"]),
+            ("treatment_active", corpus["treatment_active"]),
         ):
             if (mask > 1).any():
                 errors.append(f"{key} is not binary")
@@ -788,31 +808,36 @@ class DataGenerator:
             expanded = np.broadcast_to(inactive[:, None, :], array.shape)
             return bool((array[expanded] != 0).any())
 
-        for key in ("spend_raw", "spend_norm", "spend_share", "contributions_raw"):
-            if _padded_nonzero(corpus[key], inactive_c):
-                errors.append(f"{key} has nonzero inactive-channel padding")
-        if _padded_nonzero(corpus["channel_shock_mask"], inactive_c):
-            errors.append("channel_shock_mask has nonzero inactive-channel padding")
         for key in (
-            "spend_means",
-            "channel_active",
-            "channel_level",
+            "treatment_raw",
+            "treatment_norm",
+            "treatment_share",
+            "treatment_contribution_raw",
+        ):
+            if _padded_nonzero(corpus[key], inactive_c):
+                errors.append(f"{key} has nonzero inactive-treatment padding")
+        if _padded_nonzero(corpus["treatment_shock_mask"], inactive_c):
+            errors.append("treatment_shock_mask has nonzero inactive-treatment padding")
+        for key in (
+            "treatment_means",
+            "treatment_active",
+            "treatment_level",
             "saturation_scale",
-            "adstock_family",
-            "adstock_alpha",
+            "carryover_family",
+            "carryover_alpha",
             "weibull_lam",
             "weibull_k",
         ):
             if (corpus[key][inactive_c] != 0).any():
-                errors.append(f"{key} has nonzero inactive-channel padding")
-        for key in ("controls", "control_contribution"):
+                errors.append(f"{key} has nonzero inactive-treatment padding")
+        for key in ("covariates", "covariate_contribution"):
             if _padded_nonzero(corpus[key], inactive_m):
-                errors.append(f"{key} has nonzero inactive-control padding")
-        for key in ("demand", "confounder_contribution"):
+                errors.append(f"{key} has nonzero inactive-covariate padding")
+        for key in ("latent_unobserved", "latent_unobserved_contribution"):
             if _padded_nonzero(corpus[key], inactive_j):
-                errors.append(f"{key} has nonzero inactive-demand padding")
+                errors.append(f"{key} has nonzero inactive-latent_unobserved padding")
         if (corpus["saturation_scale"][active_treatment == 1] <= 0.0).any():
-            errors.append("saturation_scale must be positive for active channels")
+            errors.append("saturation_scale must be positive for active treatments")
 
         graph = layout.unpack(corpus["g"])
         treatment_present = ~inactive_c
@@ -835,17 +860,17 @@ class DataGenerator:
             if np.tril(graph[edge_type], k=-1).any():
                 errors.append(f"g_{edge_type} must be strictly upper triangular")
         direct = graph["cy"] == 1
-        expected_channel_active = (
+        expected_treatment_active = (
             (direct | (graph["cc"].sum(axis=2) > 0)) & treatment_present
         ).astype(np.uint8)
-        if not np.array_equal(corpus["channel_active"], expected_channel_active):
-            errors.append("channel_active does not match graph reachability rule")
-        if _padded_nonzero(corpus["contributions_raw"], ~direct):
-            errors.append("contributions_raw is nonzero for channels without C->Y edges")
-        if _padded_nonzero(corpus["control_contribution"], graph["zy"] != 1):
-            errors.append("control_contribution is nonzero without a Z->Y edge")
-        if _padded_nonzero(corpus["confounder_contribution"], graph["dy"] != 1):
-            errors.append("confounder_contribution is nonzero without a D->Y edge")
+        if not np.array_equal(corpus["treatment_active"], expected_treatment_active):
+            errors.append("treatment_active does not match graph reachability rule")
+        if _padded_nonzero(corpus["treatment_contribution_raw"], ~direct):
+            errors.append("treatment_contribution_raw is nonzero for treatments without C->Y edges")
+        if _padded_nonzero(corpus["covariate_contribution"], graph["zy"] != 1):
+            errors.append("covariate_contribution is nonzero without a Z->Y edge")
+        if _padded_nonzero(corpus["latent_unobserved_contribution"], graph["dy"] != 1):
+            errors.append("latent_unobserved_contribution is nonzero without a D->Y edge")
         for source_index, edge_type in enumerate(("cc", "zc", "dc")):
             source_present = graph[edge_type].reshape(n_tasks, -1).any(axis=1)
             if (corpus["indirect_effects_by_source"][~source_present, :, source_index] != 0).any():
@@ -856,64 +881,66 @@ class DataGenerator:
         if has_signal_labels and (
             (signal_metrics[inactive_c] != 0).any() or signal_metric_valid[inactive_c].any()
         ):
-            errors.append("signal metrics have nonzero inactive-channel padding")
+            errors.append("signal metrics have nonzero inactive-treatment padding")
         ineligible = ~(direct & (active_treatment == 1))
         if has_signal_labels and (
             (signal_metrics[ineligible] != 0).any() or signal_metric_valid[ineligible].any()
         ):
-            errors.append("signal metrics have nonzero ineligible-channel values")
+            errors.append("signal metrics have nonzero ineligible-treatment values")
 
-        channels = corpus["channel_shock_channel"]
-        starts = corpus["channel_shock_start"]
-        lengths = corpus["channel_shock_length"]
-        levels = corpus["channel_shock_level"]
-        multipliers = corpus["channel_shock_level_multiplier"]
-        channel_level = corpus["channel_level"]
+        treatments = corpus["treatment_shock_index"]
+        starts = corpus["treatment_shock_start"]
+        lengths = corpus["treatment_shock_length"]
+        levels = corpus["treatment_shock_level"]
+        multipliers = corpus["treatment_shock_level_multiplier"]
+        treatment_level = corpus["treatment_level"]
         for n in range(n_tasks):
             rebuilt = np.zeros((n_time_steps, n_treatments), dtype=np.uint8)
             occupied = np.zeros(n_time_steps, dtype=bool)
-            for s_idx in range(n_channel_shocks):
-                channel, start, length = (
-                    int(channels[n, s_idx]),
+            for s_idx in range(n_treatment_shocks):
+                treatment, start, length = (
+                    int(treatments[n, s_idx]),
                     int(starts[n, s_idx]),
                     int(lengths[n, s_idx]),
                 )
-                slot_lo = s_idx * n_time_steps // n_channel_shocks
-                slot_hi = (s_idx + 1) * n_time_steps // n_channel_shocks
-                if not (0 <= channel < n_treatments and direct[n, channel]):
-                    errors.append("channel_shock_channel is not an active direct channel")
+                slot_lo = s_idx * n_time_steps // n_treatment_shocks
+                slot_hi = (s_idx + 1) * n_time_steps // n_treatment_shocks
+                if not (0 <= treatment < n_treatments and direct[n, treatment]):
+                    errors.append("treatment_shock_index is not an active direct treatment")
                     continue
                 if not (length > 0 and slot_lo <= start and start + length <= slot_hi):
-                    errors.append("channel shock start/length is outside its schedule slot")
+                    errors.append("treatment shock start/length is outside its schedule slot")
                     continue
                 if occupied[start : start + length].any():
-                    errors.append("channel shocks overlap globally")
+                    errors.append("treatment shocks overlap globally")
                 occupied[start : start + length] = True
-                rebuilt[start : start + length, channel] = 1
-                expected_level = multipliers[n, s_idx] * channel_level[n, channel]
+                rebuilt[start : start + length, treatment] = 1
+                expected_level = multipliers[n, s_idx] * treatment_level[n, treatment]
                 if not np.isclose(levels[n, s_idx], expected_level, rtol=1e-6, atol=1e-7):
-                    errors.append("channel_shock_level does not match multiplier * channel_level")
+                    errors.append(
+                        "treatment_shock_level does not match multiplier * treatment_level"
+                    )
                 if not np.array_equal(
-                    corpus["spend_raw"][n, start : start + length, channel],
+                    corpus["treatment_raw"][n, start : start + length, treatment],
                     np.full(length, levels[n, s_idx], dtype=np.float32),
                 ):
-                    errors.append("held spend does not equal channel_shock_level")
+                    errors.append("held treatment does not equal treatment_shock_level")
             if not np.array_equal(rebuilt, shock_mask[n]):
-                errors.append("channel_shock_mask does not match the schedule")
+                errors.append("treatment_shock_mask does not match the schedule")
 
         baseline = corpus["baseline_raw"].astype(np.float64)
-        contributions = corpus["contributions_raw"].astype(np.float64)
+        contributions = corpus["treatment_contribution_raw"].astype(np.float64)
         indirect = corpus["indirect_effects"].astype(np.float64)
         indirect_by_source = corpus["indirect_effects_by_source"].astype(np.float64)
         intrinsic = corpus["baseline_intrinsic"].astype(np.float64)
-        sales_noise = corpus["sales_noise"].astype(np.float64)
-        control_contribution = corpus["control_contribution"].astype(np.float64)
-        confounder_contribution = corpus["confounder_contribution"].astype(np.float64)
-        tolerance_factor = 32 * np.finfo(corpus["sales_raw"].dtype).eps
+        outcome_noise = corpus["outcome_noise"].astype(np.float64)
+        covariate_contribution = corpus["covariate_contribution"].astype(np.float64)
+        latent_unobserved_contribution = corpus["latent_unobserved_contribution"].astype(np.float64)
+        tolerance_factor = 32 * np.finfo(corpus["outcome_raw"].dtype).eps
         decomposition_errors = {
             "additive decomposition": (
-                np.abs(baseline + contributions.sum(axis=2) + indirect - sales),
-                sales,
+                np.abs(baseline + contributions.sum(axis=2) + indirect - outcome),
+                outcome,
             ),
             "telescoping decomposition": (
                 np.abs(indirect_by_source.sum(axis=2) - indirect),
@@ -922,9 +949,9 @@ class DataGenerator:
             "baseline decomposition": (
                 np.abs(
                     intrinsic
-                    + sales_noise
-                    + confounder_contribution.sum(axis=2)
-                    + control_contribution.sum(axis=2)
+                    + outcome_noise
+                    + latent_unobserved_contribution.sum(axis=2)
+                    + covariate_contribution.sum(axis=2)
                     - baseline
                 ),
                 baseline,
@@ -932,14 +959,14 @@ class DataGenerator:
             "full decomposition": (
                 np.abs(
                     intrinsic
-                    + sales_noise
-                    + confounder_contribution.sum(axis=2)
-                    + control_contribution.sum(axis=2)
+                    + outcome_noise
+                    + latent_unobserved_contribution.sum(axis=2)
+                    + covariate_contribution.sum(axis=2)
                     + contributions.sum(axis=2)
                     + indirect_by_source.sum(axis=2)
-                    - sales
+                    - outcome
                 ),
-                sales,
+                outcome,
             ),
         }
         for name, (residual, reference) in decomposition_errors.items():
@@ -950,18 +977,18 @@ class DataGenerator:
         if not errors and version_supported:
             eligible = direct & (corpus["treatment_active_mask"] == 1)
             expected_metrics, expected_valid = dense_signal_metrics(
-                corpus["spend_raw"],
-                corpus["contributions_raw"],
-                corpus["sales_raw"],
+                corpus["treatment_raw"],
+                corpus["treatment_contribution_raw"],
+                corpus["outcome_raw"],
                 corpus["baseline_raw"],
                 eligible,
-                sales_scale=corpus["sales_scale"],
-                adstock_family=corpus["adstock_family"],
-                adstock_alpha=corpus["adstock_alpha"],
+                outcome_scale=corpus["outcome_scale"],
+                carryover_family=corpus["carryover_family"],
+                carryover_alpha=corpus["carryover_alpha"],
                 weibull_lam=corpus["weibull_lam"],
                 weibull_k=corpus["weibull_k"],
                 l_max=int(signal_diagnostics["l_max"]),
-                adstock_burn_in=int(signal_diagnostics["adstock_burn_in"]),
+                carryover_burn_in=int(signal_diagnostics["carryover_burn_in"]),
             )
             if has_signal_labels:
                 if not np.array_equal(signal_metrics, expected_metrics):
@@ -973,13 +1000,13 @@ class DataGenerator:
             expected_signal = summarize_signal_metrics(
                 expected_metrics,
                 expected_valid,
-                corpus["sales_raw"],
+                corpus["outcome_raw"],
                 eligible,
-                sales_scale=corpus["sales_scale"],
+                outcome_scale=corpus["outcome_scale"],
                 l_max=int(signal_diagnostics["l_max"]),
-                adstock_burn_in=int(signal_diagnostics["adstock_burn_in"]),
-                adstock_family=corpus["adstock_family"],
-                adstock_alpha=corpus["adstock_alpha"],
+                carryover_burn_in=int(signal_diagnostics["carryover_burn_in"]),
+                carryover_family=corpus["carryover_family"],
+                carryover_alpha=corpus["carryover_alpha"],
                 weibull_lam=corpus["weibull_lam"],
                 weibull_k=corpus["weibull_k"],
             )
@@ -988,9 +1015,9 @@ class DataGenerator:
                     "metric_version": SIGNAL_METRIC_VERSION,
                     "metric_layout": list(SIGNAL_METRIC_LAYOUT),
                     "l_max": int(signal_diagnostics["l_max"]),
-                    "adstock_burn_in": int(signal_diagnostics["adstock_burn_in"]),
-                    "adstock_kernel_semantics": "normalized-causal-minmax-weibull-density",
-                    "adstock_kernel_version": 3,
+                    "carryover_burn_in": int(signal_diagnostics["carryover_burn_in"]),
+                    "carryover_kernel_semantics": "normalized-causal-minmax-weibull-density",
+                    "carryover_kernel_version": 3,
                     "outcome_noise_semantics": OUTCOME_NOISE_SEMANTICS,
                     "outcome_noise_version": OUTCOME_NOISE_VERSION,
                     "outcome_std_mode": signal_diagnostics["outcome_std_mode"],
@@ -1002,8 +1029,8 @@ class DataGenerator:
                 errors.append("diagnostics signal summary does not match recomputation")
 
         # This corpus-level invariant enforces beta_additive_range >= 0 downstream.
-        if (corpus["contributions_raw"] < 0).any():
-            errors.append("contributions_raw contains negative values")
+        if (corpus["treatment_contribution_raw"] < 0).any():
+            errors.append("treatment_contribution_raw contains negative values")
 
         return errors
 
@@ -1181,7 +1208,37 @@ def load_corpus(path: str | Path) -> dict[str, Any]:
                     raise ValueError(f"corpus {path}: conflicting direct-null floor names")
                 diagnostics["min_no_direct_effect_channels"] = diagnostics.pop("min_dead_channels")
             diagnostics["edge_types"] = list(EDGE_TYPES_EXTENDED)
-            diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
+            diagnostics["schema_version"] = 3
+
+    # v3 -> v4: the marketing vocabulary becomes domain-neutral. Arrays keep
+    # their contents, dtypes, shapes and packed graph positions; only the keys
+    # move, so this migration is lossless and order-independent.
+    diagnostics = corpus.get("diagnostics")
+    if isinstance(diagnostics, dict) and diagnostics.get("schema_version") == 3:
+        clashes = sorted(
+            new for old, new in LEGACY_CORPUS_KEYS_V3.items() if old in corpus and new in corpus
+        )
+        if clashes:
+            raise ValueError(f"corpus {path} mixes v3 and v4 array names: {clashes}")
+        for old, new in LEGACY_CORPUS_KEYS_V3.items():
+            if old in corpus:
+                corpus[new] = corpus.pop(old)
+        for old, new in LEGACY_DIAGNOSTIC_KEYS_V3.items():
+            if old in diagnostics:
+                if new in diagnostics:
+                    raise ValueError(f"corpus {path}: diagnostics mixes v3 and v4 name {new!r}")
+                diagnostics[new] = diagnostics.pop(old)
+        layout = diagnostics.get("prior_cond_layout")
+        if isinstance(layout, list):
+            diagnostics["prior_cond_layout"] = [
+                LEGACY_PRIOR_COND_COLUMNS_V3.get(column, column) for column in layout
+            ]
+        quantities = diagnostics.get("prior_cond_quantities")
+        if isinstance(quantities, list):
+            diagnostics["prior_cond_quantities"] = [
+                "carryover_alpha" if q == "adstock_alpha" else q for q in quantities
+            ]
+        diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
 
     version_problem = _schema_version_error(corpus.get("diagnostics"))
     if version_problem is not None:

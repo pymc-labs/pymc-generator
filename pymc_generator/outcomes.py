@@ -1,7 +1,7 @@
 """Outcome-space distributions: every world pooled along the QUANTITY axis.
 
 The existing diagnostics describe a corpus in *parameter* space (edge
-marginals, drawn coefficients) or in *signal* space (per-channel CV, Spearman,
+marginals, drawn coefficients) or in *signal* space (per-treatment CV, Spearman,
 warmup ratio). Neither answers the magnitude question you ask of a prior
 before trusting it: **how large are the outcomes, and how large are the pieces
 that add up to them?**
@@ -14,17 +14,17 @@ and returns
 * per-unit stats over time — ``unit_mean``, ``unit_std``, ``unit_min``,
   ``unit_max``, ``unit_total`` — one row per unit, i.e. the distribution
   *across worlds* rather than across time;
-* ``unit_share`` — ``Σ_t value / Σ_t sales``, the fraction of total sales the
+* ``unit_share`` — ``Σ_t value / Σ_t outcome``, the fraction of total outcome the
   unit accounts for, for every quantity that lives on the Y scale.
 
-A **unit** is one world for a scalar quantity (``sales``, ``baseline``, ...)
-and one ``(world, column)`` pair for a column quantity (per channel, per
-control, per latent demand, per indirect-effect source). Inactive padded
-columns are dropped; a structurally-null channel stays in as an exact zero and
+A **unit** is one world for a scalar quantity (``outcome``, ``baseline``, ...)
+and one ``(world, column)`` pair for a column quantity (per treatment, per
+covariate, per latent latent_unobserved, per indirect-effect source). Inactive padded
+columns are dropped; a structurally-null treatment stays in as an exact zero and
 is counted by :attr:`QuantityDistribution.zero_unit_fraction`.
 
 The quantities in :data:`ADDITIVE_QUANTITIES` are the exact per-node
-decomposition of sales, so their ``unit_share`` values sum to 1.0 per world
+decomposition of outcome, so their ``unit_share`` values sum to 1.0 per world
 (:meth:`OutcomeDistributions.additive_share_total`) — the share table is a
 true budget, not a set of loosely related ratios.
 
@@ -36,13 +36,13 @@ Usage::
     dist = outcome_distributions(corpus)
 
     print(dist.table())                       # pooled value quantiles
-    print(dist.table(of="share"))             # per-unit share-of-sales budget
-    y = dist["sales"].values                  # every Y value, all worlds
-    media = dist["channel_contribution"]      # per (world, channel)
-    media.quantiles(of="share")               # how big media effects get
+    print(dist.table(of="share"))             # per-unit share-of-outcome budget
+    y = dist["outcome"].values                  # every Y value, all worlds
+    treatment = dist["treatment_contribution"]      # per (world, treatment)
+    treatment.quantiles(of="share")               # how big treatment effects get
 
-Scale note: worlds have arbitrary sales levels, so pooled RAW values mix
-scales. ``normalize="sales_scale"`` (or ``"sales_mean"``) divides every
+Scale note: worlds have arbitrary outcome levels, so pooled RAW values mix
+scales. ``normalize="outcome_scale"`` (or ``"outcome_mean"``) divides every
 Y-scale quantity by the world's own scale, making the pooled distribution
 comparable across worlds. Shares are ratios and are unaffected.
 """
@@ -73,7 +73,7 @@ __all__ = [
 #: ``signal_diagnostics``, widened to the 5/95 tails).
 DEFAULT_QUANTILES: tuple[float, ...] = (0.05, 0.25, 0.5, 0.75, 0.95)
 
-Normalize = Literal["none", "sales_scale", "sales_mean"]
+Normalize = Literal["none", "outcome_scale", "outcome_mean"]
 StatName = Literal["value", "mean", "std", "min", "max", "total", "share"]
 
 
@@ -87,41 +87,48 @@ class _Spec:
     """One reported quantity and where it comes from.
 
     ``columns`` names the trailing axis kind ("" for a scalar-per-world
-    quantity); ``on_y_scale`` marks quantities measured in sales units (only
+    quantity); ``on_y_scale`` marks quantities measured in outcome units (only
     those get a share); ``additive`` marks membership of the exact per-node
-    decomposition of sales.
+    decomposition of outcome.
     """
 
     name: str
     corpus_key: str  # "" => derived, see _quantity_values
     world_key: str  # "" => derived
-    columns: str  # "" | "channel" | "control" | "latent" | "source"
+    columns: str  # "" | "treatment" | "covariate" | "latent" | "source"
     on_y_scale: bool
     additive: bool
 
 
 _SPECS: tuple[_Spec, ...] = (
-    _Spec("sales", "sales_raw", "sales", "", True, False),
+    _Spec("outcome", "outcome_raw", "outcome", "", True, False),
     _Spec("baseline", "baseline_raw", "baseline", "", True, False),
     _Spec("baseline_intrinsic", "baseline_intrinsic", "baseline_intrinsic", "", True, True),
-    _Spec("sales_noise", "sales_noise", "sales_noise", "", True, True),
+    _Spec("outcome_noise", "outcome_noise", "outcome_noise", "", True, True),
     _Spec(
-        "control_contribution",
-        "control_contribution",
-        "control_contribution",
-        "control",
+        "covariate_contribution",
+        "covariate_contribution",
+        "covariate_contribution",
+        "covariate",
         True,
         True,
     ),
     _Spec(
-        "confounder_contribution",
-        "confounder_contribution",
-        "confounder_contribution",
+        "latent_unobserved_contribution",
+        "latent_unobserved_contribution",
+        "latent_unobserved_contribution",
         "latent",
         True,
         True,
     ),
-    _Spec("channel_contribution", "contributions_raw", "contributions", "channel", True, True),
+    _Spec(
+        "treatment_contribution",
+        "treatment_contribution_raw",
+        "contributions",
+        "treatment",
+        True,
+        True,
+    ),
     _Spec(
         "indirect_by_source",
         "indirect_effects_by_source",
@@ -130,11 +137,11 @@ _SPECS: tuple[_Spec, ...] = (
         True,
         True,
     ),
-    _Spec("media_contribution", "", "", "", True, False),
+    _Spec("treatment_total_contribution", "", "", "", True, False),
     _Spec("indirect_effects", "indirect_effects", "indirect_effects", "", True, False),
-    _Spec("spend", "spend_raw", "channels", "channel", False, False),
-    _Spec("controls", "controls", "controls", "control", False, False),
-    _Spec("demand", "demand", "demand", "latent", False, False),
+    _Spec("treatment", "treatment_raw", "treatments", "treatment", False, False),
+    _Spec("covariates", "covariates", "covariates", "covariate", False, False),
+    _Spec("latent_unobserved", "latent_unobserved", "latent_unobserved", "latent", False, False),
 )
 
 _BY_NAME: dict[str, _Spec] = {spec.name: spec for spec in _SPECS}
@@ -147,12 +154,12 @@ ADDITIVE_QUANTITIES: frozenset[str] = frozenset(spec.name for spec in _SPECS if 
 
 #: Corpus mask key per column kind. "source" is never padded (always 3).
 _MASK_KEYS: dict[str, str] = {
-    "channel": "treatment_active_mask",
-    "control": "covariate_active_mask",
+    "treatment": "treatment_active_mask",
+    "covariate": "covariate_active_mask",
     "latent": "latent_active_mask",
 }
 
-_COLUMN_PREFIX: dict[str, str] = {"channel": "C", "control": "Z", "latent": "D"}
+_COLUMN_PREFIX: dict[str, str] = {"treatment": "C", "covariate": "Z", "latent": "D"}
 _SOURCE_LABELS: tuple[str, ...] = ("cc", "zc", "dc")
 
 
@@ -272,7 +279,7 @@ class QuantityDistribution:
     name, columns, on_y_scale, additive
         Copied from the quantity table; ``columns`` is "" for a
         one-unit-per-world quantity, else the column kind
-        ("channel" / "control" / "latent" / "source").
+        ("treatment" / "covariate" / "latent" / "source").
     world_index, column_index
         ``(n_units,)`` int arrays locating each unit. ``world_index`` indexes
         the analysed world set (see :attr:`OutcomeDistributions.world_ids` to
@@ -282,9 +289,9 @@ class QuantityDistribution:
         ``(n_units,)`` float64 stats over the time axis — the spread of these
         IS the across-world spread of the quantity.
     unit_share
-        ``(n_units,)`` ``unit_total / Σ_t sales`` of the unit's world; all-NaN
+        ``(n_units,)`` ``unit_total / Σ_t outcome`` of the unit's world; all-NaN
         when the quantity is not on the Y scale, and NaN for a world whose
-        sales sum to zero — that share is undefined, not zero.
+        outcome sum to zero — that share is undefined, not zero.
     pooled
         mean/std/min/max/quantiles over every individual value of the units
         held here; :meth:`select` recomputes it for the retained subset.
@@ -331,7 +338,7 @@ class QuantityDistribution:
     def zero_unit_fraction(self) -> float:
         """Fraction of units that are identically zero over the whole window.
 
-        For ``channel_contribution`` this is the share of active channels with
+        For ``treatment_contribution`` this is the share of active treatments with
         no ``C->Y`` edge (structural nulls) — they legitimately contribute
         nothing, and they drag every other statistic toward zero, so they are
         reported rather than silently filtered.
@@ -408,8 +415,8 @@ class QuantityDistribution:
         Boolean ``(n_units,)`` mask or scalar/1-D integer positions. Scalars
         retain a one-unit axis. For positive realized contributions::
 
-            media = dist["channel_contribution"]
-            direct = media.select(media.unit_max > 0)
+            treatment = dist["treatment_contribution"]
+            direct = treatment.select(treatment.unit_max > 0)
 
         A 0/1 integer array as long as ``n_units`` is rejected: it is a mask
         written as integers as often as it is a list of positions, and the two
@@ -489,7 +496,7 @@ class OutcomeDistributions:
         on the share budget as much as a diagnostic. Requires the full
         additive set (do not restrict ``quantities`` if you need it).
 
-        A world whose sales sum to zero has no budget to split: every share of
+        A world whose outcome sum to zero has no budget to split: every share of
         it is undefined, and the total comes back as NaN rather than as a 0.0
         that would read like a catastrophically broken decomposition.
         """
@@ -510,7 +517,7 @@ class OutcomeDistributions:
         """Fixed-width text table of one statistic per quantity.
 
         ``of="value"`` shows the pooled magnitude of every drawn value;
-        ``of="share"`` shows the share-of-sales budget; ``of="mean"`` shows
+        ``of="share"`` shows the share-of-outcome budget; ``of="mean"`` shows
         the across-world spread of per-world levels.
         """
         levels = _resolve_levels(levels, self.quantile_levels)
@@ -600,7 +607,7 @@ class _Dense:
     masks: dict[str, np.ndarray]
     n_worlds: int
     n_time_steps: int
-    sales_scale: np.ndarray | None
+    outcome_scale: np.ndarray | None
     world_ids: np.ndarray
 
 
@@ -632,12 +639,12 @@ def _dense_from_corpus(
     mask_keys = {kind: _MASK_KEYS[kind] for kind in mask_kinds if kind != "source"}
     required = [*keys.values(), *mask_keys.values()]
     if need_scale:
-        required.append("sales_scale")
+        required.append("outcome_scale")
     missing = sorted({key for key in required if key not in corpus})
     if missing:
         raise KeyError(f"corpus is missing keys required for outcome distributions: {missing}")
-    sales = np.asarray(corpus["sales_raw"])
-    idx = _world_index(int(sales.shape[0]), worlds)
+    outcome = np.asarray(corpus["outcome_raw"])
+    idx = _world_index(int(outcome.shape[0]), worlds)
     if idx.size == 0:
         raise ValueError("world selection is empty")
     selection = slice(None) if worlds is None else worlds if isinstance(worlds, slice) else idx
@@ -651,9 +658,11 @@ def _dense_from_corpus(
         arrays=arrays,
         masks=masks,
         n_worlds=int(idx.size),
-        n_time_steps=int(sales.shape[1]),
-        sales_scale=(
-            np.asarray(corpus["sales_scale"])[selection].astype(np.float64) if need_scale else None
+        n_time_steps=int(outcome.shape[1]),
+        outcome_scale=(
+            np.asarray(corpus["outcome_scale"])[selection].astype(np.float64)
+            if need_scale
+            else None
         ),
         world_ids=idx,
     )
@@ -673,13 +682,13 @@ def _dense_from_worlds(
     if idx.size == 0:
         raise ValueError("world selection is empty")
     chosen = [scms[int(i)] for i in idx]
-    horizons = {int(w.data["sales"].shape[0]) for w in chosen}
+    horizons = {int(w.data["outcome"].shape[0]) for w in chosen}
     if len(horizons) > 1:
         raise ValueError(f"worlds must share n_time_steps to be pooled; got {sorted(horizons)}")
     n_time_steps = horizons.pop()
     width_attributes = {
-        "channel": "n_treatments",
-        "control": "n_covariates",
+        "treatment": "n_treatments",
+        "covariate": "n_covariates",
         "latent": "n_latent",
     }
     needed_kinds = {_BY_NAME[name].columns for name in needed} - {"", "source"}
@@ -708,10 +717,10 @@ def _dense_from_worlds(
     }
     if "source" in mask_kinds:
         masks["source"] = np.ones((n_worlds, 3), dtype=bool)
-    # The corpus defines sales_scale over supported observations only; a bare
+    # The corpus defines outcome_scale over supported observations only; a bare
     # SCM has no train/query split, so the full-window std is the analogue.
-    sales_scale = (
-        np.asarray([np.asarray(w.data["sales"]).std() for w in chosen], dtype=np.float64)
+    outcome_scale = (
+        np.asarray([np.asarray(w.data["outcome"]).std() for w in chosen], dtype=np.float64)
         if need_scale
         else None
     )
@@ -720,17 +729,17 @@ def _dense_from_worlds(
         masks=masks,
         n_worlds=n_worlds,
         n_time_steps=n_time_steps,
-        sales_scale=sales_scale,
+        outcome_scale=outcome_scale,
         world_ids=idx,
     )
 
 
 def _quantity_values(dense: _Dense, spec: _Spec) -> np.ndarray:
     """Float64 array for one quantity: ``(n_worlds, T[, K])``."""
-    if spec.name == "media_contribution":
-        channel = dense.arrays["channel_contribution"].astype(np.float64, copy=False)
+    if spec.name == "treatment_total_contribution":
+        treatment = dense.arrays["treatment_contribution"].astype(np.float64, copy=False)
         indirect = dense.arrays["indirect_effects"].astype(np.float64, copy=False)
-        return np.asarray(channel.sum(axis=2) + indirect, dtype=np.float64)
+        return np.asarray(treatment.sum(axis=2) + indirect, dtype=np.float64)
     return dense.arrays[spec.name].astype(np.float64, copy=False)
 
 
@@ -761,22 +770,22 @@ def outcome_distributions(
         empty subset is rejected — there is nothing to report. Note
         :meth:`OutcomeDistributions.additive_share_total` needs the full
         additive set. Only requested arrays, their dependencies, and their
-        column masks are loaded. ``sales_raw`` supplies the world/time axes and
-        share denominator; ``sales_scale`` is needed only for that normalization.
+        column masks are loaded. ``outcome_raw`` supplies the world/time axes and
+        share denominator; ``outcome_scale`` is needed only for that normalization.
     worlds
         World selector — boolean mask over corpus rows, integer index array,
         or slice. Use it to condition on anything you can express as a row
         mask (``corpus["cell_id"] == 3``, ``corpus["is_val"] == 1``, an
-        active-channel count). Corpus flags are stored as ``uint8``, so
+        active-treatment count). Corpus flags are stored as ``uint8``, so
         compare or cast them (``== 1`` / ``.astype(bool)``) instead of passing
         them raw: a 0/1 integer array as long as the corpus reads equally well
         as a list of positions and is rejected as ambiguous.
     normalize
-        ``"none"`` keeps raw units. ``"sales_scale"`` divides every Y-scale
-        quantity by the world's ``sales_scale`` (std of supported sales);
-        ``"sales_mean"`` divides by mean sales. Exogenous inputs (``spend``,
-        ``controls``, ``demand``) are never rescaled — they do not live in
-        sales units. Shares are ratios and are unaffected.
+        ``"none"`` keeps raw units. ``"outcome_scale"`` divides every Y-scale
+        quantity by the world's ``outcome_scale`` (std of supported outcome);
+        ``"outcome_mean"`` divides by mean outcome. Exogenous inputs (``treatment``,
+        ``covariates``, ``latent_unobserved``) are never rescaled — they do not live in
+        outcome units. Shares are ratios and are unaffected.
     quantiles
         Quantile levels for the pooled/marginal reports.
     keep_series
@@ -791,9 +800,9 @@ def outcome_distributions(
     OutcomeDistributions
     """
     levels = _validate_quantiles(quantiles)
-    if normalize not in ("none", "sales_scale", "sales_mean"):
+    if normalize not in ("none", "outcome_scale", "outcome_mean"):
         raise ValueError(
-            f"normalize must be 'none', 'sales_scale' or 'sales_mean', got {normalize!r}"
+            f"normalize must be 'none', 'outcome_scale' or 'outcome_mean', got {normalize!r}"
         )
     names = OUTCOME_QUANTITIES if quantities is None else tuple(quantities)
     unknown = sorted(set(names) - set(OUTCOME_QUANTITIES))
@@ -804,12 +813,12 @@ def outcome_distributions(
             f"quantities is empty; name at least one of {list(OUTCOME_QUANTITIES)} "
             "or pass None for all of them"
         )
-    needed = set(names) | {"sales"}
-    if "media_contribution" in needed:
-        needed.remove("media_contribution")
-        needed.update(("channel_contribution", "indirect_effects"))
+    needed = set(names) | {"outcome"}
+    if "treatment_total_contribution" in needed:
+        needed.remove("treatment_total_contribution")
+        needed.update(("treatment_contribution", "indirect_effects"))
     mask_kinds = {_BY_NAME[name].columns for name in names} - {""}
-    need_scale = normalize == "sales_scale"
+    need_scale = normalize == "outcome_scale"
 
     if isinstance(source, Mapping):
         dense = _dense_from_corpus(source, worlds, needed, mask_kinds, need_scale)
@@ -822,17 +831,17 @@ def outcome_distributions(
     else:
         raise TypeError(f"source must be a corpus mapping or a sequence of SCM, got {type(source)}")
 
-    raw_sales = dense.arrays["sales"].astype(np.float64, copy=False)
-    if normalize == "sales_scale":
-        assert dense.sales_scale is not None
-        scale = dense.sales_scale
-    elif normalize == "sales_mean":
-        scale = np.abs(raw_sales.mean(axis=1))
+    raw_outcome = dense.arrays["outcome"].astype(np.float64, copy=False)
+    if normalize == "outcome_scale":
+        assert dense.outcome_scale is not None
+        scale = dense.outcome_scale
+    elif normalize == "outcome_mean":
+        scale = np.abs(raw_outcome.mean(axis=1))
     else:
         scale = np.ones(dense.n_worlds, dtype=np.float64)
     # A degenerate scale would turn a finite world into inf/nan; leave it at 1.
     scale[~(scale > 0.0)] = 1.0
-    sales_total = raw_sales.sum(axis=1) / scale
+    outcome_total = raw_outcome.sum(axis=1) / scale
 
     out: dict[str, QuantityDistribution] = {}
     for name in OUTCOME_QUANTITIES:
@@ -853,7 +862,7 @@ def outcome_distributions(
             column_index = np.full(dense.n_worlds, -1, dtype=np.int64)
         unit_total = series.sum(axis=1)
         if spec.on_y_scale:
-            denominator = sales_total[world_index]
+            denominator = outcome_total[world_index]
             unit_share = np.divide(
                 unit_total,
                 denominator,

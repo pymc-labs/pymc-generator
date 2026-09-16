@@ -54,7 +54,7 @@ Their names change from `db` to `dy` and `zb` to `zy` in `edge_types`,
 
 The Python API uses only the new names: `g_dy`, `g_zy`, `delta_dy`, `rho_zy`,
 `dy_coeff_range`, and `zy_coeff_range`. Old keyword arguments and graph-dict
-aliases are not supported. These edges enter sales `Y`, not the parentless
+aliases are not supported. These edges enter outcome `Y`, not the parentless
 intercept `B`.
 
 ## Timing telemetry is not persisted

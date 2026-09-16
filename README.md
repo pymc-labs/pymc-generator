@@ -80,7 +80,7 @@ print("decomposition residual:", world.identity_error())
 corpus = pg.sample_prior_predictive(cfg)
 pg.save_corpus(corpus, "corpus.npz")
 loaded = pg.load_corpus("corpus.npz")
-print(loaded["spend_raw"].shape)  # (4, 32, 3)
+print(loaded["treatment_raw"].shape)  # (4, 32, 3)
 ```
 
 For a CSV/figure bundle, call `pg.write_scm_bundle(world, "my-world")`.
@@ -100,8 +100,8 @@ What the generator actually produces, stated precisely so you can judge whether
 your problem fits. The [foundation guide](docs/guide/foundation.md) carries the
 structural equations.
 
-- **Structure.** A directed acyclic graph over five node families — latent
-  confounders, observed covariates, treatments, a baseline intercept, and one
+- **Structure.** A directed acyclic graph over five node families — unobserved
+  latent factors, observed covariates, treatments, a baseline intercept, and one
   outcome sink — connected by eight edge types. Confounding, mediation through
   covariates, and treatment-to-treatment chains are all representable.
 - **Functional form.** Every edge is a coefficient times its parent, summed
@@ -117,7 +117,7 @@ structural equations.
   | Carryover (adstock) | `none`, `geometric`, `weibull` |
   | Saturation | `linear`, `hill`, `logistic`, `michaelis_menten`, `tanh`, `root` |
 
-  Every other path — covariate→outcome, confounder→outcome, and all
+  Every other path — covariate→outcome, latent-unobserved→outcome, and all
   input→input edges — is linear on the child's pre-activation scale.
 - **Outcome likelihood.** Gaussian with an identity link only (`pm.Normal`, or
   `pm.MvNormal` in the oracle's marginal mode). The linear-predictor machinery
@@ -127,16 +127,17 @@ structural equations.
   with optional high-frequency texture and Bernoulli pulses. Time is an axis,
   not a node in the DAG.
 
+
 ## Data contracts and interpretation
 
-- **Decomposition:** `sales = baseline + contributions.sum(-1) + indirect_effects`,
-  up to floating-point error. Here `baseline` is the **complete non-media
+- **Decomposition:** `outcome = baseline + contributions.sum(-1) + indirect_effects`,
+  up to floating-point error. Here `baseline` is the **complete non-treatment
   aggregate**, including observation noise, not just the structural intercept.
   The [decomposition guide](docs/guide/decomposition.md) defines the individual
   columns, floor scopes, and ordered indirect attribution.
-- **Causal meaning:** direct demand/control edges enter sales, not the parentless
-  intercept. A channel without a direct sales edge can still affect sales
-  through downstream channels. See the [foundation](docs/guide/foundation.md).
+- **Causal meaning:** direct latent-unobserved/covariate edges enter outcome, not the
+  parentless intercept. A treatment without a direct outcome edge can still affect
+  outcome through downstream treatments. See the [foundation](docs/guide/foundation.md).
 - **Corpus storage:** arrays use configured maximum dimensions and explicit
   active counts/masks. Numerical payloads are stored as float32; generation
   identities are evaluated before that rounding. Readers migrate supported

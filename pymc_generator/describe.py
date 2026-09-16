@@ -3,7 +3,7 @@
 :func:`describe_scm` renders everything a human needs to audit one world:
 the vector-valued structural equations, DAG edges with drawn coefficients,
 node connectivity, realized mechanism and texture parameters, prior ranges,
-exact decomposition-identity check, and per-channel signal metrics.
+exact decomposition-identity check, and per-treatment signal metrics.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ import numpy as np
 
 from .mechanisms import SATURATION_PRIOR_RANGES
 from .worlds import (
-    ADSTOCK_NAMES,
+    CARRYOVER_NAMES,
     SATURATION_NAMES,
     SCM,
-    channel_role,
     edges_with_coeffs,
     mechanism_label,
     node_status,
+    treatment_role,
 )
 
 
@@ -43,17 +43,17 @@ def _saturation_description(params: dict, k: int, family: str) -> str:
     return family
 
 
-def _channel_lines(g: dict, params: dict) -> list[str]:
+def _treatment_lines(g: dict, params: dict) -> list[str]:
     n_treatments = len(g["g_cy"])
     lines = []
     for k in range(n_treatments):
         sat = SATURATION_NAMES[int(params["sat_family"][k])]
-        ad = ADSTOCK_NAMES[int(params["adstock_family"][k])]
+        ad = CARRYOVER_NAMES[int(params["carryover_family"][k])]
         bits = [
-            f"C{k + 1}: role={channel_role(g, k)}",
+            f"C{k + 1}: role={treatment_role(g, k)}",
             f"beta={params['beta'][k]:.2f}",
-            f"adstock={ad}"
-            + (f"(alpha={params['adstock_alpha'][k]:.2f})" if ad == "geometric" else "")
+            f"carryover={ad}"
+            + (f"(alpha={params['carryover_alpha'][k]:.2f})" if ad == "geometric" else "")
             + (
                 f"(lam={params['weibull_lam'][k]:.1f},k={params['weibull_k'][k]:.1f})"
                 if ad == "weibull"
@@ -69,7 +69,7 @@ def _channel_lines(g: dict, params: dict) -> list[str]:
     return lines
 
 
-def _control_lines(g: dict, params: dict) -> list[str]:
+def _covariate_lines(g: dict, params: dict) -> list[str]:
     n_covariates = len(g["g_zy"])
     lines = []
     for m in range(n_covariates):
@@ -77,9 +77,9 @@ def _control_lines(g: dict, params: dict) -> list[str]:
             f"Z{m + 1}: zy={int(g['g_zy'][m])}",
             f"walk(mean={params['rw_z']['mean'][m]:.2f},std={params['rw_z']['std'][m]:.2f},"
             f"smooth={params['rw_z']['smoothness'][m]:.2f})",
-            f"control_hf_sigma={params['control_hf_sigma'][m]:.2f}",
-            f"pulse(p={params['control_pulse_prob'][m]:.2f},"
-            f"amp={params['control_pulse_amp'][m]:.2f},centred)",
+            f"covariate_hf_sigma={params['covariate_hf_sigma'][m]:.2f}",
+            f"pulse(p={params['covariate_pulse_prob'][m]:.2f},"
+            f"amp={params['covariate_pulse_amp'][m]:.2f},centred)",
         ]
         lines.append("  " + "  ".join(bits))
     return lines
@@ -103,10 +103,10 @@ def _texture_label(params: dict) -> str:
     """
     parts = []
     for label, key in (
-        ("channel hf", "use_hf"),
-        ("channel pulse", "use_pulse"),
-        ("control hf", "use_control_hf"),
-        ("control pulse", "use_control_pulse"),
+        ("treatment hf", "use_hf"),
+        ("treatment pulse", "use_pulse"),
+        ("covariate hf", "use_covariate_hf"),
+        ("covariate pulse", "use_covariate_pulse"),
     ):
         flags = np.asarray(params[key])
         parts.append(f"{label} {int(np.count_nonzero(flags))}/{flags.size}")
@@ -117,9 +117,9 @@ def describe_scm(world: SCM) -> str:
     """Render the full plain-text description of one :class:`SCM`.
 
     Sections: title + purpose, sizes, edge budget, edge census, active edges
-    with drawn coefficients, node connectivity, per-channel mechanism +
+    with drawn coefficients, node connectivity, per-treatment mechanism +
     texture, prior ranges, vector-valued structural equations, exact replay
-    inputs, decomposition-identity error, and per-direct-channel signal metrics.
+    inputs, decomposition-identity error, and per-direct-treatment signal metrics.
     """
     g, params, cfg = world.g, world.params, world.cfg
     edges = edges_with_coeffs(g, params)
@@ -134,7 +134,7 @@ def describe_scm(world: SCM) -> str:
         f"Sizes: n_time_steps={cfg.n_time_steps}, n_treatments={world.n_treatments}, "
         f"n_covariates={world.n_covariates}, n_latent={world.n_latent}, "
     )
-    f.write(f"l_max={cfg.l_max}, adstock_burn_in={cfg.adstock_burn_in}\n")
+    f.write(f"l_max={cfg.l_max}, carryover_burn_in={cfg.carryover_burn_in}\n")
     f.write(f"Edge budget: {cfg.edge_budget}\n\n")
     counts: dict[str, int] = {}
     for et, _src, _dst, _c in edges:
@@ -155,9 +155,9 @@ def describe_scm(world: SCM) -> str:
             "must credit them zero.\n"
         )
     f.write("\nChannels (mechanism + own-drive texture):\n")
-    f.write("\n".join(_channel_lines(g, params)) + "\n\n")
-    f.write("Controls (walk + own-drive texture):\n")
-    f.write("\n".join(_control_lines(g, params)) + "\n\n")
+    f.write("\n".join(_treatment_lines(g, params)) + "\n\n")
+    f.write("Covariates (walk + own-drive texture):\n")
+    f.write("\n".join(_covariate_lines(g, params)) + "\n\n")
     prior_cond = world.extras.get("prior_cond")
     if prior_cond:
         spec = cfg.prior_cond_spec()
@@ -171,15 +171,15 @@ def describe_scm(world: SCM) -> str:
             )
         f.write("\n")
     f.write(f"Texture prior ({_texture_label(params)}):\n")
-    f.write(f"  rw_channel_std_range={cfg.rw_channel_std_range} (relative)\n")
-    f.write(f"  channel_hf_sigma_range={cfg.channel_hf_sigma_range} (relative)\n")
-    f.write(f"  channel_pulse_prob_range={cfg.channel_pulse_prob_range}\n")
-    f.write(f"  channel_pulse_amp_range={cfg.channel_pulse_amp_range} (relative)\n")
+    f.write(f"  rw_treatment_std_range={cfg.rw_treatment_std_range} (relative)\n")
+    f.write(f"  treatment_hf_sigma_range={cfg.treatment_hf_sigma_range} (relative)\n")
+    f.write(f"  treatment_pulse_prob_range={cfg.treatment_pulse_prob_range}\n")
+    f.write(f"  treatment_pulse_amp_range={cfg.treatment_pulse_amp_range} (relative)\n")
     f.write(f"  rw_positive_mean_range={cfg.rw_positive_mean_range}\n")
-    f.write(f"  control_hf_sigma_range={cfg.control_hf_sigma_range} (relative to rw_z_std)\n")
-    f.write(f"  control_pulse_prob_range={cfg.control_pulse_prob_range}\n")
+    f.write(f"  covariate_hf_sigma_range={cfg.covariate_hf_sigma_range} (relative to rw_z_std)\n")
+    f.write(f"  covariate_pulse_prob_range={cfg.covariate_pulse_prob_range}\n")
     f.write(
-        f"  control_pulse_amp_range={cfg.control_pulse_amp_range} (relative to rw_z_std, centred)\n"
+        f"  covariate_pulse_amp_range={cfg.covariate_pulse_amp_range} (relative to rw_z_std, centred)\n"
     )
     f.write(f"  beta_additive_range={cfg.beta_additive_range}\n")
     f.write("  saturation prior ranges: ")
@@ -195,16 +195,16 @@ def describe_scm(world: SCM) -> str:
         "  world.equation_parameters is the sparse executed-parameter audit; "
         "world.exogenous holds defensive copies of raw full-horizon innovations.\n\n"
     )
-    f.write("Decomposition identity (baseline_intrinsic + sales_noise + confounder\n")
-    f.write("  + control + direct contributions + indirect_by_source == sales,\n")
+    f.write("Decomposition identity (baseline_intrinsic + outcome_noise + confounder\n")
+    f.write("  + covariate + direct contributions + indirect_by_source == outcome,\n")
     f.write("  exactly the sum SCM.reconstruction() forms):\n")
     f.write(f"  max |error| = {ident_err:.2e}\n\n")
-    f.write("Signal metrics (per direct channel):\n")
-    for i in range(len(signal["spend_cv"])):
+    f.write("Signal metrics (per direct treatment):\n")
+    for i in range(len(signal["treatment_cv"])):
         f.write(
-            f"  C{int(signal['channel'][i]) + 1}: "
-            f"spend_cv={_format_signal_metric(signal, 'spend_cv', i)} "
-            f"spend_hf={_format_signal_metric(signal, 'spend_hf', i)} "
+            f"  C{int(signal['treatment'][i]) + 1}: "
+            f"treatment_cv={_format_signal_metric(signal, 'treatment_cv', i)} "
+            f"treatment_hf={_format_signal_metric(signal, 'treatment_hf', i)} "
             f"contrib_cv={_format_signal_metric(signal, 'contrib_cv', i)} "
             f"contrib_hf={_format_signal_metric(signal, 'contrib_hf', i)} "
             f"spearman={_format_signal_metric(signal, 'spearman', i)} "
@@ -225,10 +225,10 @@ def world_to_dot(world: SCM) -> str:
     for k in range(n_treatments):
         f.write(f'  C{k + 1} [label="C{k + 1}\\n({mechanism_label(params, k)})"];\n')
     for m in range(n_covariates):
-        f.write(f'  Z{m + 1} [label="Z{m + 1}\\n(control)"];\n')
+        f.write(f'  Z{m + 1} [label="Z{m + 1}\\n(covariate)"];\n')
     for j in range(n_latent):
-        f.write(f'  D{j + 1} [label="D{j + 1}\\n(demand)"];\n')
-    f.write('  B [label="B\\n(baseline)"];\n  Y [label="Y\\n(sales)"];\n')
+        f.write(f'  D{j + 1} [label="D{j + 1}\\n(latent_unobserved)"];\n')
+    f.write('  B [label="B\\n(baseline)"];\n  Y [label="Y\\n(outcome)"];\n')
     for et, src, dst, coef in edges_with_coeffs(g, params):
         f.write(f'  {src} -> {dst} [label="{coef:+.2f}", comment="{et}"];\n')
     f.write("  B -> Y;\n}\n")

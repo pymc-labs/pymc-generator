@@ -59,19 +59,19 @@ def default_arrays():
     return _corpus_arrays()
 
 
-def test_disabled_control_pulse_amplitude_is_rng_inert():
+def test_disabled_covariate_pulse_amplitude_is_rng_inert():
     disabled = {
-        "control_hf_sigma_range": (0.0, 0.0),
-        "control_pulse_prob_range": (0.0, 0.0),
+        "covariate_hf_sigma_range": (0.0, 0.0),
+        "covariate_pulse_prob_range": (0.0, 0.0),
     }
-    expected = _corpus_arrays(**disabled, control_pulse_amp_range=(0.0, 0.0))
-    actual = _corpus_arrays(**disabled, control_pulse_amp_range=(0.5, 3.0))
+    expected = _corpus_arrays(**disabled, covariate_pulse_amp_range=(0.0, 0.0))
+    actual = _corpus_arrays(**disabled, covariate_pulse_amp_range=(0.5, 3.0))
     assert actual.keys() == expected.keys()
     for key in actual:
         np.testing.assert_array_equal(actual[key], expected[key], err_msg=key)
 
 
-@pytest.mark.parametrize("scope", ("intercept", "non_media"))
+@pytest.mark.parametrize("scope", ("intercept", "non_treatment"))
 def test_nonbinding_floor_preserves_generated_arrays(scope, default_arrays):
     """Changing a nonbinding clip must not change draws or persisted labels."""
     floored = _corpus_arrays(baseline_floor=-1e6, baseline_floor_scope=scope)
@@ -90,9 +90,9 @@ def test_identifiability_labels_are_optional_metadata_not_features():
         draws_per_cell=1,
         seed=47,
         confounding_strength_range=(0.6, 0.6),
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=(0.0, 0.5),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 2),
+        treatment_shock_level_range=(0.0, 0.5),
     )
     labelled = pg.sample_prior_predictive(cfg)
     feature_only = pg.sample_prior_predictive(replace(cfg, include_identifiability_labels=False))
@@ -163,7 +163,7 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         "n_covariates": 1,
         "n_latent": 1,
         "nonlinearity": "linear",
-        "adstock_family_probs": {"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        "carryover_family_probs": {"none": 1.0, "geometric": 0.0, "weibull": 0.0},
         "saturation_family_probs": {
             "linear": 1.0,
             "hill": 0.0,
@@ -173,23 +173,23 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
             "root": 0.0,
         },
         "beta_additive_range": (1.0, 1.0),
-        "rw_channel_std_range": (0.25, 0.25),
+        "rw_treatment_std_range": (0.25, 0.25),
         "rw_baseline_std_sigma": 0.75,
-        "rw_sales_std_sigma": 1e-4,
+        "rw_outcome_std_sigma": 1e-4,
         "outcome_std_mode": "absolute",
-        "channel_hf_sigma_range": (0.08, 0.08),
-        "channel_pulse_prob_range": (0.0, 0.0),
-        "channel_pulse_amp_range": (0.0, 0.0),
+        "treatment_hf_sigma_range": (0.08, 0.08),
+        "treatment_pulse_prob_range": (0.0, 0.0),
+        "treatment_pulse_amp_range": (0.0, 0.0),
         # This fixture isolates rho, so every other texture axis is pinned —
-        # the controls here are edge-free anyway, and leaving their texture on
+        # the covariates here are edge-free anyway, and leaving their texture on
         # would only move the calibrated constants below.
-        "control_hf_sigma_range": (0.0, 0.0),
-        "control_pulse_prob_range": (0.0, 0.0),
-        "control_pulse_amp_range": (0.0, 0.0),
-        "rw_control_mean_range": (3.0, 3.0),
+        "covariate_hf_sigma_range": (0.0, 0.0),
+        "covariate_pulse_prob_range": (0.0, 0.0),
+        "covariate_pulse_amp_range": (0.0, 0.0),
+        "rw_covariate_mean_range": (3.0, 3.0),
         "rw_positive_mean_range": (3.0, 3.0),
         "rw_baseline_mean_range": (3.0, 3.0),
-        "adstock_burn_in": 0,
+        "carryover_burn_in": 0,
     }
     medians = []
     target_cv_medians = []
@@ -199,7 +199,7 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
     cv_index = SIGNAL_METRIC_LAYOUT.index("contrib_cv")
 
     # rho enters the mixture as sqrt(1 - rho**2) * eps_c + rho * eps_b, so R2's
-    # response to rho is convex: a 0.45 midpoint still leaves 89% of the channel
+    # response to rho is convex: a 0.45 midpoint still leaves 89% of the treatment
     # innovation independent and lands within noise of rho = 0 (measured first
     # step 0.07-0.14 across draw seeds). 0.6 separates the three levels well
     # clear of the 0.10 margin asserted below (measured 0.15-0.21).
@@ -214,18 +214,18 @@ def test_confounding_strength_monotonically_increases_dense_r2_without_flattenin
         model, out_names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
         drawn = draw_worlds(model, out_names, seed=draw_seed, draws=48)
         metrics, valid = dense_signal_metrics(
-            drawn["channels"],
+            drawn["treatments"],
             drawn["contributions"],
-            drawn["sales"],
+            drawn["outcome"],
             drawn["baseline"],
             np.ones((48, 2), dtype=bool),
-            sales_scale=np.ones(48),
-            adstock_family=np.zeros((48, 2), dtype=np.uint8),
-            adstock_alpha=np.zeros((48, 2)),
+            outcome_scale=np.ones(48),
+            carryover_family=np.zeros((48, 2), dtype=np.uint8),
+            carryover_alpha=np.zeros((48, 2)),
             weibull_lam=np.zeros((48, 2)),
             weibull_k=np.zeros((48, 2)),
             l_max=cfg.l_max,
-            adstock_burn_in=cfg.adstock_burn_in,
+            carryover_burn_in=cfg.carryover_burn_in,
         )
         r2 = metrics[..., r2_index][valid[..., r2_index].astype(bool)]
         target_cv = metrics[..., cv_index][valid[..., cv_index].astype(bool)]
@@ -265,7 +265,7 @@ def test_supported_corpus_signal_gate():
     signal = summarize_signal_metrics(
         np.concatenate([corpus["identifiability"]["signal_metrics"] for corpus in corpora]),
         np.concatenate([corpus["identifiability"]["signal_metric_valid"] for corpus in corpora]),
-        np.concatenate([corpus["sales_raw"] for corpus in corpora]),
+        np.concatenate([corpus["outcome_raw"] for corpus in corpora]),
         np.concatenate(
             [
                 (corpus["g"][:, cfg.layout.slices["cy"]] == 1)
@@ -274,19 +274,19 @@ def test_supported_corpus_signal_gate():
             ]
         ),
         l_max=cfg.l_max,
-        adstock_burn_in=cfg.adstock_burn_in,
-        sales_scale=np.concatenate([corpus["sales_scale"] for corpus in corpora]),
-        adstock_family=np.concatenate([corpus["adstock_family"] for corpus in corpora]),
-        adstock_alpha=np.concatenate([corpus["adstock_alpha"] for corpus in corpora]),
+        carryover_burn_in=cfg.carryover_burn_in,
+        outcome_scale=np.concatenate([corpus["outcome_scale"] for corpus in corpora]),
+        carryover_family=np.concatenate([corpus["carryover_family"] for corpus in corpora]),
+        carryover_alpha=np.concatenate([corpus["carryover_alpha"] for corpus in corpora]),
         weibull_lam=np.concatenate([corpus["weibull_lam"] for corpus in corpora]),
         weibull_k=np.concatenate([corpus["weibull_k"] for corpus in corpora]),
     )
     passed, _ = check_signal_gate(signal)
 
-    # Gated values are Bernoulli fractions over direct channels. At the old
-    # 100-channel size, their population means sat about one sigma below the
+    # Gated values are Bernoulli fractions over direct treatments. At the old
+    # 100-treatment size, their population means sat about one sigma below the
     # thresholds, so one draw failed about a quarter of the time (6/8 passed).
-    # Pooling eight independent corpora yields roughly 800 direct channels and
+    # Pooling eight independent corpora yields roughly 800 direct treatments and
     # measures the prior's gate compliance rather than one noisy realization.
     assert passed
     assert signal["frac_spearman_lt_03"] <= 0.15

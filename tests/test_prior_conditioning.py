@@ -50,7 +50,7 @@ def _cols(corpus):
 
 
 def test_prior_cond_key_present_iff_enabled(conditioned_corpus):
-    n = conditioned_corpus["spend_raw"].shape[0]
+    n = conditioned_corpus["treatment_raw"].shape[0]
     assert conditioned_corpus["prior_cond"].shape == (n, len(PRIOR_COND_LAYOUT))
     assert conditioned_corpus["prior_cond"].dtype == np.float32
     off = pg.sample_prior_predictive(_cfg())
@@ -73,7 +73,7 @@ def test_diagnostics_echo(conditioned_corpus):
     assert echo["layout"] == list(PRIOR_COND_LAYOUT)
     assert set(echo["supports"]) == set(PRIOR_COND_QUANTITIES)
     assert set(echo["width_ranges"]) == set(PRIOR_COND_QUANTITIES)
-    assert echo["supports"]["adstock_alpha"] == [0.2, 0.8]
+    assert echo["supports"]["carryover_alpha"] == [0.2, 0.8]
     assert echo["width_ranges"]["hill_shape"] == [0.2, 1.6]
     assert pg.DataGenerator.validate_corpus(conditioned_corpus) == []
 
@@ -112,8 +112,8 @@ def test_validator_rejects_invalid_or_non_cellwise_prior_intervals(conditioned_c
     bad_bounds["diagnostics"]["prior_cond"]["supports"] = dict(
         conditioned_corpus["diagnostics"]["prior_cond"]["supports"]
     )
-    bad_bounds["diagnostics"]["prior_cond"]["supports"]["adstock_alpha"] = [0.8, 0.2]
-    assert "diagnostics prior_cond adstock_alpha bounds are invalid" in (
+    bad_bounds["diagnostics"]["prior_cond"]["supports"]["carryover_alpha"] = [0.8, 0.2]
+    assert "diagnostics prior_cond carryover_alpha bounds are invalid" in (
         pg.DataGenerator.validate_corpus(bad_bounds)
     )
 
@@ -164,7 +164,7 @@ def test_nesting(conditioned_corpus):
 
 
 def test_containment_single_cell():
-    """Drawn conditioned params lie in the recorded interval (all channels)."""
+    """Drawn conditioned params lie in the recorded interval (all treatments)."""
     cfg = _cfg(prior_conditioning=True)
     rng = np.random.default_rng(3)
     g = sample_g_additive(
@@ -176,8 +176,8 @@ def test_containment_single_cell():
     model, _out_names, _param_names = build_world_model(
         g_act, cfg, structural, cfg.n_time_steps, prior_cond=prior_cond
     )
-    drawn = draw_worlds(model, ("adstock_alpha", "hill_slope"), seed=5, draws=8)
-    for q, var in (("adstock_alpha", "adstock_alpha"), ("hill_shape", "hill_slope")):
+    drawn = draw_worlds(model, ("carryover_alpha", "hill_slope"), seed=5, draws=8)
+    for q, var in (("carryover_alpha", "carryover_alpha"), ("hill_shape", "hill_slope")):
         lo, width = prior_cond[q]
         vals = drawn[var]
         assert (vals >= lo).all() and (vals <= lo + width).all(), q
@@ -186,9 +186,9 @@ def test_containment_single_cell():
 def test_containment_sample_scm():
     cfg = _cfg(prior_conditioning=True)
     world = pg.sample_scm(cfg, seed=11)
-    lo, width = world.extras["prior_cond"]["adstock_alpha"]
-    alpha = np.asarray(world.params["adstock_alpha"])
-    geometric = np.asarray(world.params["adstock_family"]) == 1
+    lo, width = world.extras["prior_cond"]["carryover_alpha"]
+    alpha = np.asarray(world.params["carryover_alpha"])
+    geometric = np.asarray(world.params["carryover_family"]) == 1
     assert (alpha >= lo).all() and (alpha <= lo + width).all()
     assert geometric.shape == alpha.shape  # family mask well-formed
 
@@ -199,7 +199,7 @@ def test_containment_sample_scm():
 def test_determinism(conditioned_corpus):
     again = pg.sample_prior_predictive(_cfg(prior_conditioning=True))
     assert np.array_equal(again["prior_cond"], conditioned_corpus["prior_cond"])
-    assert np.array_equal(again["sales_raw"], conditioned_corpus["sales_raw"])
+    assert np.array_equal(again["outcome_raw"], conditioned_corpus["outcome_raw"])
 
 
 # -- invariant 4: RNG isolation of the disabled path -------------------------
@@ -217,7 +217,7 @@ def test_disabled_path_ignores_width_ranges():
     """Width ranges are inert while the flag is off — corpora are identical."""
     base = pg.sample_prior_predictive(_cfg())
     with_ranges = pg.sample_prior_predictive(
-        _cfg(prior_cond_width_ranges={"adstock_alpha": (0.1, 0.3)})
+        _cfg(prior_cond_width_ranges={"carryover_alpha": (0.1, 0.3)})
     )
     assert "prior_cond" not in with_ranges
     for key, val in base.items():
@@ -243,12 +243,12 @@ def test_validate_rejects_bad_configs():
     with pytest.raises(ValueError, match="conditioned set"):
         _cfg(prior_conditioning=True, prior_cond_width_ranges={"weibull_lam": (0.1, 0.2)})
     with pytest.raises(ValueError, match="support width"):
-        _cfg(prior_conditioning=True, prior_cond_width_ranges={"adstock_alpha": (0.1, 0.9)})
+        _cfg(prior_conditioning=True, prior_cond_width_ranges={"carryover_alpha": (0.1, 0.9)})
     with pytest.raises(ValueError, match="support width"):
         _cfg(prior_conditioning=True, prior_cond_width_ranges={"hill_shape": (0.0, 1.0)})
     # degenerate support cannot be conditioned
     with pytest.raises(ValueError, match="support width"):
-        _cfg(prior_conditioning=True, adstock_alpha_range=(0.5, 0.5))
+        _cfg(prior_conditioning=True, carryover_alpha_range=(0.5, 0.5))
 
 
 def test_replace_preserves_conditioning():
@@ -260,6 +260,6 @@ def test_describe_prints_intervals():
     world = pg.sample_scm(_cfg(prior_conditioning=True), seed=11)
     text = pg.describe_scm(world)
     assert "Prior conditioning (ACE)" in text
-    assert "adstock_alpha" in text and "hill_shape" in text
-    lo, width = world.extras["prior_cond"]["adstock_alpha"]
+    assert "carryover_alpha" in text and "hill_shape" in text
+    lo, width = world.extras["prior_cond"]["carryover_alpha"]
     assert f"U({lo:.3f}, {lo + width:.3f})" in text

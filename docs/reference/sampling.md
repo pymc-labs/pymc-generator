@@ -20,6 +20,6 @@ description and plotting layers, and handy for your own analysis.
 
 ::: pymc_generator.worlds.edges_with_coeffs
 
-::: pymc_generator.worlds.channel_role
+::: pymc_generator.worlds.treatment_role
 
 ::: pymc_generator.worlds.mechanism_label

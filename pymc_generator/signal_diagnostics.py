@@ -2,32 +2,32 @@
 
 A valid corpus can still contain weak or redundant signals. These metrics
 quantify variation, relative amplitude, and dependence for direct C->Y
-channels, before a consumer trains on the corpus. Summaries are embedded in
+treatments, before a consumer trains on the corpus. Summaries are embedded in
 ``diagnostics``; screening with :func:`check_signal_gate` is optional.
 Neither the summaries nor a passing gate establish causal identification.
 
-Metrics per (task, direct channel) pair
+Metrics per (task, direct treatment) pair
 ---------------------------------------
-* ``spend_cv``      — CV of the observed channel (the model's input).
-* ``spend_hf``      — high-frequency ratio ``std(diff x) / (sqrt(2)·std x)``:
+* ``treatment_cv``      — CV of the observed treatment (the model's input).
+* ``treatment_hf``      — high-frequency ratio ``std(diff x) / (sqrt(2)·std x)``:
   1 for white noise, -> 0 for a smooth drift.
 * ``contrib_cv``    — CV of the true contribution target (flatness).
 * ``contrib_hf``    — high-frequency ratio of the target.
-* ``contrib_rel_std`` — target std / per-task sales scale (amplitude of the
+* ``contrib_rel_std`` — target std / per-task outcome scale (amplitude of the
   target in training-loss units).
-* ``spearman``      — |rank correlation| between true-family-adstocked spend
+* ``spearman``      — |rank correlation| between true-family-carryovered treatment
   and the contribution (how much of the target is visible from the input).
 * ``warmup_ratio``  — (max-min over the first ``l_max`` weeks) / (std of the
-  rest): >> 1 flags the adstock zero-padding warmup artifact dominating the
-  target (fixed by ``adstock_burn_in``).
+  rest): >> 1 flags the carryover zero-padding warmup artifact dominating the
+  target (fixed by ``carryover_burn_in``).
 * ``contrib_r2_explained_by_rest`` — contribution R² against an intercept,
-  baseline, and the other direct-channel contributions.
+  baseline, and the other direct-treatment contributions.
 * ``contrib_corr_baseline`` — signed contribution/baseline correlation.
 
 ``signal_summary`` reduces these to quantiles plus degenerate-target
-fractions, and adds the per-task normalized sales-level magnitude
-``abs(mean(sales))/sales_scale``. Targets are trained
-sales_scale-normalized without centering, so only the magnitude of the level
+fractions, and adds the per-task normalized outcome-level magnitude
+``abs(mean(outcome))/outcome_scale``. Targets are trained
+outcome_scale-normalized without centering, so only the magnitude of the level
 matters.
 """
 
@@ -47,7 +47,7 @@ __all__ = [
     "check_signal_gate",
     "contemporaneous_weight",
     "dense_signal_metrics",
-    "per_channel_signal",
+    "per_treatment_signal",
     "response_support_weeks",
     "summarize_signal_metrics",
     "signal_summary",
@@ -56,12 +56,12 @@ __all__ = [
 _QS = (0.1, 0.5, 0.9)
 SIGNAL_METRIC_VERSION = 3
 
-#: Per-pair metrics emitted by :func:`per_channel_signal` and summarized (as
+#: Per-pair metrics emitted by :func:`per_treatment_signal` and summarized (as
 #: ``<key>_quantiles``) by :func:`signal_summary`. Single source of truth —
 #: report/gate tooling should import this instead of re-listing names.
 METRIC_KEYS: tuple[str, ...] = (
-    "spend_cv",
-    "spend_hf",
+    "treatment_cv",
+    "treatment_hf",
     "contrib_cv",
     "contrib_hf",
     "contrib_rel_std",
@@ -92,12 +92,12 @@ FRAC_KEYS: tuple[str, ...] = tuple(_FRACTION_SPECS)
 DEFAULT_GATE: dict[str, float] = {
     "frac_contrib_cv_lt_010": 0.15,  # at most 15% near-flat targets
     "frac_contrib_hf_lt_015": 0.15,  # at most 15% targets without weekly variation
-    # with burn-in the adstock artifact is gone, but a REAL pulse in the first
+    # with burn-in the carryover artifact is gone, but a REAL pulse in the first
     # l_max weeks legitimately trips the 3x ratio — allow a modest tail
     "frac_warmup_gt_3": 0.10,
-    "frac_spearman_lt_03": 0.15,  # target visible from the observed spend
+    "frac_spearman_lt_03": 0.15,  # target visible from the observed treatment
     "frac_contrib_rel_std_lt_001": 0.10,  # targets too small to matter in loss units
-    "frac_contrib_r2_gt_095": 0.10,  # targets a linear combination of baseline + other channels
+    "frac_contrib_r2_gt_095": 0.10,  # targets a linear combination of baseline + other treatments
 }
 
 
@@ -112,8 +112,8 @@ def _validated_integer(value: object, name: str, minimum: int) -> int:
     return int(value)
 
 
-def _validated_adstock_family(value: object, name: str = "family") -> int:
-    """Return one supported scalar adstock-family identifier."""
+def _validated_carryover_family(value: object, name: str = "family") -> int:
+    """Return one supported scalar carryover-family identifier."""
     family = _validated_integer(value, name, 0)
     if family not in (0, 1, 2):
         raise ValueError(f"{name} must be an integer in {{0, 1, 2}}")
@@ -130,7 +130,7 @@ def _is_finite_real(value: object) -> bool:
 
 
 def _metadata_float_array(value: object, name: str, shape: tuple[int, int]) -> np.ndarray:
-    """Return float64 metadata with the required task/channel shape."""
+    """Return float64 metadata with the required task/treatment shape."""
     try:
         array = np.asarray(value, dtype=np.float64)
     except (TypeError, ValueError) as exc:
@@ -140,40 +140,40 @@ def _metadata_float_array(value: object, name: str, shape: tuple[int, int]) -> n
     return array
 
 
-def _validated_adstock_family_array(value: object, shape: tuple[int, int]) -> np.ndarray:
-    """Return validated integer adstock-family metadata with the required shape."""
+def _validated_carryover_family_array(value: object, shape: tuple[int, int]) -> np.ndarray:
+    """Return validated integer carryover-family metadata with the required shape."""
     try:
         family_raw = np.asarray(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"adstock_family must have shape {shape}") from exc
+        raise ValueError(f"carryover_family must have shape {shape}") from exc
     if family_raw.shape != shape:
-        raise ValueError(f"adstock_family must have shape {shape}")
+        raise ValueError(f"carryover_family must have shape {shape}")
     if np.issubdtype(family_raw.dtype, np.bool_):
-        raise ValueError("adstock_family entries must be integers in {0, 1, 2}")
+        raise ValueError("carryover_family entries must be integers in {0, 1, 2}")
     try:
         family_float = family_raw.astype(np.float64, copy=False)
     except (TypeError, ValueError) as exc:
-        raise ValueError("adstock_family entries must be integers in {0, 1, 2}") from exc
+        raise ValueError("carryover_family entries must be integers in {0, 1, 2}") from exc
     if (
         not np.isfinite(family_float).all()
         or not np.equal(family_float, np.floor(family_float)).all()
         or not np.isin(family_float, (0.0, 1.0, 2.0)).all()
     ):
-        raise ValueError("adstock_family entries must be integers in {0, 1, 2}")
+        raise ValueError("carryover_family entries must be integers in {0, 1, 2}")
     return family_float.astype(np.int8)
 
 
-def _validated_adstock_metadata(
-    adstock_family: object,
-    adstock_alpha: object,
+def _validated_carryover_metadata(
+    carryover_family: object,
+    carryover_alpha: object,
     weibull_lam: object,
     weibull_k: object,
     shape: tuple[int, int],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Validate adstock metadata and return arrays suitable for recomputation."""
-    family = _validated_adstock_family_array(adstock_family, shape)
+    """Validate carryover metadata and return arrays suitable for recomputation."""
+    family = _validated_carryover_family_array(carryover_family, shape)
 
-    alpha = _metadata_float_array(adstock_alpha, "adstock_alpha", shape)
+    alpha = _metadata_float_array(carryover_alpha, "carryover_alpha", shape)
     lam = _metadata_float_array(weibull_lam, "weibull_lam", shape)
     k = _metadata_float_array(weibull_k, "weibull_k", shape)
     geometric = family == 1
@@ -183,29 +183,31 @@ def _validated_adstock_metadata(
         or (alpha[geometric] < 0.0).any()
         or (alpha[geometric] > 1.0).any()
     ):
-        raise ValueError("adstock_alpha must be finite in [0, 1] where adstock_family == 1")
+        raise ValueError("carryover_alpha must be finite in [0, 1] where carryover_family == 1")
     if weibull.any() and (not np.isfinite(lam[weibull]).all() or (lam[weibull] <= 0.0).any()):
-        raise ValueError("weibull_lam must be finite and > 0 where adstock_family == 2")
+        raise ValueError("weibull_lam must be finite and > 0 where carryover_family == 2")
     if weibull.any() and (not np.isfinite(k[weibull]).all() or (k[weibull] <= 0.0).any()):
-        raise ValueError("weibull_k must be finite and > 0 where adstock_family == 2")
+        raise ValueError("weibull_k must be finite and > 0 where carryover_family == 2")
     return family, alpha, lam, k
 
 
-def _validated_sales_scale(sales: np.ndarray, sales_scale: np.ndarray | None) -> np.ndarray:
-    """Return a finite, strictly positive per-task sales scale."""
+def _validated_outcome_scale(outcome: np.ndarray, outcome_scale: np.ndarray | None) -> np.ndarray:
+    """Return a finite, strictly positive per-task outcome scale."""
     try:
         scale = (
-            sales.std(axis=1) if sales_scale is None else np.asarray(sales_scale, dtype=np.float64)
+            outcome.std(axis=1)
+            if outcome_scale is None
+            else np.asarray(outcome_scale, dtype=np.float64)
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(
-            "sales_scale must be finite and strictly positive with shape (n_tasks,)"
+            "outcome_scale must be finite and strictly positive with shape (n_tasks,)"
         ) from exc
     invalid_scale = (
-        scale.shape != (sales.shape[0],) or not np.isfinite(scale).all() or (scale <= 0.0).any()
+        scale.shape != (outcome.shape[0],) or not np.isfinite(scale).all() or (scale <= 0.0).any()
     )
     if invalid_scale:
-        raise ValueError("sales_scale must be finite and strictly positive with shape (n_tasks,)")
+        raise ValueError("outcome_scale must be finite and strictly positive with shape (n_tasks,)")
     return scale
 
 
@@ -250,11 +252,11 @@ def _spearman_abs(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.asarray(out)
 
 
-def _adstock_weights(
+def _carryover_weights(
     family: int, alpha: float, lam: float, shape: float, l_max: int
 ) -> np.ndarray | None:
     """Return normalized causal weights, or ``None`` for identity/degenerate kernels."""
-    family = _validated_adstock_family(family)
+    family = _validated_carryover_family(family)
     l_max = _validated_integer(l_max, "l_max", 1)
     if family == 0 or l_max == 1:
         return None
@@ -276,9 +278,9 @@ def _adstock_weights(
         raw_weight_max = weights.max()
         weight_min = weights.min()
         span = raw_weight_max - weight_min
-        # This guard MUST track mechanisms.apply_weibull_pdf_adstock. The oracle passes
+        # This guard MUST track mechanisms.apply_weibull_pdf_carryover. The oracle passes
         # symbolic value variables; a backend-dependent library-output guard would make
-        # FAST_COMPILE generation and the FAST_RUN oracle disagree whether a channel responds.
+        # FAST_COMPILE generation and the FAST_RUN oracle disagree whether a treatment responds.
         # 1e-300 is above the float64 denormal cliff (~5e-324), yet below any
         # normal-magnitude density, so the analytic replica detects only underflow.
         if not (raw_weight_max > 1e-300) or not np.isfinite(span) or span == 0.0:
@@ -291,7 +293,7 @@ def _adstock_weights(
 
 
 def contemporaneous_weight(family: int, alpha: float, lam: float, k: float, l_max: int) -> float:
-    """Normalized adstock weight on the current week (zero lag).
+    """Normalized carryover weight on the current week (zero lag).
 
     Returns
     -------
@@ -299,9 +301,9 @@ def contemporaneous_weight(family: int, alpha: float, lam: float, k: float, l_ma
         ``weights[0]`` for a nondegenerate nonidentity kernel, 1.0 for an
         identity kernel, and 0.0 for a degenerate nonidentity kernel.
     """
-    family = _validated_adstock_family(family)
+    family = _validated_carryover_family(family)
     l_max = _validated_integer(l_max, "l_max", 1)
-    weights = _adstock_weights(family, alpha, lam, k, l_max)
+    weights = _carryover_weights(family, alpha, lam, k, l_max)
     if family == 0 or l_max == 1:
         return 1.0
     return 0.0 if weights is None else float(weights[0])
@@ -315,16 +317,16 @@ def response_support_weeks(family: int, alpha: float, lam: float, k: float, l_ma
     trailing taps are annihilated both reach fewer weeks back than
     ``l_max - 1``. ``0`` means the response is contemporaneous only — an
     identity kernel (``family == 0`` or ``l_max == 1``), a kernel confined to
-    the current week, or a degenerate kernel that annihilates the channel.
+    the current week, or a degenerate kernel that annihilates the treatment.
 
     Returns
     -------
     int
         Maximum lag index with nonzero normalized weight, in ``[0, l_max - 1]``.
     """
-    family = _validated_adstock_family(family)
+    family = _validated_carryover_family(family)
     l_max = _validated_integer(l_max, "l_max", 1)
-    weights = _adstock_weights(family, alpha, lam, k, l_max)
+    weights = _carryover_weights(family, alpha, lam, k, l_max)
     if weights is None:
         return 0
     positive = np.flatnonzero(weights > 0.0)
@@ -335,7 +337,7 @@ def admitted_response_support_weeks(
     families: Iterable[int],
     l_max: int,
     *,
-    adstock_alpha_range: tuple[float, float],
+    carryover_alpha_range: tuple[float, float],
 ) -> int:
     """Largest positive lag ANY kernel these families and priors can produce.
 
@@ -356,24 +358,24 @@ def admitted_response_support_weeks(
     Parameters
     ----------
     families : iterable of int
-        Adstock family ids that can occur (``0``/``1``/``2``).
+        Carryover family ids that can occur (``0``/``1``/``2``).
     l_max : int
-        Adstock kernel length.
-    adstock_alpha_range : (float, float)
+        Carryover kernel length.
+    carryover_alpha_range : (float, float)
         Geometric-decay prior support, ``(lo, hi)`` with ``0 <= lo <= hi <= 1``.
         Only its upper end is consulted; a Weibull family needs no range
         because its bound does not depend on one.
     """
     l_max = _validated_integer(l_max, "l_max", 1)
     try:
-        alpha_lo, alpha_hi = (float(value) for value in adstock_alpha_range)
+        alpha_lo, alpha_hi = (float(value) for value in carryover_alpha_range)
     except (TypeError, ValueError) as exc:
-        raise ValueError("adstock_alpha_range must be a finite (lo, hi) pair") from exc
+        raise ValueError("carryover_alpha_range must be a finite (lo, hi) pair") from exc
     if not (np.isfinite(alpha_lo) and np.isfinite(alpha_hi)) or not 0.0 <= alpha_lo <= alpha_hi:
-        raise ValueError("adstock_alpha_range must satisfy finite 0 <= lo <= hi")
+        raise ValueError("carryover_alpha_range must satisfy finite 0 <= lo <= hi")
     support = 0
     for value in families:
-        family = _validated_adstock_family(value)
+        family = _validated_carryover_family(value)
         if family == 1 and alpha_hi > 0.0:
             support = max(support, l_max - 1)
         elif family == 2:
@@ -381,21 +383,21 @@ def admitted_response_support_weeks(
     return support
 
 
-def _adstock_numpy(
+def _carryover_numpy(
     x: np.ndarray, family: int, alpha: float, lam: float, shape: float, l_max: int
 ) -> np.ndarray:
-    """The generator's normalized, causal adstock for one reported series.
+    """The generator's normalized, causal carryover for one reported series.
 
     ``pymc_marketing.weibull_adstock(type="PDF")`` min-max rescales the sampled
     density before sum-normalizing it. The resulting kernel is therefore not a
     Weibull pdf and has ``min(weights) == 0`` exactly. Under the default prior
     (``lam ~ U(2, 8)``, ``k ~ U(1.5, 4)``, ``l_max = 8``), 45.0% of Weibull
-    channels have zero current-week weight (200k draws), mean lag-1 weight is
+    treatments have zero current-week weight (200k draws), mean lag-1 weight is
     0.065, and 38.5% peak at lag >= 5.
     """
-    family = _validated_adstock_family(family)
+    family = _validated_carryover_family(family)
     l_max = _validated_integer(l_max, "l_max", 1)
-    weights = _adstock_weights(family, alpha, lam, shape, l_max)
+    weights = _carryover_weights(family, alpha, lam, shape, l_max)
     if family == 0 or l_max == 1:
         return x.copy()
     if weights is None:
@@ -404,19 +406,19 @@ def _adstock_numpy(
 
 
 def dense_signal_metrics(
-    spend: np.ndarray,
+    treatment: np.ndarray,
     contributions: np.ndarray,
-    sales: np.ndarray,
+    outcome: np.ndarray,
     baseline: np.ndarray,
     cy_mask: np.ndarray,
     *,
-    sales_scale: np.ndarray | None = None,
-    adstock_family: np.ndarray | None = None,
-    adstock_alpha: np.ndarray | None = None,
+    outcome_scale: np.ndarray | None = None,
+    carryover_family: np.ndarray | None = None,
+    carryover_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
     l_max: int = 8,
-    adstock_burn_in: int = 0,
+    carryover_burn_in: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return persisted dense metrics and uint8 validity, both shaped
     ``(n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT))``.
@@ -424,60 +426,60 @@ def dense_signal_metrics(
     Inputs are deliberately the final persisted arrays; callers must not pass
     pre-cast draw values. Ineligible/padded cells are exactly zero and invalid.
     An all-zero series has valid CV 0.0. A nonconstant zero-mean series has an
-    undefined/infinite CV and is invalid; generated spend and contribution
+    undefined/infinite CV and is invalid; generated treatment and contribution
     targets are non-negative, so only the all-zero convention is reachable in
     a corpus.
     """
-    spend = np.asarray(spend, dtype=np.float64)
+    treatment = np.asarray(treatment, dtype=np.float64)
     contributions = np.asarray(contributions, dtype=np.float64)
-    sales = np.asarray(sales, dtype=np.float64)
+    outcome = np.asarray(outcome, dtype=np.float64)
     baseline = np.asarray(baseline, dtype=np.float64)
     mask = np.asarray(cy_mask, dtype=bool)
-    if spend.ndim != 3:
-        raise ValueError("spend must have shape (n_tasks, n_time_steps, n_treatments)")
-    n_tasks, n_time_steps, n_treatments = spend.shape
+    if treatment.ndim != 3:
+        raise ValueError("treatment must have shape (n_tasks, n_time_steps, n_treatments)")
+    n_tasks, n_time_steps, n_treatments = treatment.shape
     if (
         contributions.shape != (n_tasks, n_time_steps, n_treatments)
-        or sales.shape != (n_tasks, n_time_steps)
+        or outcome.shape != (n_tasks, n_time_steps)
         or baseline.shape != (n_tasks, n_time_steps)
     ):
         raise ValueError("signal source arrays have incompatible shapes")
     if mask.shape != (n_tasks, n_treatments):
         raise ValueError(f"cy_mask shape {mask.shape} != {(n_tasks, n_treatments)}")
-    if not all(np.isfinite(a).all() for a in (spend, contributions, sales, baseline)):
+    if not all(np.isfinite(a).all() for a in (treatment, contributions, outcome, baseline)):
         raise ValueError("signal source arrays must be finite")
     l_max = _validated_integer(l_max, "l_max", 1)
-    adstock_burn_in = _validated_integer(adstock_burn_in, "adstock_burn_in", 0)
-    scale = _validated_sales_scale(sales, sales_scale)
+    carryover_burn_in = _validated_integer(carryover_burn_in, "carryover_burn_in", 0)
+    scale = _validated_outcome_scale(outcome, outcome_scale)
     metadata_shape = (n_tasks, n_treatments)
     family_input = (
-        np.zeros(metadata_shape, dtype=np.int8) if adstock_family is None else adstock_family
+        np.zeros(metadata_shape, dtype=np.int8) if carryover_family is None else carryover_family
     )
-    alpha_input = np.zeros(metadata_shape) if adstock_alpha is None else adstock_alpha
+    alpha_input = np.zeros(metadata_shape) if carryover_alpha is None else carryover_alpha
     lam_input = np.ones(metadata_shape) if weibull_lam is None else weibull_lam
     k_input = np.ones(metadata_shape) if weibull_k is None else weibull_k
-    fam, alpha, wlam, wk = _validated_adstock_metadata(
+    fam, alpha, wlam, wk = _validated_carryover_metadata(
         family_input, alpha_input, lam_input, k_input, metadata_shape
     )
     metrics = np.zeros((n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT)), dtype=np.float32)
     valid = np.zeros_like(metrics, dtype=np.uint8)
     metric_index = {name: i for i, name in enumerate(SIGNAL_METRIC_LAYOUT)}
     for n in range(n_tasks):
-        active_channels = np.flatnonzero(mask[n])
-        if active_channels.size == 0:
+        active_treatments = np.flatnonzero(mask[n])
+        if active_treatments.size == 0:
             continue
         if n_time_steps >= 2:
             centered_b = baseline[n] - baseline[n].mean()
             centered_contributions = {
-                k: contributions[n, :, k] - contributions[n, :, k].mean() for k in active_channels
+                k: contributions[n, :, k] - contributions[n, :, k].mean() for k in active_treatments
             }
-        for k in active_channels:
-            x, y = spend[n, :, k], contributions[n, :, k]
+        for k in active_treatments:
+            x, y = treatment[n, :, k], contributions[n, :, k]
             std_x, std_y = x.std(), y.std()
-            spend_cv, spend_cv_valid = _coefficient_of_variation(x, std_x)
+            treatment_cv, treatment_cv_valid = _coefficient_of_variation(x, std_x)
             contrib_cv, contrib_cv_valid = _coefficient_of_variation(y, std_y)
             values = {
-                "spend_cv": (spend_cv, spend_cv_valid),
+                "treatment_cv": (treatment_cv, treatment_cv_valid),
                 "contrib_cv": (contrib_cv, contrib_cv_valid),
                 "contrib_rel_std": (std_y / scale[n], True),
             }
@@ -485,17 +487,17 @@ def dense_signal_metrics(
                 metrics[n, k, metric_index[name]] = value
                 valid[n, k, metric_index[name]] = is_valid
             if n_time_steps >= 2:
-                metrics[n, k, metric_index["spend_hf"]] = _hf_ratio(x, std_x)
+                metrics[n, k, metric_index["treatment_hf"]] = _hf_ratio(x, std_x)
                 metrics[n, k, metric_index["contrib_hf"]] = _hf_ratio(y, std_y)
-                valid[n, k, [metric_index["spend_hf"], metric_index["contrib_hf"]]] = 1
-            ad_x = _adstock_numpy(x, fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
-            # Compare once-adstocked observed spend, not an already-transformed target.
+                valid[n, k, [metric_index["treatment_hf"], metric_index["contrib_hf"]]] = 1
+            ad_x = _carryover_numpy(x, fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
+            # Compare once-carryovered observed treatment, not an already-transformed target.
             if n_time_steps - l_max >= 3:
                 metrics[n, k, metric_index["spearman"]] = _spearman_abs(
                     ad_x[l_max:][None], y[l_max:][None]
                 )[0]
                 valid[n, k, metric_index["spearman"]] = 1
-            if adstock_burn_in < l_max and n_time_steps >= l_max + 3:
+            if carryover_burn_in < l_max and n_time_steps >= l_max + 3:
                 warm_range = y[:l_max].max() - y[:l_max].min()
                 suffix_std = y[l_max:].std()
                 if suffix_std != 0.0:
@@ -506,7 +508,7 @@ def dense_signal_metrics(
                 design = np.column_stack(
                     [
                         centered_b,
-                        *(centered_contributions[j] for j in active_channels if j != k),
+                        *(centered_contributions[j] for j in active_treatments if j != k),
                     ]
                 )
                 sst = float(centered_y @ centered_y)
@@ -531,54 +533,54 @@ def dense_signal_metrics(
     return metrics, valid
 
 
-def per_channel_signal(
-    spend: np.ndarray,
+def per_treatment_signal(
+    treatment: np.ndarray,
     contributions: np.ndarray,
-    sales: np.ndarray,
+    outcome: np.ndarray,
     cy_mask: np.ndarray,
     *,
-    sales_scale: np.ndarray | None = None,
+    outcome_scale: np.ndarray | None = None,
     l_max: int = 8,
     baseline: np.ndarray | None = None,
-    adstock_family: np.ndarray | None = None,
-    adstock_alpha: np.ndarray | None = None,
+    carryover_family: np.ndarray | None = None,
+    carryover_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
-    adstock_burn_in: int = 0,
+    carryover_burn_in: int = 0,
 ) -> dict[str, np.ndarray]:
-    """Per-(task, direct channel) signal metrics.
+    """Per-(task, direct treatment) signal metrics.
 
     Parameters
     ----------
-    spend : (n_tasks, n_time_steps, n_treatments) observed channels (model input).
+    treatment : (n_tasks, n_time_steps, n_treatments) observed treatments (model input).
     contributions : (n_tasks, n_time_steps, n_treatments) true contribution targets.
-    sales : (n_tasks, n_time_steps) sales series.
-    cy_mask : (n_tasks, n_treatments) bool/0-1 — which channels are direct (C->Y) AND active.
-    sales_scale : (n_tasks,) optional — per-task target normalizer; defaults to the
-        full-series sales std.
-    l_max : adstock length, defines the warmup window for ``warmup_ratio``.
+    outcome : (n_tasks, n_time_steps) outcome series.
+    cy_mask : (n_tasks, n_treatments) bool/0-1 — which treatments are direct (C->Y) AND active.
+    outcome_scale : (n_tasks,) optional — per-task target normalizer; defaults to the
+        full-series outcome std.
+    l_max : carryover length, defines the warmup window for ``warmup_ratio``.
 
     Returns
     -------
-    dict of 1-D float arrays, one entry per (task, direct channel) pair, plus
+    dict of 1-D float arrays, one entry per (task, direct treatment) pair, plus
     ``task_idx`` locating each pair.
     """
-    spend = np.asarray(spend)
-    n_tasks, n_time_steps, n_treatments = spend.shape
+    treatment = np.asarray(treatment)
+    n_tasks, n_time_steps, n_treatments = treatment.shape
     mask = np.asarray(cy_mask, dtype=bool)
     dense, valid = dense_signal_metrics(
-        spend,
+        treatment,
         contributions,
-        sales,
-        np.zeros((n_tasks, n_time_steps), dtype=spend.dtype) if baseline is None else baseline,
+        outcome,
+        np.zeros((n_tasks, n_time_steps), dtype=treatment.dtype) if baseline is None else baseline,
         mask,
-        sales_scale=sales_scale,
+        outcome_scale=outcome_scale,
         l_max=l_max,
-        adstock_family=adstock_family,
-        adstock_alpha=adstock_alpha,
+        carryover_family=carryover_family,
+        carryover_alpha=carryover_alpha,
         weibull_lam=weibull_lam,
         weibull_k=weibull_k,
-        adstock_burn_in=adstock_burn_in,
+        carryover_burn_in=carryover_burn_in,
     )
     if baseline is None:
         for name in ("contrib_r2_explained_by_rest", "contrib_corr_baseline"):
@@ -598,14 +600,14 @@ def per_channel_signal(
 def summarize_signal_metrics(
     metrics: np.ndarray,
     valid: np.ndarray,
-    sales: np.ndarray,
+    outcome: np.ndarray,
     cy_mask: np.ndarray,
     *,
-    sales_scale: np.ndarray | None = None,
+    outcome_scale: np.ndarray | None = None,
     l_max: int = 8,
-    adstock_burn_in: int = 0,
-    adstock_family: np.ndarray | None = None,
-    adstock_alpha: np.ndarray | None = None,
+    carryover_burn_in: int = 0,
+    carryover_family: np.ndarray | None = None,
+    carryover_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
 ) -> dict:
@@ -615,7 +617,7 @@ def summarize_signal_metrics(
     can be derived from exactly the float32 arrays written to disk.
 
     ``response_warmup_weeks`` identifies reported weeks whose response depends
-    on unpersisted pre-window spend. With burn-in, reported week ``t`` reaches
+    on unpersisted pre-window treatment. With burn-in, reported week ``t`` reaches
     before the persisted window exactly when ``t < S``, where ``S`` is the
     largest positive lag any ``cy_mask``-eligible direct kernel actually
     weights (:func:`response_support_weeks`). The count is therefore ``S`` —
@@ -623,8 +625,8 @@ def summarize_signal_metrics(
     contemporaneous, which includes an identity family, a geometric kernel with
     ``alpha == 0``, and a degenerate annihilated kernel. ``S`` is below
     ``l_max - 1`` whenever the realized min-max Weibull kernel has no weight on
-    its trailing taps. Establishing ``S`` needs all four adstock metadata
-    arrays; with only ``adstock_family`` the summary reports ``l_max - 1`` for
+    its trailing taps. Establishing ``S`` needs all four carryover metadata
+    arrays; with only ``carryover_family`` the summary reports ``l_max - 1`` for
     any non-identity eligible kernel, and with no metadata at all it reports
     ``l_max - 1`` under burn-in because it cannot rule out a full-reach kernel.
     ``support_mask`` is the temporal train/query split, not this
@@ -635,19 +637,19 @@ def summarize_signal_metrics(
     metrics, valid : np.ndarray
         Persisted dense metric values and their binary per-metric validity
         masks, each shaped ``(n_tasks, n_treatments, len(SIGNAL_METRIC_LAYOUT))``.
-    sales : np.ndarray
-        Persisted sales array with shape ``(n_tasks, n_time_steps)``.
+    outcome : np.ndarray
+        Persisted outcome array with shape ``(n_tasks, n_time_steps)``.
     cy_mask : np.ndarray
-        Boolean ``(n_tasks, n_treatments)`` mask selecting eligible direct-channel pairs.
-    sales_scale : np.ndarray, optional
+        Boolean ``(n_tasks, n_treatments)`` mask selecting eligible direct-treatment pairs.
+    outcome_scale : np.ndarray, optional
         Positive persisted per-task target scales. When omitted, scales are
-        computed from ``sales``.
+        computed from ``outcome``.
     l_max : int
-        Adstock kernel length.
-    adstock_burn_in : int
+        Carryover kernel length.
+    carryover_burn_in : int
         Number of generated leading burn-in weeks.
-    adstock_family, adstock_alpha, weibull_lam, weibull_k : np.ndarray, optional
-        Per-(task, channel) adstock metadata. All four must be supplied to
+    carryover_family, carryover_alpha, weibull_lam, weibull_k : np.ndarray, optional
+        Per-(task, treatment) carryover metadata. All four must be supplied to
         calculate ``frac_zero_contemporaneous_weight`` and the realized
         ``response_warmup_weeks``; omitting any sets that fraction to ``None``
         and falls back to the family-only (or, with no metadata, the
@@ -655,35 +657,35 @@ def summarize_signal_metrics(
     """
     metrics = np.asarray(metrics)
     valid = np.asarray(valid)
-    sales = np.asarray(sales, dtype=np.float64)
+    outcome = np.asarray(outcome, dtype=np.float64)
     mask = np.asarray(cy_mask, dtype=bool)
     expected = mask.shape + (len(SIGNAL_METRIC_LAYOUT),)
     if metrics.shape != expected or valid.shape != expected:
         raise ValueError(f"metrics and validity must have shape {expected}")
-    if sales.ndim != 2 or sales.shape[0] != mask.shape[0]:
-        raise ValueError("sales must have shape (n_tasks, n_time_steps)")
-    if not np.isfinite(sales).all():
-        raise ValueError("sales must be finite")
+    if outcome.ndim != 2 or outcome.shape[0] != mask.shape[0]:
+        raise ValueError("outcome must have shape (n_tasks, n_time_steps)")
+    if not np.isfinite(outcome).all():
+        raise ValueError("outcome must be finite")
     if not np.isfinite(metrics).all() or not np.isin(valid, (0, 1)).all():
         raise ValueError("metrics must be finite and validity must be binary")
 
     l_max = _validated_integer(l_max, "l_max", 1)
-    adstock_burn_in = _validated_integer(adstock_burn_in, "adstock_burn_in", 0)
-    scale = _validated_sales_scale(sales, sales_scale)
-    level_ratio = np.abs(sales.mean(axis=1)) / scale
+    carryover_burn_in = _validated_integer(carryover_burn_in, "carryover_burn_in", 0)
+    scale = _validated_outcome_scale(outcome, outcome_scale)
+    level_ratio = np.abs(outcome.mean(axis=1)) / scale
     n_pairs = int(mask.sum())
-    adstock_metadata = (adstock_family, adstock_alpha, weibull_lam, weibull_k)
+    carryover_metadata = (carryover_family, carryover_alpha, weibull_lam, weibull_k)
     fam: np.ndarray | None = None
     frac_zero_contemporaneous_weight: float | None = None
     realized_support: int | None = None
-    if n_pairs and all(value is not None for value in adstock_metadata):
-        fam, alpha, wlam, wk = _validated_adstock_metadata(
-            adstock_family, adstock_alpha, weibull_lam, weibull_k, mask.shape
+    if n_pairs and all(value is not None for value in carryover_metadata):
+        fam, alpha, wlam, wk = _validated_carryover_metadata(
+            carryover_family, carryover_alpha, weibull_lam, weibull_k, mask.shape
         )
         zero_count = 0
         realized_support = 0
         for n, k in zip(*np.nonzero(mask)):
-            weights = _adstock_weights(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
+            weights = _carryover_weights(fam[n, k], alpha[n, k], wlam[n, k], wk[n, k], l_max)
             if weights is None:
                 first_weight = 1.0 if fam[n, k] == 0 or l_max == 1 else 0.0
             else:
@@ -693,9 +695,9 @@ def summarize_signal_metrics(
                     realized_support = max(realized_support, int(positive[-1]))
             zero_count += int(first_weight < 1e-9)
         frac_zero_contemporaneous_weight = zero_count / n_pairs
-    elif n_pairs and adstock_family is not None:
-        fam = _validated_adstock_family_array(adstock_family, mask.shape)
-    if adstock_burn_in == 0 or n_pairs == 0:
+    elif n_pairs and carryover_family is not None:
+        fam = _validated_carryover_family_array(carryover_family, mask.shape)
+    if carryover_burn_in == 0 or n_pairs == 0:
         response_warmup_weeks = 0
     elif realized_support is not None:
         response_warmup_weeks = realized_support
@@ -704,7 +706,7 @@ def summarize_signal_metrics(
     else:
         response_warmup_weeks = 0
     out: dict = {
-        "n_direct_channels": n_pairs,
+        "n_direct_treatments": n_pairs,
         "response_warmup_weeks": response_warmup_weeks,
         "frac_zero_contemporaneous_weight": frac_zero_contemporaneous_weight,
     }
@@ -722,10 +724,10 @@ def summarize_signal_metrics(
         # to too few observations.  Its aggregate artifact fraction is 0.
         out[key] = (
             0.0
-            if metric == "warmup_ratio" and adstock_burn_in >= l_max
+            if metric == "warmup_ratio" and carryover_burn_in >= l_max
             else (float(predicate(vals).mean()) if vals.size else None)
         )
-    out["sales_level_ratio_quantiles"] = {
+    out["outcome_level_ratio_quantiles"] = {
         f"q{int(q * 100)}": (float(np.quantile(level_ratio, q)) if level_ratio.size else None)
         for q in _QS
     }
@@ -733,19 +735,19 @@ def summarize_signal_metrics(
 
 
 def signal_summary(
-    spend: np.ndarray,
+    treatment: np.ndarray,
     contributions: np.ndarray,
-    sales: np.ndarray,
+    outcome: np.ndarray,
     cy_mask: np.ndarray,
     *,
-    sales_scale: np.ndarray | None = None,
+    outcome_scale: np.ndarray | None = None,
     l_max: int = 8,
     baseline: np.ndarray | None = None,
-    adstock_family: np.ndarray | None = None,
-    adstock_alpha: np.ndarray | None = None,
+    carryover_family: np.ndarray | None = None,
+    carryover_alpha: np.ndarray | None = None,
     weibull_lam: np.ndarray | None = None,
     weibull_k: np.ndarray | None = None,
-    adstock_burn_in: int = 0,
+    carryover_burn_in: int = 0,
 ) -> dict:
     """Corpus-level signal report: metric quantiles + degenerate fractions.
 
@@ -753,35 +755,37 @@ def signal_summary(
     ``sample_prior_predictive`` so weak-signal priors are visible in every corpus /
     shard manifest. Interpretation guide:
 
-    * ``frac_contrib_cv_lt_010`` — share of direct channels whose true
-      contribution is near-flat (CV < 0.10). Some flat channels are realistic;
+    * ``frac_contrib_cv_lt_010`` — share of direct treatments whose true
+      contribution is near-flat (CV < 0.10). Some flat treatments are realistic;
       a majority means the prior generates unlearnable attribution tasks.
     * ``frac_contrib_hf_lt_015`` — share with essentially no week-to-week
       variation (smooth drift only).
     * ``frac_spearman_lt_03`` — share whose target is invisible from the
-      observed spend.
-    * ``frac_warmup_gt_3`` — share whose largest feature is the adstock
-      zero-padding warmup (generator artifact, fixed by ``adstock_burn_in``).
+      observed treatment.
+    * ``frac_warmup_gt_3`` — share whose largest feature is the carryover
+      zero-padding warmup (generator artifact, fixed by ``carryover_burn_in``).
     * ``frac_contrib_rel_std_lt_001`` — share whose contribution amplitude is
       too small to matter in training-loss units.
     * ``frac_contrib_r2_gt_095`` — share whose target is a linear combination
-      of baseline and the other channels, so only the sum is identified.
+      of baseline and the other treatments, so only the sum is identified.
     """
-    spend = np.asarray(spend)
-    baseline_array = np.zeros(spend.shape[:2], dtype=spend.dtype) if baseline is None else baseline
+    treatment = np.asarray(treatment)
+    baseline_array = (
+        np.zeros(treatment.shape[:2], dtype=treatment.dtype) if baseline is None else baseline
+    )
     metrics, valid = dense_signal_metrics(
-        spend,
+        treatment,
         contributions,
-        sales,
+        outcome,
         baseline_array,
         cy_mask,
-        sales_scale=sales_scale,
+        outcome_scale=outcome_scale,
         l_max=l_max,
-        adstock_family=adstock_family,
-        adstock_alpha=adstock_alpha,
+        carryover_family=carryover_family,
+        carryover_alpha=carryover_alpha,
         weibull_lam=weibull_lam,
         weibull_k=weibull_k,
-        adstock_burn_in=adstock_burn_in,
+        carryover_burn_in=carryover_burn_in,
     )
     if baseline is None:
         for name in ("contrib_r2_explained_by_rest", "contrib_corr_baseline"):
@@ -791,13 +795,13 @@ def signal_summary(
     return summarize_signal_metrics(
         metrics,
         valid,
-        sales,
+        outcome,
         cy_mask,
-        sales_scale=sales_scale,
+        outcome_scale=outcome_scale,
         l_max=l_max,
-        adstock_burn_in=adstock_burn_in,
-        adstock_family=adstock_family,
-        adstock_alpha=adstock_alpha,
+        carryover_burn_in=carryover_burn_in,
+        carryover_family=carryover_family,
+        carryover_alpha=carryover_alpha,
         weibull_lam=weibull_lam,
         weibull_k=weibull_k,
     )
@@ -809,22 +813,22 @@ def check_signal_gate(signal: dict, gate: dict[str, float] | None = None) -> tup
     Returns ``(ok, lines)`` where ``lines`` are human-readable PASS/FAIL rows.
     A missing or ``None`` metric FAILS loudly — no signal measured is not a
     pass — and its row names WHY it is missing, which is not always the same
-    thing: a corpus can have no direct channels to measure at all, or it can
+    thing: a corpus can have no direct treatments to measure at all, or it can
     have them and still leave a metric unmeasured because every eligible pair's
     value was invalid (a horizon too short for the metric's window, a constant
-    series, ...). Only ``signal["n_direct_channels"]`` separates the two, so a
+    series, ...). Only ``signal["n_direct_treatments"]`` separates the two, so a
     summary that omits the count gets an agnostic row rather than a guess.
     Generation pipelines can call this on each shard's ``diagnostics["signal"]``
     to reject weak-signal priors at generation time.
     """
     thresholds = DEFAULT_GATE if gate is None else gate
-    n_direct = signal.get("n_direct_channels")
+    n_direct = signal.get("n_direct_treatments")
     if n_direct is None:
-        missing_reason = "n_direct_channels not reported"
+        missing_reason = "n_direct_treatments not reported"
     elif int(n_direct) == 0:
-        missing_reason = "no direct channels measured"
+        missing_reason = "no direct treatments measured"
     else:
-        missing_reason = f"no valid observations across {int(n_direct)} direct channels"
+        missing_reason = f"no valid observations across {int(n_direct)} direct treatments"
     ok = True
     lines: list[str] = []
     for key, thresh in thresholds.items():

@@ -1,4 +1,4 @@
-"""Optional shared baseline/channel innovation tests."""
+"""Optional shared baseline/treatment innovation tests."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def test_zero_confounding_range_preserves_disabled_draw_stream():
     zero = draw_worlds(zero_model, zero_names, seed=23, draws=1)
     assert np.array_equal(zero["confounding_strength"], np.zeros(1))
 
-    for name in ("sales", "channels", "contributions"):
+    for name in ("outcome", "treatments", "contributions"):
         assert disabled[name].tobytes() == zero[name].tobytes()
 
 
@@ -68,17 +68,19 @@ def test_nondegenerate_confounding_strength_varies_per_batched_world():
     assert np.unique(rho).size > 1
 
 
-def test_enabled_confounding_preserves_decomposition_and_nonflat_channels():
+def test_enabled_confounding_preserves_decomposition_and_nonflat_treatments():
     model, out_names, _ = _built((0.7, 0.7))
     d = {name: value[0] for name, value in draw_worlds(model, out_names, seed=10).items()}
     assert (
-        np.abs(d["sales"] - d["baseline"] - d["contributions"].sum(1) - d["indirect_effects"]).max()
+        np.abs(
+            d["outcome"] - d["baseline"] - d["contributions"].sum(1) - d["indirect_effects"]
+        ).max()
         < 1e-9
     )
-    assert d["channels"].std(axis=0).max() > 0.0
+    assert d["treatments"].std(axis=0).max() > 0.0
 
 
-def test_shared_innovation_formula_drives_channel_walk_exactly():
+def test_shared_innovation_formula_drives_treatment_walk_exactly():
     rho = 0.6
     cfg = pg.make_scm_prior(
         n_treatments=1,
@@ -87,9 +89,9 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         n_time_steps=24,
         rw_smoothness_max_weeks=1,
         confounding_strength_range=(rho, rho),
-        channel_hf_sigma_range=(0.0, 0.0),
-        channel_pulse_prob_range=(0.0, 0.0),
-        channel_pulse_amp_range=(0.0, 0.0),
+        treatment_hf_sigma_range=(0.0, 0.0),
+        treatment_pulse_prob_range=(0.0, 0.0),
+        treatment_pulse_amp_range=(0.0, 0.0),
     )
     g = {
         "g_cy": np.ones(1, dtype=int),
@@ -110,7 +112,7 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         ).items()
     }
     effective_eps = np.sqrt(1.0 - rho**2) * drawn["eps_c"][:, 0] + rho * drawn["eps_b"]
-    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.carryover_burn_in
     walk = symbolic_random_walk(
         n_time_steps_full,
         mean=drawn["param_rw_c_mean"][0],
@@ -120,8 +122,8 @@ def test_shared_innovation_formula_drives_channel_walk_exactly():
         positive_only=True,
         eps=pt.as_tensor_variable(effective_eps),
     ).eval()
-    expected_channel = np.logaddexp(0.0, walk)[cfg.adstock_burn_in :]
-    np.testing.assert_allclose(drawn["channels"][:, 0], expected_channel, rtol=0.0, atol=1e-12)
+    expected_treatment = np.logaddexp(0.0, walk)[cfg.carryover_burn_in :]
+    np.testing.assert_allclose(drawn["treatments"][:, 0], expected_treatment, rtol=0.0, atol=1e-12)
 
 
 def test_confounding_strength_is_persisted_in_corpus():
