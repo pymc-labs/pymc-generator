@@ -26,27 +26,28 @@ uv sync --frozen
 uv run --no-sync python
 ```
 
-Requires Python 3.12 or newer. The validated stack pins PyMC 6.0.1,
-PyTensor 3.0.7, and pymc-marketing to an immutable Git commit. The Git dependency
-is deliberate; do not replace it with a similarly named release when comparing
-numerical results. See [getting started](docs/getting-started.md) for installation
+Requires Python 3.13 or newer. The lock selects released registry packages:
+PyMC 6.2.0, PyTensor 3.2.4, and pymc-marketing 1.1.0; no Git development
+companions are required. Dependency upgrades can change numerical results even
+with the same seeds. See [getting started](docs/getting-started.md) for installation
 and executable examples, and [CONTRIBUTING.md](CONTRIBUTING.md) for development
-and documentation environments.
+and documentation environments. Repository access is required while it remains private.
 
 ## Install with conda
 
-Use a locally built channel or a GitHub release's native channel archive:
+Use a locally built channel, or a GitHub release's native channel archive when available:
 
 ```bash
 conda create --name pymc-generator --override-channels --strict-channel-priority \
   --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
-  python=3.13 pymc-generator=0.0.1
+  python=3.13 pymc-generator=0.0.2
 conda activate pymc-generator
 ```
 
-The companion packages retain the exact pymc-marketing and pymc-extras commits
-used by the uv lock, with matching core numerical and diagnostic versions.
-This is not a pip overlay. See the
+The local channel contains only `pymc-generator`; released modeling and other
+native dependencies come from conda-forge, with selected source versions pinned
+to match the uv lock. This is not a pip overlay and does not require publication
+of `pymc-generator` on PyPI or conda-forge. See the
 [conda installation guide](docs/getting-started.md#install-with-conda) for channel
 paths and platform-specific environment exports, or
 [native build instructions](CONTRIBUTING.md#conda-artifacts) when building from source.

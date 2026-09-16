@@ -9,8 +9,9 @@ Their likelihoods given latent demand or baseline innovations are omitted.
 Use [`build_oracle_model`](../reference/world-model.md#pymc_generator.world_model.build_oracle_model)
 to compare a fitted reference posterior with known simulation truth. Interpret
 that comparison under the conditioning assumptions below and report convergence
-diagnostics. `pm.sample` generally uses NUTS; Weibull carryover parameters require
-Metropolis with the pinned upstream stack.
+diagnostics. With the locked released stack, identity, geometric, and Weibull
+carryover parameters are NUTS-eligible; Weibull no longer requires Metropolis
+because of missing upstream gradients.
 
 ## The recipe
 
@@ -154,16 +155,14 @@ The API reference documents these mode-dependent qualifications:
    parameter-only reference level; it is persisted and supplied by
    `SCM.oracle_model()` so the oracle anchors the nonlinear response exactly
    where generation did.
-6. **Weibull sampler downgrade.** pymc-marketing's `weibull_adstock` performs
-   min-max normalization with an upstream `Min` operation that has no PyTensor
-   pullback. For any Weibull-adstock channel, `pm.sample` consequently
-   uses Metropolis—not NUTS—for `weibull_lam` and `weibull_k`. Identity and
-   geometric-adstock channels differentiate cleanly and remain NUTS-eligible.
-   The package's own analytic Weibull guard is not the cause; its reductions
-   differentiate cleanly, and replacing the library normalization would break
-   load-bearing parity with a stock `WeibullAdstock`. Metropolis mixing on the
-   two carryover parameters makes their ESS suspect, so prefer
-   geometric-adstock worlds when using the oracle as a reference posterior.
+6. **Sampler eligibility.** The locked released stack differentiates
+   pymc-marketing's Weibull normalization, so `pm.sample` can use NUTS for
+   `weibull_lam` and `weibull_k` as well as identity/geometric-adstock parameters.
+   This removes the previous upstream gradient restriction, not the need to
+   assess the fit. Check divergences, R-hat, and effective sample sizes for every
+   posterior; gradient availability alone establishes neither convergence nor
+   reliable recovery. Automatic sampler selection can differ from the previous
+   stack, so unchanged generation seeds do not imply identical posterior draws.
 
 
 ### Held-level shocks

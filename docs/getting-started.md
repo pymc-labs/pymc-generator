@@ -20,15 +20,18 @@ For a released source archive, unpack it and run the same `uv sync` command
 inside its project directory. Access to the repository is required while it
 remains private. The supported workflow does not depend on a PyPI publication.
 
-The lock retains PyMC **6.0.1**, PyTensor **3.0.7**, and pymc-marketing at the exact
-tested commit **ff70aae62dea1933b758a55885c24a76a3e7a9a5**. Replacing that Git
-dependency with a newer release changes the validated stack. Use `uv lock --check`
-to check lock freshness; do not run a blanket dependency upgrade to fix an
-installation problem.
+The lock selects released registry packages: PyMC **6.2.0**, PyTensor **3.2.4**,
+pymc-marketing **1.1.0**, pymc-extras **0.14.0**, and PreliZ **0.27.1**.
+No Git development companions are required. Project requirements allow
+`pymc>=6.2,<7`, `pymc-marketing>=1.1,<2`, and `pytensor>=3.2.3,<4`;
+pymc-marketing 1.1.0 further requires `pymc>=6.2,<6.3`, so do not force a newer
+PyMC outside that intersection. Dependency upgrades can change numerical results
+even with identical configurations and seeds. Use `uv lock --check` to check lock
+freshness; do not run a blanket dependency upgrade to fix an installation problem.
 
 !!! info "Environment requirements"
-    Python **3.12 or newer** and uv **0.9.10 or newer**. CI selects Python 3.12
-    and 3.13 explicitly. Core packages include NumPy, SciPy, pandas, Matplotlib,
+    Python **3.13 or newer** and uv **0.9.10 or newer**. CI selects Python 3.13
+    and 3.14 explicitly. Core packages include NumPy, SciPy, pandas, Matplotlib,
     and the pinned modeling stack. PyTensor may compile native code; install
     your platform's C/C++ toolchain when needed. Graphviz's `dot` executable is
     needed for DAG image export and full documentation builds, not basic draws.
@@ -40,18 +43,19 @@ command does not silently remove optional tools from that environment.
 
 ## Install with conda
 
-Use the native channel built from this repository or unpacked from a GitHub
-release's `conda-channel.tar.gz`. The channel contains `pymc-generator` and
-exact-commit companion builds of pymc-marketing and pymc-extras; remaining
-native dependencies come from conda-forge. Core numerical and diagnostic source
-versions are pinned to match the uv lock.
+Use the native channel built from this repository or, when available, unpacked
+from a GitHub release's `conda-channel.tar.gz`. The channel contains only
+`pymc-generator`; released modeling packages and all other native dependencies
+come from conda-forge. Selected modeling, numerical, and diagnostic source
+versions are pinned to match the uv lock. This does not require publication
+of `pymc-generator` on PyPI or conda-forge.
 
 From a checkout with a channel at `dist/conda-channel`:
 
 ```bash
 conda create --name pymc-generator --override-channels --strict-channel-priority \
   --channel "file://$PWD/dist/conda-channel" --channel conda-forge \
-  python=3.13 pymc-generator=0.0.1
+  python=3.13 pymc-generator=0.0.2
 conda activate pymc-generator
 python -c "import pymc_generator as pg; print(pg.__version__)"
 pymc-generator --help
@@ -60,8 +64,8 @@ pymc-generator --help
 For an unpacked release channel, substitute its absolute directory in the
 `file://` URL. While no release channel is available, follow the
 [native build instructions](https://github.com/pymc-labs/pymc-generator/blob/main/CONTRIBUTING.md#conda-artifacts).
-This is a native conda install: it does not overlay a pip environment or
-replace the pinned development commits with released upstream versions.
+This is a native conda install: it does not overlay a pip environment or build
+private development companions.
 
 Record a solved environment when reproducing a native run:
 

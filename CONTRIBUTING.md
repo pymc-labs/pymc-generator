@@ -19,8 +19,10 @@ loosening numerical tolerances merely to obtain a passing result.
 
 ## Development setup
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (0.9.10 or
-newer), then use the committed lock rather than resolving dependencies afresh:
+Use Python 3.13 or newer and install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) (0.9.10 or newer).
+Use the committed lock of released registry packages rather than resolving
+dependencies afresh; no private Git development companions are needed:
 
 ```bash
 git clone https://github.com/pymc-labs/pymc-generator.git
@@ -125,22 +127,22 @@ conda env create --file conda/build-environment.yml
 conda activate pymc-generator-build
 uv sync --locked --group build
 uv run --no-sync python -m build --sdist --no-isolation
-uv run --no-sync python scripts/build_conda.py dist/pymc_generator-0.0.1.tar.gz \
+uv run --no-sync python scripts/build_conda.py dist/pymc_generator-0.0.2.tar.gz \
   --conda "$CONDA_PREFIX/bin/conda"
 ```
 
 Supply the exact source archive for the version being built. The script reads
-its version and SHA-256, builds and tests the two exact-commit upstream companion
-packages, then builds and tests `pymc-generator`. All runtime packages are
+its version and SHA-256, then builds and tests only `pymc-generator`. Released
+modeling dependencies and all other runtime dependencies come from conda-forge as
 native conda packages. Pip is used only as the build backend's installation
 frontend with dependency resolution and build isolation disabled.
 
 The builder uses libmamba with explicit channels, never uploads to Anaconda.org,
 and publishes `dist/conda-channel` only after all package tests pass. Its output
 directory must not already exist; choose a fresh `--output-folder` when repeating
-a build. Recipes retain upstream license files and immutable source checksums.
-When deliberately changing a modeling dependency, update both `uv.lock` and its
-native recipe, including the source checksum and commit-specific build string.
+a build. The recipe retains the project's license and source archive checksum.
+When deliberately changing a modeling dependency, update both `uv.lock` and the
+project's native recipe to preserve selected exact source-version parity.
 
 Follow the [conda installation instructions](docs/getting-started.md#install-with-conda)
 to create an environment from the resulting channel. From the checkout, verify it
@@ -153,7 +155,7 @@ it is not interchangeable with `uv.lock`.
 Keep `main` protected for administrators too: require an up-to-date branch,
 resolved review conversations, and one approval from someone other than the
 latest pusher; dismiss stale approvals and prohibit force pushes and deletion.
-Required checks are `lint`, `test (3.12)`, `test (3.13)`, `slow-tests`, `build`,
+Required checks are `lint`, `test (3.13)`, `test (3.14)`, `slow-tests`, `build`,
 `native-conda`, `docs-build`, `secrets`, and `codeql`. CodeQL intentionally skips
 private repositories; GitHub accepts skipped required checks. Do not require
 the sole default code owner to approve their own contribution.

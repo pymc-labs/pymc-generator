@@ -204,13 +204,10 @@ class SCM:
         ``latent="sampled"`` reproduces the previous representation and is
         required for posterior ``demand`` / ``baseline`` series. Requires an
         SCM produced by ``sample_scm`` (which records the structural draw in
-        ``extras``). A Weibull-adstock channel downgrades ``weibull_lam`` and
-        ``weibull_k`` from NUTS to Metropolis: pymc-marketing's min-max
-        Weibull normalization has an upstream ``Min`` with no pullback.
-        Identity and geometric adstock remain NUTS-differentiable. Treat the
-        Metropolis parameters' ESS with suspicion and prefer geometric-adstock
-        worlds when using this as a reference posterior. See the oracle guide
-        for the other caveats.
+        ``extras``). The locked released stack supports NUTS for identity,
+        geometric, and Weibull adstock. Gradient availability does not
+        establish convergence: inspect divergences, R-hat, and effective
+        sample sizes. See the oracle guide for the conditioning caveats.
         """
         from .world_model import build_oracle_model
 
