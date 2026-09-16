@@ -1,8 +1,7 @@
 """Shared pytest configuration.
 
-Adapted from structural-pfn's conftest: keeps the --runslow gate and the
-autouse seeding fixture, drops the torch seeding and model fixtures (this
-package has no torch dependency).
+Keeps the --runslow gate and the autouse seeding fixture. There are no torch
+seeding or model fixtures: this package has no torch dependency.
 """
 
 from __future__ import annotations

@@ -166,8 +166,8 @@ pymc-generator --out inspection-datasets --seed 20260712
 
 ## 6 · Generate a training corpus
 
-Stack many worlds into the tensor `.npz` format amortized-inference / PFN
-pipelines consume — the decomposition targets come baked in.
+Stack many worlds into one padded tensor `.npz` archive — the decomposition
+targets come baked in.
 
 ```python
 import pymc_generator as pg

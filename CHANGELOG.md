@@ -8,6 +8,13 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Document the project as what it is: a **structural causal model generator**
+  whose defaults are tuned for marketing-mix-model-shaped data, rather than an
+  MMM dataset generator. A new README "Scope and limits" section states the
+  representable structure, the exact carryover and saturation families, the
+  Gaussian identity-link-only outcome likelihood, the linear interaction shape,
+  and which names are vocabulary rather than mathematics. No API symbol,
+  corpus field, or numerical behaviour changed.
 - Native conda packaging initially used exact-commit pymc-marketing/pymc-extras
   companions, matching core numerical versions, isolated build tooling, and no
   automatic uploads. Package tests exercise generation, persistence, and the
@@ -181,7 +188,7 @@ read the migration notes before upgrading.
 
 ### Added
 
-- Initial extraction from `pymc-labs/structural-pfn` at commit `d5fd09f`.
+- Initial import of the generator as a standalone project.
 - Additive SCM generation through `SCMPrior`, `make_scm_prior`, and a drawable
   PyMC world model using pymc-marketing response transforms.
 - Corpus generation and compressed persistence, a `DataGenerator` facade,

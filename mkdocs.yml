@@ -1,7 +1,7 @@
 site_name: pymc-generator
 site_description: >-
-  Simulate thousands of synthetic MMM worlds with exact causal decompositions —
-  human-readable dataset bundles and PFN-ready corpora.
+  Generate structural causal models as PyMC/PyTensor graphs with exact additive
+  decompositions, human-readable bundles, and stacked tensor corpora.
 site_author: PyMC Labs
 repo_url: https://github.com/pymc-labs/pymc-generator
 repo_name: pymc-labs/pymc-generator

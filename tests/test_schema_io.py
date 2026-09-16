@@ -1,4 +1,4 @@
-"""Corpus schema, validation, and .npz persistence (the PFN-consumable format)."""
+"""Corpus schema, validation, and .npz persistence (the stacked corpus format)."""
 
 from __future__ import annotations
 

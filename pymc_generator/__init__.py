@@ -1,9 +1,10 @@
-"""pymc-generator: synthetic MMM world simulation with exact causal decompositions.
+"""pymc-generator: structural causal model simulation with exact decompositions.
 
-Simulate thousands of marketing-mix-model "worlds" — additive structural
-causal models over demand, controls, media channels, baseline and sales —
-with exact interventional decomposition targets, human-readable dataset
-bundles, and corpora in the format PFN training pipelines consume.
+Generate thousands of "worlds" — additive structural causal models over latent
+confounders, observed covariates, treatments, a baseline intercept and one
+outcome — with exact interventional decomposition targets, human-readable
+dataset bundles, and stacked padded tensor corpora. The default vocabulary is
+marketing-mix-model-shaped (channels, spend, sales); the machinery is not.
 
 Public symbols are lazy-loaded so ``import pymc_generator`` stays light
 (no pytensor / scipy / pandas / matplotlib until actually used).
@@ -45,7 +46,7 @@ _LAZY_IMPORTS = {
     "SCMPrior": (".sampler", "SCMPrior"),
     "sample_prior_predictive": (".sampler", "sample_prior_predictive"),
     "make_scm_prior": (".presets", "make_scm_prior"),
-    # high-level facade + persistence (the PFN-consumable .npz format)
+    # high-level facade + persistence (the stacked .npz corpus format)
     "DataGenerator": (".data_generator", "DataGenerator"),
     "save_corpus": (".data_generator", "save_corpus"),
     "load_corpus": (".data_generator", "load_corpus"),

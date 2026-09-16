@@ -1,19 +1,26 @@
 # pymc-generator
 
-Synthetic marketing-mix-model (MMM) datasets with known structural ground truth.
-Each world contains media spend, observed controls, latent demand, and sales,
-plus an additive, intervention-based decomposition of the generated outcome.
+A **structural causal model (SCM) generator**: it draws random Pearlian DAGs,
+turns each into one PyTensor / PyMC graph, and emits both the observable series
+and the exact additive decomposition of the outcome that produced them.
+
+The generated model is an additive structural system — a linear predictor per
+node, plus explicitly bounded nonlinearity. That makes it a natural fit for
+marketing-mix-model-shaped problems, and the default vocabulary uses that
+domain (treatments are "channels" with "spend", the outcome is "sales"), but
+the machinery itself is not specific to marketing. See
+[scope and limits](#scope-and-limits) for what is and is not representable
+today.
 
 The generator uses **PyMC** distributions, a **PyTensor** causal graph, and
-**pymc-marketing** adstock and saturation transforms. Discrete graph structures
-and mechanism families are sampled before constructing each world. Outputs
-support individual-world inspection and padded corpora for amortized inference.
+**pymc-marketing** carryover and saturation transforms. Discrete graph
+structures and mechanism families are sampled before constructing each world.
+Outputs support individual-world inspection and stacked padded corpora.
 
-**Alpha software.** Extracted from
-[`pymc-labs/structural-pfn`](https://github.com/pymc-labs/structural-pfn).
-Public API and corpus migrations are recorded in [CHANGELOG.md](CHANGELOG.md).
-Known generating truth does not imply that the effects are identifiable from
-observations or recoverable by every fitted MMM.
+**Alpha software.** Public API and corpus migrations are recorded in
+[CHANGELOG.md](CHANGELOG.md). Known generating truth does not imply that the
+effects are identifiable from observations or recoverable by any particular
+fitted model.
 
 ## Install with uv
 
@@ -90,6 +97,44 @@ The command-line interface generates named inspection scenarios:
 uv run --no-sync pymc-generator --out inspection-datasets --seed 20260712
 ```
 
+## Scope and limits
+
+What the generator actually produces, stated precisely so you can judge whether
+your problem fits. The [foundation guide](docs/guide/foundation.md) carries the
+structural equations.
+
+- **Structure.** A directed acyclic graph over five node families — latent
+  confounders, observed covariates, treatments, a baseline intercept, and one
+  outcome sink — connected by eight edge types. Confounding, mediation through
+  covariates, and treatment-to-treatment chains are all representable.
+- **Functional form.** Every edge is a coefficient times its parent, summed
+  additively into the child's linear predictor. Interaction *structure* is
+  rich; interaction *shape* is linear. There are no explicit multiplicative
+  treatment×treatment or treatment×covariate product terms.
+- **Nonlinearity.** Exactly two places. Treatment nodes pass through a
+  `softplus` to stay non-negative, and each treatment's path into the outcome
+  passes through a carryover ∘ saturation response curve:
+
+  | Kind | Families |
+  | --- | --- |
+  | Carryover (adstock) | `none`, `geometric`, `weibull` |
+  | Saturation | `linear`, `hill`, `logistic`, `michaelis_menten`, `tanh`, `root` |
+
+  Every other path — covariate→outcome, confounder→outcome, and all
+  input→input edges — is linear on the child's pre-activation scale.
+- **Outcome likelihood.** Gaussian with an identity link only (`pm.Normal`, or
+  `pm.MvNormal` in the oracle's marginal mode). The linear-predictor machinery
+  is GLM-shaped, but **no other GLM family or link function is implemented
+  today**; adding one would be a likelihood swap, not a redesign.
+- **Time.** Each non-outcome node carries its own smoothed random-walk drive,
+  with optional high-frequency texture and Bernoulli pulses. Time is an axis,
+  not a node in the DAG.
+- **Vocabulary vs mathematics.** The API and the persisted corpus schema use
+  marketing names (`spend_raw`, `sales_raw`, channels, controls, demand). The
+  mathematics behind covariates, confounders, baseline, and outcome is generic
+  additive structural machinery; only the treatment pipeline — softplus plus
+  carryover and saturation — is domain-shaped.
+
 ## Data contracts and interpretation
 
 - **Decomposition:** `sales = baseline + contributions.sum(-1) + indirect_effects`,
@@ -142,6 +187,5 @@ MIT; see [LICENSE](LICENSE). The project builds on
 [pymc-marketing](https://github.com/pymc-labs/pymc-marketing), which retain their
 own licenses and attribution.
 
-The MIT notice preserves Carlos Trujillo's 2024 copyright from the
-`structural-pfn` extraction at commit `d5fd09f`, alongside PyMC Labs' 2026
-copyright for this project.
+The MIT notice preserves Carlos Trujillo's 2024 copyright alongside PyMC Labs'
+2026 copyright for this project.

@@ -4,6 +4,15 @@ Every world is a **Pearlian additive structural causal model (SCM)** over five
 families of nodes. The whole point of the design is the distinction between what
 a modeller *observes* and what *confounds* them.
 
+!!! note "Vocabulary versus mathematics"
+    The node names below are marketing-mix-model names, because that is the
+    domain the defaults are tuned for. The mathematics is not. Covariates,
+    confounders, the baseline and the outcome are generic additive structural
+    machinery: a linear predictor per node. Only the treatment pipeline — a
+    `softplus` positivity guard plus a carryover ∘ saturation response curve on
+    the path into the outcome — is domain-shaped. Read "media channel" as
+    "treatment with a non-negative, carryover-and-saturating response".
+
 ## Five node families
 
 | Node | Symbol | Role | Observed? | Sign |

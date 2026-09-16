@@ -19,7 +19,7 @@ design: continuous priors are distributions; structure is drawn per world.
 :func:`build_oracle_model` is the observed-data variant: the same structure
 and the same prior definitions with the world's dataset attached, so
 ``pm.sample`` yields the structure-known posterior on any drawn world — the
-identification floor amortized models (PFNs) are judged against. The prior
+identification floor an amortized or approximate method is judged against. The prior
 definitions (:func:`_uniform_prior_specs`, :func:`_walk_priors`) are shared
 between the generative and oracle builders so they cannot drift.
 """
@@ -1105,8 +1105,8 @@ def build_oracle_model(
 
     Builds a ``pm.Model`` for the SAME world structure with the world's
     dataset attached, so ``pm.sample`` yields the posterior structural
-    parameters that form the identification floor an amortized model (e.g. a
-    PFN) is judged against. The priors and the media response transforms are
+    parameters that form the identification floor an amortized model is judged
+    against. The priors and the treatment response transforms are
     the same definitions generation uses (:func:`_uniform_prior_specs`,
     :func:`_walk_priors`, and the adstock/saturation code from
     :mod:`pymc_generator.symbolic_graph`), so draw and oracle cannot drift.

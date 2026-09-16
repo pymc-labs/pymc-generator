@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pymc-generator"
 dynamic = ["version"]
-description = "Simulate thousands of synthetic MMM worlds with exact causal decompositions — human-readable dataset bundles and PFN-ready corpora. Built on PyTensor / PyMC / pymc-marketing."
+description = "Generate structural causal models as PyTensor / PyMC graphs with exact causal decompositions — human-readable dataset bundles and stacked tensor corpora. Marketing-mix-model-shaped data is the default vocabulary, not the limit."
 # Supported interpreter floor; CI exercises Python 3.13 and 3.14.
 requires-python = ">=3.13"
 license = "MIT"
@@ -15,7 +15,7 @@ authors = [
     {name = "Carlos Trujillo"},
 ]
 readme = "README.md"
-keywords = ["marketing-mix-model", "synthetic-data", "structural-causal-models", "simulation", "prior-predictive", "pytensor", "bayesian", "machine-learning"]
+keywords = ["structural-causal-models", "causal-inference", "synthetic-data", "simulation", "prior-predictive", "marketing-mix-model", "pytensor", "bayesian", "machine-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",

@@ -50,6 +50,6 @@ test:
 
 about:
   home: https://github.com/pymc-labs/pymc-generator
-  summary: Synthetic MMM worlds with known structural decompositions
+  summary: Structural causal model worlds with known additive decompositions
   license: MIT
   license_file: LICENSE

@@ -17,8 +17,8 @@ Each bundle contains:
 * ``decomposition.png``     — every true effect on Y + reconstruction check
 * ``channels.png``          — per-channel spend vs true contribution (indexed)
 
-:func:`write_scenario_bundles` reproduces structural-pfn's five-scenario
-inspection layout (one numbered folder per scenario + a root README).
+:func:`write_scenario_bundles` writes the five-scenario inspection layout
+(one numbered folder per scenario + a root README).
 """
 
 from __future__ import annotations
