@@ -17,8 +17,8 @@ uv run --no-sync python
 ```
 
 For a released source archive, unpack it and run the same `uv sync` command
-inside its project directory. Access to the repository is required while it
-remains private. The supported workflow does not depend on a PyPI publication.
+inside its project directory. The supported workflow does not yet depend on a
+PyPI publication.
 
 The lock selects released registry packages: PyMC **6.2.0**, PyTensor **3.2.4**,
 pymc-marketing **1.1.0**, pymc-extras **0.14.0**, and PreliZ **0.27.1**.

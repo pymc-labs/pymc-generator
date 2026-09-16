@@ -34,6 +34,10 @@ dependencies = [
     "scipy",
     "pandas",
     "matplotlib",
+    # mechanisms.py imports pytensor.xtensor, whose type module imports xarray
+    # at module level. xarray is not a core pytensor requirement, so declare it
+    # here rather than relying on pymc-marketing pulling it in transitively.
+    "xarray",
 ]
 
 [project.optional-dependencies]
