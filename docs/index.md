@@ -65,7 +65,7 @@ observable series, and a machine-checked proof that the decomposition adds up.
 from scm_docs import world, viz_html
 import pymc_generator as pg
 
-w = world(scenario=1, seed=0)          # "confounded_spend"
+w = world(scenario=1, seed=0)          # "confounded_treatment"
 print(viz_html(pg.viz.plot_dag, w, caption="The drawn causal graph (D confounds spend)."))
 ```
 
@@ -81,7 +81,7 @@ print(viz_html(pg.viz.plot_timeseries, w, caption="What a modeller observes: spe
 from scm_docs import world
 w = world(scenario=1, seed=0)
 print("decomposition identity error:", f"{w.identity_error():.2e}")
-print("reconstruction == sales:", bool((abs(w.reconstruction() - w.data['sales']) < 1e-9).all()))
+print("reconstruction == sales:", bool((abs(w.reconstruction() - w.data['outcome']) < 1e-9).all()))
 ```
 
 !!! tip "Everything on this site is live"

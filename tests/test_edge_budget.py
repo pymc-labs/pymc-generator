@@ -36,7 +36,7 @@ def _draw(cfg: SCMPrior, seed: int) -> dict[str, np.ndarray]:
 
 
 def test_int_budget_is_up_to():
-    cfg = _cfg({"zc": 5})  # 5 controls x 5 channels = 25 eligible pairs
+    cfg = _cfg({"zc": 5})  # 5 covariates x 5 treatments = 25 eligible pairs
     counts = {int(_draw(cfg, s)["g_zc"].sum()) for s in range(120)}
     assert counts <= {0, 1, 2, 3, 4, 5}
     assert max(counts) == 5 and min(counts) == 0

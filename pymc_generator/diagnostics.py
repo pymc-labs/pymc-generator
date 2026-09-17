@@ -13,7 +13,7 @@ BETWEEN them:
   and over the oracle design (active C+Z+D),
 * **dynamics**: autocorrelation, forward lag-xi, roughness and a robust
   spike ratio,
-* **contributions to sales**: an explicit hierarchy of net/gross totals,
+* **contributions to outcome**: an explicit hierarchy of net/gross totals,
   per-period means and shares, with closure residuals.
 
 Everything here is strictly post-hoc over retained arrays. Nothing in this
@@ -120,12 +120,12 @@ CONTRIBUTION_FIELDS: tuple[str, ...] = (
     "net_share",
     "gross_total",
     "gross_mean_per_period",
-    "gross_over_net_sales",
+    "gross_over_net_outcome",
 )
 
 #: Contribution hierarchies. The two bases are alternative readings of the
-#: same media effect and are never additive alongside each other.
-CONTRIBUTION_BASES: tuple[str, ...] = ("base_direct_plus_indirect", "observed_path_media")
+#: same treatment effect and are never additive alongside each other.
+CONTRIBUTION_BASES: tuple[str, ...] = ("base_direct_plus_indirect", "observed_path_treatment")
 
 _MEASURE_FIELD = {
     ("net", "total"): "net_total",
@@ -133,7 +133,7 @@ _MEASURE_FIELD = {
     ("net", "share"): "net_share",
     ("gross", "total"): "gross_total",
     ("gross", "mean_per_period"): "gross_mean_per_period",
-    ("gross", "share"): "gross_over_net_sales",
+    ("gross", "share"): "gross_over_net_outcome",
 }
 
 # Minimum observations a reported dependence / lag statistic is computed
@@ -144,71 +144,71 @@ _MIN_PAIRS = 3
 
 # Canonical internal array names -> corpus / SCM keys.
 _CORPUS_ARRAYS: dict[str, str] = {
-    "spend": "spend_raw",
-    "controls": "controls",
-    "demand": "demand",
+    "treatment": "treatment_raw",
+    "covariates": "covariates",
+    "latent_unobserved": "latent_unobserved",
     "baseline": "baseline_raw",
-    "sales": "sales_raw",
+    "outcome": "outcome_raw",
     "baseline_intrinsic": "baseline_intrinsic",
-    "sales_noise": "sales_noise",
-    "control_contribution": "control_contribution",
-    "confounder_contribution": "confounder_contribution",
-    "channel_contribution": "contributions_raw",
+    "outcome_noise": "outcome_noise",
+    "covariate_contribution": "covariate_contribution",
+    "latent_unobserved_contribution": "latent_unobserved_contribution",
+    "treatment_contribution": "treatment_contribution_raw",
     "indirect_by_source": "indirect_effects_by_source",
     "indirect_effects": "indirect_effects",
 }
 
 _WORLD_ARRAYS: dict[str, str] = {
-    "spend": "channels",
-    "controls": "controls",
-    "demand": "demand",
+    "treatment": "treatments",
+    "covariates": "covariates",
+    "latent_unobserved": "latent_unobserved",
     "baseline": "baseline",
-    "sales": "sales",
+    "outcome": "outcome",
     "baseline_intrinsic": "baseline_intrinsic",
-    "sales_noise": "sales_noise",
-    "control_contribution": "control_contribution",
-    "confounder_contribution": "confounder_contribution",
-    "channel_contribution": "contributions",
+    "outcome_noise": "outcome_noise",
+    "covariate_contribution": "covariate_contribution",
+    "latent_unobserved_contribution": "latent_unobserved_contribution",
+    "treatment_contribution": "contributions",
     "indirect_by_source": "indirect_effects_by_source",
     "indirect_effects": "indirect_effects",
 }
 
-# SCM-only audit paths. ``channels_base`` / ``contributions_observed`` are
+# SCM-only audit paths. ``treatments_base`` / ``contributions_observed`` are
 # always drawn; the unshocked paths exist only when shocks were enabled.
 _WORLD_COUNTERFACTUAL: dict[str, str] = {
-    "channels_base": "channels_base",
+    "treatments_base": "treatments_base",
     "contributions_observed": "contributions_observed",
-    "channels_unshocked": "channels_unshocked",
-    "sales_unshocked": "sales_unshocked",
+    "treatments_unshocked": "treatments_unshocked",
+    "outcome_unshocked": "outcome_unshocked",
 }
 
 # Column kind of every canonical array ("" = one series per world).
 _ARRAY_KIND: dict[str, str] = {
-    "spend": "channel",
-    "controls": "control",
-    "demand": "latent",
+    "treatment": "treatment",
+    "covariates": "covariate",
+    "latent_unobserved": "latent",
     "baseline": "",
-    "sales": "",
+    "outcome": "",
     "baseline_intrinsic": "",
-    "sales_noise": "",
-    "control_contribution": "control",
-    "confounder_contribution": "latent",
-    "channel_contribution": "channel",
+    "outcome_noise": "",
+    "covariate_contribution": "covariate",
+    "latent_unobserved_contribution": "latent",
+    "treatment_contribution": "treatment",
     "indirect_by_source": "source",
     "indirect_effects": "",
-    "channels_base": "channel",
-    "contributions_observed": "channel",
-    "channels_unshocked": "channel",
-    "sales_unshocked": "",
+    "treatments_base": "treatment",
+    "contributions_observed": "treatment",
+    "treatments_unshocked": "treatment",
+    "outcome_unshocked": "",
 }
 
 _MASK_KEYS: dict[str, str] = {
-    "channel": "treatment_active_mask",
-    "control": "covariate_active_mask",
+    "treatment": "treatment_active_mask",
+    "covariate": "covariate_active_mask",
     "latent": "latent_active_mask",
 }
 
-_WIDTH_KINDS: tuple[str, ...] = ("channel", "control", "latent")
+_WIDTH_KINDS: tuple[str, ...] = ("treatment", "covariate", "latent")
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ class SeriesDescriptor:
         not move when the analysed set shrinks, and they are the only
         selector accepted by raw access and plots — display labels are not
         unique across scopes (``C1``, ``C1_direct_y``, ``C1_base`` all read
-        as "channel 1" to a human).
+        as "treatment 1" to a human).
     display_label
         Human wording for tables and plots.
     scope
@@ -262,29 +262,29 @@ class SeriesDescriptor:
 
 def _node_descriptors(widths: Mapping[str, int]) -> list[SeriesDescriptor]:
     out: list[SeriesDescriptor] = []
-    for k in range(widths["channel"]):
+    for k in range(widths["treatment"]):
         out.append(
             SeriesDescriptor(
                 key=f"C{k + 1}",
-                display_label=f"C{k + 1} spend",
+                display_label=f"C{k + 1} treatment",
                 scope="nodes",
                 role="observed",
-                source="spend",
-                column_kind="channel",
+                source="treatment",
+                column_kind="treatment",
                 column_index=k,
                 available=True,
                 vif_scopes=("observed", "oracle"),
             )
         )
-    for m in range(widths["control"]):
+    for m in range(widths["covariate"]):
         out.append(
             SeriesDescriptor(
                 key=f"Z{m + 1}",
-                display_label=f"Z{m + 1} control",
+                display_label=f"Z{m + 1} covariate",
                 scope="nodes",
                 role="observed",
-                source="controls",
-                column_kind="control",
+                source="covariates",
+                column_kind="covariate",
                 column_index=m,
                 available=True,
                 vif_scopes=("observed", "oracle"),
@@ -294,10 +294,10 @@ def _node_descriptors(widths: Mapping[str, int]) -> list[SeriesDescriptor]:
         out.append(
             SeriesDescriptor(
                 key=f"D{j + 1}",
-                display_label=f"D{j + 1} latent demand",
+                display_label=f"D{j + 1} latent latent_unobserved",
                 scope="nodes",
                 role="latent",
-                source="demand",
+                source="latent_unobserved",
                 column_kind="latent",
                 column_index=j,
                 available=True,
@@ -320,10 +320,10 @@ def _node_descriptors(widths: Mapping[str, int]) -> list[SeriesDescriptor]:
     out.append(
         SeriesDescriptor(
             key="Y",
-            display_label="Y sales",
+            display_label="Y outcome",
             scope="nodes",
             role="observed",
-            source="sales",
+            source="outcome",
             column_kind="",
             column_index=-1,
             available=True,
@@ -351,22 +351,22 @@ def _decomposition_descriptors(widths: Mapping[str, int]) -> list[SeriesDescript
             display_label="Y observation noise",
             scope="decomposition",
             role="latent",
-            source="sales_noise",
+            source="outcome_noise",
             column_kind="",
             column_index=-1,
             available=True,
             vif_scopes=(),
         ),
     ]
-    for m in range(widths["control"]):
+    for m in range(widths["covariate"]):
         out.append(
             SeriesDescriptor(
                 key=f"Z{m + 1}_baseline_alloc",
                 display_label=f"Z{m + 1} retained baseline allocation",
                 scope="decomposition",
                 role="derived",
-                source="control_contribution",
-                column_kind="control",
+                source="covariate_contribution",
+                column_kind="covariate",
                 column_index=m,
                 available=True,
                 vif_scopes=(),
@@ -379,22 +379,22 @@ def _decomposition_descriptors(widths: Mapping[str, int]) -> list[SeriesDescript
                 display_label=f"D{j + 1} retained baseline allocation",
                 scope="decomposition",
                 role="derived",
-                source="confounder_contribution",
+                source="latent_unobserved_contribution",
                 column_kind="latent",
                 column_index=j,
                 available=True,
                 vif_scopes=(),
             )
         )
-    for k in range(widths["channel"]):
+    for k in range(widths["treatment"]):
         out.append(
             SeriesDescriptor(
                 key=f"C{k + 1}_direct_y",
                 display_label=f"C{k + 1} direct C->Y contribution",
                 scope="decomposition",
                 role="derived",
-                source="channel_contribution",
-                column_kind="channel",
+                source="treatment_contribution",
+                column_kind="treatment",
                 column_index=k,
                 available=True,
                 vif_scopes=(),
@@ -404,7 +404,7 @@ def _decomposition_descriptors(widths: Mapping[str, int]) -> list[SeriesDescript
         out.append(
             SeriesDescriptor(
                 key=f"indirect_{label}",
-                display_label=f"indirect media effect via {label} edges",
+                display_label=f"indirect treatment effect via {label} edges",
                 scope="decomposition",
                 role="derived",
                 source="indirect_by_source",
@@ -417,7 +417,7 @@ def _decomposition_descriptors(widths: Mapping[str, int]) -> list[SeriesDescript
     out.append(
         SeriesDescriptor(
             key="indirect_total",
-            display_label="total indirect media effect",
+            display_label="total indirect treatment effect",
             scope="decomposition",
             role="derived",
             source="indirect_effects",
@@ -429,11 +429,11 @@ def _decomposition_descriptors(widths: Mapping[str, int]) -> list[SeriesDescript
     )
     out.append(
         SeriesDescriptor(
-            key="media_total",
-            display_label="total media effect (direct + indirect)",
+            key="treatment_total",
+            display_label="total treatment effect (direct + indirect)",
             scope="decomposition",
             role="derived",
-            source="media_total",
+            source="treatment_total",
             column_kind="",
             column_index=-1,
             available=True,
@@ -447,21 +447,21 @@ def _counterfactual_descriptors(
     widths: Mapping[str, int], available: frozenset[str]
 ) -> list[SeriesDescriptor]:
     out: list[SeriesDescriptor] = []
-    for k in range(widths["channel"]):
+    for k in range(widths["treatment"]):
         out.append(
             SeriesDescriptor(
                 key=f"C{k + 1}_base",
-                display_label=f"C{k + 1} base spend (no C/Z/D inputs)",
+                display_label=f"C{k + 1} base treatment (no C/Z/D inputs)",
                 scope="counterfactual",
                 role="derived",
-                source="channels_base",
-                column_kind="channel",
+                source="treatments_base",
+                column_kind="treatment",
                 column_index=k,
-                available="channels_base" in available,
+                available="treatments_base" in available,
                 vif_scopes=(),
             )
         )
-    for k in range(widths["channel"]):
+    for k in range(widths["treatment"]):
         out.append(
             SeriesDescriptor(
                 key=f"C{k + 1}_observed_y",
@@ -469,36 +469,36 @@ def _counterfactual_descriptors(
                 scope="counterfactual",
                 role="derived",
                 source="contributions_observed",
-                column_kind="channel",
+                column_kind="treatment",
                 column_index=k,
                 available="contributions_observed" in available,
                 vif_scopes=(),
             )
         )
-    for k in range(widths["channel"]):
+    for k in range(widths["treatment"]):
         out.append(
             SeriesDescriptor(
                 key=f"C{k + 1}_unshocked",
-                display_label=f"C{k + 1} spend without the shock schedule",
+                display_label=f"C{k + 1} treatment without the shock schedule",
                 scope="counterfactual",
                 role="derived",
-                source="channels_unshocked",
-                column_kind="channel",
+                source="treatments_unshocked",
+                column_kind="treatment",
                 column_index=k,
-                available="channels_unshocked" in available,
+                available="treatments_unshocked" in available,
                 vif_scopes=(),
             )
         )
     out.append(
         SeriesDescriptor(
             key="Y_unshocked",
-            display_label="Y sales without the shock schedule",
+            display_label="Y outcome without the shock schedule",
             scope="counterfactual",
             role="derived",
-            source="sales_unshocked",
+            source="outcome_unshocked",
             column_kind="",
             column_index=-1,
-            available="sales_unshocked" in available,
+            available="outcome_unshocked" in available,
             vif_scopes=(),
         )
     )
@@ -646,8 +646,8 @@ def _as_float64(value: Any, name: str) -> np.ndarray:
 def _check_zero_padding(arr: np.ndarray, mask: np.ndarray, name: str) -> None:
     """Inactive padded columns must be exactly zero, not merely small.
 
-    ``outcome_distributions`` derives ``media_contribution`` by summing the
-    padded channel block BEFORE masking, so a single NaN or junk value in a
+    ``outcome_distributions`` derives ``treatment_total_contribution`` by summing the
+    padded treatment block BEFORE masking, so a single NaN or junk value in a
     padded slot silently poisons a reported total. Reject it here, pointing
     at the exact world and column, instead of sanitizing a corpus the rest
     of the library treats as valid.
@@ -673,7 +673,7 @@ def _corpus_source(
     if need_counterfactual:
         raise ValueError(
             "scope 'counterfactual' needs the single-world audit paths "
-            "(channels_base / contributions_observed), which a corpus does not retain; "
+            "(treatments_base / contributions_observed), which a corpus does not retain; "
             "pass a sequence of SCM worlds from sample_scm"
         )
     required = [*_CORPUS_ARRAYS.values(), *_MASK_KEYS.values()]
@@ -681,10 +681,10 @@ def _corpus_source(
     if missing:
         raise KeyError(f"corpus is missing keys required for data diagnostics: {missing}")
 
-    sales = np.asarray(corpus["sales_raw"])
-    if sales.ndim != 2:
-        raise ValueError(f"sales_raw must be (n_tasks, n_time_steps), got shape {sales.shape}")
-    n_total, n_time_steps = (int(sales.shape[0]), int(sales.shape[1]))
+    outcome = np.asarray(corpus["outcome_raw"])
+    if outcome.ndim != 2:
+        raise ValueError(f"outcome_raw must be (n_tasks, n_time_steps), got shape {outcome.shape}")
+    n_total, n_time_steps = (int(outcome.shape[0]), int(outcome.shape[1]))
     if n_total == 0 or n_time_steps == 0:
         raise ValueError(
             f"corpus has no data to diagnose: {n_total} worlds x {n_time_steps} time steps"
@@ -740,7 +740,7 @@ def _worlds_source(
     n_total = len(scms)
     if n_total == 0:
         raise ValueError("no worlds to diagnose")
-    horizons = {int(np.asarray(w.data["sales"]).shape[0]) for w in scms}
+    horizons = {int(np.asarray(w.data["outcome"]).shape[0]) for w in scms}
     if len(horizons) > 1:
         raise ValueError(f"worlds must share n_time_steps to be pooled; got {sorted(horizons)}")
     n_time_steps = horizons.pop()
@@ -748,13 +748,13 @@ def _worlds_source(
         raise ValueError("worlds have no time steps to diagnose")
 
     widths = {
-        "channel": max(int(w.n_treatments) for w in scms),
-        "control": max(int(w.n_covariates) for w in scms),
+        "treatment": max(int(w.n_treatments) for w in scms),
+        "covariate": max(int(w.n_covariates) for w in scms),
         "latent": max(int(w.n_latent) for w in scms),
     }
     per_world = {
-        "channel": np.array([int(w.n_treatments) for w in scms]),
-        "control": np.array([int(w.n_covariates) for w in scms]),
+        "treatment": np.array([int(w.n_treatments) for w in scms]),
+        "covariate": np.array([int(w.n_covariates) for w in scms]),
         "latent": np.array([int(w.n_latent) for w in scms]),
     }
     # The optional audit paths are a property of the whole sequence: a key
@@ -770,7 +770,7 @@ def _worlds_source(
                 "diagnose a homogeneous sequence"
             )
     if need_counterfactual:
-        for name in ("channels_base", "contributions_observed"):
+        for name in ("treatments_base", "contributions_observed"):
             if name not in optional:
                 raise ValueError(
                     f"scope 'counterfactual' needs {_WORLD_COUNTERFACTUAL[name]!r} in every world"
@@ -870,9 +870,9 @@ def _series_block(source: _DiagnosticSource, descriptors: Sequence[SeriesDescrip
     for p, desc in enumerate(descriptors):
         if not desc.available:
             continue
-        if desc.source == "media_total":
+        if desc.source == "treatment_total":
             block = (
-                source.arrays["channel_contribution"].sum(axis=2)
+                source.arrays["treatment_contribution"].sum(axis=2)
                 + source.arrays["indirect_effects"]
             )
         else:
@@ -1382,13 +1382,13 @@ def _lag_xi_world(block: np.ndarray, lags: Sequence[int]) -> tuple[np.ndarray, n
 
 
 # ---------------------------------------------------------------------------
-# Contributions to sales
+# Contributions to outcome
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ContributionDescriptor:
-    """One row of the sales contribution hierarchy."""
+    """One row of the outcome contribution hierarchy."""
 
     key: str
     display_label: str
@@ -1403,34 +1403,34 @@ class ContributionDescriptor:
     column_index: int
 
 
-#: Parent of each complete sibling cut. ``top`` closes against sales itself.
+#: Parent of each complete sibling cut. ``top`` closes against outcome itself.
 _SIBLING_PARENT: dict[str, dict[str, str]] = {
     "base_direct_plus_indirect": {
         "top": "Y",
-        "media_children": "media_total",
-        "channel_direct_children": "channels_direct_y_total",
-        "control_children": "controls_baseline_alloc_total",
-        "demand_children": "demand_baseline_alloc_total",
+        "treatment_children": "treatment_total",
+        "treatment_direct_children": "treatments_direct_y_total",
+        "covariate_children": "covariates_baseline_alloc_total",
+        "latent_unobserved_children": "latent_unobserved_baseline_alloc_total",
     },
-    "observed_path_media": {"observed_path_children": "media_total_observed_path"},
+    "observed_path_treatment": {"observed_path_children": "treatment_total_observed_path"},
 }
 
 
 def _contribution_descriptors(
     widths: Mapping[str, int], basis: str
 ) -> list[ContributionDescriptor]:
-    if basis == "observed_path_media":
+    if basis == "observed_path_treatment":
         out = [
             ContributionDescriptor(
-                key="media_total_observed_path",
-                display_label="total observed-path media effect",
+                key="treatment_total_observed_path",
+                display_label="total observed-path treatment effect",
                 parent="",
-                path=("media_total_observed_path",),
+                path=("treatment_total_observed_path",),
                 depth=0,
                 sibling_set="root",
                 basis=basis,
                 atomic=False,
-                role="media",
+                role="treatment",
                 column_kind="",
                 column_index=-1,
             )
@@ -1439,44 +1439,44 @@ def _contribution_descriptors(
             ContributionDescriptor(
                 key=f"C{k + 1}_observed_y",
                 display_label=f"C{k + 1} observed-path contribution",
-                parent="media_total_observed_path",
-                path=("media_total_observed_path", f"C{k + 1}_observed_y"),
+                parent="treatment_total_observed_path",
+                path=("treatment_total_observed_path", f"C{k + 1}_observed_y"),
                 depth=1,
                 sibling_set="observed_path_children",
                 basis=basis,
                 atomic=True,
-                role="media",
-                column_kind="channel",
+                role="treatment",
+                column_kind="treatment",
                 column_index=k,
             )
-            for k in range(widths["channel"])
+            for k in range(widths["treatment"])
         )
         return out
 
     out = [
         ContributionDescriptor(
-            key="media_total",
-            display_label="media (direct + indirect)",
+            key="treatment_total",
+            display_label="treatment (direct + indirect)",
             parent="",
-            path=("media_total",),
+            path=("treatment_total",),
             depth=0,
             sibling_set="top",
             basis=basis,
             atomic=False,
-            role="media",
+            role="treatment",
             column_kind="",
             column_index=-1,
         ),
         ContributionDescriptor(
-            key="channels_direct_y_total",
+            key="treatments_direct_y_total",
             display_label="direct C->Y contributions",
-            parent="media_total",
-            path=("media_total", "channels_direct_y_total"),
+            parent="treatment_total",
+            path=("treatment_total", "treatments_direct_y_total"),
             depth=1,
-            sibling_set="media_children",
+            sibling_set="treatment_children",
             basis=basis,
             atomic=False,
-            role="media",
+            role="treatment",
             column_kind="",
             column_index=-1,
         ),
@@ -1485,29 +1485,29 @@ def _contribution_descriptors(
         ContributionDescriptor(
             key=f"C{k + 1}_direct_y",
             display_label=f"C{k + 1} direct contribution",
-            parent="channels_direct_y_total",
-            path=("media_total", "channels_direct_y_total", f"C{k + 1}_direct_y"),
+            parent="treatments_direct_y_total",
+            path=("treatment_total", "treatments_direct_y_total", f"C{k + 1}_direct_y"),
             depth=2,
-            sibling_set="channel_direct_children",
+            sibling_set="treatment_direct_children",
             basis=basis,
             atomic=True,
-            role="media",
-            column_kind="channel",
+            role="treatment",
+            column_kind="treatment",
             column_index=k,
         )
-        for k in range(widths["channel"])
+        for k in range(widths["treatment"])
     )
     out.extend(
         ContributionDescriptor(
             key=f"indirect_{label}",
-            display_label=f"indirect media effect via {label} edges",
-            parent="media_total",
-            path=("media_total", f"indirect_{label}"),
+            display_label=f"indirect treatment effect via {label} edges",
+            parent="treatment_total",
+            path=("treatment_total", f"indirect_{label}"),
             depth=1,
-            sibling_set="media_children",
+            sibling_set="treatment_children",
             basis=basis,
             atomic=True,
-            role="media",
+            role="treatment",
             column_kind="source",
             column_index=index,
         )
@@ -1515,15 +1515,15 @@ def _contribution_descriptors(
     )
     out.append(
         ContributionDescriptor(
-            key="controls_baseline_alloc_total",
-            display_label="controls, retained baseline allocation",
+            key="covariates_baseline_alloc_total",
+            display_label="covariates, retained baseline allocation",
             parent="",
-            path=("controls_baseline_alloc_total",),
+            path=("covariates_baseline_alloc_total",),
             depth=0,
             sibling_set="top",
             basis=basis,
             atomic=False,
-            role="control",
+            role="covariate",
             column_kind="",
             column_index=-1,
         )
@@ -1532,24 +1532,24 @@ def _contribution_descriptors(
         ContributionDescriptor(
             key=f"Z{m + 1}_baseline_alloc",
             display_label=f"Z{m + 1} retained baseline allocation",
-            parent="controls_baseline_alloc_total",
-            path=("controls_baseline_alloc_total", f"Z{m + 1}_baseline_alloc"),
+            parent="covariates_baseline_alloc_total",
+            path=("covariates_baseline_alloc_total", f"Z{m + 1}_baseline_alloc"),
             depth=1,
-            sibling_set="control_children",
+            sibling_set="covariate_children",
             basis=basis,
             atomic=True,
-            role="control",
-            column_kind="control",
+            role="covariate",
+            column_kind="covariate",
             column_index=m,
         )
-        for m in range(widths["control"])
+        for m in range(widths["covariate"])
     )
     out.append(
         ContributionDescriptor(
-            key="demand_baseline_alloc_total",
-            display_label="latent demand, retained baseline allocation",
+            key="latent_unobserved_baseline_alloc_total",
+            display_label="latent latent_unobserved, retained baseline allocation",
             parent="",
-            path=("demand_baseline_alloc_total",),
+            path=("latent_unobserved_baseline_alloc_total",),
             depth=0,
             sibling_set="top",
             basis=basis,
@@ -1563,10 +1563,10 @@ def _contribution_descriptors(
         ContributionDescriptor(
             key=f"D{j + 1}_baseline_alloc",
             display_label=f"D{j + 1} retained baseline allocation",
-            parent="demand_baseline_alloc_total",
-            path=("demand_baseline_alloc_total", f"D{j + 1}_baseline_alloc"),
+            parent="latent_unobserved_baseline_alloc_total",
+            path=("latent_unobserved_baseline_alloc_total", f"D{j + 1}_baseline_alloc"),
             depth=1,
-            sibling_set="demand_children",
+            sibling_set="latent_unobserved_children",
             basis=basis,
             atomic=True,
             role="latent",
@@ -1613,17 +1613,17 @@ def _atomic_component(source: _DiagnosticSource, desc: ContributionDescriptor) -
     if key == "B_intrinsic":
         return source.arrays["baseline_intrinsic"]
     if key == "Y_noise":
-        return source.arrays["sales_noise"]
+        return source.arrays["outcome_noise"]
     if key.startswith("indirect_"):
         return source.arrays["indirect_by_source"][:, :, desc.column_index]
     if key.endswith("_direct_y"):
-        return source.arrays["channel_contribution"][:, :, desc.column_index]
+        return source.arrays["treatment_contribution"][:, :, desc.column_index]
     if key.endswith("_observed_y"):
         return source.arrays["contributions_observed"][:, :, desc.column_index]
-    if key.endswith("_baseline_alloc") and desc.column_kind == "control":
-        return source.arrays["control_contribution"][:, :, desc.column_index]
+    if key.endswith("_baseline_alloc") and desc.column_kind == "covariate":
+        return source.arrays["covariate_contribution"][:, :, desc.column_index]
     if key.endswith("_baseline_alloc") and desc.column_kind == "latent":
-        return source.arrays["confounder_contribution"][:, :, desc.column_index]
+        return source.arrays["latent_unobserved_contribution"][:, :, desc.column_index]
     raise KeyError(f"no component array for contribution {key!r}")  # pragma: no cover
 
 
@@ -1673,13 +1673,13 @@ class ContributionClosure:
 
 @dataclass(frozen=True)
 class ContributionBudget:
-    """Every contribution row's amount and share of sales, per world.
+    """Every contribution row's amount and share of outcome, per world.
 
     Six measures are always carried. ``net_*`` keeps the sign, so a complete
-    top cut sums to sales exactly. ``gross_*`` sums absolute atomic
+    top cut sums to outcome exactly. ``gross_*`` sums absolute atomic
     magnitudes, so a parent's gross is the sum of its atomic descendants'
     gross, never ``abs`` of their sum — cancellation between two children is
-    activity, not absence. ``gross_over_net_sales`` for a complete valid top
+    activity, not absence. ``gross_over_net_outcome`` for a complete valid top
     cut is therefore at least 1, with equality exactly when nothing cancels;
     an arbitrary subset has no such bound.
     """
@@ -1688,7 +1688,7 @@ class ContributionBudget:
     descriptors: tuple[ContributionDescriptor, ...]
     world_ids: np.ndarray
     n_time_steps: int
-    sales_total: np.ndarray
+    outcome_total: np.ndarray
     measures: dict[str, np.ndarray]
     active: np.ndarray
     denominator_valid: np.ndarray
@@ -1783,12 +1783,12 @@ class ContributionBudget:
         return stats, ledger
 
     def _micro(self, field: str, index: int, valid: np.ndarray) -> float | None:
-        """Pooled (sales-weighted) value: totals over totals, never a mean of ratios."""
+        """Pooled (outcome-weighted) value: totals over totals, never a mean of ratios."""
         if not valid.any():
             return None
         net = self.measures["net_total"][valid, index]
         gross = self.measures["gross_total"][valid, index]
-        sales = self.sales_total[valid]
+        outcome = self.outcome_total[valid]
         periods = float(int(valid.sum()) * self.n_time_steps)
         if field == "net_total":
             return float(net.sum())
@@ -1798,7 +1798,7 @@ class ContributionBudget:
             return float(net.sum() / periods) if periods else None
         if field == "gross_mean_per_period":
             return float(gross.sum() / periods) if periods else None
-        denominator = float(sales.sum())
+        denominator = float(outcome.sum())
         if denominator == 0.0:
             return None
         if field == "net_share":
@@ -1814,13 +1814,13 @@ class ContributionBudget:
         A projection is not a smaller budget: the omitted siblings still
         exist, so the result records ``is_partial_projection`` and
         ``omitted_keys`` and stops making closure claims. Bases are
-        alternative readings of the same media effect and never mix — ask
+        alternative readings of the same treatment effect and never mix — ask
         ``DataDiagnostics.contribution_bases`` for the other one.
         """
         if basis is not None and basis != self.basis:
             raise ValueError(
                 f"this budget is basis {self.basis!r}; {basis!r} is an alternative reading "
-                "of the same media effect and is not additive alongside it — read it from "
+                "of the same treatment effect and is not additive alongside it — read it from "
                 "DataDiagnostics.contribution_bases"
             )
         if keys is None:
@@ -1890,12 +1890,12 @@ class ContributionBudget:
                 return self.measures[field][:, self._index(parent)]
             except KeyError:
                 return None
-        # The top cut closes against sales itself, which has no gross
+        # The top cut closes against outcome itself, which has no gross
         # decomposition of its own.
         if field == "net_total":
-            return self.sales_total
+            return self.outcome_total
         if field == "net_mean_per_period":
-            return self.sales_total / self.n_time_steps
+            return self.outcome_total / self.n_time_steps
         if field == "net_share":
             return np.where(self.denominator_valid, 1.0, np.nan)
         return None
@@ -1943,7 +1943,7 @@ class ContributionBudget:
             f"{c:>{value_w}}" for c in columns
         )
         title = (
-            f"contributions to sales — {field} — {weighting} — {population} — "
+            f"contributions to outcome — {field} — {weighting} — {population} — "
             f"basis {self.basis} — {self.n_worlds} worlds x {self.n_time_steps} steps"
         )
         lines = [title, header, "-" * len(header)]
@@ -2026,7 +2026,7 @@ def _contribution_budget(
     descriptors = tuple(_contribution_descriptors(source.widths, basis))
     n_worlds = int(source.world_ids.size)
     n_time_steps = source.n_time_steps
-    sales_total = source.arrays["sales"].sum(axis=1)
+    outcome_total = source.arrays["outcome"].sum(axis=1)
 
     net = np.zeros((n_worlds, len(descriptors)), dtype=np.float64)
     gross = np.zeros((n_worlds, len(descriptors)), dtype=np.float64)
@@ -2052,24 +2052,24 @@ def _contribution_budget(
                 net[:, i] += net[:, index_of[other.key]]
                 gross[:, i] += gross[:, index_of[other.key]]
 
-    denominator_valid = sales_total != 0.0
-    safe_sales = np.where(denominator_valid, sales_total, 1.0)
-    share = np.where(denominator_valid[:, None], net / safe_sales[:, None], np.nan)
-    gross_over = np.where(denominator_valid[:, None], gross / np.abs(safe_sales)[:, None], np.nan)
+    denominator_valid = outcome_total != 0.0
+    safe_outcome = np.where(denominator_valid, outcome_total, 1.0)
+    share = np.where(denominator_valid[:, None], net / safe_outcome[:, None], np.nan)
+    gross_over = np.where(denominator_valid[:, None], gross / np.abs(safe_outcome)[:, None], np.nan)
     measures = {
         "net_total": net,
         "net_mean_per_period": net / n_time_steps,
         "net_share": share,
         "gross_total": gross,
         "gross_mean_per_period": gross / n_time_steps,
-        "gross_over_net_sales": gross_over,
+        "gross_over_net_outcome": gross_over,
     }
     return ContributionBudget(
         basis=basis,
         descriptors=descriptors,
         world_ids=source.world_ids,
         n_time_steps=n_time_steps,
-        sales_total=sales_total,
+        outcome_total=outcome_total,
         measures=measures,
         active=active,
         denominator_valid=denominator_valid,
@@ -2758,8 +2758,8 @@ def data_diagnostics(
         the full corpus, with one row per world axis.
     scopes
         ``nodes`` (always required) covers C/Z/D/B/Y. ``decomposition`` adds
-        the exact additive pieces of sales; ``counterfactual`` adds the
-        SCM-only audit paths (base spend, observed-path contributions and,
+        the exact additive pieces of outcome; ``counterfactual`` adds the
+        SCM-only audit paths (base treatment, observed-path contributions and,
         when shocks were drawn, the unshocked series).
     views
         ``levels`` and/or ``differences``. Both by default: weekly series are
@@ -2938,8 +2938,8 @@ def data_diagnostics(
         )
     }
     if "contributions_observed" in source_data.available:
-        bases["observed_path_media"] = _contribution_budget(
-            source_data, "observed_path_media", levels
+        bases["observed_path_treatment"] = _contribution_budget(
+            source_data, "observed_path_treatment", levels
         )
 
     companion = outcome_distributions(

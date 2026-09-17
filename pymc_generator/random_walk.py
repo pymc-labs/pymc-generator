@@ -4,7 +4,7 @@ Every non-outcome node in the additive SCM (D, Z, C, B) carries a random-walk
 noise term rather than flat Gaussian noise. The outcome
 node ``Y`` instead carries iid observation noise. A walk is always
 autocorrelated — a smoothed Brownian motion — and its ``smoothness`` parameter
-controls texture:
+covariates texture:
 
 * ``smoothness -> 0``: raw Brownian motion — jagged, hectic, but cumulative.
 * ``smoothness -> 1``: an absolute-week moving average no wider than
@@ -85,7 +85,7 @@ def _centred_walk_scale(n_time_steps: int, width: int) -> float:
     map injective: centring gives rank at most ``n_time_steps - 1``, and
     smoothing can reduce it further. The signed walk is a degenerate Gaussian
     on an affine subspace, without a full-dimensional Lebesgue density.
-    Independent observation noise with positive variance makes the sales
+    Independent observation noise with positive variance makes the outcome
     covariance full rank; it does not make the latent walk full rank.
 
     A one-week path has ``A = 0`` and no calibratable amplitude, so

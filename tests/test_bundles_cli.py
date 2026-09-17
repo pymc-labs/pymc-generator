@@ -2,7 +2,7 @@
 
 A bundle is this package's human-facing product, so the assertions here are
 on-disk ones: ``true_components.csv`` must be the FULL additive truth (its
-component columns sum to ``dataset.csv``'s ``sales_Y``, the very identity
+component columns sum to ``dataset.csv``'s ``outcome_Y``, the very identity
 ``SCM.identity_error()`` scores), the file set must be complete,
 ``description.txt`` must name the formula it reports the error of, and
 ``--require-path-to-y`` must be satisfiable for every shipped scenario.
@@ -26,12 +26,12 @@ from pymc_generator.describe import describe_scm
 from pymc_generator.sampler import SCMPrior
 from pymc_generator.scenarios import SCENARIOS, Scenario
 
-#: ``true_components.csv`` columns that are NOT additive terms of sales: the
+#: ``true_components.csv`` columns that are NOT additive terms of outcome: the
 #: index, the reconstruction total itself, and the latent-input diagnostics
-#: (demand reaches sales through the confounder/indirect columns, base channels
+#: (latent_unobserved reaches outcome through the confounder/indirect columns, base treatments
 #: through the direct ones — adding them would double-count).
-NON_ADDITIVE_COLUMNS = ("week", "sales_reconstructed")
-NON_ADDITIVE_PREFIXES = ("demand_", "channel_base_")
+NON_ADDITIVE_COLUMNS = ("week", "outcome_reconstructed")
+NON_ADDITIVE_PREFIXES = ("latent_unobserved_", "treatment_base_")
 
 TEXT_FILES = frozenset(
     {
@@ -41,7 +41,7 @@ TEXT_FILES = frozenset(
         "dag.dot",
     }
 )
-PLOT_FILES = frozenset({"dag.png", "timeseries.png", "decomposition.png", "channels.png"})
+PLOT_FILES = frozenset({"dag.png", "timeseries.png", "decomposition.png", "treatments.png"})
 
 
 def _world(
@@ -102,13 +102,13 @@ def kitchen_sink_bundle(tmp_path_factory):
     return world, out
 
 
-def test_true_components_columns_reconstruct_sales(kitchen_sink_bundle):
-    """The exported additive columns sum to sales_Y — sales_noise included.
+def test_true_components_columns_reconstruct_outcome(kitchen_sink_bundle):
+    """The exported additive columns sum to outcome_Y — outcome_noise included.
 
     This is the whole point of ``true_components.csv``: a reader who adds up
     the component columns must land on the observed outcome. Omitting the
-    observation noise leaves a residual of ``max|sales_noise|`` — invisible in
-    ``sales_reconstructed`` (which is computed, not summed) and contradicted by
+    observation noise leaves a residual of ``max|outcome_noise|`` — invisible in
+    ``outcome_reconstructed`` (which is computed, not summed) and contradicted by
     the ``max |error| = ~1e-15`` printed next to it in ``description.txt``.
     """
     world, out = kitchen_sink_bundle
@@ -116,20 +116,20 @@ def test_true_components_columns_reconstruct_sales(kitchen_sink_bundle):
     truth = pd.read_csv(out / "true_components.csv")
 
     additive = _additive_columns(truth)
-    assert "sales_noise" in additive
+    assert "outcome_noise" in additive
     assert "baseline_intrinsic" in additive
 
-    sales = dataset["sales_Y"].to_numpy()
+    outcome = dataset["outcome_Y"].to_numpy()
     total = truth[additive].to_numpy().sum(axis=1)
-    # float64 CSV round-trip on O(sales) magnitudes; the in-memory identity is ~1e-15.
-    np.testing.assert_allclose(total, sales, atol=1e-9)
-    np.testing.assert_allclose(truth["sales_reconstructed"].to_numpy(), sales, atol=1e-9)
+    # float64 CSV round-trip on O(outcome) magnitudes; the in-memory identity is ~1e-15.
+    np.testing.assert_allclose(total, outcome, atol=1e-9)
+    np.testing.assert_allclose(truth["outcome_reconstructed"].to_numpy(), outcome, atol=1e-9)
 
     # Keep the test honest: a zero-noise world would satisfy the sum with or
     # without the column, and would prove nothing.
-    noise = truth["sales_noise"].to_numpy()
+    noise = truth["outcome_noise"].to_numpy()
     assert np.abs(noise).max() > 1e-6
-    without_noise = np.abs(total - noise - sales).max()
+    without_noise = np.abs(total - noise - outcome).max()
     assert without_noise == pytest.approx(np.abs(noise).max(), rel=1e-6)
 
     # And it is the same identity the world reports on itself.
@@ -171,8 +171,8 @@ def test_scenario_writer_refuses_nonempty_root(tmp_path):
 def test_forced_connectivity_connects_every_node_in_every_scenario(tmp_path):
     """``require_path_to_y=True`` must be attainable for all five scenarios.
 
-    channel_halo budgets ``zy=(1, 1)`` with ``zc=zz=dz=0``, so one of its two
-    controls has no route to Y at all: forcing connectivity on that budget is
+    treatment_halo budgets ``zy=(1, 1)`` with ``zc=zz=dz=0``, so one of its two
+    covariates has no route to Y at all: forcing connectivity on that budget is
     unsatisfiable at any draw count, not merely unlikely. The scenarios carry
     a ``connect_all_edge_budget`` that substitutes a feasible budget, and this
     asserts the auditor's view of the result — every node reported connected.
@@ -201,8 +201,8 @@ def test_infeasible_forced_scenario_raises_before_writing_anything(tmp_path):
     would otherwise leave earlier bundles behind.
     """
     impossible = Scenario(
-        name="impossible_control",
-        purpose="A control with no zy/zc/zz/dz route to Y under forced connectivity.",
+        name="impossible_covariate",
+        purpose="A covariate with no zy/zc/zz/dz route to Y under forced connectivity.",
         n_treatments=2,
         n_covariates=2,
         n_latent=1,
@@ -219,7 +219,7 @@ def test_infeasible_forced_scenario_raises_before_writing_anything(tmp_path):
         },
     )
     out_root = tmp_path / "partial"
-    with pytest.raises(RuntimeError, match="impossible_control"):
+    with pytest.raises(RuntimeError, match="impossible_covariate"):
         write_scenario_bundles(
             out_root,
             scenarios=(*SCENARIOS[:3], impossible),
@@ -231,7 +231,7 @@ def test_infeasible_forced_scenario_raises_before_writing_anything(tmp_path):
         )
     assert not out_root.exists()
 
-    # Unforced, that same scenario is legal — the isolated control is the trap.
+    # Unforced, that same scenario is legal — the isolated covariate is the trap.
     written = write_scenario_bundles(
         tmp_path / "unforced",
         scenarios=(impossible,),
@@ -251,9 +251,9 @@ def test_description_identity_names_the_formula_it_scores(kitchen_sink_bundle):
     identity = text.split("Decomposition identity ")[1].split("max |error|")[0]
     for term in (
         "baseline_intrinsic",
-        "sales_noise",
+        "outcome_noise",
         "confounder",
-        "control",
+        "covariate",
         "direct contributions",
         "indirect_by_source",
     ):
@@ -285,12 +285,12 @@ def test_description_texture_reports_the_drawn_flags():
 
     flat_text = describe_scm(flat)
     assert "diverse" not in flat_text
-    assert "Texture prior (drawn: channel hf 0/3, channel pulse 0/3" in flat_text
-    assert "control hf 0/2, control pulse 0/2):" in flat_text
+    assert "Texture prior (drawn: treatment hf 0/3, treatment pulse 0/3" in flat_text
+    assert "covariate hf 0/2, covariate pulse 0/2):" in flat_text
 
     # A textured world reports its live flags instead.
     textured = describe_scm(_world(0))
-    assert "Texture prior (drawn: channel hf 4/4, channel pulse 4/4" in textured
+    assert "Texture prior (drawn: treatment hf 4/4, treatment pulse 4/4" in textured
 
 
 def _cli(*argv: str) -> subprocess.CompletedProcess[str]:

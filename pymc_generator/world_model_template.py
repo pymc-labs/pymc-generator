@@ -9,7 +9,7 @@ before comparing performance; a shared seed alone does not align their draws.
 maximum node counts, with every structural choice as a ``pm.Data`` input:
 
 * the ``g`` edge blocks and the per-node activity masks,
-* the adstock / saturation family ids,
+* the carryover / saturation family ids,
 * the random-walk kernel widths.
 
 That model compiles once per shard and then draws every cell by swapping those
@@ -39,7 +39,7 @@ from .sampler import SCMPrior
 from .symbolic_graph import build_symbolic_graph
 from .world_model import (
     _apply_outcome_std_scale,
-    _confounded_channel_eps,
+    _confounded_treatment_eps,
     _disabled_shock_outputs,
     _execute_draws,
     _get_cached_draw_fn,
@@ -64,7 +64,7 @@ TEMPLATE_STRUCTURE_INPUT_NAMES: tuple[str, ...] = (
     "active_treatment",
     "active_covariate",
     "active_latent",
-    "adstock_family",
+    "carryover_family",
     "sat_family",
     "rw_width_d",
     "rw_width_z",
@@ -76,12 +76,12 @@ TEMPLATE_STRUCTURE_INPUT_NAMES: tuple[str, ...] = (
 def check_template_supported(cfg: SCMPrior) -> None:
     """Raise if ``cfg`` uses a feature the template path does not model yet.
 
-    Channel shocks and prior conditioning both add per-world structure that is
+    Treatment shocks and prior conditioning both add per-world structure that is
     still baked into the graph, and a non-degenerate confounding range would need
     its own input slot. Recipes using them must stay on the per-world path.
     """
-    if cfg.n_channel_shocks:
-        raise ValueError("template generation does not support channel shocks yet")
+    if cfg.n_treatment_shocks:
+        raise ValueError("template generation does not support treatment shocks yet")
     if cfg.prior_conditioning:
         raise ValueError("template generation does not support prior conditioning yet")
     if cfg.confounding_strength_range is not None:
@@ -117,7 +117,7 @@ def build_cell_inputs(
     n_treatments = layout.n_treatments
     n_covariates = layout.n_covariates
     n_latent = layout.n_latent
-    n_time_steps_full = cfg.n_time_steps + cfg.adstock_burn_in
+    n_time_steps_full = cfg.n_time_steps + cfg.carryover_burn_in
     rw_max = cfg.rw_smoothness_max_weeks
 
     def _widths(key: str) -> np.ndarray:
@@ -135,7 +135,7 @@ def build_cell_inputs(
         "active_treatment": np.asarray(active["active_treatment"], dtype="float64"),
         "active_covariate": np.asarray(active["active_covariate"], dtype="float64"),
         "active_latent": np.asarray(active["active_latent"], dtype="float64"),
-        "adstock_family": _pad_to(structural["adstock_family"], n_treatments, "int64"),
+        "carryover_family": _pad_to(structural["carryover_family"], n_treatments, "int64"),
         "sat_family": _pad_to(structural["sat_family"], n_treatments, "int64"),
         "rw_width_d": _pad_to(_widths("smoothness_d"), n_latent, "int64"),
         "rw_width_z": _pad_to(_widths("smoothness_z"), n_covariates, "int64"),
@@ -205,7 +205,7 @@ def build_world_model_template(
     n_treatments = layout.n_treatments
     n_covariates = layout.n_covariates
     n_latent = layout.n_latent
-    burn_in = cfg.adstock_burn_in
+    burn_in = cfg.carryover_burn_in
     n_time_steps_full = n_time_steps + burn_in
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, None)
 
@@ -222,7 +222,7 @@ def build_world_model_template(
         # Smoothness reaches the graph as a kernel-width index rather than a
         # float, which is what keeps the walk operators out of the compiled
         # structure. Texture flags stay concrete: they gate whole terms, and the
-        # supported configs enable them uniformly across channels and controls.
+        # supported configs enable them uniformly across treatments and covariates.
         rw = _walk_priors(
             cfg,
             {},
@@ -242,12 +242,12 @@ def build_world_model_template(
             specs,
             rw,
             c_level,
-            adstock_family=data["adstock_family"],
+            carryover_family=data["carryover_family"],
             sat_family=data["sat_family"],
-            use_hf=_texture_flag(cfg.channel_hf_sigma_range, n_treatments),
-            use_pulse=_texture_flag(cfg.channel_pulse_prob_range, n_treatments),
-            use_control_hf=_texture_flag(cfg.control_hf_sigma_range, n_covariates),
-            use_control_pulse=_texture_flag(cfg.control_pulse_prob_range, n_covariates),
+            use_hf=_texture_flag(cfg.treatment_hf_sigma_range, n_treatments),
+            use_pulse=_texture_flag(cfg.treatment_pulse_prob_range, n_treatments),
+            use_covariate_hf=_texture_flag(cfg.covariate_hf_sigma_range, n_covariates),
+            use_covariate_pulse=_texture_flag(cfg.covariate_pulse_prob_range, n_covariates),
         )
         _apply_outcome_std_scale(cfg, rw, g_data["g_cy"], params["beta"])
 
@@ -257,9 +257,9 @@ def build_world_model_template(
             n_covariates,
             n_latent,
             params["pulse_prob"],
-            params["control_pulse_prob"],
+            params["covariate_pulse_prob"],
         )
-        confounding_strength = _confounded_channel_eps(cfg, eps)
+        confounding_strength = _confounded_treatment_eps(cfg, eps)
 
         graph = build_symbolic_graph(
             g_data,

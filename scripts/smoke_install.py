@@ -24,7 +24,9 @@ def main() -> None:
         seed=731,
     )
     world = pg.sample_scm(config, seed=731)
-    np.testing.assert_allclose(world.reconstruction(), world.data["sales"], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(
+        world.reconstruction(), world.data["outcome"], rtol=1e-12, atol=1e-12
+    )
     corpus = pg.sample_prior_predictive(config)
     with TemporaryDirectory(prefix="pymc-generator-smoke-") as directory:
         path = Path(directory) / "corpus.npz"
@@ -33,7 +35,7 @@ def main() -> None:
         errors = pg.DataGenerator.validate_corpus(loaded)
         if errors:
             raise AssertionError("Invalid persisted corpus:\n" + "\n".join(errors))
-        np.testing.assert_array_equal(loaded["spend_raw"], corpus["spend_raw"])
+        np.testing.assert_array_equal(loaded["treatment_raw"], corpus["treatment_raw"])
     print(f"pymc-generator {pg.__version__}: generation, decomposition, and persistence pass")
 
 

@@ -80,26 +80,26 @@ def padded_corpus():
 
 
 def test_required_keys_and_shapes(corpus):
-    n_tasks, n_time_steps, n_treatments = corpus["spend_raw"].shape
-    n_covariates = corpus["controls"].shape[2]
-    n_latent = corpus["demand"].shape[2]
+    n_tasks, n_time_steps, n_treatments = corpus["treatment_raw"].shape
+    n_covariates = corpus["covariates"].shape[2]
+    n_latent = corpus["latent_unobserved"].shape[2]
     expected = {
-        "spend_raw": (n_tasks, n_time_steps, n_treatments),
-        "spend_norm": (n_tasks, n_time_steps, n_treatments),
-        "spend_share": (n_tasks, n_time_steps, n_treatments),
-        "controls": (n_tasks, n_time_steps, n_covariates),
-        "sales_raw": (n_tasks, n_time_steps),
-        "sales_norm": (n_tasks, n_time_steps),
+        "treatment_raw": (n_tasks, n_time_steps, n_treatments),
+        "treatment_norm": (n_tasks, n_time_steps, n_treatments),
+        "treatment_share": (n_tasks, n_time_steps, n_treatments),
+        "covariates": (n_tasks, n_time_steps, n_covariates),
+        "outcome_raw": (n_tasks, n_time_steps),
+        "outcome_norm": (n_tasks, n_time_steps),
         "support_mask": (n_tasks, n_time_steps),
-        "contributions_raw": (n_tasks, n_time_steps, n_treatments),
+        "treatment_contribution_raw": (n_tasks, n_time_steps, n_treatments),
         "baseline_raw": (n_tasks, n_time_steps),
         "indirect_effects": (n_tasks, n_time_steps),
         "indirect_effects_by_source": (n_tasks, n_time_steps, 3),
-        "control_contribution": (n_tasks, n_time_steps, n_covariates),
-        "confounder_contribution": (n_tasks, n_time_steps, n_latent),
+        "covariate_contribution": (n_tasks, n_time_steps, n_covariates),
+        "latent_unobserved_contribution": (n_tasks, n_time_steps, n_latent),
         "baseline_intrinsic": (n_tasks, n_time_steps),
-        "sales_noise": (n_tasks, n_time_steps),
-        "channel_active": (n_tasks, n_treatments),
+        "outcome_noise": (n_tasks, n_time_steps),
+        "treatment_active": (n_tasks, n_treatments),
         "treatment_active_mask": (n_tasks, n_treatments),
         "covariate_active_mask": (n_tasks, n_covariates),
         "latent_active_mask": (n_tasks, n_latent),
@@ -114,30 +114,30 @@ def test_required_keys_and_shapes(corpus):
 
 
 def test_shock_and_mechanism_metadata_schema(corpus):
-    n_tasks, n_time_steps, n_treatments = corpus["spend_raw"].shape
+    n_tasks, n_time_steps, n_treatments = corpus["treatment_raw"].shape
     expected = {
-        "channel_shock_mask": ((n_tasks, n_time_steps, n_treatments), np.uint8),
-        "channel_shock_channel": ((n_tasks, 0), np.int32),
-        "channel_shock_start": ((n_tasks, 0), np.int32),
-        "channel_shock_length": ((n_tasks, 0), np.int32),
-        "channel_shock_level_multiplier": ((n_tasks, 0), np.float32),
-        "channel_shock_level": ((n_tasks, 0), np.float32),
-        "channel_level": ((n_tasks, n_treatments), np.float32),
+        "treatment_shock_mask": ((n_tasks, n_time_steps, n_treatments), np.uint8),
+        "treatment_shock_index": ((n_tasks, 0), np.int32),
+        "treatment_shock_start": ((n_tasks, 0), np.int32),
+        "treatment_shock_length": ((n_tasks, 0), np.int32),
+        "treatment_shock_level_multiplier": ((n_tasks, 0), np.float32),
+        "treatment_shock_level": ((n_tasks, 0), np.float32),
+        "treatment_level": ((n_tasks, n_treatments), np.float32),
         "saturation_scale": ((n_tasks, n_treatments), np.float32),
-        "adstock_family": ((n_tasks, n_treatments), np.uint8),
-        "adstock_alpha": ((n_tasks, n_treatments), np.float32),
+        "carryover_family": ((n_tasks, n_treatments), np.uint8),
+        "carryover_alpha": ((n_tasks, n_treatments), np.float32),
         "weibull_lam": ((n_tasks, n_treatments), np.float32),
         "weibull_k": ((n_tasks, n_treatments), np.float32),
     }
     for key, (shape, dtype) in expected.items():
         assert corpus[key].shape == shape
         assert corpus[key].dtype == dtype
-    assert not corpus["channel_shock_mask"].any()
+    assert not corpus["treatment_shock_mask"].any()
 
 
 def test_g_layout_is_extended_8_block(corpus):
-    n_tasks, n_time_steps, n_treatments = corpus["spend_raw"].shape
-    n_covariates, n_latent = corpus["controls"].shape[2], corpus["demand"].shape[2]
+    n_tasks, n_time_steps, n_treatments = corpus["treatment_raw"].shape
+    n_covariates, n_latent = corpus["covariates"].shape[2], corpus["latent_unobserved"].shape[2]
     layout = SlotLayout(
         n_treatments=n_treatments,
         n_covariates=n_covariates,
@@ -154,23 +154,23 @@ def test_validate_corpus_accepts_generated(corpus):
 
 def test_query_windows_do_not_overlap_response_warmup(corpus):
     """Every query suffix begins after the non-reproducible response prefix."""
-    n_time_steps = corpus["spend_raw"].shape[1]
+    n_time_steps = corpus["treatment_raw"].shape[1]
     n_query = int(corpus["diagnostics"]["short_horizon_n_query"])
     warmup = int(corpus["diagnostics"]["signal"]["response_warmup_weeks"])
     assert min(n_time_steps - n_query, n_time_steps // 2) >= warmup
 
 
-def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
-    """Persisted spend features stay ratios when the monetary unit changes."""
+def test_persisted_treatment_ratios_are_unit_invariant(monkeypatch):
+    """Persisted treatment features stay ratios when the monetary unit changes."""
     draw_worlds = world_model.draw_worlds
     unit_scale = 1e-16
 
-    def draw_with_rescaled_spend(*args, **kwargs):
+    def draw_with_rescaled_treatment(*args, **kwargs):
         drawn = draw_worlds(*args, **kwargs)
-        drawn["channels"] = drawn["channels"] * unit_scale
+        drawn["treatments"] = drawn["treatments"] * unit_scale
         return drawn
 
-    monkeypatch.setattr(world_model, "draw_worlds", draw_with_rescaled_spend)
+    monkeypatch.setattr(world_model, "draw_worlds", draw_with_rescaled_treatment)
     cfg = pg.make_scm_prior(
         n_treatments=3,
         n_covariates=2,
@@ -179,62 +179,69 @@ def test_persisted_spend_ratios_are_unit_invariant(monkeypatch):
         n_time_steps=16,
         n_cells=2,
         draws_per_cell=1,
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 2),
         seed=29,
     )
     generated = pg.sample_prior_predictive(cfg)
 
-    def normalized_spend(spend):
-        means = spend.mean(axis=1)
+    def normalized_treatment(treatment):
+        means = treatment.mean(axis=1)
         return np.divide(
-            spend, means[:, None, :], out=np.zeros_like(spend), where=means[:, None, :] != 0.0
+            treatment,
+            means[:, None, :],
+            out=np.zeros_like(treatment),
+            where=means[:, None, :] != 0.0,
         )
 
-    def spend_shares(spend):
+    def treatment_shares(treatment):
         active = generated["treatment_active_mask"].astype(np.float64)[:, None, :]
-        active_sum = (spend * active).sum(axis=-1, keepdims=True)
+        active_sum = (treatment * active).sum(axis=-1, keepdims=True)
         return (
-            np.divide(spend, active_sum, out=np.zeros_like(spend), where=active_sum != 0.0) * active
+            np.divide(treatment, active_sum, out=np.zeros_like(treatment), where=active_sum != 0.0)
+            * active
         )
 
-    def spend_cv_quantiles(spend):
-        means = spend.mean(axis=1)
+    def treatment_cv_quantiles(treatment):
+        means = treatment.mean(axis=1)
         cv = np.divide(
-            spend.std(axis=1), means, out=np.zeros_like(means), where=means != 0.0
+            treatment.std(axis=1), means, out=np.zeros_like(means), where=means != 0.0
         ).ravel()
         return np.quantile(cv, (0.1, 0.5, 0.9))
 
-    spend = generated["spend_raw"].astype(np.float64)
-    rescaled_spend = spend * 1e8
+    treatment = generated["treatment_raw"].astype(np.float64)
+    rescaled_treatment = treatment * 1e8
     np.testing.assert_allclose(
-        generated["spend_norm"], normalized_spend(rescaled_spend), rtol=1e-5, atol=1e-6
+        generated["treatment_norm"], normalized_treatment(rescaled_treatment), rtol=1e-5, atol=1e-6
     )
     np.testing.assert_allclose(
-        generated["spend_share"], spend_shares(rescaled_spend), rtol=1e-5, atol=1e-6
+        generated["treatment_share"], treatment_shares(rescaled_treatment), rtol=1e-5, atol=1e-6
     )
     np.testing.assert_allclose(
-        spend_cv_quantiles(spend), spend_cv_quantiles(rescaled_spend), rtol=1e-5, atol=1e-6
+        treatment_cv_quantiles(treatment),
+        treatment_cv_quantiles(rescaled_treatment),
+        rtol=1e-5,
+        atol=1e-6,
     )
     np.testing.assert_allclose(
         [
-            generated["diagnostics"]["spend_cv_quantiles"][f"q{int(q * 100)}"]
+            generated["diagnostics"]["treatment_cv_quantiles"][f"q{int(q * 100)}"]
             for q in (0.1, 0.5, 0.9)
         ],
-        spend_cv_quantiles(rescaled_spend),
+        treatment_cv_quantiles(rescaled_treatment),
         rtol=1e-5,
         atol=1e-6,
     )
     inactive = generated["treatment_active_mask"] == 0
-    for key in ("spend_raw", "spend_norm", "spend_share"):
+    for key in ("treatment_raw", "treatment_norm", "treatment_share"):
         assert not generated[key].transpose(0, 2, 1)[inactive].any(), key
     assert DataGenerator.validate_corpus(generated) == []
 
 
 def test_validate_corpus_flags_missing_key(corpus):
-    broken = {k: v for k, v in corpus.items() if k != "sales_scale"}
+    broken = {k: v for k, v in corpus.items() if k != "outcome_scale"}
     errors = DataGenerator.validate_corpus(broken)
-    assert any("sales_scale" in e for e in errors)
+    assert any("outcome_scale" in e for e in errors)
 
 
 @pytest.mark.parametrize(
@@ -246,11 +253,11 @@ def test_validate_corpus_flags_missing_key(corpus):
         "n_covariates_active",
         "n_latent_active",
         "indirect_effects",
-        "channel_active",
-        "control_contribution",
-        "confounder_contribution",
+        "treatment_active",
+        "covariate_contribution",
+        "latent_unobserved_contribution",
         "baseline_intrinsic",
-        "sales_noise",
+        "outcome_noise",
         "indirect_effects_by_source",
     ),
 )
@@ -261,14 +268,14 @@ def test_validate_corpus_requires_complete_generated_schema(corpus, key):
 
 def test_validate_corpus_flags_nan(corpus):
     broken = dict(corpus)
-    bad = corpus["spend_raw"].copy()
+    bad = corpus["treatment_raw"].copy()
     bad[0, 0, 0] = np.nan
-    broken["spend_raw"] = bad
+    broken["treatment_raw"] = bad
     errors = DataGenerator.validate_corpus(broken)
     assert any("NaN" in e or "Inf" in e for e in errors)
 
 
-@pytest.mark.parametrize("key", ("spend_raw", "controls", "demand", "g"))
+@pytest.mark.parametrize("key", ("treatment_raw", "covariates", "latent_unobserved", "g"))
 def test_validate_corpus_returns_errors_for_malformed_core_dimensions(corpus, key):
     broken = dict(corpus)
     broken[key] = corpus[key][0]
@@ -285,8 +292,8 @@ def test_validate_corpus_rejects_wrong_graph_slot_width(corpus):
 
 def test_validate_corpus_rejects_non_array_required_fields(corpus):
     broken = dict(corpus)
-    broken["sales_raw"] = corpus["sales_raw"].tolist()
-    assert DataGenerator.validate_corpus(broken) == ["sales_raw must be an ndarray"]
+    broken["outcome_raw"] = corpus["outcome_raw"].tolist()
+    assert DataGenerator.validate_corpus(broken) == ["outcome_raw must be an ndarray"]
 
 
 def test_validate_corpus_rejects_non_array_extra_fields(corpus):
@@ -297,7 +304,7 @@ def test_validate_corpus_rejects_non_array_extra_fields(corpus):
 
 @pytest.mark.parametrize(
     ("key", "dtype"),
-    (("spend_raw", np.float64), ("g", np.int32), ("n_treatments_active", np.int64)),
+    (("treatment_raw", np.float64), ("g", np.int32), ("n_treatments_active", np.int64)),
 )
 def test_validate_corpus_rejects_wrong_required_dtypes(corpus, key, dtype):
     broken = dict(corpus)
@@ -343,7 +350,7 @@ def test_single_node_edge_marginals_are_defined_without_empty_mean_warning(recwa
             n_covariates=1,
             n_latent=1,
             n_time_steps=8,
-            adstock_burn_in=0,
+            carryover_burn_in=0,
             n_cells=2,
             draws_per_cell=1,
             seed=91,
@@ -363,7 +370,7 @@ def test_edge_base_rates_report_legacy_overrides():
             n_latent=1,
             n_time_steps=8,
             l_max=1,
-            adstock_burn_in=0,
+            carryover_burn_in=0,
             n_cells=2,
             draws_per_cell=1,
             edge_rate_overrides=overrides,
@@ -391,6 +398,36 @@ def test_save_load_roundtrip(tmp_path, corpus):
     assert isinstance(loaded["identifiability"], dict)
 
 
+#: v4 array key -> the marketing name every pre-v4 corpus used on disk. Spelled
+#: out here on purpose: the fixture must not be written from the reader's own
+#: mapping, or a wrong mapping would agree with itself and prove nothing.
+PRE_V4_ARRAY_NAMES: dict[str, str] = {
+    "treatment_raw": "spend_raw",
+    "treatment_norm": "spend_norm",
+    "treatment_share": "spend_share",
+    "treatment_means": "spend_means",
+    "covariates": "controls",
+    "outcome_raw": "sales_raw",
+    "outcome_norm": "sales_norm",
+    "outcome_scale": "sales_scale",
+    "outcome_noise": "sales_noise",
+    "latent_unobserved": "demand",
+    "treatment_contribution_raw": "contributions_raw",
+    "covariate_contribution": "control_contribution",
+    "latent_unobserved_contribution": "confounder_contribution",
+    "treatment_active": "channel_active",
+    "treatment_level": "channel_level",
+    "treatment_shock_mask": "channel_shock_mask",
+    "treatment_shock_index": "channel_shock_channel",
+    "treatment_shock_start": "channel_shock_start",
+    "treatment_shock_length": "channel_shock_length",
+    "treatment_shock_level": "channel_shock_level",
+    "treatment_shock_level_multiplier": "channel_shock_level_multiplier",
+    "carryover_family": "adstock_family",
+    "carryover_alpha": "adstock_alpha",
+}
+
+
 def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
     """Write the historical vocabulary independently of the reader's mapping."""
     import json
@@ -400,16 +437,27 @@ def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
         for key, value in corpus["diagnostics"].items()
         if key not in {"schema_version", "timing"}
     }
-    diagnostics["edge_types"] = ["cy", "dc", "dz", "db", "zb", "zc", "cc", "zz"]
-    for field in ("edge_base_rates", "edge_marginals", "edge_budget"):
-        values = diagnostics.get(field)
-        if values is not None:
-            diagnostics[field] = {
-                {"dy": "db", "zy": "zb"}.get(key, key): value for key, value in values.items()
-            }
-    diagnostics["min_dead_channels"] = diagnostics.pop("min_no_direct_effect_channels")
-    if version == 2:
-        diagnostics["schema_version"] = 2
+    if version < 3:
+        diagnostics["edge_types"] = ["cy", "dc", "dz", "db", "zb", "zc", "cc", "zz"]
+        for field in ("edge_base_rates", "edge_marginals", "edge_budget"):
+            values = diagnostics.get(field)
+            if values is not None:
+                diagnostics[field] = {
+                    {"dy": "db", "zy": "zb"}.get(key, key): value for key, value in values.items()
+                }
+        diagnostics["min_dead_channels"] = diagnostics.pop("min_no_direct_effect_treatments")
+    else:
+        diagnostics["min_no_direct_effect_channels"] = diagnostics.pop(
+            "min_no_direct_effect_treatments"
+        )
+    for old, new in (
+        ("carryover_kernel_version", "adstock_kernel_version"),
+        ("carryover_kernel_semantics", "adstock_kernel_semantics"),
+    ):
+        if old in diagnostics:
+            diagnostics[new] = diagnostics.pop(old)
+    if version in (2, 3):
+        diagnostics["schema_version"] = version
     diagnostics.update(diagnostics_overrides or {})
     payload = {"diagnostics": np.array(json.dumps(diagnostics))}
     for key, value in corpus.items():
@@ -420,13 +468,16 @@ def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
                 payload[f"identifiability__{label}"] = array
         else:
             payload[key] = value
+    for new, old in PRE_V4_ARRAY_NAMES.items():
+        if new in payload:
+            payload[old] = payload.pop(new)
     if version == 1:
         for old, new in LEGACY_CORPUS_KEYS_V1.items():
             payload[old] = payload.pop(new)
     np.savez_compressed(path, **payload)
 
 
-@pytest.mark.parametrize("version", (1, 2))
+@pytest.mark.parametrize("version", (1, 2, 3))
 def test_load_corpus_migrates_legacy_metadata_without_changing_arrays(tmp_path, corpus, version):
     path = tmp_path / f"v{version}.npz"
     _write_legacy_shard(path, corpus, version)
@@ -530,8 +581,8 @@ def test_numpy_scalar_diagnostics_validate_and_roundtrip(tmp_path, corpus):
             "metric_version": np.int64(SIGNAL_METRIC_VERSION),
             "metric_layout": np.asarray(SIGNAL_METRIC_LAYOUT),
             "l_max": np.int32(signal["l_max"]),
-            "adstock_burn_in": np.int64(signal["adstock_burn_in"]),
-            "adstock_kernel_version": np.int64(3),
+            "carryover_burn_in": np.int64(signal["carryover_burn_in"]),
+            "carryover_kernel_version": np.int64(3),
         }
     )
     diagnostics["signal"] = signal
@@ -708,8 +759,8 @@ def test_numeric_nested_extension_roundtrips(tmp_path, corpus):
 @pytest.mark.parametrize(
     "key",
     (
-        "adstock_kernel_version",
-        "adstock_kernel_semantics",
+        "carryover_kernel_version",
+        "carryover_kernel_semantics",
         "outcome_noise_version",
         "outcome_noise_semantics",
     ),
@@ -756,7 +807,7 @@ def test_validate_corpus_rejects_out_of_domain_signal_metrics(corpus, metric, va
     assert any(metric in error for error in errors)
 
 
-@pytest.mark.parametrize("key", ("spend_norm", "spend_share", "sales_norm"))
+@pytest.mark.parametrize("key", ("treatment_norm", "treatment_share", "outcome_norm"))
 def test_validate_corpus_rejects_nonfinite_normalized_inputs(corpus, key):
     broken = dict(corpus)
     broken[key] = corpus[key].copy()
@@ -765,7 +816,7 @@ def test_validate_corpus_rejects_nonfinite_normalized_inputs(corpus, key):
     assert any(f"{key} contains NaN or Inf" in error for error in errors)
 
 
-@pytest.mark.parametrize("key", ("spend_norm", "spend_share"))
+@pytest.mark.parametrize("key", ("treatment_norm", "treatment_share"))
 def test_validate_corpus_rejects_incorrect_normalized_inputs(corpus, key):
     broken = dict(corpus)
     broken[key] = corpus[key].copy()
@@ -774,15 +825,15 @@ def test_validate_corpus_rejects_incorrect_normalized_inputs(corpus, key):
     assert any(key in error for error in errors)
 
 
-def test_validate_corpus_rejects_nonpositive_sales_scale(corpus):
+def test_validate_corpus_rejects_nonpositive_outcome_scale(corpus):
     broken = dict(corpus)
-    broken["sales_scale"] = corpus["sales_scale"].copy()
-    broken["sales_scale"][0] = 0.0
+    broken["outcome_scale"] = corpus["outcome_scale"].copy()
+    broken["outcome_scale"][0] = 0.0
     errors = DataGenerator.validate_corpus(broken)
-    assert "sales_scale must be positive" in errors
+    assert "outcome_scale must be positive" in errors
 
 
-def test_validate_corpus_checks_temporal_split_and_sales_scale(corpus):
+def test_validate_corpus_checks_temporal_split_and_outcome_scale(corpus):
     bad_support = dict(corpus)
     bad_support["support_mask"] = np.ones_like(corpus["support_mask"])
     assert "support_mask does not match the recorded temporal split" in (
@@ -797,11 +848,11 @@ def test_validate_corpus_checks_temporal_split_and_sales_scale(corpus):
     )
 
     bad_scale = dict(corpus)
-    bad_scale["sales_scale"] = corpus["sales_scale"].copy()
-    bad_scale["sales_scale"][0] += 1.0
+    bad_scale["outcome_scale"] = corpus["outcome_scale"].copy()
+    bad_scale["outcome_scale"][0] += 1.0
     errors = DataGenerator.validate_corpus(bad_scale)
-    assert "sales_scale does not match supported sales observations" in errors
-    assert "sales_norm != sales_raw / sales_scale" in errors
+    assert "outcome_scale does not match supported outcome observations" in errors
+    assert "outcome_norm != outcome_raw / outcome_scale" in errors
 
 
 def test_validate_corpus_rejects_unverifiable_metric_version(corpus):
@@ -882,9 +933,9 @@ def test_validate_corpus_rejects_corrupt_layout_metrics_and_family(corpus):
     )
 
     bad_family = dict(corpus)
-    bad_family["adstock_family"] = corpus["adstock_family"].copy()
-    bad_family["adstock_family"][0, 0] = 3
-    assert any("adstock_family" in error for error in DataGenerator.validate_corpus(bad_family))
+    bad_family["carryover_family"] = corpus["carryover_family"].copy()
+    bad_family["carryover_family"][0, 0] = 3
+    assert any("carryover_family" in error for error in DataGenerator.validate_corpus(bad_family))
 
 
 @pytest.mark.parametrize("is_val_value", (0, 1))
@@ -900,18 +951,18 @@ def test_validate_corpus_requires_nonempty_train_and_validation_sides(corpus, is
 @pytest.mark.parametrize(
     ("field", "old_value"),
     (
-        ("adstock_kernel_semantics", "normalized-causal-weibull-pdf"),
-        ("adstock_kernel_version", 2),
+        ("carryover_kernel_semantics", "normalized-causal-weibull-pdf"),
+        ("carryover_kernel_version", 2),
     ),
 )
-def test_validate_corpus_rejects_previous_adstock_kernel_metadata(corpus, field, old_value):
+def test_validate_corpus_rejects_previous_carryover_kernel_metadata(corpus, field, old_value):
     broken = dict(corpus)
     diagnostics = dict(corpus["diagnostics"])
     diagnostics["signal"] = dict(diagnostics["signal"])
     diagnostics["signal"][field] = old_value
     broken["diagnostics"] = diagnostics
 
-    assert "diagnostics signal adstock kernel semantics are not supported" in (
+    assert "diagnostics signal carryover kernel semantics are not supported" in (
         DataGenerator.validate_corpus(broken)
     )
 
@@ -919,7 +970,7 @@ def test_validate_corpus_rejects_previous_adstock_kernel_metadata(corpus, field,
 @pytest.mark.parametrize(
     ("field", "old_value"),
     (
-        ("outcome_noise_semantics", "baseline-walk-random-walk-sales-noise"),
+        ("outcome_noise_semantics", "baseline-walk-random-walk-outcome-noise"),
         ("outcome_noise_version", 0),
     ),
 )
@@ -941,10 +992,10 @@ def test_datagenerator_generate_n_tasks():
     )
     gen = DataGenerator(cfg)
     corpus = gen.generate(n_tasks=7, seed=1)
-    assert corpus["spend_raw"].shape[0] == 7
+    assert corpus["treatment_raw"].shape[0] == 7
     assert corpus["is_val"].sum() >= 1
-    assert corpus["channel_shock_mask"].shape[0] == 7
-    assert corpus["channel_level"].shape[0] == 7
+    assert corpus["treatment_shock_mask"].shape[0] == 7
+    assert corpus["treatment_level"].shape[0] == 7
 
 
 @pytest.mark.slow
@@ -957,15 +1008,15 @@ def test_datagenerator_small_task_counts_keep_cell_level_split(seed, n_tasks):
         n_latent=1,
         n_time_steps=4,
         l_max=1,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         draws_per_cell=20,
         nonlinearity="linear",
-        spend_cv_floor=0.0,
+        treatment_cv_floor=0.0,
         seed=seed,
     )
     corpus = DataGenerator(cfg).generate(n_tasks=n_tasks, validate=True)
 
-    assert corpus["spend_raw"].shape[0] == n_tasks
+    assert corpus["treatment_raw"].shape[0] == n_tasks
     assert corpus["diagnostics"]["draws_per_cell"] == max(1, n_tasks // 2)
     assert 0 < corpus["is_val"].sum() < n_tasks
     cell_ids = np.unique(corpus["cell_id"])
@@ -982,15 +1033,15 @@ def test_datagenerator_task_count_above_draws_per_cell_keeps_cell_level_split():
         n_latent=1,
         n_time_steps=4,
         l_max=1,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         draws_per_cell=2,
         nonlinearity="linear",
-        spend_cv_floor=0.0,
+        treatment_cv_floor=0.0,
         seed=11,
     )
     corpus = DataGenerator(cfg).generate(n_tasks=n_tasks, validate=True)
 
-    assert corpus["spend_raw"].shape[0] == n_tasks
+    assert corpus["treatment_raw"].shape[0] == n_tasks
     assert corpus["diagnostics"]["draws_per_cell"] == 2
     assert 0 < corpus["is_val"].sum() < n_tasks
     cell_ids = np.unique(corpus["cell_id"])
@@ -1006,7 +1057,7 @@ def test_datagenerator_rejects_one_task_cell_split():
         n_latent=1,
         n_time_steps=8,
         l_max=1,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         draws_per_cell=2,
     )
     with pytest.raises(ValueError, match="n must be >= 2"):
@@ -1034,15 +1085,15 @@ def test_datagenerator_batches_preserve_tasks_without_one_world_batch(
         n_latent=1,
         n_time_steps=8,
         l_max=1,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         draws_per_cell=2,
         nonlinearity="linear",
-        spend_cv_floor=0.0,
+        treatment_cv_floor=0.0,
         seed=91,
     )
 
     batches = DataGenerator(cfg).iter_batches(n_tasks=n_tasks, batch_size=batch_size)
-    sizes = tuple(batch["spend_raw"].shape[0] for batch in batches)
+    sizes = tuple(batch["treatment_raw"].shape[0] for batch in batches)
 
     assert sizes == expected_sizes
     assert sum(sizes) == n_tasks
@@ -1056,7 +1107,7 @@ def test_datagenerator_rejects_one_world_batch_size():
         n_latent=1,
         n_time_steps=8,
         l_max=1,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         draws_per_cell=2,
     )
 
@@ -1073,7 +1124,7 @@ def test_batch_iterator_releases_yielded_arrays_and_uses_config_seed():
         n_latent=1,
         n_time_steps=8,
         l_max=1,
-        adstock_burn_in=0,
+        carryover_burn_in=0,
         nonlinearity="linear",
         seed=91,
     )
@@ -1081,13 +1132,13 @@ def test_batch_iterator_releases_yielded_arrays_and_uses_config_seed():
     batches = generator.iter_batches(n_tasks=4, batch_size=2)
     first = next(batches)
     expected = generator.generate(n_tasks=2, seed=cfg.seed)
-    np.testing.assert_array_equal(first["sales_raw"], expected["sales_raw"])
-    array_ref = weakref.ref(first["spend_raw"])
+    np.testing.assert_array_equal(first["outcome_raw"], expected["outcome_raw"])
+    array_ref = weakref.ref(first["treatment_raw"])
     del first
     assert array_ref() is None
     second = next(batches)
     expected = generator.generate(n_tasks=2, seed=cfg.seed + 1)
-    np.testing.assert_array_equal(second["sales_raw"], expected["sales_raw"])
+    np.testing.assert_array_equal(second["outcome_raw"], expected["outcome_raw"])
     with pytest.raises(StopIteration):
         next(batches)
 
@@ -1123,40 +1174,40 @@ def test_finalization_uses_retained_tasks_for_truncated_public_paths(tmp_path):
         )
         direct = (corpus["g"][:, layout.slices["cy"]] == 1) & (corpus["treatment_active_mask"] == 1)
         expected_metrics, expected_valid = dense_signal_metrics(
-            corpus["spend_raw"],
-            corpus["contributions_raw"],
-            corpus["sales_raw"],
+            corpus["treatment_raw"],
+            corpus["treatment_contribution_raw"],
+            corpus["outcome_raw"],
             corpus["baseline_raw"],
             direct,
-            sales_scale=corpus["sales_scale"],
-            adstock_family=corpus["adstock_family"],
-            adstock_alpha=corpus["adstock_alpha"],
+            outcome_scale=corpus["outcome_scale"],
+            carryover_family=corpus["carryover_family"],
+            carryover_alpha=corpus["carryover_alpha"],
             weibull_lam=corpus["weibull_lam"],
             weibull_k=corpus["weibull_k"],
             l_max=cfg.l_max,
-            adstock_burn_in=cfg.adstock_burn_in,
+            carryover_burn_in=cfg.carryover_burn_in,
         )
         assert np.array_equal(corpus["identifiability"]["signal_metrics"], expected_metrics)
         assert np.array_equal(corpus["identifiability"]["signal_metric_valid"], expected_valid)
         expected_signal = summarize_signal_metrics(
             expected_metrics,
             expected_valid,
-            corpus["sales_raw"],
+            corpus["outcome_raw"],
             direct,
-            sales_scale=corpus["sales_scale"],
+            outcome_scale=corpus["outcome_scale"],
             l_max=cfg.l_max,
-            adstock_burn_in=cfg.adstock_burn_in,
-            adstock_family=corpus["adstock_family"],
-            adstock_alpha=corpus["adstock_alpha"],
+            carryover_burn_in=cfg.carryover_burn_in,
+            carryover_family=corpus["carryover_family"],
+            carryover_alpha=corpus["carryover_alpha"],
             weibull_lam=corpus["weibull_lam"],
             weibull_k=corpus["weibull_k"],
         )
         expected_signal["metric_version"] = SIGNAL_METRIC_VERSION
         expected_signal["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
         expected_signal["l_max"] = cfg.l_max
-        expected_signal["adstock_burn_in"] = cfg.adstock_burn_in
-        expected_signal["adstock_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
-        expected_signal["adstock_kernel_version"] = 3
+        expected_signal["carryover_burn_in"] = cfg.carryover_burn_in
+        expected_signal["carryover_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
+        expected_signal["carryover_kernel_version"] = 3
         expected_signal["outcome_noise_semantics"] = OUTCOME_NOISE_SEMANTICS
         expected_signal["outcome_noise_version"] = OUTCOME_NOISE_VERSION
         expected_signal["outcome_std_mode"] = cfg.outcome_std_mode
@@ -1187,8 +1238,8 @@ def test_datagenerator_generate_and_save_without_identifiability_labels(tmp_path
         seed=57,
         include_identifiability_labels=False,
         confounding_strength_range=(0.3, 0.3),
-        n_channel_shocks=1,
-        channel_shock_length_range=(2, 2),
+        n_treatment_shocks=1,
+        treatment_shock_length_range=(2, 2),
     )
     path = tmp_path / "feature-only.npz"
     pg.DataGenerator(cfg).generate_and_save(path)
@@ -1199,42 +1250,46 @@ def test_datagenerator_generate_and_save_without_identifiability_labels(tmp_path
 
 def test_validate_corpus_flags_corrupt_shock_metadata(corpus):
     broken = dict(corpus)
-    bad = corpus["channel_shock_mask"].copy()
+    bad = corpus["treatment_shock_mask"].copy()
     bad[0, 0, 0] = 2
-    broken["channel_shock_mask"] = bad
+    broken["treatment_shock_mask"] = bad
     errors = DataGenerator.validate_corpus(broken)
-    assert any("channel_shock_mask is not binary" in error for error in errors)
+    assert any("treatment_shock_mask is not binary" in error for error in errors)
 
 
 @pytest.mark.parametrize(
     ("key", "axis", "expected"),
     (
-        ("spend_raw", "channel", "inactive-channel padding"),
-        ("spend_norm", "channel", "inactive-channel padding"),
-        ("spend_share", "channel", "inactive-channel padding"),
-        ("contributions_raw", "channel", "inactive-channel padding"),
-        ("channel_shock_mask", "channel", "inactive-channel padding"),
-        ("spend_means", "channel", "inactive-channel padding"),
-        ("channel_active", "channel", "inactive-channel padding"),
-        ("channel_level", "channel", "inactive-channel padding"),
-        ("saturation_scale", "channel", "inactive-channel padding"),
-        ("adstock_family", "channel", "inactive-channel padding"),
-        ("adstock_alpha", "channel", "inactive-channel padding"),
-        ("weibull_lam", "channel", "inactive-channel padding"),
-        ("weibull_k", "channel", "inactive-channel padding"),
-        ("controls", "control", "inactive-control padding"),
-        ("control_contribution", "control", "inactive-control padding"),
-        ("demand", "demand", "inactive-demand padding"),
-        ("confounder_contribution", "demand", "inactive-demand padding"),
+        ("treatment_raw", "treatment", "inactive-treatment padding"),
+        ("treatment_norm", "treatment", "inactive-treatment padding"),
+        ("treatment_share", "treatment", "inactive-treatment padding"),
+        ("treatment_contribution_raw", "treatment", "inactive-treatment padding"),
+        ("treatment_shock_mask", "treatment", "inactive-treatment padding"),
+        ("treatment_means", "treatment", "inactive-treatment padding"),
+        ("treatment_active", "treatment", "inactive-treatment padding"),
+        ("treatment_level", "treatment", "inactive-treatment padding"),
+        ("saturation_scale", "treatment", "inactive-treatment padding"),
+        ("carryover_family", "treatment", "inactive-treatment padding"),
+        ("carryover_alpha", "treatment", "inactive-treatment padding"),
+        ("weibull_lam", "treatment", "inactive-treatment padding"),
+        ("weibull_k", "treatment", "inactive-treatment padding"),
+        ("covariates", "covariate", "inactive-covariate padding"),
+        ("covariate_contribution", "covariate", "inactive-covariate padding"),
+        ("latent_unobserved", "latent_unobserved", "inactive-latent_unobserved padding"),
+        (
+            "latent_unobserved_contribution",
+            "latent_unobserved",
+            "inactive-latent_unobserved padding",
+        ),
     ),
 )
 def test_validate_corpus_rejects_nonzero_node_padding(padded_corpus, key, axis, expected):
     broken = dict(padded_corpus)
     bad = padded_corpus[key].copy()
     active_key = {
-        "channel": "n_treatments_active",
-        "control": "n_covariates_active",
-        "demand": "n_latent_active",
+        "treatment": "n_treatments_active",
+        "covariate": "n_covariates_active",
+        "latent_unobserved": "n_latent_active",
     }[axis]
     index = int(padded_corpus[active_key][0])
     if bad.ndim == 3:
@@ -1326,7 +1381,7 @@ def test_validate_corpus_rejects_offsetting_impossible_indirect_sources():
             n_cells=2,
             draws_per_cell=1,
             l_max=2,
-            adstock_burn_in=2,
+            carryover_burn_in=2,
             cc_base_rate=0.0,
             zc_base_rate=0.0,
             edge_rate_overrides={"dc": 0.0},
@@ -1352,7 +1407,7 @@ def test_single_treatment_corpus_has_exactly_zero_cc_indirect_source():
             n_cells=2,
             draws_per_cell=1,
             l_max=2,
-            adstock_burn_in=2,
+            carryover_burn_in=2,
             seed=7,
         )
     )
@@ -1381,40 +1436,43 @@ def test_validate_corpus_handles_array_valued_signal_diagnostic(corpus):
     broken = dict(corpus)
     broken["diagnostics"] = dict(corpus["diagnostics"])
     broken["diagnostics"]["signal"] = dict(corpus["diagnostics"]["signal"])
-    value = broken["diagnostics"]["signal"]["n_direct_channels"]
-    broken["diagnostics"]["signal"]["n_direct_channels"] = np.array([value, value])
+    value = broken["diagnostics"]["signal"]["n_direct_treatments"]
+    broken["diagnostics"]["signal"]["n_direct_treatments"] = np.array([value, value])
     assert "diagnostics signal summary does not match recomputation" in (
         DataGenerator.validate_corpus(broken)
     )
 
 
-def test_validate_corpus_rejects_incorrect_channel_active(corpus):
+def test_validate_corpus_rejects_incorrect_treatment_active(corpus):
     broken = dict(corpus)
-    broken["channel_active"] = corpus["channel_active"].copy()
-    broken["channel_active"][0, 0] ^= 1
+    broken["treatment_active"] = corpus["treatment_active"].copy()
+    broken["treatment_active"][0, 0] ^= 1
     assert any(
-        "channel_active does not match" in error for error in DataGenerator.validate_corpus(broken)
+        "treatment_active does not match" in error
+        for error in DataGenerator.validate_corpus(broken)
     )
 
 
-def test_validate_corpus_rejects_balanced_null_channel_contribution(corpus):
+def test_validate_corpus_rejects_balanced_null_treatment_contribution(corpus):
     layout = SlotLayout(n_treatments=4, n_covariates=2, n_latent=1, edge_types=EDGE_TYPES_EXTENDED)
     direct = corpus["g"][:, layout.slices["cy"]]
     n, k = np.argwhere(direct == 0)[0]
     broken = dict(corpus)
-    for key in ("contributions_raw", "indirect_effects", "indirect_effects_by_source"):
+    for key in ("treatment_contribution_raw", "indirect_effects", "indirect_effects_by_source"):
         broken[key] = corpus[key].copy()
-    broken["contributions_raw"][n, 0, k] += 0.25
+    broken["treatment_contribution_raw"][n, 0, k] += 0.25
     broken["indirect_effects"][n, 0] -= 0.25
     broken["indirect_effects_by_source"][n, 0, 0] -= 0.25
-    assert any("channels without C->Y" in error for error in DataGenerator.validate_corpus(broken))
+    assert any(
+        "treatments without C->Y" in error for error in DataGenerator.validate_corpus(broken)
+    )
 
 
 @pytest.mark.parametrize(
     ("edge_type", "contribution_key", "message"),
     (
-        ("zy", "control_contribution", "without a Z->Y edge"),
-        ("dy", "confounder_contribution", "without a D->Y edge"),
+        ("zy", "covariate_contribution", "without a Z->Y edge"),
+        ("dy", "latent_unobserved_contribution", "without a D->Y edge"),
     ),
 )
 def test_validate_corpus_rejects_balanced_parentless_baseline_contribution(
@@ -1438,7 +1496,7 @@ def test_validate_corpus_rejects_balanced_parentless_baseline_contribution(
         ("indirect_effects", (0, 0), "additive decomposition"),
         ("indirect_effects_by_source", (0, 0, 0), "telescoping decomposition"),
         ("baseline_intrinsic", (0, 0), "baseline decomposition"),
-        ("control_contribution", (0, 0, 0), "full decomposition"),
+        ("covariate_contribution", (0, 0, 0), "full decomposition"),
     ),
 )
 def test_validate_corpus_rejects_corrupt_decompositions(corpus, key, index, expected):
@@ -1457,34 +1515,41 @@ def test_shock_metadata_is_reconstructable_and_zero_padded():
         n_cells=2,
         draws_per_cell=1,
         n_treatments_active_range=(2, 3),
-        n_channel_shocks=2,
-        channel_shock_length_range=(2, 2),
-        channel_shock_level_range=(0.0, 1.0),
+        n_treatment_shocks=2,
+        treatment_shock_length_range=(2, 2),
+        treatment_shock_level_range=(0.0, 1.0),
         seed=14,
     )
     generated = pg.sample_prior_predictive(cfg)
     assert DataGenerator.validate_corpus(generated) == []
     inactive = generated["treatment_active_mask"] == 0
-    for key in ("channel_level", "adstock_family", "adstock_alpha", "weibull_lam", "weibull_k"):
+    for key in (
+        "treatment_level",
+        "carryover_family",
+        "carryover_alpha",
+        "weibull_lam",
+        "weibull_k",
+    ):
         assert not generated[key][inactive].any(), key
 
     broken = dict(generated)
-    bad_start = generated["channel_shock_start"].copy()
+    bad_start = generated["treatment_shock_start"].copy()
     bad_start[0, 0] = cfg.n_time_steps
-    broken["channel_shock_start"] = bad_start
+    broken["treatment_shock_start"] = bad_start
     errors = DataGenerator.validate_corpus(broken)
     assert any("start/length" in error or "mask does not match" in error for error in errors)
 
     broken = dict(generated)
-    bad_level = generated["channel_shock_level"].copy()
+    bad_level = generated["treatment_shock_level"].copy()
     bad_level[0, 0] += 1.0
-    broken["channel_shock_level"] = bad_level
+    broken["treatment_shock_level"] = bad_level
     errors = DataGenerator.validate_corpus(broken)
-    assert any("multiplier * channel_level" in error for error in errors)
+    assert any("multiplier * treatment_level" in error for error in errors)
 
 
-def test_sales_norm_matches_scale(corpus):
+def test_outcome_norm_matches_scale(corpus):
     expected = (
-        corpus["sales_raw"].astype(np.float64) / corpus["sales_scale"].astype(np.float64)[:, None]
+        corpus["outcome_raw"].astype(np.float64)
+        / corpus["outcome_scale"].astype(np.float64)[:, None]
     )
-    assert np.allclose(corpus["sales_norm"].astype(np.float64), expected, rtol=1e-5)
+    assert np.allclose(corpus["outcome_norm"].astype(np.float64), expected, rtol=1e-5)

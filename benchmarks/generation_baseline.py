@@ -38,16 +38,16 @@ def cases():
             "n_covariates_active_range": (1, 2),
         },
         "shocks": {
-            "n_channel_shocks": 1,
-            "channel_shock_length_range": (3, 5),
+            "n_treatment_shocks": 1,
+            "treatment_shock_length_range": (3, 5),
         },
         "intercept_floor": {"baseline_floor": 0.0},
-        "non_media_floor": {"baseline_floor": 0.0, "baseline_floor_scope": "non_media"},
+        "non_treatment_floor": {"baseline_floor": 0.0, "baseline_floor_scope": "non_treatment"},
         "conditioned": {"prior_conditioning": True},
-        "smooth_controls": {
-            "control_hf_sigma_range": (0.0, 0.0),
-            "control_pulse_prob_range": (0.0, 0.0),
-            "control_pulse_amp_range": (0.0, 0.0),
+        "smooth_covariates": {
+            "covariate_hf_sigma_range": (0.0, 0.0),
+            "covariate_pulse_prob_range": (0.0, 0.0),
+            "covariate_pulse_amp_range": (0.0, 0.0),
         },
     }
     for name, overrides in variants.items():

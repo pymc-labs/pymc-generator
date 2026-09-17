@@ -2,20 +2,20 @@
 
 Each bundle contains:
 
-* ``dataset.csv``           — what a model eats: week, spend_C*, control_Z*, sales_Y
+* ``dataset.csv``           — what a model eats: week, treatment_C*, covariate_Z*, outcome_Y
 * ``true_components.csv``   — the full additive truth: baseline_intrinsic,
-  sales_noise, per-confounder and per-control contributions, per-channel
+  outcome_noise, per-confounder and per-covariate contributions, per-treatment
   DIRECT contributions, indirect effects by source (cc/zc/dc), plus the
-  latent demand and base-channel series. Every column except ``week``,
-  ``sales_reconstructed`` and the ``demand_*``/``channel_base_*`` diagnostics
-  is an ADDITIVE term of ``sales_Y``: they sum to it exactly (this is
+  latent latent_unobserved and base-treatment series. Every column except ``week``,
+  ``outcome_reconstructed`` and the ``latent_unobserved_*``/``treatment_base_*`` diagnostics
+  is an ADDITIVE term of ``outcome_Y``: they sum to it exactly (this is
   ``SCM.reconstruction()``, the quantity ``SCM.identity_error()`` scores).
-* ``description.txt``       — DAG edges with drawn coefficients, per-channel
+* ``description.txt``       — DAG edges with drawn coefficients, per-treatment
   mechanism/texture parameters, decomposition identity check, signal metrics
 * ``dag.dot`` / ``dag.png`` — the causal graph (matplotlib render; no graphviz)
 * ``timeseries.png``        — model-input series
 * ``decomposition.png``     — every true effect on Y + reconstruction check
-* ``channels.png``          — per-channel spend vs true contribution (indexed)
+* ``treatments.png``          — per-treatment treatment vs true contribution (indexed)
 
 :func:`write_scenario_bundles` writes the five-scenario inspection layout
 (one numbered folder per scenario + a root README).
@@ -88,26 +88,26 @@ def write_scm_bundle(
     recon = world.reconstruction()
 
     model_cols = {"week": weeks}
-    model_cols.update({f"spend_C{k + 1}": d["channels"][:, k] for k in range(n_treatments)})
-    model_cols.update({f"control_Z{m + 1}": d["controls"][:, m] for m in range(n_covariates)})
-    model_cols["sales_Y"] = d["sales"]
+    model_cols.update({f"treatment_C{k + 1}": d["treatments"][:, k] for k in range(n_treatments)})
+    model_cols.update({f"covariate_Z{m + 1}": d["covariates"][:, m] for m in range(n_covariates)})
+    model_cols["outcome_Y"] = d["outcome"]
     pd.DataFrame(model_cols).to_csv(out / "dataset.csv", index=False)
 
     truth_cols = {"week": weeks, "baseline_intrinsic": d["baseline_intrinsic"]}
-    # The observation noise is an additive term of sales like any other, so it
+    # The observation noise is an additive term of outcome like any other, so it
     # belongs in the exported truth: without it the additive columns sum to
-    # sales MINUS the noise and an auditor reads a residual of max|sales_noise|
+    # outcome MINUS the noise and an auditor reads a residual of max|outcome_noise|
     # where SCM.identity_error() reports ~1e-15.
-    truth_cols["sales_noise"] = d["sales_noise"]
+    truth_cols["outcome_noise"] = d["outcome_noise"]
     truth_cols.update(
         {
-            f"confounder_contribution_D{j + 1}": d["confounder_contribution"][:, j]
+            f"confounder_contribution_D{j + 1}": d["latent_unobserved_contribution"][:, j]
             for j in range(n_latent)
         }
     )
     truth_cols.update(
         {
-            f"control_contribution_Z{m + 1}": d["control_contribution"][:, m]
+            f"covariate_contribution_Z{m + 1}": d["covariate_contribution"][:, m]
             for m in range(n_covariates)
         }
     )
@@ -116,10 +116,12 @@ def write_scm_bundle(
     )
     for i, src in enumerate(("cc", "zc", "dc")):
         truth_cols[f"indirect_{src}"] = d["indirect_effects_by_source"][:, i]
-    truth_cols["sales_reconstructed"] = recon
-    truth_cols.update({f"demand_D{j + 1}": d["demand"][:, j] for j in range(n_latent)})
+    truth_cols["outcome_reconstructed"] = recon
     truth_cols.update(
-        {f"channel_base_C{k + 1}": d["channels_base"][:, k] for k in range(n_treatments)}
+        {f"latent_unobserved_D{j + 1}": d["latent_unobserved"][:, j] for j in range(n_latent)}
+    )
+    truth_cols.update(
+        {f"treatment_base_C{k + 1}": d["treatments_base"][:, k] for k in range(n_treatments)}
     )
     pd.DataFrame(truth_cols).to_csv(out / "true_components.csv", index=False)
 
@@ -132,7 +134,7 @@ def write_scm_bundle(
         viz.plot_dag(world, str(out / "dag.png"), title)
         viz.plot_timeseries(world, str(out / "timeseries.png"), title)
         viz.plot_decomposition(world, str(out / "decomposition.png"), title)
-        viz.plot_channels(world, str(out / "channels.png"), title)
+        viz.plot_treatments(world, str(out / "treatments.png"), title)
 
     return out
 
@@ -299,7 +301,7 @@ def write_scenario_bundles(
     )
     if plots:
         lines.append(
-            "Figures: `dag.png`, `timeseries.png`, `decomposition.png`, and `channels.png`."
+            "Figures: `dag.png`, `timeseries.png`, `decomposition.png`, and `treatments.png`."
         )
     (out_root / "README.md").write_text("\n".join(lines) + "\n")
     return written

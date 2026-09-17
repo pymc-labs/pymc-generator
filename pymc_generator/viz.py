@@ -1,7 +1,7 @@
 """Matplotlib renders for world bundles and for generated-data diagnostics.
 
 Two families live here. The bundle figures (DAG, timeseries, decomposition,
-channels) render ONE world; the diagnostics figures render a
+treatments) render ONE world; the diagnostics figures render a
 :class:`~pymc_generator.diagnostics.DataDiagnostics` report over many worlds
 (dependence, series distributions, temporal structure, VIF, contributions).
 
@@ -29,7 +29,7 @@ from .diagnostics import (
     DataDiagnostics,
 )
 from .outcomes import OutcomeDistributions, QuantityDistribution, StatName, _q_key
-from .worlds import SCM, channel_role, edges_with_coeffs, mechanism_label, node_status
+from .worlds import SCM, edges_with_coeffs, mechanism_label, node_status, treatment_role
 
 # Validated categorical palette — slots are assigned in FIXED order per entity
 # and reused consistently across every figure of a bundle.
@@ -129,7 +129,7 @@ def plot_dag(world: SCM, path: str, title: str | None = None) -> None:
         sub = ""
         if name.startswith("C"):
             k = int(name[1:]) - 1
-            role = channel_role(g, k)
+            role = treatment_role(g, k)
             sub = mechanism_label(params, k) + ("" if role in ("direct", "null") else f" · {role}")
         if not reaches:
             sub = (sub + " · " if sub else "") + "isolated null"
@@ -155,46 +155,46 @@ def plot_dag(world: SCM, path: str, title: str | None = None) -> None:
 
 
 def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
-    """Model-input series: per-channel spend, controls + latent demand, sales."""
+    """Model-input series: per-treatment treatment, covariates + latent latent_unobserved, outcome."""
     import matplotlib.pyplot as plt
 
     d = world.data
     title = world.name if title is None else title
-    n_time_steps, n_treatments = d["channels"].shape
-    n_covariates = d["controls"].shape[1]
-    n_latent = d["demand"].shape[1]
+    n_time_steps, n_treatments = d["treatments"].shape
+    n_covariates = d["covariates"].shape[1]
+    n_latent = d["latent_unobserved"].shape[1]
     weeks = np.arange(n_time_steps)
     fig, axes = plt.subplots(3, 1, figsize=(11, 7), sharex=True)
 
     ax = axes[0]
     for k in range(n_treatments):
         ax.plot(
-            weeks, d["channels"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}"
+            weeks, d["treatments"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}"
         )
     ax.set_title(f"{title} — model inputs", fontsize=11, color=INK, loc="left")
-    ax.set_ylabel("spend", fontsize=9, color=MUTED)
+    ax.set_ylabel("treatment", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
     ax = axes[1]
     for m in range(n_covariates):
         ax.plot(
-            weeks, d["controls"][:, m], color=PALETTE[m % len(PALETTE)], lw=1.3, label=f"Z{m + 1}"
+            weeks, d["covariates"][:, m], color=PALETTE[m % len(PALETTE)], lw=1.3, label=f"Z{m + 1}"
         )
     for j in range(n_latent):
         ax.plot(
             weeks,
-            d["demand"][:, j],
+            d["latent_unobserved"][:, j],
             color=MUTED,
             lw=1.2,
             ls="--",
             label=f"D{j + 1} (latent)",
         )
-    ax.set_ylabel("controls / demand", fontsize=9, color=MUTED)
+    ax.set_ylabel("covariates / latent_unobserved", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_covariates + n_latent, 8), loc="upper left")
 
     ax = axes[2]
-    ax.plot(weeks, d["sales"], color=INK, lw=1.5)
-    ax.set_ylabel("sales Y", fontsize=9, color=MUTED)
+    ax.plot(weeks, d["outcome"], color=INK, lw=1.5)
+    ax.set_ylabel("outcome Y", fontsize=9, color=MUTED)
     ax.set_xlabel("week", fontsize=9, color=MUTED)
 
     for ax in axes:
@@ -212,15 +212,15 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     title = world.name if title is None else title
     ident_err = world.identity_error()
     n_time_steps, n_treatments = d["contributions"].shape
-    n_covariates = d["control_contribution"].shape[1]
-    n_latent = d["confounder_contribution"].shape[1]
+    n_covariates = d["covariate_contribution"].shape[1]
+    n_latent = d["latent_unobserved_contribution"].shape[1]
     weeks = np.arange(n_time_steps)
     recon = world.reconstruction()
 
     fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
 
     ax = axes[0]
-    ax.plot(weeks, d["sales"], color=INK, lw=1.6, label="sales Y")
+    ax.plot(weeks, d["outcome"], color=INK, lw=1.6, label="outcome Y")
     ax.plot(weeks, recon, color="#999999", lw=1.2, ls="--", label="Σ true components")
     ax.set_title(
         f"{title} — true decomposition (identity max err {ident_err:.1e})",
@@ -232,7 +232,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
 
     ax = axes[1]
     for k in range(n_treatments):
-        if g["g_cy"][k]:  # only channels with a direct edge have a nonzero target
+        if g["g_cy"][k]:  # only treatments with a direct edge have a nonzero target
             ax.plot(
                 weeks,
                 d["contributions"][:, k],
@@ -249,7 +249,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
         if g["g_dy"][j]:  # absent edges are identically zero — skip the clutter
             ax.plot(
                 weeks,
-                d["confounder_contribution"][:, j],
+                d["latent_unobserved_contribution"][:, j],
                 color=EDGE_STYLE["dy"][0],
                 lw=1.2,
                 ls=["-", "--"][j % 2],
@@ -259,7 +259,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
         if g["g_zy"][m]:
             ax.plot(
                 weeks,
-                d["control_contribution"][:, m],
+                d["covariate_contribution"][:, m],
                 color=EDGE_STYLE["zy"][0],
                 lw=1.2,
                 ls=["-", "--", ":", "-."][m % 4],
@@ -295,8 +295,8 @@ def _mean_index(values: np.ndarray) -> tuple[np.ndarray, str]:
     return (values / mean, "/ |mean|") if mean else (values, "raw; zero mean")
 
 
-def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
-    """Per-channel spend and contribution relative to their absolute mean.
+def plot_treatments(world: SCM, path: str, title: str | None = None) -> None:
+    """Per-treatment treatment and contribution relative to their absolute mean.
 
     Zero-mean series retain raw values and are labelled rather than divided.
     """
@@ -304,7 +304,7 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
 
     d, g, params = world.data, world.g, world.params
     title = world.name if title is None else title
-    n_time_steps, n_treatments = d["channels"].shape
+    n_time_steps, n_treatments = d["treatments"].shape
     weeks = np.arange(n_time_steps)
     ncols = min(3, n_treatments)
     nrows = int(np.ceil(n_treatments / ncols))
@@ -312,8 +312,8 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
     axes = np.atleast_1d(axes).ravel()
     for k in range(n_treatments):
         ax = axes[k]
-        spend, spend_scale = _mean_index(d["channels"][:, k])
-        ax.plot(weeks, spend, color=MUTED, lw=1.0, label=f"spend ({spend_scale})")
+        treatment, treatment_scale = _mean_index(d["treatments"][:, k])
+        ax.plot(weeks, treatment, color=MUTED, lw=1.0, label=f"treatment ({treatment_scale})")
         if g["g_cy"][k]:
             contrib, contrib_scale = _mean_index(d["contributions"][:, k])
             ax.plot(
@@ -325,13 +325,13 @@ def plot_channels(world: SCM, path: str, title: str | None = None) -> None:
             )
             tag = f"β={params['beta'][k]:.2f}"
         else:
-            tag = f"no direct edge ({channel_role(g, k)})"
+            tag = f"no direct edge ({treatment_role(g, k)})"
         ax.set_title(f"C{k + 1} — {mechanism_label(params, k)} — {tag}", fontsize=9, color=INK)
         ax.legend(fontsize=7, frameon=False, loc="upper left")
         _style_ax(ax)
     for ax in axes[n_treatments:]:
         ax.axis("off")
-    fig.suptitle(f"{title} — per-channel spend vs true contribution", fontsize=11, color=INK)
+    fig.suptitle(f"{title} — per-treatment treatment vs true contribution", fontsize=11, color=INK)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)
@@ -350,10 +350,10 @@ def plot_outcome_distributions(
     One panel per quantity of an :func:`~pymc_generator.outcomes.outcome_distributions`
     result. ``of="value"`` pools every drawn value across worlds and time;
     ``of="mean"`` shows the across-world spread of per-world levels;
-    ``of="share"`` shows the share-of-sales budget (media/baseline/noise).
+    ``of="share"`` shows the share-of-outcome budget (treatment/baseline/noise).
 
     Quantities with no spread under the chosen statistic are skipped — e.g.
-    ``sales`` is identically 1.0 in the share budget and would waste a panel.
+    ``outcome`` is identically 1.0 in the share budget and would waste a panel.
     """
     import matplotlib.pyplot as plt
 
@@ -1144,12 +1144,12 @@ def plot_contribution_diagnostics(
     basis: str = "base_direct_plus_indirect",
     population: str = "unconditional",
 ) -> None:
-    """Horizontal bars of one sibling cut of the sales contribution hierarchy.
+    """Horizontal bars of one sibling cut of the outcome contribution hierarchy.
 
     ``basis`` selects one reading from ``report.contribution_bases`` and
     raises when that reading is not in the report; the two bases are
-    alternative readings of the same media effect and never mix.
-    ``sibling_set`` picks the cut (``top``, ``media_children``, ...) and
+    alternative readings of the same treatment effect and never mix.
+    ``sibling_set`` picks the cut (``top``, ``treatment_children``, ...) and
     ``keys`` narrows the rows within it, in caller order.
 
     Bars hold the across-world mean (``weighting="macro"``) or the pooled
@@ -1222,7 +1222,7 @@ def plot_contribution_diagnostics(
     ax.set_yticklabels([key for key, _, _, _ in rows], fontsize=8)
     ax.set_xlabel(f"{mode} {measure} ({weighting}, {population})", fontsize=9, color=MUTED)
     ax.set_title(
-        f"contributions to sales — {sibling_set} cut of {basis} — "
+        f"contributions to outcome — {sibling_set} cut of {basis} — "
         f"{report.n_worlds} worlds × {report.n_time_steps} steps",
         fontsize=10,
         color=INK,

@@ -70,18 +70,18 @@ def corpus():
 
 
 def test_additive_identity(corpus):
-    """sales_raw == baseline_raw + Σ_k contributions_raw + indirect_effects."""
+    """outcome_raw == baseline_raw + Σ_k treatment_contribution_raw + indirect_effects."""
     residual = np.abs(
         corpus["baseline_raw"].astype(np.float64)
-        + corpus["contributions_raw"].astype(np.float64).sum(-1)
+        + corpus["treatment_contribution_raw"].astype(np.float64).sum(-1)
         + corpus["indirect_effects"].astype(np.float64)
-        - corpus["sales_raw"].astype(np.float64)
+        - corpus["outcome_raw"].astype(np.float64)
     )
     budget = _float32_storage_budget(
         corpus["baseline_raw"],
-        corpus["contributions_raw"],
+        corpus["treatment_contribution_raw"],
         corpus["indirect_effects"],
-        corpus["sales_raw"],
+        corpus["outcome_raw"],
     )
     assert (residual <= budget).all(), (
         f"max|residual| {residual.max():.4g} exceeds the float32 storage budget "
@@ -103,19 +103,19 @@ def test_telescoping_split_sums_to_indirect(corpus):
 
 
 def test_full_per_node_additivity(corpus):
-    """baseline_intrinsic + sales_noise + Σ confounder + Σ control + Σ direct + Σ by_source == sales."""
+    """baseline_intrinsic + outcome_noise + Σ confounder + Σ covariate + Σ direct + Σ by_source == outcome."""
     f = lambda k: corpus[k].astype(np.float64)  # noqa: E731
     terms = (
         "baseline_intrinsic",
-        "sales_noise",
-        "confounder_contribution",
-        "control_contribution",
-        "contributions_raw",
+        "outcome_noise",
+        "latent_unobserved_contribution",
+        "covariate_contribution",
+        "treatment_contribution_raw",
         "indirect_effects_by_source",
     )
     recon = sum(f(name).sum(-1) if corpus[name].ndim == 3 else f(name) for name in terms)
-    residual = np.abs(recon - f("sales_raw"))
-    budget = _float32_storage_budget(*(corpus[name] for name in terms), corpus["sales_raw"])
+    residual = np.abs(recon - f("outcome_raw"))
+    budget = _float32_storage_budget(*(corpus[name] for name in terms), corpus["outcome_raw"])
     assert (residual <= budget).all(), (
         f"max|residual| {residual.max():.4g} exceeds the float32 storage budget "
         f"(worst element {(residual - budget).max():.4g} over)"
@@ -126,27 +126,27 @@ def test_diagnostics_report_persisted_identity_error(corpus):
     """Diagnostics quantify reconstruction error from the stored float32 arrays."""
     expected_decomposition = np.abs(
         corpus["baseline_raw"]
-        + corpus["contributions_raw"].sum(axis=-1)
+        + corpus["treatment_contribution_raw"].sum(axis=-1)
         + corpus["indirect_effects"]
-        - corpus["sales_raw"]
+        - corpus["outcome_raw"]
     ).max()
     expected_telescoping = np.abs(
         corpus["indirect_effects_by_source"].sum(axis=-1) - corpus["indirect_effects"]
     ).max()
     expected_full = np.abs(
         corpus["baseline_intrinsic"]
-        + corpus["sales_noise"]
-        + corpus["confounder_contribution"].sum(axis=-1)
-        + corpus["control_contribution"].sum(axis=-1)
-        + corpus["contributions_raw"].sum(axis=-1)
+        + corpus["outcome_noise"]
+        + corpus["latent_unobserved_contribution"].sum(axis=-1)
+        + corpus["covariate_contribution"].sum(axis=-1)
+        + corpus["treatment_contribution_raw"].sum(axis=-1)
         + corpus["indirect_effects_by_source"].sum(axis=-1)
-        - corpus["sales_raw"]
+        - corpus["outcome_raw"]
     ).max()
     expected_baseline = np.abs(
         corpus["baseline_intrinsic"]
-        + corpus["sales_noise"]
-        + corpus["confounder_contribution"].sum(axis=-1)
-        + corpus["control_contribution"].sum(axis=-1)
+        + corpus["outcome_noise"]
+        + corpus["latent_unobserved_contribution"].sum(axis=-1)
+        + corpus["covariate_contribution"].sum(axis=-1)
         - corpus["baseline_raw"]
     ).max()
 
@@ -167,15 +167,15 @@ def test_diagnostics_report_persisted_identity_error(corpus):
         assert diagnostics[name] < 1e-5
 
 
-def test_channels_positive_and_finite(corpus):
-    assert np.isfinite(corpus["spend_raw"]).all()
-    assert (corpus["spend_raw"] >= 0).all()
-    assert np.isfinite(corpus["sales_raw"]).all()
-    assert (corpus["sales_raw"] >= 0).all()
+def test_treatments_positive_and_finite(corpus):
+    assert np.isfinite(corpus["treatment_raw"]).all()
+    assert (corpus["treatment_raw"] >= 0).all()
+    assert np.isfinite(corpus["outcome_raw"]).all()
+    assert (corpus["outcome_raw"] >= 0).all()
 
 
-def test_inactive_channels_zero_padded():
-    """Channels beyond the active count contribute nothing and carry no spend."""
+def test_inactive_treatments_zero_padded():
+    """Treatments beyond the active count contribute nothing and carry no treatment."""
     cfg = pg.make_scm_prior(
         n_treatments=6,
         n_covariates=3,
@@ -190,10 +190,12 @@ def test_inactive_channels_zero_padded():
     )
     corpus = pg.sample_prior_predictive(cfg)
     acm = corpus["treatment_active_mask"]
-    # padded (inactive) channel slots are exactly zero in spend and contribution
+    # padded (inactive) treatment slots are exactly zero in treatment and contribution
     pad = acm == 0
-    assert (corpus["spend_raw"][pad[:, None, :].repeat(corpus["spend_raw"].shape[1], 1)] == 0).all()
-    contrib = corpus["contributions_raw"]
+    assert (
+        corpus["treatment_raw"][pad[:, None, :].repeat(corpus["treatment_raw"].shape[1], 1)] == 0
+    ).all()
+    contrib = corpus["treatment_contribution_raw"]
     assert (contrib[pad[:, None, :].repeat(contrib.shape[1], 1)] == 0).all()
 
 
@@ -209,7 +211,13 @@ def test_determinism_same_seed():
     }
     a = pg.sample_prior_predictive(pg.make_scm_prior(**kw))
     b = pg.sample_prior_predictive(pg.make_scm_prior(**kw))
-    for key in ("spend_raw", "sales_raw", "g", "contributions_raw", "indirect_effects"):
+    for key in (
+        "treatment_raw",
+        "outcome_raw",
+        "g",
+        "treatment_contribution_raw",
+        "indirect_effects",
+    ):
         assert np.array_equal(a[key], b[key]), f"{key} not reproducible"
 
 
@@ -220,7 +228,7 @@ def test_different_seed_differs():
     b = pg.sample_prior_predictive(
         pg.make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, n_time_steps=40, seed=2)
     )
-    assert not np.array_equal(a["sales_raw"], b["sales_raw"])
+    assert not np.array_equal(a["outcome_raw"], b["outcome_raw"])
 
 
 #: ``indirect_effects_by_source`` column order, locked by the corpus schema.
@@ -249,7 +257,7 @@ def test_scenario_isolates_the_pathway_it_names(scenario):
       no arrow, no telescoping difference, at any seed.
     * REQUIRED — a budget with a positive lower bound puts the arrows in the
       graph, and the column carries the effect. This one additionally needs the
-      arrows to REACH Y (a ``zc`` arrow into a channel with no ``C->Y`` edge and
+      arrows to REACH Y (a ``zc`` arrow into a treatment with no ``C->Y`` edge and
       no outgoing ``C->C`` contributes nothing), so the seed is pinned.
 
     ``cfg.edge_budget`` is read back off the built config rather than off the
@@ -274,7 +282,7 @@ def test_scenario_isolates_the_pathway_it_names(scenario):
         peak = float(np.abs(by_source[:, column]).max())
         # A budget spanning zero (low == 0 < high) would decide neither way, and
         # silently dropping the claim is how this coverage rotted in the first
-        # place — so demand a decisive budget instead.
+        # place — so latent_unobserved a decisive budget instead.
         assert high == 0 or low >= 1, f"{edge} budget {cfg.edge_budget[edge]} decides nothing"
         if high == 0:
             assert peak == 0.0, f"{edge} is budgeted out yet its column is live ({peak:.3g})"
@@ -300,9 +308,9 @@ def _weekly_jaggedness(series: np.ndarray) -> np.ndarray:
 
 
 def _causal_reach(fired: np.ndarray, l_max: int) -> np.ndarray:
-    """Weeks an adstock kernel of length ``l_max`` can carry a fire into.
+    """Weeks an carryover kernel of length ``l_max`` can carry a fire into.
 
-    Adstock is applied in ``ConvMode.After``: a week-``s`` fire reaches weeks
+    Carryover is applied in ``ConvMode.After``: a week-``s`` fire reaches weeks
     ``s .. s + l_max - 1`` and no others. Everything downstream of the
     convolution (κ-relative saturation, the ``g_cy * beta`` gate) is pointwise,
     so this mask is the exact support of a pulse's effect on the contribution
@@ -316,7 +324,7 @@ def _causal_reach(fired: np.ndarray, l_max: int) -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def texture_arms():
-    """One sampled world, replayed with its channel texture selectively muted.
+    """One sampled world, replayed with its treatment texture selectively muted.
 
     The previous version of these tests asserted ``std / |mean| > 0.05`` on the
     contribution targets, which the texture-FREE arm below also satisfies
@@ -333,14 +341,14 @@ def texture_arms():
     mean-zero and so never enters the parameter-only saturation anchor. The
     pulse is toggled through its FIRE indicator instead of ``use_pulse``:
     ``_expected_levels`` folds ``pulse_amp * pulse_prob`` into that anchor, so
-    dropping the flag would also move every channel's saturation scale and stop
+    dropping the flag would also move every treatment's saturation scale and stop
     being a per-week comparison. All three arms therefore share one anchor,
     asserted below.
 
-    Adstock is pinned to geometric so no channel draws the min-max-rescaled
+    Carryover is pinned to geometric so no treatment draws the min-max-rescaled
     Weibull kernel, which can annihilate individual lags (including the current
-    week) and would make the per-channel weekly signal a family lottery rather
-    than a texture measurement. ``cc`` is budgeted out so a fire on one channel
+    week) and would make the per-treatment weekly signal a family lottery rather
+    than a texture measurement. ``cc`` is budgeted out so a fire on one treatment
     cannot smear into another's column.
     """
     cfg = pg.make_scm_prior(
@@ -350,10 +358,10 @@ def texture_arms():
         n_time_steps=52,
         seed=7,
         edge_budget={"cy": (3, 3), "cc": 0},
-        adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
-        channel_hf_sigma_range=(0.4, 0.4),
-        channel_pulse_prob_range=(0.15, 0.15),
-        channel_pulse_amp_range=(1.5, 1.5),
+        carryover_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        treatment_hf_sigma_range=(0.4, 0.4),
+        treatment_pulse_prob_range=(0.15, 0.15),
+        treatment_pulse_amp_range=(1.5, 1.5),
     )
     world = pg.sample_scm(cfg, seed=7, connect_all=True)
     fired = world.exogenous["eps_c_pulse"] > 0
@@ -371,7 +379,7 @@ def texture_arms():
             world.n_treatments,
             world.n_covariates,
             world.n_latent,
-            burn_in=cfg.adstock_burn_in,
+            burn_in=cfg.carryover_burn_in,
             eps=eps,
         )["outputs"]
         # Only the two outputs these tests read: evaluating the whole output
@@ -393,12 +401,12 @@ def texture_arms():
 
 
 def test_weekly_jitter_survives_the_response_mechanism(texture_arms):
-    """The iid weekly term reaches the contribution target, not just the spend.
+    """The iid weekly term reaches the contribution target, not just the treatment.
 
-    Adstock is a low-pass filter and κ-relative saturation compresses the knee,
-    so texture that moves spend does not automatically move the TARGET — which
+    Carryover is a low-pass filter and κ-relative saturation compresses the knee,
+    so texture that moves treatment does not automatically move the TARGET — which
     is the whole reason the texture prior exists. Measured 8.4-91x over six
-    seeds and eighteen channels; the bound is half the observed floor. All three
+    seeds and eighteen treatments; the bound is half the observed floor. All three
     arms share one saturation anchor, so this is a per-week comparison and not a
     rescaling.
     """
@@ -413,11 +421,11 @@ def test_weekly_jitter_survives_the_response_mechanism(texture_arms):
     )
 
 
-def test_a_pulse_lifts_exactly_the_weeks_its_adstock_kernel_reaches(texture_arms):
+def test_a_pulse_lifts_exactly_the_weeks_its_carryover_kernel_reaches(texture_arms):
     """A campaign pulse is an isolated, causal, bounded-support lift.
 
-    The mechanism-specific signature, stated exactly: the pulse only ADDS spend,
-    and softplus, the non-negative adstock kernel, saturation and the ``beta``
+    The mechanism-specific signature, stated exactly: the pulse only ADDS treatment,
+    and softplus, the non-negative carryover kernel, saturation and the ``beta``
     gate are all monotone increasing, so the target can only rise. It rises on
     precisely the weeks a week-``s`` fire can reach through an ``l_max`` causal
     kernel — bit-identical everywhere else, including every week BEFORE a fire.
@@ -429,11 +437,11 @@ def test_a_pulse_lifts_exactly_the_weeks_its_adstock_kernel_reaches(texture_arms
         arms["pulsed"]["saturation_scale"], arms["quiet"]["saturation_scale"]
     )
     lift = arms["pulsed"]["contributions"] - arms["quiet"]["contributions"]
-    reach = _causal_reach(fired, cfg.l_max)[cfg.adstock_burn_in :]
+    reach = _causal_reach(fired, cfg.l_max)[cfg.carryover_burn_in :]
 
     # both classes present, or one of the two claims below is vacuous
     assert reach.any(axis=0).all() and (~reach).any(axis=0).all(), (
-        f"every channel needs both reached and unreached weeks, got "
+        f"every treatment needs both reached and unreached weeks, got "
         f"{reach.sum(axis=0)} of {reach.shape[0]}"
     )
     assert (lift[reach] > 0.0).all(), "a reached week must be lifted"

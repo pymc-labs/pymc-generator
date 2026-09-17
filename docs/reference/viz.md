@@ -20,7 +20,7 @@ Five figures render a [`data_diagnostics`](diagnostics.md) report.
 | `plot_series_distributions` | one distribution panel per (view, series): raw retained values, or one of the eight per-world slots |
 | `plot_temporal_diagnostics` | per view: an ACF heatmap, a forward lag-xi heatmap, and per-series median roughness / spike |
 | `plot_vif_diagnostics` | per view and design scope (`observed`, `oracle`): the across-world quantile of VIF per predictor |
-| `plot_contribution_diagnostics` | horizontal bars of one sibling cut of the sales contribution hierarchy |
+| `plot_contribution_diagnostics` | horizontal bars of one sibling cut of the outcome contribution hierarchy |
 
 ### Paired views, and the levels-only warning
 
@@ -108,7 +108,7 @@ inputs.
         - plot_dag
         - plot_timeseries
         - plot_decomposition
-        - plot_channels
+        - plot_treatments
         - plot_outcome_distributions
         - plot_dependence_matrices
         - plot_series_distributions

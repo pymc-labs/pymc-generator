@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "force full connectivity in EVERY scenario (overrides connect_all; "
-            "removes the deliberate isolated-null traps from channel_halo/"
+            "removes the deliberate isolated-null traps from treatment_halo/"
             "kitchen_sink, substituting each scenario's connectivity-feasible "
             "edge budget — a trap-tuned budget can leave a node unable to "
             "reach the outcome at all)"

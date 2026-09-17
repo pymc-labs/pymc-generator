@@ -87,7 +87,7 @@ a named audit scenario, each of which isolates one causal pathway.
 ```python exec="1" session="quickstart" source="block" result="text"
 import pymc_generator as pg
 
-scenario = pg.SCENARIOS[1]                       # "confounded_spend"
+scenario = pg.SCENARIOS[1]                       # "confounded_treatment"
 scm = pg.sample_scm(
     scenario.prior(n_time_steps=104, seed=0), seed=0,
     connect_all=scenario.connect_all,
@@ -101,7 +101,7 @@ print(f"drew world {scm.name!r}: {scm.n_treatments} channels, "
 ## 2 · Read its story
 
 `describe_scm` renders everything you need to audit a world as plain text — its
-DAG with drawn coefficients, node connectivity, per-channel mechanisms, the
+DAG with drawn coefficients, node connectivity, per-treatment mechanisms, the
 decomposition-identity check, and signal metrics.
 
 ```python exec="1" session="quickstart" source="block" result="text"
@@ -134,7 +134,7 @@ print(viz_html(plot_timeseries, scm,
 ## 4 · Trust it
 
 The reason to *simulate* rather than collect data is that you get the answer —
-and it is exact. Sales equals the sum of its true components to float precision:
+and it is exact. Outcome equals the sum of its true components to float precision:
 
 ```python exec="1" session="quickstart" source="block" result="text"
 print("max |Σ components − sales| =", f"{scm.identity_error():.2e}")
@@ -150,7 +150,7 @@ import pymc_generator as pg
 
 pg.write_scm_bundle(scm, "my_world/")
 # my_world/
-#   dataset.csv            model inputs (week, spend_C*, control_Z*, sales_Y)
+#   dataset.csv            model inputs (week, treatment_C*, covariate_Z*, outcome_Y)
 #   recipe.json            configuration, seed, and replay instructions
 #   true_components.csv    the full additive decomposition truth
 #   description.txt        the world's story
@@ -193,7 +193,7 @@ equations behind every world.
 <div class="pg-card" markdown>
 <div class="pg-card__icon">🧮</div>
 ### [The exact decomposition](guide/decomposition.md)
-How sales splits — exactly — into direct, baseline, and indirect effects, and
+How outcome splits — exactly — into direct, baseline, and indirect effects, and
 how to verify it yourself.
 </div>
 

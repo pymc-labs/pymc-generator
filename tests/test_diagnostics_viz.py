@@ -23,40 +23,42 @@ from pymc_generator.diagnostics import DEPENDENCE_METRICS, data_diagnostics
 
 def make_corpus(
     *,
-    spend: np.ndarray,
-    controls: np.ndarray,
-    demand: np.ndarray,
+    treatment: np.ndarray,
+    covariates: np.ndarray,
+    latent_unobserved: np.ndarray,
     contributions: np.ndarray,
-    control_contribution: np.ndarray,
-    confounder_contribution: np.ndarray,
+    covariate_contribution: np.ndarray,
+    latent_unobserved_contribution: np.ndarray,
     indirect_by_source: np.ndarray,
     baseline_intrinsic: np.ndarray,
-    sales_noise: np.ndarray,
-    channel_mask: np.ndarray,
-    control_mask: np.ndarray,
+    outcome_noise: np.ndarray,
+    treatment_mask: np.ndarray,
+    covariate_mask: np.ndarray,
     latent_mask: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """A minimal current-schema corpus whose sales identity holds exactly."""
+    """A minimal current-schema corpus whose outcome identity holds exactly."""
     baseline = (
-        baseline_intrinsic + confounder_contribution.sum(axis=2) + control_contribution.sum(axis=2)
+        baseline_intrinsic
+        + latent_unobserved_contribution.sum(axis=2)
+        + covariate_contribution.sum(axis=2)
     )
-    sales = baseline + sales_noise + contributions.sum(axis=2) + indirect_by_source.sum(axis=2)
+    outcome = baseline + outcome_noise + contributions.sum(axis=2) + indirect_by_source.sum(axis=2)
     return {
-        "spend_raw": spend,
-        "controls": controls,
-        "demand": demand,
-        "sales_raw": sales,
+        "treatment_raw": treatment,
+        "covariates": covariates,
+        "latent_unobserved": latent_unobserved,
+        "outcome_raw": outcome,
         "baseline_raw": baseline,
         "baseline_intrinsic": baseline_intrinsic,
-        "sales_noise": sales_noise,
-        "control_contribution": control_contribution,
-        "confounder_contribution": confounder_contribution,
-        "contributions_raw": contributions,
+        "outcome_noise": outcome_noise,
+        "covariate_contribution": covariate_contribution,
+        "latent_unobserved_contribution": latent_unobserved_contribution,
+        "treatment_contribution_raw": contributions,
         "indirect_effects_by_source": indirect_by_source,
         "indirect_effects": indirect_by_source.sum(axis=2),
-        "sales_scale": np.maximum(sales.std(axis=1), 1e-3),
-        "treatment_active_mask": channel_mask.astype(np.uint8),
-        "covariate_active_mask": control_mask.astype(np.uint8),
+        "outcome_scale": np.maximum(outcome.std(axis=1), 1e-3),
+        "treatment_active_mask": treatment_mask.astype(np.uint8),
+        "covariate_active_mask": covariate_mask.astype(np.uint8),
         "latent_active_mask": latent_mask.astype(np.uint8),
     }
 
@@ -65,59 +67,59 @@ def toy_corpus(
     *,
     n_worlds: int = 3,
     n_time: int = 16,
-    n_channels: int = 3,
-    n_controls: int = 2,
+    n_treatments: int = 3,
+    n_covariates: int = 2,
     seed: int = 7,
-    dead_last_channel: bool = True,
-    quadratic_second_channel: bool = False,
-    collinear_first_control: bool = False,
-    zero_last_control: bool = False,
+    dead_last_treatment: bool = True,
+    quadratic_second_treatment: bool = False,
+    collinear_first_covariate: bool = False,
+    zero_last_covariate: bool = False,
 ) -> dict[str, np.ndarray]:
     """A fast synthetic corpus with switchable diagnosable structures.
 
-    * ``dead_last_channel`` pads the last channel off (no eligible world),
-    * ``quadratic_second_channel`` makes C2 an exact function of C1 (so xi is
+    * ``dead_last_treatment`` pads the last treatment off (no eligible world),
+    * ``quadratic_second_treatment`` makes C2 an exact function of C1 (so xi is
       strongly asymmetric between them),
-    * ``collinear_first_control`` sets Z1 = C1 (so the observed design is
+    * ``collinear_first_covariate`` sets Z1 = C1 (so the observed design is
       exactly collinear and VIF is a valid ``+inf``),
-    * ``zero_last_control`` keeps the last control ACTIVE but identically
+    * ``zero_last_covariate`` keeps the last covariate ACTIVE but identically
       zero (a real structural zero, and a constant predictor for VIF).
     """
     rng = np.random.default_rng(seed)
     shape2 = (n_worlds, n_time)
-    spend = rng.normal(size=(*shape2, n_channels))
-    controls = rng.normal(size=(*shape2, n_controls))
-    demand = rng.normal(size=(*shape2, 2))
-    contributions = rng.normal(size=(*shape2, n_channels))
-    control_contribution = rng.normal(size=(*shape2, n_controls))
-    confounder_contribution = rng.normal(size=(*shape2, 2))
+    treatment = rng.normal(size=(*shape2, n_treatments))
+    covariates = rng.normal(size=(*shape2, n_covariates))
+    latent_unobserved = rng.normal(size=(*shape2, 2))
+    contributions = rng.normal(size=(*shape2, n_treatments))
+    covariate_contribution = rng.normal(size=(*shape2, n_covariates))
+    latent_unobserved_contribution = rng.normal(size=(*shape2, 2))
     indirect = rng.normal(size=(*shape2, 3))
-    channel_mask = np.ones((n_worlds, n_channels), dtype=bool)
-    control_mask = np.ones((n_worlds, n_controls), dtype=bool)
+    treatment_mask = np.ones((n_worlds, n_treatments), dtype=bool)
+    covariate_mask = np.ones((n_worlds, n_covariates), dtype=bool)
     latent_mask = np.ones((n_worlds, 2), dtype=bool)
-    if quadratic_second_channel:
-        spend[:, :, 1] = spend[:, :, 0] ** 2
-    if collinear_first_control:
-        controls[:, :, 0] = spend[:, :, 0]
-    if zero_last_control:
-        controls[:, :, -1] = 0.0
-        control_contribution[:, :, -1] = 0.0
-    if dead_last_channel:
-        channel_mask[:, -1] = False
-        spend[:, :, -1] = 0.0
+    if quadratic_second_treatment:
+        treatment[:, :, 1] = treatment[:, :, 0] ** 2
+    if collinear_first_covariate:
+        covariates[:, :, 0] = treatment[:, :, 0]
+    if zero_last_covariate:
+        covariates[:, :, -1] = 0.0
+        covariate_contribution[:, :, -1] = 0.0
+    if dead_last_treatment:
+        treatment_mask[:, -1] = False
+        treatment[:, :, -1] = 0.0
         contributions[:, :, -1] = 0.0
     return make_corpus(
-        spend=spend,
-        controls=controls,
-        demand=demand,
+        treatment=treatment,
+        covariates=covariates,
+        latent_unobserved=latent_unobserved,
         contributions=contributions,
-        control_contribution=control_contribution,
-        confounder_contribution=confounder_contribution,
+        covariate_contribution=covariate_contribution,
+        latent_unobserved_contribution=latent_unobserved_contribution,
         indirect_by_source=indirect,
         baseline_intrinsic=rng.normal(size=shape2),
-        sales_noise=rng.normal(size=shape2),
-        channel_mask=channel_mask,
-        control_mask=control_mask,
+        outcome_noise=rng.normal(size=shape2),
+        treatment_mask=treatment_mask,
+        covariate_mask=covariate_mask,
         latent_mask=latent_mask,
     )
 
@@ -135,9 +137,9 @@ def report():
     """Padded C3, an exactly-collinear Z1, and an identically-zero Z2."""
     return data_diagnostics(
         toy_corpus(
-            quadratic_second_channel=True,
-            collinear_first_control=True,
-            zero_last_control=True,
+            quadratic_second_treatment=True,
+            collinear_first_covariate=True,
+            zero_last_covariate=True,
         )
     )
 
@@ -151,7 +153,9 @@ def levels_report():
 def wide_report():
     """Exactly ``MAX_HEATMAP_KEYS`` series: 40 C + 20 Z + 2 D + B + Y."""
     return data_diagnostics(
-        toy_corpus(n_worlds=1, n_time=10, n_channels=40, n_controls=20, dead_last_channel=False),
+        toy_corpus(
+            n_worlds=1, n_time=10, n_treatments=40, n_covariates=20, dead_last_treatment=False
+        ),
         views=("levels",),
     )
 
@@ -237,7 +241,7 @@ def fingerprint(rep) -> str:
                 vif.eligible.tobytes(),
             ]
     budget = rep.contributions
-    parts += [budget.active.tobytes(), budget.sales_total.tobytes()]
+    parts += [budget.active.tobytes(), budget.outcome_total.tobytes()]
     parts += [budget.measures[field].tobytes() for field in sorted(budget.measures)]
     return hashlib.sha256(b"".join(parts)).hexdigest()
 
@@ -319,7 +323,7 @@ def test_dependence_masks_the_diagonal_and_annotates_missing_pairs(report, captu
     assert np.all(np.ma.getmaskarray(drawn)[diagonal]), "the diagonal is never reported"
     expected = report["levels"].dependence.matrix("pearson", quantile=0.5)
     missing = ~np.isfinite(expected) & ~diagonal
-    assert missing.any(), "the padded channel must leave unreported pairs"
+    assert missing.any(), "the padded treatment must leave unreported pairs"
     assert np.all(np.ma.getmaskarray(drawn)[missing])
     assert axis_texts(ax).count("N/A") == int(missing.sum())
 
@@ -561,7 +565,7 @@ def test_real_active_zero_renders_as_a_zero_and_missing_data_is_annotated(
 
 def test_a_view_with_no_difference_to_take_is_annotated_as_such(capture, tmp_path):
     """One time step: the worlds are eligible, the difference view is empty."""
-    one_step = data_diagnostics(toy_corpus(n_time=1, dead_last_channel=False))
+    one_step = data_diagnostics(toy_corpus(n_time=1, dead_last_treatment=False))
     assert one_step["differences"].series.n_time_steps == 0
 
     viz.plot_series_distributions(
@@ -581,7 +585,7 @@ def test_a_view_with_no_difference_to_take_is_annotated_as_such(capture, tmp_pat
 
 
 def test_empty_lag_axis_reports_no_valid_lags_without_claiming_ineligibility(capture, tmp_path):
-    one_step = data_diagnostics(toy_corpus(n_time=1, dead_last_channel=False))
+    one_step = data_diagnostics(toy_corpus(n_time=1, dead_last_treatment=False))
     assert one_step.lags == ()
 
     viz.plot_temporal_diagnostics(
@@ -688,13 +692,13 @@ def test_micro_weighting_plots_the_pooled_value(report, capture, tmp_path):
     viz.plot_contribution_diagnostics(
         report,
         str(tmp_path / "contrib.png"),
-        sibling_set="media_children",
+        sibling_set="treatment_children",
         weighting="micro",
         measure="total",
     )
     ax = only_figure(capture).axes[0]
     budget = report.contributions
-    cut = [d.key for d in budget.descriptors if d.sibling_set == "media_children"]
+    cut = [d.key for d in budget.descriptors if d.sibling_set == "treatment_children"]
     for patch, key in zip(ax.patches, cut):
         stats, _ = budget.stats(key, measure="total", mode="net", weighting="micro")
         assert patch.get_width() == pytest.approx(stats["value"])
@@ -702,7 +706,9 @@ def test_micro_weighting_plots_the_pooled_value(report, capture, tmp_path):
 
 
 def test_partial_projection_reports_the_omitted_siblings(report, capture, tmp_path):
-    viz.plot_contribution_diagnostics(report, str(tmp_path / "contrib.png"), keys=("media_total",))
+    viz.plot_contribution_diagnostics(
+        report, str(tmp_path / "contrib.png"), keys=("treatment_total",)
+    )
     fig = only_figure(capture)
     notes = [t.get_text() for t in fig.texts]
     assert any(
@@ -718,7 +724,7 @@ def test_inactive_row_is_a_real_zero_unconditionally_and_na_when_conditioned(
     viz.plot_contribution_diagnostics(
         report,
         str(tmp_path / "contrib.png"),
-        sibling_set="channel_direct_children",
+        sibling_set="treatment_direct_children",
         keys=("C3_direct_y",),
     )
     ax = only_figure(capture).axes[0]
@@ -730,7 +736,7 @@ def test_inactive_row_is_a_real_zero_unconditionally_and_na_when_conditioned(
     viz.plot_contribution_diagnostics(
         report,
         str(tmp_path / "contrib2.png"),
-        sibling_set="channel_direct_children",
+        sibling_set="treatment_direct_children",
         keys=("C3_direct_y",),
         population="conditional_on_active",
     )
@@ -740,16 +746,16 @@ def test_inactive_row_is_a_real_zero_unconditionally_and_na_when_conditioned(
 
 
 def test_unavailable_basis_is_named(report, tmp_path):
-    assert "observed_path_media" not in report.contribution_bases
-    with pytest.raises(ValueError, match="observed_path_media' is not available"):
+    assert "observed_path_treatment" not in report.contribution_bases
+    with pytest.raises(ValueError, match="observed_path_treatment' is not available"):
         viz.plot_contribution_diagnostics(
-            report, str(tmp_path / "c.png"), basis="observed_path_media"
+            report, str(tmp_path / "c.png"), basis="observed_path_treatment"
         )
 
 
 def test_unknown_sibling_set_lists_the_cuts(report, tmp_path):
-    with pytest.raises(ValueError, match="unknown sibling_set 'channels'"):
-        viz.plot_contribution_diagnostics(report, str(tmp_path / "c.png"), sibling_set="channels")
+    with pytest.raises(ValueError, match="unknown sibling_set 'treatments'"):
+        viz.plot_contribution_diagnostics(report, str(tmp_path / "c.png"), sibling_set="treatments")
 
 
 def test_unknown_measure_is_rejected_by_the_budget(report, tmp_path):
@@ -830,7 +836,9 @@ def test_heatmap_key_bound_is_enforced_and_the_figure_stays_capped(wide_report, 
 
 def test_over_the_heatmap_key_bound_raises(tmp_path):
     over = data_diagnostics(
-        toy_corpus(n_worlds=1, n_time=10, n_channels=41, n_controls=20, dead_last_channel=False),
+        toy_corpus(
+            n_worlds=1, n_time=10, n_treatments=41, n_covariates=20, dead_last_treatment=False
+        ),
         views=("levels",),
     )
     assert len(over.keys) == viz.MAX_HEATMAP_KEYS + 1
@@ -861,12 +869,12 @@ def test_panel_bound_is_enforced_and_the_grid_stays_capped(capture, tmp_path):
 
 def test_over_the_contribution_row_bound_raises(tmp_path):
     wide = data_diagnostics(
-        toy_corpus(n_worlds=1, n_time=10, n_channels=25, dead_last_channel=False),
+        toy_corpus(n_worlds=1, n_time=10, n_treatments=25, dead_last_treatment=False),
         views=("levels",),
     )
     with pytest.raises(ValueError, match="exceed this figure's bound of 24"):
         viz.plot_contribution_diagnostics(
-            wide, str(tmp_path / "c.png"), sibling_set="channel_direct_children"
+            wide, str(tmp_path / "c.png"), sibling_set="treatment_direct_children"
         )
 
 

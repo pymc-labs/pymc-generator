@@ -1,9 +1,9 @@
 # Interrogating the generated data
 
 A corpus can satisfy every schema contract, close its decomposition to machine
-precision, and still be the wrong training data: the channels may be
-collinear, the latent demand may dominate every series, the spend may be a
-smooth drift with no week-to-week signal, or media may account for 2% of sales.
+precision, and still be the wrong training data: the treatments may be
+collinear, the latent-unobserved factors may dominate every series, the treatment may be a
+smooth drift with no week-to-week signal, or treatments may account for 2% of outcome.
 `data_diagnostics` is the blood panel for that question. One call produces one
 report object, and every aspect of the data is a facet of it.
 
@@ -41,7 +41,7 @@ print(rep.table())
 ```
 
 The top cut is the first thing to read: five non-overlapping groups whose
-signed shares sum to exactly 1 in every world. If media sits at 3% you are
+signed shares sum to exactly 1 in every world. If treatment contribution is 3% you are
 training a model to find something that is barely there; if `Y_noise` sits at
 40% the target is mostly unlearnable.
 
@@ -60,7 +60,7 @@ print(rep["differences"].vif["observed"].table())
 
 Two scopes are reported. `observed` holds the active `C` and `Z` series — the
 redundancy a real model would face. `oracle` adds the latent `D`, so the gap
-between them is exactly the redundancy hidden demand injects into the design a
+between them is exactly the redundancy hidden latent-unobserved factors inject into the design a
 model cannot see. Read the **differences** view first: independent random walks
 routinely produce a level VIF above 10 with no shared structure at all.
 
@@ -109,7 +109,7 @@ print(rep["levels"].series.table("roughness"))
 
 `roughness` is 1 for white noise and → 0 for a smooth drift — the same
 high-frequency ratio the [signal gate](../reference/signal.md) uses, applied to
-every series rather than direct channels only. `spike` is a robust
+every series rather than direct treatments only. `spike` is a robust
 `max|Δ − median Δ| / IQR(Δ)`: it is ~1.7 for white noise and ~100 for a series
 that is flat apart from one pulse, and it is `+inf` (a real, counted value, not
 a missing one) when a single jump sits on an otherwise perfectly flat series.
@@ -130,7 +130,7 @@ cfg = pg.make_scm_prior(
 )
 corpus = pg.sample_prior_predictive(cfg)
 one = pg.data_diagnostics(corpus, worlds=[0])
-print(one.contributions.table(sibling_set="media_children", measure="share"))
+print(one.contributions.table(sibling_set="treatment_children", measure="share"))
 print()
 print(one.contributions.select(("C1_direct_y", "C2_direct_y")).table(measure="total"))
 ```
@@ -167,7 +167,7 @@ that is genuinely zero is a real zero and looks like one.
 * **Nothing is causal.** `lag_xi` is not Granger causality and a high `xi` is
   not an effect. The causal answer already exists elsewhere — it is the exact
   [decomposition](decomposition.md).
-* **Per-channel contributions are direct-path.** The aggregate indirect terms
+* **Per-treatment contributions are direct-path.** The aggregate indirect terms
   cannot be split per node from a corpus, and the report never pretends they
   can.
 * **`D` and `B` are retained ground truth**, kept so you can audit what a model

@@ -1,13 +1,13 @@
 """Stratified corpus sampler for the additive causal SCM.
 
-Each world (task) is an additive structural causal model over latent demand
-factors D, observed controls Z, media channels C, a baseline B and sales Y.
+Each world (task) is an additive structural causal model over latent latent_unobserved
+factors D, observed covariates Z, treatment treatments C, a baseline B and outcome Y.
 The DAG is drawn per cell by :func:`sample_g_additive` (per-edge-type
 Bernoulli rates or "pot" budgets over the extended 8-block layout). Each world
 is then a PyMC model (:mod:`pymc_generator.world_model`) whose continuous
 priors are pm distributions and whose noise is pm RVs; drawing it yields the
 series with exact interventional decomposition targets — direct contributions,
-per-control / per-confounder contributions, ``baseline_intrinsic`` and the
+per-covariate / per-confounder contributions, ``baseline_intrinsic`` and the
 telescoping 3-source indirect split ``(cc, zc, dc)``.
 
 The corpus schema is the dict-of-ndarrays documented in
@@ -44,8 +44,8 @@ from .slots import (
     SlotLayout,
 )
 
-#: Canonical categorical orders for media-response mechanism family ids.
-ADSTOCK_FAMILY_KEYS: tuple[str, ...] = ("none", "geometric", "weibull")
+#: Canonical categorical orders for treatment-response mechanism family ids.
+CARRYOVER_FAMILY_KEYS: tuple[str, ...] = ("none", "geometric", "weibull")
 SATURATION_FAMILY_KEYS: tuple[str, ...] = (
     "linear",
     "hill",
@@ -58,13 +58,13 @@ SATURATION_FAMILY_KEYS: tuple[str, ...] = (
 #: Persisted outcome-process contract. Version 1 makes iid ``RW_Y`` and its
 #: relative/absolute scale mode explicit so pre-change corpora cannot validate
 #: as worlds drawn under the new outcome-noise semantics.
-OUTCOME_NOISE_SEMANTICS = "baseline-walk-iid-sales-noise"
+OUTCOME_NOISE_SEMANTICS = "baseline-walk-iid-outcome-noise"
 OUTCOME_NOISE_VERSION = 1
 
 
-def _default_adstock_family_probs() -> dict[str, float]:
-    """Return a fresh default categorical distribution over adstock families."""
-    return dict(zip(ADSTOCK_FAMILY_KEYS, (0.15, 0.425, 0.425), strict=True))
+def _default_carryover_family_probs() -> dict[str, float]:
+    """Return a fresh default categorical distribution over carryover families."""
+    return dict(zip(CARRYOVER_FAMILY_KEYS, (0.15, 0.425, 0.425), strict=True))
 
 
 def _default_saturation_family_probs() -> dict[str, float]:
@@ -85,7 +85,7 @@ MAX_TOPUPS_PER_CELL = 8
 #: (ACE). Each width spans a useful fraction of that quantity's full prior
 #: range, narrow enough to inform a cell without collapsing it to a point.
 PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
-    "adstock_alpha": (0.05, 0.45),
+    "carryover_alpha": (0.05, 0.45),
     "hill_shape": (0.2, 1.6),
 }
 
@@ -110,10 +110,10 @@ def _minimum_valid_query_horizon(
 ) -> int | None:
     """Return the first valid candidate horizon at or above ``n_time_steps``, if bounded.
 
-    ``response_support`` is the largest lag the admitted adstock kernels can
+    ``response_support`` is the largest lag the admitted carryover kernels can
     reach (see :func:`~pymc_generator.signal_diagnostics.
     admitted_response_support_weeks`), i.e. the number of leading reported
-    weeks whose media response depends on pre-window spend.
+    weeks whose treatment response depends on pre-window treatment.
     """
     for candidate in range(n_time_steps, n_time_steps + MAX_QUERY_HORIZON_SEARCH_STEPS + 1):
         n_query = _n_query(candidate, query_frac)
@@ -173,7 +173,7 @@ def _is_retryable_draw_failure(exc: BaseException) -> bool:
     parameter, and a fresh seed simply lands elsewhere. Retrying anything else
     turns a repeatable programming error into a silent stream of empty batches,
     which is what the caller then misreads as a strict realism filter — so the
-    predicate demands BOTH that the failure is numeric AND that it escaped a
+    predicate latent_unobserved BOTH that the failure is numeric AND that it escaped a
     node PyTensor was evaluating (rather than our own call frames around it).
     """
     if not isinstance(exc, _RETRYABLE_DRAW_ERRORS):
@@ -198,26 +198,26 @@ class SCMPrior:
     latent_active_mask.
 
     Key fields:
-        n_treatments / n_covariates / n_latent: padded graph sizes (media
-            channels / observed controls / hidden confounders).
+        n_treatments / n_covariates / n_latent: padded graph sizes (treatment
+            treatments / observed covariates / hidden confounders).
         n_treatments_active_range / ...: per-cell active-count ranges; inactive
             nodes are zero-padded to the sizes above and masked.
 
     Prefer building configs through
     :func:`pymc_generator.presets.make_scm_prior`, which pins the
-    layout and enables the supported "diverse" channel texture.
+    layout and enables the supported "diverse" treatment texture.
     """
 
     n_time_steps: int = N_TIME_STEPS_DEMO
-    n_treatments: int = N_TREATMENTS_DEMO  # media channels (the interventions / treatments)
-    n_covariates: int = N_COVARIATES_DEMO  # observed controls
-    n_latent: int = N_LATENT_DEMO  # hidden confounders (latent demand factors)
+    n_treatments: int = N_TREATMENTS_DEMO  # treatment treatments (the interventions / treatments)
+    n_covariates: int = N_COVARIATES_DEMO  # observed covariates
+    n_latent: int = N_LATENT_DEMO  # hidden confounders (latent latent_unobserved factors)
     n_cells: int = 50
     draws_per_cell: int = 20
     val_cell_frac: float = 0.2
     query_frac: float = 0.25
     p_long_horizon: float = 0.5  # fraction of tasks with 50% horizon (vs 25%)
-    spend_cv_floor: float = 0.08
+    treatment_cv_floor: float = 0.08
     l_max: int = 8
     seed: int = 0
 
@@ -231,16 +231,18 @@ class SCMPrior:
     n_latent_active_range: tuple[int, int] = (1, 5)
 
     # -- prior-range constants -------------------------------------------
-    # Per-channel media-response mechanism priors (realized as PyMC
+    # Per-treatment treatment-response mechanism priors (realized as PyMC
     # distributions in pymc_generator.world_model.build_world_model):
-    adstock_alpha_range: tuple[float, float] = (0.2, 0.8)
-    # Adstock family probabilities by ``ADSTOCK_FAMILY_KEYS``.
-    adstock_family_probs: dict[str, float] = field(default_factory=_default_adstock_family_probs)
+    carryover_alpha_range: tuple[float, float] = (0.2, 0.8)
+    # Carryover family probabilities by ``CARRYOVER_FAMILY_KEYS``.
+    carryover_family_probs: dict[str, float] = field(
+        default_factory=_default_carryover_family_probs
+    )
     # Saturation family probabilities by ``SATURATION_FAMILY_KEYS``.
     saturation_family_probs: dict[str, float] = field(
         default_factory=_default_saturation_family_probs
     )
-    # Weibull adstock prior ranges
+    # Weibull carryover prior ranges
     weibull_lam_range: tuple[float, float] = (2.0, 8.0)
     weibull_k_range: tuple[float, float] = (1.5, 4.0)
 
@@ -258,19 +260,19 @@ class SCMPrior:
     zz_coeff_range: tuple[float, float] = (-0.2, 0.2)  # Z->Z (signed)
     dy_coeff_range: tuple[float, float] = (0.15, 0.45)  # D->Y loadings
     zy_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->Y loadings
-    beta_additive_range: tuple[float, float] = (0.5, 2.0)  # channel effects
+    beta_additive_range: tuple[float, float] = (0.5, 2.0)  # treatment effects
     # Random-walk and outcome-noise priors.
-    rw_control_mean_range: tuple[float, float] = (-1.0, 1.0)  # control drive (Z)
-    rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # channels
+    rw_covariate_mean_range: tuple[float, float] = (-1.0, 1.0)  # covariate drive (Z)
+    rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # treatments
     rw_baseline_mean_range: tuple[float, float] = (3.0, 8.0)  # baseline level
     rw_std_sigma: float = 1.0  # HalfNormal prior for Z and absolute-mode RW_B std
     rw_baseline_std_sigma: float | None = None  # absolute-mode RW_B; None follows rw_std_sigma
-    rw_sales_std_sigma: float = 0.25  # absolute-mode iid sales-noise std
+    rw_outcome_std_sigma: float = 0.25  # absolute-mode iid outcome-noise std
     outcome_std_mode: Literal["relative", "absolute"] = "relative"
     # Relative-mode outcome amplitudes multiply
     # sqrt(sum_k((g_cy[k] * beta[k]) ** 2)), never a realized series.
     rw_baseline_std_range: tuple[float, float] = (0.000, 0.093)
-    rw_sales_std_range: tuple[float, float] = (0.010, 0.028)
+    rw_outcome_std_range: tuple[float, float] = (0.010, 0.028)
     rw_smoothness_alpha: float = 2.0  # Beta prior alpha for smoothness
     rw_smoothness_beta: float = 2.0  # Beta prior beta for smoothness
     # 26 weeks (half a year) reproduces the CURRENT n_time_steps=104 reference
@@ -279,58 +281,58 @@ class SCMPrior:
     # config knob, not a constant, so drift timescale stays tunable
     # independently of n_time_steps — that flexibility is the point.
     rw_smoothness_max_weeks: int = 26
-    # Optional shared innovation between the baseline and every channel. When
+    # Optional shared innovation between the baseline and every treatment. When
     # enabled, rho is resolved per world and mixes their already-standardized
     # innovations without changing either marginal innovation variance.
     confounding_strength_range: tuple[float, float] | None = None
 
-    # -- Channel own-drive variation --------------------------------------
-    # ``rw_channel_std_range`` is the channel random-walk standard-deviation
-    # prior, relative to each channel's own level (softplus of its walk mean).
-    # That keeps channel variation scale-free across small and large channels.
-    # High-frequency exogenous drive on the channel's own pre-softplus input
+    # -- Treatment own-drive variation --------------------------------------
+    # ``rw_treatment_std_range`` is the treatment random-walk standard-deviation
+    # prior, relative to each treatment's own level (softplus of its walk mean).
+    # That keeps treatment variation scale-free across small and large treatments.
+    # High-frequency exogenous drive on the treatment's own pre-softplus input
     # comes from iid weekly noise (sigma ~ U(range)) and campaign pulses
     # (per-week probability ~ U(prob_range), amplitude ~ U(amp_range)).
     # Defaults retain the deprecated smooth-walk-only texture; make_scm_prior
     # enables the diverse texture, which is the supported prior.
-    rw_channel_std_range: tuple[float, float] = (0.15, 0.8)
-    channel_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
-    channel_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
-    channel_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
+    rw_treatment_std_range: tuple[float, float] = (0.15, 0.8)
+    treatment_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
+    treatment_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
+    treatment_pulse_amp_range: tuple[float, float] = (0.5, 1.5)
 
-    # -- Control texture ---------------------------------------------------
-    # A control's own drive is otherwise a smoothed random walk, i.e. exactly
+    # -- Covariate texture ---------------------------------------------------
+    # A covariate's own drive is otherwise a smoothed random walk, i.e. exactly
     # the function class the equally smooth baseline walk (RW_B) spans, so the
     # Z->Y coefficient trades off against baseline drift and is only weakly
     # identified. These knobs add the high-frequency content a smooth walk
     # cannot mimic — iid weekly noise (sigma ~ U(range)) and calendar pulses
     # (per-week probability ~ U(prob_range), amplitude ~ U(amp_range)) — which
-    # is also what real controls (promos, holidays, price steps) look like.
-    # Both magnitudes are drawn RELATIVE to the control's own walk std, so they
-    # are scale-free like the channel factors; unlike the channel pulse, the
-    # control pulse is CENTRED (``amp * (fire - prob)``), because a control is
+    # is also what real covariates (promos, holidays, price steps) look like.
+    # Both magnitudes are drawn RELATIVE to the covariate's own walk std, so they
+    # are scale-free like the treatment factors; unlike the treatment pulse, the
+    # covariate pulse is CENTRED (``amp * (fire - prob)``), because a covariate is
     # signed and its level is identified by ``rw_z_mean`` alone.
     # Defaults are inert: no graph term, the magnitudes degenerate to constants
     # (no parameter RV, no RNG consumed) and corpora stay byte-identical to the
     # pre-texture format. make_scm_prior enables them.
-    control_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
-    control_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
-    control_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
+    covariate_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
+    covariate_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
+    covariate_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
 
     # -- Intercept floor ---------------------------------------------------
     # The intercept walk RW_B is signed, so the baseline — and, once the signed
-    # D->Y / Z->Y terms are added, sales — can dip below zero. Rare at the
-    # default relative-mode scale (mean 3-8, amplitude <= ~0.12 x the media
+    # D->Y / Z->Y terms are added, outcome — can dip below zero. Rare at the
+    # default relative-mode scale (mean 3-8, amplitude <= ~0.12 x the treatment
     # amplitude; measured 0.08% of weeks) but routine in absolute mode with a
     # low mean. A floor CENSORS the intercept: ``B = max(RW_B, baseline_floor)``,
     # so B is >= floor by construction and may sit exactly AT it (a censored
     # walk, not a softplus — zeros are a legitimate baseline).
     #
     # This is a PRIOR-level constraint on one additive term, so it stays inside
-    # the function class a consuming MMM can represent. Sales is deliberately
+    # the function class a consuming MMM can represent. Outcome is deliberately
     # NOT clamped: that would censor the OBSERVATION (a likelihood-level
     # change) and make every additive-Gaussian estimator — including this
-    # package's own oracle — misspecified. Non-negative sales remains enforced
+    # package's own oracle — misspecified. Non-negative outcome remains enforced
     # exactly by the acceptance filter. Note the oracle's analytic
     # ``latent="marginal"`` mode is unavailable with a floor, because a
     # censored walk is not Gaussian.
@@ -338,26 +340,26 @@ class SCMPrior:
     baseline_floor: float | None = None
     # WHAT the floor clips, when one is configured.
     #   "intercept" (default): the intercept walk only. Every other term stays
-    #       exactly linear in its node, so ``control_contribution[:, m]`` remains
+    #       exactly linear in its node, so ``covariate_contribution[:, m]`` remains
     #       ``g_zy[m]·ρ[m]·Z[:, m]`` — but a large negative ρ·Z can still drag
-    #       the non-media total, and sales, below zero.
-    #   "non_media": the running non-media TOTAL, clipped as each parent joins in
-    #       the locked order intercept -> confounders -> controls. A negative
-    #       control effect is then credited only down to the floor and the excess
-    #       is absorbed, so the whole mean function of sales is >= 0 by
-    #       construction (media contributions are already >= 0). Per-node columns
+    #       the non-treatment total, and outcome, below zero.
+    #   "non_treatment": the running non-treatment TOTAL, clipped as each parent joins in
+    #       the locked order intercept -> confounders -> covariates. A negative
+    #       covariate effect is then credited only down to the floor and the excess
+    #       is absorbed, so the whole mean function of outcome is >= 0 by
+    #       construction (treatment contributions are already >= 0). Per-node columns
     #       become the telescoping differences each node caused — exact, and
     #       identical to the linear split wherever the floor does not bind, but
     #       no longer linear in the node where it does.
-    baseline_floor_scope: Literal["intercept", "non_media"] = "intercept"
-    adstock_burn_in: int = 0
+    baseline_floor_scope: Literal["intercept", "non_treatment"] = "intercept"
+    carryover_burn_in: int = 0
 
-    # Symbolic, per-draw held-level channel shocks. A shock clamps observed
-    # spend for its window; it never touches the channel's response state, so
-    # the clamped path adstocks with the ordinary normalized causal kernel.
-    n_channel_shocks: int = 0
-    channel_shock_length_range: tuple[int, int] = (2, 2)
-    channel_shock_level_range: tuple[float, float] = (0.0, 0.0)
+    # Symbolic, per-draw held-level treatment shocks. A shock clamps observed
+    # treatment for its window; it never touches the treatment's response state, so
+    # the clamped path carryovers with the ordinary normalized causal kernel.
+    n_treatment_shocks: int = 0
+    treatment_shock_length_range: tuple[int, int] = (2, 2)
+    treatment_shock_level_range: tuple[float, float] = (0.0, 0.0)
 
     # Dense truth-derived attribution labels are metadata, never model inputs.
     # Disable them for feature-only shards without changing generated worlds.
@@ -390,18 +392,18 @@ class SCMPrior:
     # scattered uniformly over eligible node pairs instead of drawn per-pair
     # Bernoulli; each type's pot is independent. Types absent from the dict keep
     # their Bernoulli base rate. None (default) => byte-identical legacy path.
-    # Example: {"zc": 5} places up to 5 control->channel arrows however they
-    # land (one control fanning out, or spread across controls — capped at 5),
-    # while "zy" (controls' effect on the outcome) is untouched.
+    # Example: {"zc": 5} places up to 5 covariate->treatment arrows however they
+    # land (one covariate fanning out, or spread across covariates — capped at 5),
+    # while "zy" (covariates' effect on the outcome) is untouched.
     # Note: "cy" keeps its >=1 floor from the degenerate C->Y guard, so a cy
     # budget that draws 0 still yields exactly one C->Y edge.
     edge_budget: dict[str, int | tuple[int, int]] | None = None
 
-    # Reserve active channels with no direct C->Y edge and zero direct
+    # Reserve active treatments with no direct C->Y edge and zero direct
     # contribution. Unlike a fixed cy budget, the cap follows each cell's
-    # active count. Such channels can still affect Y through C->C paths.
+    # active count. Such treatments can still affect Y through C->C paths.
     # Zero leaves the graph-sampling RNG schedule unchanged.
-    min_no_direct_effect_channels: int = 0
+    min_no_direct_effect_treatments: int = 0
 
     @property
     def layout(self) -> SlotLayout:
@@ -450,7 +452,7 @@ class SCMPrior:
         Quantities iterate in the LOCKED ``PRIOR_COND_QUANTITIES`` order (the
         order both the interval RNG draws and the ``prior_cond`` columns
         follow). Supports come from the same constants the unconditioned
-        priors use — ``adstock_alpha_range`` for the geometric adstock decay,
+        priors use — ``carryover_alpha_range`` for the geometric carryover decay,
         ``SATURATION_PRIOR_RANGES["hill"]["slope"]`` for the Hill shape — so
         the conditioned interval is nested in the exact global prior by
         construction. Width ranges default to
@@ -461,9 +463,9 @@ class SCMPrior:
         from .mechanisms import SATURATION_PRIOR_RANGES
 
         supports: dict[str, tuple[float, float]] = {
-            "adstock_alpha": (
-                float(self.adstock_alpha_range[0]),
-                float(self.adstock_alpha_range[1]),
+            "carryover_alpha": (
+                float(self.carryover_alpha_range[0]),
+                float(self.carryover_alpha_range[1]),
             ),
             "hill_shape": (
                 float(SATURATION_PRIOR_RANGES["hill"]["slope"][0]),
@@ -507,14 +509,14 @@ class SCMPrior:
             ("draws_per_cell", 1),
             ("n_time_steps", 4),
             ("seed", 0),
-            ("min_no_direct_effect_channels", 0),
+            ("min_no_direct_effect_treatments", 0),
         ):
             _integer(name, getattr(self, name), minimum=minimum)
         _finite_real("query_frac", self.query_frac, positive=True)
         _finite_real("val_cell_frac", self.val_cell_frac, positive=True)
         if self.val_cell_frac >= 1.0:
             raise ValueError(f"val_cell_frac must be < 1, got {self.val_cell_frac}")
-        _finite_real("spend_cv_floor", self.spend_cv_floor, nonnegative=True)
+        _finite_real("treatment_cv_floor", self.treatment_cv_floor, nonnegative=True)
         _finite_real("rw_smoothness_alpha", self.rw_smoothness_alpha, positive=True)
         _finite_real("rw_smoothness_beta", self.rw_smoothness_beta, positive=True)
         _integer("rw_smoothness_max_weeks", self.rw_smoothness_max_weeks, minimum=1)
@@ -561,7 +563,7 @@ class SCMPrior:
                 raise ValueError(f"{name} must sum to 1.0, got {total}")
 
         _family_probabilities(
-            "adstock_family_probs", self.adstock_family_probs, ADSTOCK_FAMILY_KEYS
+            "carryover_family_probs", self.carryover_family_probs, CARRYOVER_FAMILY_KEYS
         )
         _family_probabilities(
             "saturation_family_probs", self.saturation_family_probs, SATURATION_FAMILY_KEYS
@@ -598,7 +600,7 @@ class SCMPrior:
             _reject_unrepresentable_bounds(name, value, lo, hi)
             return lo, hi
 
-        _finite_range("adstock_alpha_range", minimum=0.0, maximum=1.0)
+        _finite_range("carryover_alpha_range", minimum=0.0, maximum=1.0)
         _finite_range("weibull_lam_range", minimum=0.0, minimum_exclusive=True)
         _finite_range("weibull_k_range", minimum=0.0, minimum_exclusive=True)
         for name in (
@@ -608,7 +610,7 @@ class SCMPrior:
             "zz_coeff_range",
             "dy_coeff_range",
             "zy_coeff_range",
-            "rw_control_mean_range",
+            "rw_covariate_mean_range",
             "rw_baseline_mean_range",
         ):
             _finite_range(name)
@@ -619,7 +621,7 @@ class SCMPrior:
             raise ValueError(
                 f"outcome_std_mode must be 'relative' or 'absolute', got {self.outcome_std_mode!r}"
             )
-        for name in ("rw_baseline_std_range", "rw_sales_std_range"):
+        for name in ("rw_baseline_std_range", "rw_outcome_std_range"):
             _finite_range(name, minimum=0.0)
         _finite_range(
             "cc_coeff_range",
@@ -629,7 +631,7 @@ class SCMPrior:
         _, beta_additive_hi = _finite_range(
             "beta_additive_range",
             minimum=0.0,
-            reason="channel effect amplitudes must be nonnegative",
+            reason="treatment effect amplitudes must be nonnegative",
         )
         if beta_additive_hi <= 0.0:
             raise ValueError(
@@ -640,26 +642,26 @@ class SCMPrior:
             "rw_positive_mean_range",
             minimum=0.0,
             minimum_exclusive=True,
-            reason="channel walks stay positive after softplus",
+            reason="treatment walks stay positive after softplus",
         )
-        _, channel_std_hi = _finite_range(
-            "rw_channel_std_range",
+        _, treatment_std_hi = _finite_range(
+            "rw_treatment_std_range",
             minimum=0.0,
-            reason="channel walk amplitudes must be nonnegative",
+            reason="treatment walk amplitudes must be nonnegative",
         )
-        if channel_std_hi <= 0.0:
+        if treatment_std_hi <= 0.0:
             raise ValueError(
-                "rw_channel_std_range must have an upper bound > 0 because a zero-only "
-                "channel-walk amplitude produces flat channel paths"
+                "rw_treatment_std_range must have an upper bound > 0 because a zero-only "
+                "treatment-walk amplitude produces flat treatment paths"
             )
-        _finite_range("channel_hf_sigma_range", minimum=0.0)
-        _, channel_pulse_prob_hi = _finite_range(
-            "channel_pulse_prob_range", minimum=0.0, maximum=0.5
+        _finite_range("treatment_hf_sigma_range", minimum=0.0)
+        _, treatment_pulse_prob_hi = _finite_range(
+            "treatment_pulse_prob_range", minimum=0.0, maximum=0.5
         )
-        _finite_range("channel_pulse_amp_range", minimum=0.0)
-        _finite_range("control_hf_sigma_range", minimum=0.0)
-        _finite_range("control_pulse_prob_range", minimum=0.0, maximum=0.5)
-        _finite_range("control_pulse_amp_range", minimum=0.0)
+        _finite_range("treatment_pulse_amp_range", minimum=0.0)
+        _finite_range("covariate_hf_sigma_range", minimum=0.0)
+        _finite_range("covariate_pulse_prob_range", minimum=0.0, maximum=0.5)
+        _finite_range("covariate_pulse_amp_range", minimum=0.0)
         if self.baseline_floor is not None:
             floor = self.baseline_floor
             if (
@@ -668,9 +670,9 @@ class SCMPrior:
                 or not np.isfinite(floor)
             ):
                 raise ValueError(f"baseline_floor must be None or a finite number, got {floor!r}")
-        if self.baseline_floor_scope not in ("intercept", "non_media"):
+        if self.baseline_floor_scope not in ("intercept", "non_treatment"):
             raise ValueError(
-                "baseline_floor_scope must be 'intercept' or 'non_media', got "
+                "baseline_floor_scope must be 'intercept' or 'non_treatment', got "
                 f"{self.baseline_floor_scope!r}"
             )
 
@@ -745,7 +747,7 @@ class SCMPrior:
             rate = getattr(self, name)
             if not np.isfinite(rate) or not 0.0 <= rate <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1], got {rate}")
-        for name in ("rw_std_sigma", "rw_sales_std_sigma"):
+        for name in ("rw_std_sigma", "rw_outcome_std_sigma"):
             sigma = getattr(self, name)
             if (
                 isinstance(sigma, (bool, np.bool_))
@@ -781,38 +783,38 @@ class SCMPrior:
                     "confounding_strength_range must satisfy finite 0 <= lo <= hi <= 0.95, "
                     f"got {self.confounding_strength_range}"
                 )
-        # Channel texture
-        if isinstance(self.adstock_burn_in, bool) or not isinstance(
-            self.adstock_burn_in, (int, np.integer)
+        # Treatment texture
+        if isinstance(self.carryover_burn_in, bool) or not isinstance(
+            self.carryover_burn_in, (int, np.integer)
         ):
-            raise ValueError("adstock_burn_in must be an int (not bool)")
-        if self.adstock_burn_in < 0:
-            raise ValueError(f"adstock_burn_in must be >= 0, got {self.adstock_burn_in}")
-        if 0 < self.adstock_burn_in < self.l_max:
+            raise ValueError("carryover_burn_in must be an int (not bool)")
+        if self.carryover_burn_in < 0:
+            raise ValueError(f"carryover_burn_in must be >= 0, got {self.carryover_burn_in}")
+        if 0 < self.carryover_burn_in < self.l_max:
             # A partial burn-in still convolves the first reported weeks into
             # zero padding — the warmup artifact the knob exists to remove.
             # Also catches dataclasses.replace(cfg, l_max=...) desyncing a
             # preset-built config (presets pin burn_in = l_max).
             raise ValueError(
-                f"adstock_burn_in={self.adstock_burn_in} must be 0 (off) or >= "
-                f"l_max ({self.l_max}) — a partial burn-in leaves adstock warmup "
+                f"carryover_burn_in={self.carryover_burn_in} must be 0 (off) or >= "
+                f"l_max ({self.l_max}) — a partial burn-in leaves carryover warmup "
                 f"in the reported window"
             )
-        if self.adstock_burn_in > 0:
+        if self.carryover_burn_in > 0:
             # The boundary is the response's REACH, not the kernel length: an
             # identity-only family mix (nonlinearity="linear") convolves nothing,
-            # so no reported week depends on pre-window spend and a short horizon
+            # so no reported week depends on pre-window treatment and a short horizon
             # is perfectly scorable even though the presets still pin
-            # adstock_burn_in = l_max. Take the upper bound over every family the
+            # carryover_burn_in = l_max. Take the upper bound over every family the
             # config admits (probability > 0) — the families are drawn per world,
             # so validation cannot know which one a given world gets.
             admitted_families = [
                 index
-                for index, key in enumerate(ADSTOCK_FAMILY_KEYS)
-                if self.adstock_family_probs[key] > 0.0
+                for index, key in enumerate(CARRYOVER_FAMILY_KEYS)
+                if self.carryover_family_probs[key] > 0.0
             ]
             warmup_boundary = admitted_response_support_weeks(
-                admitted_families, self.l_max, adstock_alpha_range=self.adstock_alpha_range
+                admitted_families, self.l_max, carryover_alpha_range=self.carryover_alpha_range
             )
             short_query_start = self.n_time_steps - self.n_query
             long_query_start = self.n_time_steps // 2
@@ -828,49 +830,49 @@ class SCMPrior:
                     else "raise n_time_steps, "
                 )
                 raise ValueError(
-                    "adstock burn-in query overlap: "
+                    "carryover burn-in query overlap: "
                     f"n_time_steps={self.n_time_steps}, l_max={self.l_max}, "
                     f"n_query={self.n_query}; "
                     f"short-horizon query start n_time_steps - n_query={short_query_start}, "
                     f"long-horizon query start n_time_steps // 2={long_query_start}. With "
                     f"burn-in, the first admitted_response_support_weeks = "
                     f"{warmup_boundary} reported weeks carry a "
-                    "media response that depends on unpersisted pre-window spend. Both the "
+                    "treatment response that depends on unpersisted pre-window treatment. Both the "
                     "short-horizon (n_time_steps - n_query) and long-horizon "
                     "(n_time_steps // 2) query windows must "
                     "start at or after that boundary, otherwise tasks are scored on targets that "
                     "are not a function of the persisted inputs. To reach this world anyway, "
-                    "either set adstock_burn_in=0 (the convolution then zero-pads, which is "
-                    "reproducible from persisted spend at every week), restrict "
-                    f"adstock_family_probs to the identity family, {horizon_remedy}or lower "
+                    "either set carryover_burn_in=0 (the convolution then zero-pads, which is "
+                    "reproducible from persisted treatment at every week), restrict "
+                    f"carryover_family_probs to the identity family, {horizon_remedy}or lower "
                     "query_frac / l_max."
                 )
-        if channel_pulse_prob_hi > 0.0 and float(self.channel_pulse_amp_range[1]) <= 0.0:
+        if treatment_pulse_prob_hi > 0.0 and float(self.treatment_pulse_amp_range[1]) <= 0.0:
             raise ValueError(
-                "channel_pulse_prob_range enables pulses but channel_pulse_amp_range "
+                "treatment_pulse_prob_range enables pulses but treatment_pulse_amp_range "
                 "has zero amplitude — disable pulses via the prob range instead"
             )
-        control_p_hi = float(self.control_pulse_prob_range[1])
-        if control_p_hi > 0.0 and float(self.control_pulse_amp_range[1]) <= 0.0:
+        covariate_p_hi = float(self.covariate_pulse_prob_range[1])
+        if covariate_p_hi > 0.0 and float(self.covariate_pulse_amp_range[1]) <= 0.0:
             raise ValueError(
-                "control_pulse_prob_range enables pulses but control_pulse_amp_range "
+                "covariate_pulse_prob_range enables pulses but covariate_pulse_amp_range "
                 "has zero amplitude — disable pulses via the prob range instead"
             )
-        # Symbolic channel-shock schedule. Keep this validation explicit rather
+        # Symbolic treatment-shock schedule. Keep this validation explicit rather
         # than relying on PyMC's distribution errors, so invalid schedules fail
         # before a model is built.
-        if isinstance(self.n_channel_shocks, bool) or not isinstance(
-            self.n_channel_shocks, (int, np.integer)
+        if isinstance(self.n_treatment_shocks, bool) or not isinstance(
+            self.n_treatment_shocks, (int, np.integer)
         ):
-            raise ValueError("n_channel_shocks must be an int (not bool)")
-        if self.n_channel_shocks < 0:
-            raise ValueError(f"n_channel_shocks must be >= 0, got {self.n_channel_shocks}")
+            raise ValueError("n_treatment_shocks must be an int (not bool)")
+        if self.n_treatment_shocks < 0:
+            raise ValueError(f"n_treatment_shocks must be >= 0, got {self.n_treatment_shocks}")
         if not isinstance(self.include_identifiability_labels, bool):
             raise ValueError("include_identifiability_labels must be a bool")
         try:
-            shock_len_lo, shock_len_hi = self.channel_shock_length_range
+            shock_len_lo, shock_len_hi = self.treatment_shock_length_range
         except (TypeError, ValueError):
-            raise ValueError("channel_shock_length_range must be an (lo, hi) integer pair")
+            raise ValueError("treatment_shock_length_range must be an (lo, hi) integer pair")
         if (
             isinstance(shock_len_lo, bool)
             or isinstance(shock_len_hi, bool)
@@ -879,43 +881,43 @@ class SCMPrior:
             or not 1 <= shock_len_lo <= shock_len_hi <= self.n_time_steps
         ):
             raise ValueError(
-                "channel_shock_length_range must have integer bounds satisfying "
-                f"1 <= lo <= hi <= n_time_steps, got {self.channel_shock_length_range!r}"
+                "treatment_shock_length_range must have integer bounds satisfying "
+                f"1 <= lo <= hi <= n_time_steps, got {self.treatment_shock_length_range!r}"
             )
         try:
-            shock_level_lo, shock_level_hi = self.channel_shock_level_range
+            shock_level_lo, shock_level_hi = self.treatment_shock_level_range
             shock_level_lo, shock_level_hi = float(shock_level_lo), float(shock_level_hi)
         except (TypeError, ValueError):
-            raise ValueError("channel_shock_level_range must be a finite (lo, hi) pair")
+            raise ValueError("treatment_shock_level_range must be a finite (lo, hi) pair")
         if not (
             np.isfinite(shock_level_lo)
             and np.isfinite(shock_level_hi)
             and 0.0 <= shock_level_lo <= shock_level_hi
         ):
             raise ValueError(
-                "channel_shock_level_range must satisfy finite 0 <= lo <= hi, "
-                f"got {self.channel_shock_level_range!r}"
+                "treatment_shock_level_range must satisfy finite 0 <= lo <= hi, "
+                f"got {self.treatment_shock_level_range!r}"
             )
         _reject_unrepresentable_bounds(
-            "channel_shock_level_range",
-            self.channel_shock_level_range,
+            "treatment_shock_level_range",
+            self.treatment_shock_level_range,
             shock_level_lo,
             shock_level_hi,
         )
-        if self.n_channel_shocks > self.n_time_steps:
+        if self.n_treatment_shocks > self.n_time_steps:
             raise ValueError(
-                f"n_channel_shocks must be <= n_time_steps ({self.n_time_steps}), "
-                f"got {self.n_channel_shocks}"
+                f"n_treatment_shocks must be <= n_time_steps ({self.n_time_steps}), "
+                f"got {self.n_treatment_shocks}"
             )
-        if self.n_channel_shocks and shock_len_lo < 2:
+        if self.n_treatment_shocks and shock_len_lo < 2:
             raise ValueError(
-                "enabled channel shocks must last at least 2 weeks so the held level "
-                "is observable in spend"
+                "enabled treatment shocks must last at least 2 weeks so the held level "
+                "is observable in treatment"
             )
-        if self.n_channel_shocks and self.n_channel_shocks * shock_len_hi > self.n_time_steps:
+        if self.n_treatment_shocks and self.n_treatment_shocks * shock_len_hi > self.n_time_steps:
             raise ValueError(
-                "n_channel_shocks * max channel_shock_length must be <= n_time_steps, got "
-                f"{self.n_channel_shocks} * {shock_len_hi} > {self.n_time_steps}"
+                "n_treatment_shocks * max treatment_shock_length must be <= n_time_steps, got "
+                f"{self.n_treatment_shocks} * {shock_len_hi} > {self.n_time_steps}"
             )
         # Validate variable-size DAG ranges. The upper bound may exceed the
         # padded size and is intentionally clamped, but both declared bounds
@@ -944,14 +946,14 @@ class SCMPrior:
             if lo > size:
                 raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
         # The smallest cell must accommodate both the direct-null floor and
-        # the mandatory direct channel.
-        if self.min_no_direct_effect_channels:
+        # the mandatory direct treatment.
+        if self.min_no_direct_effect_treatments:
             active_lo = self.n_treatments_active_range[0]
-            if active_lo <= self.min_no_direct_effect_channels:
+            if active_lo <= self.min_no_direct_effect_treatments:
                 raise ValueError(
-                    f"min_no_direct_effect_channels ({self.min_no_direct_effect_channels}) must be < "
+                    f"min_no_direct_effect_treatments ({self.min_no_direct_effect_treatments}) must be < "
                     f"n_treatments_active_range[0] ({active_lo}) so every cell can keep at "
-                    "least one direct channel besides the direct-null ones"
+                    "least one direct treatment besides the direct-null ones"
                 )
 
 
@@ -1037,8 +1039,8 @@ def _sample_g(
         the dict keep their Bernoulli rate; with ``budget=None`` (or ``{}``)
         the RNG stream is byte-identical to the legacy path.
     min_no_direct : int
-        Minimum active channels without a direct C->Y edge (see
-        ``SCMPrior.min_no_direct_effect_channels``). Caps the direct count at
+        Minimum active treatments without a direct C->Y edge (see
+        ``SCMPrior.min_no_direct_effect_treatments``). Caps the direct count at
         ``max(1, n_treatments_active - min_no_direct)``; 0 is inert and
         consumes no extra RNG.
 
@@ -1068,8 +1070,8 @@ def _sample_g(
     # Generate edges only for active nodes; pad rest with zeros
     g_cy = np.zeros(n_treatments_max)
     if n_treatments_active > 0:
-        # Reserve `min_no_direct` active channels without a direct C->Y edge.
-        # Direct channels are still
+        # Reserve `min_no_direct` active treatments without a direct C->Y edge.
+        # Direct treatments are still
         # scattered over ALL active slots — reserving the tail slots instead
         # would make slot index predict the label.
         n_live_max = max(1, n_treatments_active - max(0, min_no_direct))
@@ -1153,19 +1155,19 @@ def sample_g_additive(
     placed by budget (uniform scatter over eligible pairs) instead of by
     Bernoulli rate — see :func:`_resolve_budget` and :func:`_scatter`.
 
-    ``channel_active`` marks a direct C->Y edge OR an outgoing C->C edge.
+    ``treatment_active`` marks a direct C->Y edge OR an outgoing C->C edge.
     This local structural flag does not guarantee a path to Y through a
-    downstream channel. All channels remain observed; the degenerate guard
+    downstream treatment. All treatments remain observed; the degenerate guard
     only forces at least one C->Y edge.
 
-    ``cfg.min_no_direct_effect_channels`` caps the direct-channel count, so a
+    ``cfg.min_no_direct_effect_treatments`` caps the direct-treatment count, so a
     cell can be made to always carry both classes of the direct-effect signal.
 
     Returns
     -------
     dict with the 8 g-blocks at max (padded) sizes — ``g_cc``/``g_zz`` as
     FULL square matrices with zero diagonals — plus active masks, active
-    counts, and ``channel_active``.
+    counts, and ``treatment_active``.
     """
     base = _sample_g(
         rng,
@@ -1175,7 +1177,7 @@ def sample_g_additive(
         n_latent_active=n_latent_active,
         rates=cfg.edge_rate_overrides,
         budget=cfg.edge_budget,
-        min_no_direct=cfg.min_no_direct_effect_channels,
+        min_no_direct=cfg.min_no_direct_effect_treatments,
     )
     n_treatments_max, n_covariates_max, n_latent_max = (
         layout.n_treatments,
@@ -1240,8 +1242,8 @@ def sample_g_additive(
             g_zz[:n_covariates_active, :n_covariates_active] = np.triu(draws, k=1)
 
     # Local structural activity: direct C->Y OR outgoing C->C.
-    channel_active = ((base["g_cy"] == 1) | (g_cc.sum(axis=1) > 0)).astype("float64")
-    channel_active *= base["active_treatment"]  # padding nodes are never active
+    treatment_active = ((base["g_cy"] == 1) | (g_cc.sum(axis=1) > 0)).astype("float64")
+    treatment_active *= base["active_treatment"]  # padding nodes are never active
 
     return {
         **base,
@@ -1249,19 +1251,19 @@ def sample_g_additive(
         "g_zc": g_zc,
         "g_cc": g_cc,
         "g_zz": g_zz,
-        "channel_active": channel_active,
+        "treatment_active": treatment_active,
     }
 
 
 def _signal_block(
     cfg: SCMPrior,
     layout: SlotLayout,
-    sales_raw: np.ndarray,
+    outcome_raw: np.ndarray,
     g_tasks: np.ndarray,
     treatment_active_mask: np.ndarray,
-    sales_scale: np.ndarray,
-    adstock_family: np.ndarray,
-    adstock_alpha: np.ndarray,
+    outcome_scale: np.ndarray,
+    carryover_family: np.ndarray,
+    carryover_alpha: np.ndarray,
     weibull_lam: np.ndarray,
     weibull_k: np.ndarray,
     signal_metrics: np.ndarray,
@@ -1269,30 +1271,30 @@ def _signal_block(
 ) -> dict:
     """``diagnostics["signal"]`` for a corpus.
 
-    "Direct active channel" = cy edge present AND channel not padding.
+    "Direct active treatment" = cy edge present AND treatment not padding.
     """
     cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (treatment_active_mask == 1)
     out = summarize_signal_metrics(
         signal_metrics,
         signal_metric_valid,
-        sales_raw,
+        outcome_raw,
         cy_mask,
-        sales_scale=sales_scale,
+        outcome_scale=outcome_scale,
         l_max=cfg.l_max,
-        adstock_burn_in=cfg.adstock_burn_in,
-        adstock_family=adstock_family,
-        adstock_alpha=adstock_alpha,
+        carryover_burn_in=cfg.carryover_burn_in,
+        carryover_family=carryover_family,
+        carryover_alpha=carryover_alpha,
         weibull_lam=weibull_lam,
         weibull_k=weibull_k,
     )
     out["metric_version"] = SIGNAL_METRIC_VERSION
     out["metric_layout"] = list(SIGNAL_METRIC_LAYOUT)
     out["l_max"] = int(cfg.l_max)
-    out["adstock_burn_in"] = int(cfg.adstock_burn_in)
+    out["carryover_burn_in"] = int(cfg.carryover_burn_in)
     # pymc-marketing min-max rescales the density before sum-normalizing, so one lag
     # has zero weight; a true normalized PDF would not have an exactly zero lag.
-    out["adstock_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
-    out["adstock_kernel_version"] = 3
+    out["carryover_kernel_semantics"] = "normalized-causal-minmax-weibull-density"
+    out["carryover_kernel_version"] = 3
     out["outcome_noise_semantics"] = OUTCOME_NOISE_SEMANTICS
     out["outcome_noise_version"] = OUTCOME_NOISE_VERSION
     out["outcome_std_mode"] = cfg.outcome_std_mode
@@ -1308,7 +1310,7 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
     pre-truncation population.
     """
     layout = cfg.layout
-    n_tasks = corpus["spend_raw"].shape[0]
+    n_tasks = corpus["treatment_raw"].shape[0]
     diagnostics = corpus["diagnostics"]
     elapsed = diagnostics["timing"]["elapsed_s"]
 
@@ -1316,18 +1318,18 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
     treatment_active_mask = corpus["treatment_active_mask"]
     cy_mask = (g_tasks[:, layout.slices["cy"]] == 1) & (treatment_active_mask == 1)
     signal_metrics, signal_metric_valid = dense_signal_metrics(
-        corpus["spend_raw"],
-        corpus["contributions_raw"],
-        corpus["sales_raw"],
+        corpus["treatment_raw"],
+        corpus["treatment_contribution_raw"],
+        corpus["outcome_raw"],
         corpus["baseline_raw"],
         cy_mask,
-        sales_scale=corpus["sales_scale"],
-        adstock_family=corpus["adstock_family"],
-        adstock_alpha=corpus["adstock_alpha"],
+        outcome_scale=corpus["outcome_scale"],
+        carryover_family=corpus["carryover_family"],
+        carryover_alpha=corpus["carryover_alpha"],
         weibull_lam=corpus["weibull_lam"],
         weibull_k=corpus["weibull_k"],
         l_max=cfg.l_max,
-        adstock_burn_in=cfg.adstock_burn_in,
+        carryover_burn_in=cfg.carryover_burn_in,
     )
     if cfg.include_identifiability_labels:
         corpus["identifiability"] = {
@@ -1337,12 +1339,12 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
     diagnostics["signal"] = _signal_block(
         cfg,
         layout,
-        corpus["sales_raw"],
+        corpus["outcome_raw"],
         g_tasks,
         treatment_active_mask,
-        corpus["sales_scale"],
-        corpus["adstock_family"],
-        corpus["adstock_alpha"],
+        corpus["outcome_scale"],
+        corpus["carryover_family"],
+        corpus["carryover_alpha"],
         corpus["weibull_lam"],
         corpus["weibull_k"],
         signal_metrics,
@@ -1352,21 +1354,24 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
     # These are intentionally calculated from the retained, persisted arrays.
     # Do not regenerate per-task normalizers here: slicing their already-cast
     # values preserves the serialized-array compatibility contract.
-    spend = corpus["spend_raw"].astype(np.float64)
-    contributions = corpus["contributions_raw"].astype(np.float64)
+    treatment = corpus["treatment_raw"].astype(np.float64)
+    contributions = corpus["treatment_contribution_raw"].astype(np.float64)
     baseline = corpus["baseline_raw"].astype(np.float64)
     qs = (0.1, 0.5, 0.9)
-    spend_mean = spend.mean(axis=1)
+    treatment_mean = treatment.mean(axis=1)
     cv_all = np.divide(
-        spend.std(axis=1), spend_mean, out=np.zeros_like(spend_mean), where=spend_mean != 0.0
+        treatment.std(axis=1),
+        treatment_mean,
+        out=np.zeros_like(treatment_mean),
+        where=treatment_mean != 0.0,
     ).ravel()
     contrib_tot = contributions.sum(axis=(1, 2))
-    media_denominator = contrib_tot + baseline.sum(axis=1)
-    media_share = np.divide(
+    treatment_denominator = contrib_tot + baseline.sum(axis=1)
+    treatment_share = np.divide(
         contrib_tot,
-        media_denominator,
+        treatment_denominator,
         out=np.zeros_like(contrib_tot),
-        where=media_denominator != 0.0,
+        where=treatment_denominator != 0.0,
     )
 
     edge_marginals = {}
@@ -1379,10 +1384,12 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
             "n_tasks": int(n_tasks),
             "n_cells": int(np.unique(corpus["cell_id"]).size),
             "edge_marginals": edge_marginals,
-            "media_share_quantiles": {
-                f"q{int(q * 100)}": float(np.quantile(media_share, q)) for q in qs
+            "treatment_share_quantiles": {
+                f"q{int(q * 100)}": float(np.quantile(treatment_share, q)) for q in qs
             },
-            "spend_cv_quantiles": {f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs},
+            "treatment_cv_quantiles": {
+                f"q{int(q * 100)}": float(np.quantile(cv_all, q)) for q in qs
+            },
         }
     )
     # Wall-clock telemetry, kept apart from every other diagnostic because it is
@@ -1400,9 +1407,9 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
             "decomposition_max_abs_error": float(
                 np.abs(
                     corpus["baseline_raw"]
-                    + corpus["contributions_raw"].sum(axis=-1)
+                    + corpus["treatment_contribution_raw"].sum(axis=-1)
                     + corpus["indirect_effects"]
-                    - corpus["sales_raw"]
+                    - corpus["outcome_raw"]
                 ).max()
             ),
             "telescoping_split_max_abs_error": float(
@@ -1413,20 +1420,20 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
             "full_decomposition_max_abs_error": float(
                 np.abs(
                     corpus["baseline_intrinsic"]
-                    + corpus["sales_noise"]
-                    + corpus["confounder_contribution"].sum(axis=-1)
-                    + corpus["control_contribution"].sum(axis=-1)
-                    + corpus["contributions_raw"].sum(axis=-1)
+                    + corpus["outcome_noise"]
+                    + corpus["latent_unobserved_contribution"].sum(axis=-1)
+                    + corpus["covariate_contribution"].sum(axis=-1)
+                    + corpus["treatment_contribution_raw"].sum(axis=-1)
                     + corpus["indirect_effects_by_source"].sum(axis=-1)
-                    - corpus["sales_raw"]
+                    - corpus["outcome_raw"]
                 ).max()
             ),
             "baseline_decomposition_max_abs_error": float(
                 np.abs(
                     corpus["baseline_intrinsic"]
-                    + corpus["sales_noise"]
-                    + corpus["confounder_contribution"].sum(axis=-1)
-                    + corpus["control_contribution"].sum(axis=-1)
+                    + corpus["outcome_noise"]
+                    + corpus["latent_unobserved_contribution"].sum(axis=-1)
+                    + corpus["covariate_contribution"].sum(axis=-1)
                     - corpus["baseline_raw"]
                 ).max()
             ),
@@ -1463,18 +1470,18 @@ def _warn_flat_texture(cfg: SCMPrior) -> None:
     """Steer every caller to the ONE supported world prior.
 
     The default ``make_scm_prior`` configuration supplies
-    additive SCM with high-frequency channel texture and adstock burn-in.
-    A config with the flat (smooth-walk-only) channel prior still generates
+    additive SCM with high-frequency treatment texture and carryover burn-in.
+    A config with the flat (smooth-walk-only) treatment prior still generates
     but warns: its contribution targets degenerate to near-flat lines
-    (measured on the reference config: ~49% of direct-channel targets without
+    (measured on the reference config: ~49% of direct-treatment targets without
     week-to-week variation; see ``signal_diagnostics``).
     """
     if (
-        float(cfg.channel_hf_sigma_range[1]) == 0.0
-        and float(cfg.channel_pulse_prob_range[1]) == 0.0
+        float(cfg.treatment_hf_sigma_range[1]) == 0.0
+        and float(cfg.treatment_pulse_prob_range[1]) == 0.0
     ):
         warnings.warn(
-            "The flat (smooth-walk-only) channel texture is "
+            "The flat (smooth-walk-only) treatment texture is "
             "deprecated: it produces near-flat contribution targets the model cannot "
             "learn attribution from. Build configs with "
             "make_scm_prior.",
@@ -1510,8 +1517,8 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
     Each world routes through :func:`_generate_corpus_additive` — the additive
     causal SCM with the extended g-vector layout and exact interventional
     decomposition targets (``indirect_effects``, ``indirect_effects_by_source``,
-    ``control_contribution``, ``confounder_contribution``, ``baseline_intrinsic``)
-    plus ``channel_active``.
+    ``covariate_contribution``, ``latent_unobserved_contribution``, ``baseline_intrinsic``)
+    plus ``treatment_active``.
 
     Parameters
     ----------
@@ -1529,7 +1536,7 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
 
     Notes
     -----
-    Priors with the flat (texture-free) channel prior emit a ``FutureWarning``
+    Priors with the flat (texture-free) treatment prior emit a ``FutureWarning``
     — build with ``make_scm_prior`` instead.
     """
     _warn_flat_texture(prior)
@@ -1551,8 +1558,8 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
         else:
             prior = replace(prior, n_cells=(n + draws_per_cell - 1) // draws_per_cell)
     corpus = _generate_corpus_additive(prior)
-    if n is not None and corpus["spend_raw"].shape[0] > n:
-        actual = corpus["spend_raw"].shape[0]
+    if n is not None and corpus["treatment_raw"].shape[0] > n:
+        actual = corpus["treatment_raw"].shape[0]
         for key, val in list(corpus.items()):
             if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == actual:
                 corpus[key] = val[:n]
@@ -1565,38 +1572,38 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
 # --------------------------------------------------------------------------
 
 _ADDITIVE_OUT_NAMES = (
-    "demand",
-    "controls",
-    "channels",
+    "latent_unobserved",
+    "covariates",
+    "treatments",
     "baseline",
     "baseline_intrinsic",
-    "control_contribution",
-    "confounder_contribution",
+    "covariate_contribution",
+    "latent_unobserved_contribution",
     "contributions",
     "indirect_effects",
     "indirect_effects_by_source",
-    "sales",
+    "outcome",
     "confounding_strength",
     # Appended last: this tuple is the draw-name order, which fixes PyTensor's
     # RNG traversal, so a new name must not displace an existing one.
-    "sales_noise",
+    "outcome_noise",
 )
 
 # Corpus audit metadata.  These are already deterministics in each cell model;
 # requesting just these values preserves the one-model-per-cell sampling path
 # while avoiding persistence of natural-path realism outputs or burn-in masks.
 _CORPUS_SHOCK_NAMES = (
-    "channel_shock_mask",
-    "channel_shock_channel",
-    "channel_shock_start",
-    "channel_shock_length",
-    "channel_shock_level_multiplier",
-    "channel_shock_level",
+    "treatment_shock_mask",
+    "treatment_shock_index",
+    "treatment_shock_start",
+    "treatment_shock_length",
+    "treatment_shock_level_multiplier",
+    "treatment_shock_level",
 )
 _CORPUS_PARAM_NAMES = (
     "saturation_scale",
-    "param_channel_level",
-    "param_adstock_alpha",
+    "param_treatment_level",
+    "param_carryover_alpha",
     "param_weibull_lam",
     "param_weibull_k",
 )
@@ -1636,42 +1643,44 @@ def _slice_g_active(
 
 
 def _additive_task_ok(
-    spend: np.ndarray,
-    sales: np.ndarray,
+    treatment: np.ndarray,
+    outcome: np.ndarray,
     arrays: dict[str, np.ndarray],
     g_cy_active: np.ndarray,
     cv_floor: float,
-    sales_spike_ratio: float = 8.0,
-    spend_spike_ratio: float = 50.0,
-    realism_spend: np.ndarray | None = None,
-    realism_sales: np.ndarray | None = None,
+    outcome_spike_ratio: float = 8.0,
+    treatment_spike_ratio: float = 50.0,
+    realism_treatment: np.ndarray | None = None,
+    realism_outcome: np.ndarray | None = None,
 ) -> bool:
     """Single-task realism filter for the additive SCM.
 
     Realism checks on the additive scale: finite
-    arrays and non-negative actual sales are always required.  CV and spike
+    arrays and non-negative actual outcome are always required.  CV and spike
     checks can use natural (unshocked) audit paths so a deliberate intervention
-    is not rejected for looking unlike organic spend.
+    is not rejected for looking unlike organic treatment.
     """
     for a in arrays.values():
         if not np.isfinite(a).all():
             return False
-    if (sales < 0).any():
+    if (outcome < 0).any():
         return False
-    realism_spend = spend if realism_spend is None else realism_spend
-    realism_sales = sales if realism_sales is None else realism_sales
+    realism_treatment = treatment if realism_treatment is None else realism_treatment
+    realism_outcome = outcome if realism_outcome is None else realism_outcome
     active = np.asarray(g_cy_active) == 1
     if active.any():
-        cv = realism_spend.std(axis=0) / (realism_spend.mean(axis=0) + 1e-12)  # (n_treatments,)
+        cv = realism_treatment.std(axis=0) / (
+            realism_treatment.mean(axis=0) + 1e-12
+        )  # (n_treatments,)
         if cv[active].min() < cv_floor:
             return False
-    sales_med = np.median(realism_sales)
-    safe_med = sales_med if sales_med > 0 else 1.0
-    if realism_sales.max() / safe_med >= sales_spike_ratio:
+    outcome_med = np.median(realism_outcome)
+    safe_med = outcome_med if outcome_med > 0 else 1.0
+    if realism_outcome.max() / safe_med >= outcome_spike_ratio:
         return False
-    spend_med = np.median(realism_spend, axis=0)  # (n_treatments,)
-    safe_spend_med = np.where(spend_med > 0, spend_med, 1.0)
-    if (realism_spend.max(axis=0) / safe_spend_med).max() >= spend_spike_ratio:
+    treatment_med = np.median(realism_treatment, axis=0)  # (n_treatments,)
+    safe_treatment_med = np.where(treatment_med > 0, treatment_med, 1.0)
+    if (realism_treatment.max(axis=0) / safe_treatment_med).max() >= treatment_spike_ratio:
         return False
     return True
 
@@ -1706,7 +1715,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         "covariate": n_covariates_max,
         "latent": n_latent_max,
         "edge": layout.n_slots,
-        "shock": cfg.n_channel_shocks,
+        "shock": cfg.n_treatment_shocks,
         "indirect_source": 3,
     }
     corpus: dict[str, Any] = {
@@ -1715,31 +1724,31 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     }
     if cfg.prior_conditioning:
         corpus["prior_cond"] = np.empty((n_tasks, len(PRIOR_COND_LAYOUT)), dtype=np.float32)
-    # Spend normalization retains the original float64 reduction order.
+    # Treatment normalization retains the original float64 reduction order.
     # Other accepted outputs can be cast directly into their final storage.
-    spend_raw = np.zeros((n_tasks, n_time_steps, n_treatments_max), dtype=np.float64)
+    treatment_raw = np.zeros((n_tasks, n_time_steps, n_treatments_max), dtype=np.float64)
     draw_fields = {
-        "controls": "controls",
-        "sales_raw": "sales",
-        "contributions_raw": "contributions",
+        "covariates": "covariates",
+        "outcome_raw": "outcome",
+        "treatment_contribution_raw": "contributions",
         "baseline_raw": "baseline",
-        "demand": "demand",
+        "latent_unobserved": "latent_unobserved",
         "indirect_effects": "indirect_effects",
         "baseline_intrinsic": "baseline_intrinsic",
-        "sales_noise": "sales_noise",
-        "control_contribution": "control_contribution",
-        "confounder_contribution": "confounder_contribution",
+        "outcome_noise": "outcome_noise",
+        "covariate_contribution": "covariate_contribution",
+        "latent_unobserved_contribution": "latent_unobserved_contribution",
         "indirect_effects_by_source": "indirect_effects_by_source",
         "confounding_strength": "confounding_strength",
-        "channel_shock_mask": "channel_shock_mask",
-        "channel_shock_channel": "channel_shock_channel",
-        "channel_shock_start": "channel_shock_start",
-        "channel_shock_length": "channel_shock_length",
-        "channel_shock_level_multiplier": "channel_shock_level_multiplier",
-        "channel_shock_level": "channel_shock_level",
-        "channel_level": "param_channel_level",
+        "treatment_shock_mask": "treatment_shock_mask",
+        "treatment_shock_index": "treatment_shock_index",
+        "treatment_shock_start": "treatment_shock_start",
+        "treatment_shock_length": "treatment_shock_length",
+        "treatment_shock_level_multiplier": "treatment_shock_level_multiplier",
+        "treatment_shock_level": "treatment_shock_level",
+        "treatment_level": "param_treatment_level",
         "saturation_scale": "saturation_scale",
-        "adstock_alpha": "param_adstock_alpha",
+        "carryover_alpha": "param_carryover_alpha",
         "weibull_lam": "param_weibull_lam",
         "weibull_k": "param_weibull_k",
     }
@@ -1778,7 +1787,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             ("treatment_active_mask", "active_treatment"),
             ("covariate_active_mask", "active_covariate"),
             ("latent_active_mask", "active_latent"),
-            ("channel_active", "channel_active"),
+            ("treatment_active", "treatment_active"),
             ("n_treatments_active", "n_treatments_active"),
             ("n_covariates_active", "n_covariates_active"),
             ("n_latent_active", "n_latent_active"),
@@ -1814,17 +1823,17 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             n_req = n_missing + max(2, int(np.ceil(0.5 * n_missing)))
             draw_seed = int(rng.integers(2**31 - 1))
             try:
-                # Output order controls PyTensor's RNG traversal. Metadata
+                # Output order covariates PyTensor's RNG traversal. Metadata
                 # deterministics must precede the legacy outputs: appending
                 # them changes legacy draws, while a separate same-seed call
                 # produces parameters from a different joint world.
                 draw_names: tuple[str, ...]
-                if cfg.n_channel_shocks:
+                if cfg.n_treatment_shocks:
                     draw_names = (
                         _CORPUS_PARAM_NAMES
                         + _CORPUS_SHOCK_NAMES
                         + _ADDITIVE_OUT_NAMES
-                        + ("channels_unshocked", "sales_unshocked")
+                        + ("treatments_unshocked", "outcome_unshocked")
                     )
                 else:
                     draw_names = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
@@ -1856,13 +1865,13 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 cell_evaluated += 1
 
                 if not _additive_task_ok(
-                    spend=drawn["channels"],
-                    sales=drawn["sales"],
+                    treatment=drawn["treatments"],
+                    outcome=drawn["outcome"],
                     arrays=drawn,
                     g_cy_active=g_act["g_cy"],
-                    cv_floor=cfg.spend_cv_floor,
-                    realism_spend=drawn.get("channels_unshocked"),
-                    realism_sales=drawn.get("sales_unshocked"),
+                    cv_floor=cfg.treatment_cv_floor,
+                    realism_treatment=drawn.get("treatments_unshocked"),
+                    realism_outcome=drawn.get("outcome_unshocked"),
                 ):
                     n_rejected += 1
                     cell_rejected += 1
@@ -1871,14 +1880,14 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 support, task_split_type = _make_support_mask(
                     rng, n_time_steps, n_query, cfg.p_long_horizon
                 )
-                candidate_sales_scale = float(np.std(drawn["sales"][support == 1]))
-                if not (np.isfinite(candidate_sales_scale) and candidate_sales_scale > 0.0):
+                candidate_outcome_scale = float(np.std(drawn["outcome"][support == 1]))
+                if not (np.isfinite(candidate_outcome_scale) and candidate_outcome_scale > 0.0):
                     n_rejected += 1
                     cell_rejected += 1
                     continue
 
                 row = cell * cfg.draws_per_cell + accepted
-                spend_raw[row, :, :n_treatments_active] = drawn["channels"]
+                treatment_raw[row, :, :n_treatments_active] = drawn["treatments"]
                 for key, source in draw_fields.items():
                     value = drawn[source]
                     prefix: tuple[int | slice, ...] = (
@@ -1886,7 +1895,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                         *(slice(size) for size in np.shape(value)),
                     )
                     corpus[key][prefix] = value
-                corpus["adstock_family"][row, :n_treatments_active] = structural["adstock_family"]
+                corpus["carryover_family"][row, :n_treatments_active] = structural[
+                    "carryover_family"
+                ]
                 corpus["support_mask"][row] = support
                 corpus["is_future"][row] = task_split_type
                 accepted += 1
@@ -1910,29 +1921,31 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     cell_id = corpus["cell_id"]
     treatment_active_mask = corpus["treatment_active_mask"]
 
-    spend_means = spend_raw.mean(axis=1)  # (n_tasks, n_treatments)
-    spend_norm = np.divide(
-        spend_raw,
-        spend_means[:, None, :],
-        out=np.zeros_like(spend_raw),
-        where=spend_means[:, None, :] != 0.0,
+    treatment_means = treatment_raw.mean(axis=1)  # (n_tasks, n_treatments)
+    treatment_norm = np.divide(
+        treatment_raw,
+        treatment_means[:, None, :],
+        out=np.zeros_like(treatment_raw),
+        where=treatment_means[:, None, :] != 0.0,
     )
-    active_spend_sum = (spend_raw * treatment_active_mask[:, None, :]).sum(axis=-1, keepdims=True)
-    spend_share = (
+    active_treatment_sum = (treatment_raw * treatment_active_mask[:, None, :]).sum(
+        axis=-1, keepdims=True
+    )
+    treatment_share = (
         np.divide(
-            spend_raw,
-            active_spend_sum,
-            out=np.zeros_like(spend_raw),
-            where=active_spend_sum != 0.0,
+            treatment_raw,
+            active_treatment_sum,
+            out=np.zeros_like(treatment_raw),
+            where=active_treatment_sum != 0.0,
         )
         * treatment_active_mask[:, None, :]
     )
 
-    corpus["spend_raw"][:] = spend_raw
-    corpus["spend_norm"][:] = spend_norm
-    corpus["spend_share"][:] = spend_share
-    corpus["spend_means"][:] = spend_means
-    del spend_raw, spend_norm, spend_share, spend_means
+    corpus["treatment_raw"][:] = treatment_raw
+    corpus["treatment_norm"][:] = treatment_norm
+    corpus["treatment_share"][:] = treatment_share
+    corpus["treatment_means"][:] = treatment_means
+    del treatment_raw, treatment_norm, treatment_share, treatment_means
 
     # -- cell-level validation split (same logic as the legacy path) --------
     n_val_cells = max(1, int(round(cfg.val_cell_frac * cfg.n_cells)))
@@ -1957,26 +1970,26 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             split_type[idx_flip] = new_split
 
     # Derived from the FLOAT32 array that is actually persisted, not from the
-    # float64 draw. `sales_norm = sales_raw / sales_scale` is persisted too, so a
+    # float64 draw. `outcome_norm = outcome_raw / outcome_scale` is persisted too, so a
     # consumer must be able to reproduce both from the corpus alone; computing
     # the scale at draw precision made that impossible whenever float32 rounding
     # dominated the standard deviation. That is reachable: a short support window
     # over a very smooth walk gives a near-constant slice, where the writer and a
     # float32 recomputation disagreed by 2.5e-5 relative — past the validator's
     # 1e-5 tolerance.
-    sales_stored = corpus["sales_raw"]
-    sales_scale = np.array(
+    outcome_stored = corpus["outcome_raw"]
+    outcome_scale = np.array(
         [
-            float(np.std(sales_stored[i][support_mask[i] == 1].astype(np.float64)))
+            float(np.std(outcome_stored[i][support_mask[i] == 1].astype(np.float64)))
             for i in range(n_tasks)
         ],
         dtype=np.float64,
     )
-    bad_scale = ~(np.isfinite(sales_scale) & (sales_scale > 0.0))
+    bad_scale = ~(np.isfinite(outcome_scale) & (outcome_scale > 0.0))
     if bad_scale.any():
-        full_std = np.std(sales_stored[bad_scale].astype(np.float64), axis=1)
-        sales_scale[bad_scale] = np.where(np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0)
-    sales_norm = sales_stored.astype(np.float64) / sales_scale[:, None]
+        full_std = np.std(outcome_stored[bad_scale].astype(np.float64), axis=1)
+        outcome_scale[bad_scale] = np.where(np.isfinite(full_std) & (full_std > 0.0), full_std, 1.0)
+    outcome_norm = outcome_stored.astype(np.float64) / outcome_scale[:, None]
 
     effective_legacy_edge_rates = {**EDGE_BASE_RATES, **(cfg.edge_rate_overrides or {})}
 
@@ -2013,7 +2026,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             if cfg.edge_budget
             else None
         ),
-        "min_no_direct_effect_channels": int(cfg.min_no_direct_effect_channels),
+        "min_no_direct_effect_treatments": int(cfg.min_no_direct_effect_treatments),
         "schema_version": CORPUS_SCHEMA_VERSION,
         # Wall clock lives under its own key so the rest of the block stays a
         # pure function of (config, seed); _finalize_corpus adds tasks_per_sec
@@ -2031,7 +2044,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             "width_ranges": {q: list(s["width_range"]) for q, s in spec.items()},
         }
 
-    corpus["sales_norm"][:] = sales_norm
-    corpus["sales_scale"][:] = sales_scale
+    corpus["outcome_norm"][:] = outcome_norm
+    corpus["outcome_scale"][:] = outcome_scale
     corpus["diagnostics"] = diagnostics
     return corpus

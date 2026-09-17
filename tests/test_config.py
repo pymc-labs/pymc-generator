@@ -9,13 +9,13 @@ import pytest
 
 import pymc_generator as pg
 from pymc_generator.sampler import (
-    ADSTOCK_FAMILY_KEYS,
+    CARRYOVER_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
     SCMPrior,
 )
 from pymc_generator.world_model import sample_structure
 
-_DEFAULT_ADSTOCK_FAMILY_PROBS = {
+_DEFAULT_CARRYOVER_FAMILY_PROBS = {
     "none": 0.15,
     "geometric": 0.425,
     "weibull": 0.425,
@@ -31,8 +31,8 @@ _DEFAULT_SATURATION_FAMILY_PROBS = {
 
 
 def _default_family_probs(name: str) -> dict[str, float]:
-    if name == "adstock_family_probs":
-        return dict(_DEFAULT_ADSTOCK_FAMILY_PROBS)
+    if name == "carryover_family_probs":
+        return dict(_DEFAULT_CARRYOVER_FAMILY_PROBS)
     return dict(_DEFAULT_SATURATION_FAMILY_PROBS)
 
 
@@ -51,33 +51,35 @@ def _one_hot_family_probs(family_keys: tuple[str, ...], selected: str) -> dict[s
 @pytest.mark.parametrize(
     ("name", "value"),
     (
-        ("control_hf_sigma_range", (-0.1, 0.5)),
-        ("control_hf_sigma_range", (0.5, 0.1)),
-        ("control_hf_sigma_range", (0.0, np.inf)),
-        ("control_hf_sigma_range", None),
-        ("control_pulse_prob_range", (0.1, 0.6)),
-        ("control_pulse_prob_range", (-0.1, 0.2)),
-        ("control_pulse_amp_range", (1.0, 0.5)),
-        ("control_pulse_amp_range", (np.nan, 1.0)),
+        ("covariate_hf_sigma_range", (-0.1, 0.5)),
+        ("covariate_hf_sigma_range", (0.5, 0.1)),
+        ("covariate_hf_sigma_range", (0.0, np.inf)),
+        ("covariate_hf_sigma_range", None),
+        ("covariate_pulse_prob_range", (0.1, 0.6)),
+        ("covariate_pulse_prob_range", (-0.1, 0.2)),
+        ("covariate_pulse_amp_range", (1.0, 0.5)),
+        ("covariate_pulse_amp_range", (np.nan, 1.0)),
     ),
 )
-def test_control_texture_ranges_fail_fast_on_invalid_bounds(name, value):
+def test_covariate_texture_ranges_fail_fast_on_invalid_bounds(name, value):
     # A live amplitude keeps the pulse cross-check from answering for the bounds
     # check, and matching the bounds message pins WHICH rule rejected the range
     # (plain `match=name` would also accept the cross-check error).
-    kwargs = {"control_pulse_amp_range": (1.0, 1.0), name: value}
+    kwargs = {"covariate_pulse_amp_range": (1.0, 1.0), name: value}
     with pytest.raises(ValueError, match=rf"{name} (has invalid bounds|must be a finite)"):
         SCMPrior(**kwargs).validate()
 
 
-def test_control_pulse_probability_ceiling_is_inclusive():
+def test_covariate_pulse_probability_ceiling_is_inclusive():
     """0.5 is the documented maximum, so it must be accepted, not merely near-valid."""
-    SCMPrior(control_pulse_prob_range=(0.0, 0.5), control_pulse_amp_range=(1.0, 1.0)).validate()
+    SCMPrior(covariate_pulse_prob_range=(0.0, 0.5), covariate_pulse_amp_range=(1.0, 1.0)).validate()
 
 
-def test_control_pulses_require_a_nonzero_amplitude():
-    with pytest.raises(ValueError, match="control_pulse_prob_range enables pulses"):
-        SCMPrior(control_pulse_prob_range=(0.1, 0.2), control_pulse_amp_range=(0.0, 0.0)).validate()
+def test_covariate_pulses_require_a_nonzero_amplitude():
+    with pytest.raises(ValueError, match="covariate_pulse_prob_range enables pulses"):
+        SCMPrior(
+            covariate_pulse_prob_range=(0.1, 0.2), covariate_pulse_amp_range=(0.0, 0.0)
+        ).validate()
 
 
 @pytest.mark.parametrize("value", (np.nan, np.inf, -np.inf, True, "0", [0.0]))
@@ -95,13 +97,13 @@ def test_family_probability_mutation_does_not_affect_another_config():
     first = SCMPrior()
     second = SCMPrior()
 
-    original_adstock = dict(second.adstock_family_probs)
+    original_carryover = dict(second.carryover_family_probs)
     original_saturation = dict(second.saturation_family_probs)
 
-    first.adstock_family_probs["none"] = 0.0
+    first.carryover_family_probs["none"] = 0.0
     first.saturation_family_probs["linear"] = 0.0
 
-    assert second.adstock_family_probs == original_adstock
+    assert second.carryover_family_probs == original_carryover
     assert second.saturation_family_probs == original_saturation
 
 
@@ -116,15 +118,15 @@ def test_linear_preset_produces_an_instantaneous_linear_response():
         edge_budget={"cy": 2, "cc": 0, "dc": 0, "dz": 0, "dy": 0, "zy": 0, "zc": 0, "zz": 0},
     )
     world = pg.sample_scm(cfg, seed=7)
-    channels = world.data["channels"]
+    treatments = world.data["treatments"]
     contribution = world.data["contributions"]
-    slope = contribution[0] / channels[0]
-    assert np.all(slope > 0.0) and np.all(np.ptp(channels, axis=0) > 0.0)
-    np.testing.assert_allclose(contribution, channels * slope, rtol=1e-12, atol=0.0)
+    slope = contribution[0] / treatments[0]
+    assert np.all(slope > 0.0) and np.all(np.ptp(treatments, axis=0) > 0.0)
+    np.testing.assert_allclose(contribution, treatments * slope, rtol=1e-12, atol=0.0)
 
 
 @pytest.mark.parametrize(
-    ("adstock_family", "saturation_family", "adstock_id", "saturation_id"),
+    ("carryover_family", "saturation_family", "carryover_id", "saturation_id"),
     (
         ("none", "linear", 0, 0),
         ("geometric", "hill", 1, 1),
@@ -135,16 +137,16 @@ def test_linear_preset_produces_an_instantaneous_linear_response():
     ),
 )
 def test_sample_structure_uses_canonical_family_ids(
-    adstock_family, saturation_family, adstock_id, saturation_id
+    carryover_family, saturation_family, carryover_id, saturation_id
 ):
     cfg = SCMPrior(
-        adstock_family_probs=_one_hot_family_probs(ADSTOCK_FAMILY_KEYS, adstock_family),
+        carryover_family_probs=_one_hot_family_probs(CARRYOVER_FAMILY_KEYS, carryover_family),
         saturation_family_probs=_one_hot_family_probs(SATURATION_FAMILY_KEYS, saturation_family),
     )
 
     structural = sample_structure(_structure_test_graph(), cfg, np.random.default_rng(7))
 
-    assert np.all(structural["adstock_family"] == adstock_id)
+    assert np.all(structural["carryover_family"] == carryover_id)
     assert np.all(structural["sat_family"] == saturation_id)
 
 
@@ -152,10 +154,10 @@ def test_sample_structure_uses_canonical_family_ids(
     ("probability_name", "family_keys", "probabilities", "structural_name"),
     (
         (
-            "adstock_family_probs",
-            ADSTOCK_FAMILY_KEYS,
+            "carryover_family_probs",
+            CARRYOVER_FAMILY_KEYS,
             {"none": 0.11, "geometric": 0.28, "weibull": 0.61},
-            "adstock_family",
+            "carryover_family",
         ),
         (
             "saturation_family_probs",
@@ -220,7 +222,7 @@ def test_rw_smoothness_max_weeks_must_be_a_positive_integer(value):
         SCMPrior(rw_smoothness_max_weeks=value).validate()
 
 
-@pytest.mark.parametrize("name", ("rw_std_sigma", "rw_sales_std_sigma"))
+@pytest.mark.parametrize("name", ("rw_std_sigma", "rw_outcome_std_sigma"))
 @pytest.mark.parametrize("value", (np.nan, np.inf, 0.0, -1.0))
 def test_random_walk_sigmas_must_be_finite_and_positive(name, value):
     with pytest.raises(ValueError, match=name):
@@ -241,8 +243,8 @@ def test_outcome_std_mode_must_select_relative_or_absolute(value):
         ("rw_baseline_std_range", (0.1, 0.01)),
         ("rw_baseline_std_range", (np.nan, 0.1)),
         ("rw_baseline_std_range", (False, 0.1)),
-        ("rw_sales_std_range", (0.0, np.inf)),
-        ("rw_sales_std_range", (0.1, 0.01)),
+        ("rw_outcome_std_range", (0.0, np.inf)),
+        ("rw_outcome_std_range", (0.1, 0.01)),
     ),
 )
 def test_relative_outcome_std_ranges_must_be_finite_nonnegative_bounds(name, value):
@@ -253,14 +255,14 @@ def test_relative_outcome_std_ranges_must_be_finite_nonnegative_bounds(name, val
 @pytest.mark.parametrize(
     ("name", "value"),
     (
-        ("adstock_alpha_range", (-0.1, 0.5)),
-        ("adstock_alpha_range", (0.5, 1.1)),
+        ("carryover_alpha_range", (-0.1, 0.5)),
+        ("carryover_alpha_range", (0.5, 1.1)),
         ("weibull_lam_range", (0.0, 1.0)),
         ("weibull_k_range", (2.0, 1.0)),
         ("beta_additive_range", (-0.1, 1.0)),
         ("cc_coeff_range", (-0.1, 0.2)),
         ("rw_positive_mean_range", (0.0, 1.0)),
-        ("rw_control_mean_range", (np.nan, 1.0)),
+        ("rw_covariate_mean_range", (np.nan, 1.0)),
         ("rw_baseline_mean_range", (2.0, 1.0)),
     ),
 )
@@ -281,15 +283,15 @@ def test_beta_additive_range_requires_nonzero_amplitude():
         ((0.0, 0.0), "upper bound > 0"),
     ),
 )
-def test_channel_walk_std_range_is_required_and_nonzero(value, match):
+def test_treatment_walk_std_range_is_required_and_nonzero(value, match):
     with pytest.raises(ValueError, match=match):
-        SCMPrior(rw_channel_std_range=value).validate()
+        SCMPrior(rw_treatment_std_range=value).validate()
 
 
 @pytest.mark.parametrize("value", (np.nan, np.inf, 8.0, 8.5, True))
-def test_adstock_burn_in_must_be_an_integer(value):
-    with pytest.raises(ValueError, match="adstock_burn_in"):
-        SCMPrior(adstock_burn_in=value).validate()
+def test_carryover_burn_in_must_be_an_integer(value):
+    with pytest.raises(ValueError, match="carryover_burn_in"):
+        SCMPrior(carryover_burn_in=value).validate()
 
 
 def test_burn_in_rejects_reproduced_query_overlap():
@@ -300,16 +302,16 @@ def test_burn_in_rejects_reproduced_query_overlap():
             n_latent=1,
             n_time_steps=8,
             l_max=8,
-            adstock_burn_in=8,
+            carryover_burn_in=8,
             query_frac=0.25,
         )
 
 
 def test_burn_in_query_window_boundary_is_exact():
-    SCMPrior(n_time_steps=14, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
+    SCMPrior(n_time_steps=14, l_max=8, carryover_burn_in=8, p_long_horizon=0.0).validate()
 
     with pytest.raises(ValueError, match="query overlap"):
-        SCMPrior(n_time_steps=13, l_max=8, adstock_burn_in=8, p_long_horizon=0.0).validate()
+        SCMPrior(n_time_steps=13, l_max=8, carryover_burn_in=8, p_long_horizon=0.0).validate()
 
 
 def test_burn_in_rejects_short_horizon_overlap_even_when_long_split_is_certain():
@@ -317,7 +319,7 @@ def test_burn_in_rejects_short_horizon_overlap_even_when_long_split_is_certain()
         SCMPrior(
             n_time_steps=20,
             l_max=8,
-            adstock_burn_in=8,
+            carryover_burn_in=8,
             query_frac=0.7,
             p_long_horizon=1.0,
         ).validate()
@@ -335,7 +337,7 @@ def test_burn_in_overlap_suggestion_is_an_accepted_horizon(n_time_steps, query_f
     kwargs = {
         "n_time_steps": n_time_steps,
         "l_max": 8,
-        "adstock_burn_in": 8,
+        "carryover_burn_in": 8,
         "query_frac": query_frac,
     }
     with pytest.raises(ValueError, match="query overlap") as error:
@@ -348,11 +350,11 @@ def test_burn_in_overlap_suggestion_is_an_accepted_horizon(n_time_steps, query_f
 
 
 def test_burn_in_query_window_guard_is_exempt_when_disabled():
-    SCMPrior(n_time_steps=4, l_max=8, adstock_burn_in=0).validate()
+    SCMPrior(n_time_steps=4, l_max=8, carryover_burn_in=0).validate()
 
 
 def test_burn_in_query_window_guard_is_exempt_for_a_single_lag_kernel():
-    SCMPrior(n_time_steps=4, l_max=1, adstock_burn_in=1, query_frac=0.5).validate()
+    SCMPrior(n_time_steps=4, l_max=1, carryover_burn_in=1, query_frac=0.5).validate()
 
 
 @pytest.mark.parametrize("value", (True, "bad", [1.0], np.nan, np.inf, 0.0))
@@ -364,10 +366,10 @@ def test_baseline_walk_sigma_must_be_a_finite_positive_scalar(value):
 @pytest.mark.parametrize(
     ("name", "value"),
     (
-        ("spend_cv_floor", np.nan),
-        ("spend_cv_floor", np.inf),
-        ("spend_cv_floor", -0.1),
-        ("spend_cv_floor", True),
+        ("treatment_cv_floor", np.nan),
+        ("treatment_cv_floor", np.inf),
+        ("treatment_cv_floor", -0.1),
+        ("treatment_cv_floor", True),
         ("rw_smoothness_alpha", np.nan),
         ("rw_smoothness_alpha", 0.0),
         ("rw_smoothness_beta", np.inf),
@@ -394,9 +396,9 @@ def test_scalar_domain_parameters_fail_fast(name, value):
 @pytest.mark.parametrize(
     ("name", "value"),
     (
-        ("adstock_family_probs", None),
-        ("adstock_family_probs", 1),
-        ("adstock_family_probs", (0.15, 0.425, 0.425)),
+        ("carryover_family_probs", None),
+        ("carryover_family_probs", 1),
+        ("carryover_family_probs", (0.15, 0.425, 0.425)),
         ("saturation_family_probs", None),
         ("saturation_family_probs", 1),
         ("saturation_family_probs", (0.15, 0.17, 0.17, 0.17, 0.17, 0.17)),
@@ -411,16 +413,16 @@ def test_family_probabilities_require_named_dicts(name, value):
     ("name", "value"),
     (
         (
-            "adstock_family_probs",
+            "carryover_family_probs",
             {
                 key: value
-                for key, value in _DEFAULT_ADSTOCK_FAMILY_PROBS.items()
+                for key, value in _DEFAULT_CARRYOVER_FAMILY_PROBS.items()
                 if key != "weibull"
             },
         ),
         (
-            "adstock_family_probs",
-            {**_DEFAULT_ADSTOCK_FAMILY_PROBS, "extra": 0.0},
+            "carryover_family_probs",
+            {**_DEFAULT_CARRYOVER_FAMILY_PROBS, "extra": 0.0},
         ),
         (
             "saturation_family_probs",
@@ -448,7 +450,7 @@ def test_family_probabilities_require_exact_canonical_keys(name, value):
         SCMPrior(**{name: value}).validate()
 
 
-@pytest.mark.parametrize("name", ("adstock_family_probs", "saturation_family_probs"))
+@pytest.mark.parametrize("name", ("carryover_family_probs", "saturation_family_probs"))
 @pytest.mark.parametrize("value", (True, np.nan, np.inf, -0.1, 1.1))
 def test_family_probabilities_reject_invalid_values(name, value):
     probabilities = _default_family_probs(name)
@@ -458,7 +460,7 @@ def test_family_probabilities_reject_invalid_values(name, value):
         SCMPrior(**{name: probabilities}).validate()
 
 
-@pytest.mark.parametrize("name", ("adstock_family_probs", "saturation_family_probs"))
+@pytest.mark.parametrize("name", ("carryover_family_probs", "saturation_family_probs"))
 def test_family_probabilities_must_sum_to_one(name):
     probabilities = _default_family_probs(name)
     probabilities[next(iter(probabilities))] = 0.0

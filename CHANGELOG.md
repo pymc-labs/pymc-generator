@@ -66,6 +66,43 @@ read the migration notes before upgrading.
 
 ### Changed — migration notes
 
+- **Domain-neutral vocabulary (breaking).** The public API and the persisted
+  corpus now use scientific node names instead of marketing ones. This renames
+  identifiers only: no distribution, coefficient, seed, sampler setting or
+  numerical value changes, and packed graph positions are untouched.
+
+  | Was | Is |
+  | --- | --- |
+  | `spend*` / `channel*` / `media*` | `treatment*` |
+  | `sales*` | `outcome*` |
+  | `control*` | `covariate*` |
+  | `demand` | `latent_unobserved` |
+  | `adstock*` | `carryover*` |
+
+  So `spend_raw`/`sales_raw`/`controls`/`demand`/`adstock_alpha` become
+  `treatment_raw`/`outcome_raw`/`covariates`/`latent_unobserved`/
+  `carryover_alpha`; `contributions_raw` becomes `treatment_contribution_raw`;
+  `confounder_contribution` becomes `latent_unobserved_contribution`;
+  `channel_shock_channel` becomes `treatment_shock_index`. In
+  `outcome_distributions`, the per-treatment quantity is `treatment_contribution`
+  and the per-world total is `treatment_total_contribution` (was
+  `channel_contribution` and `media_contribution`). `SCMPrior` fields follow the
+  same rule (`n_channel_shocks` → `n_treatment_shocks`, `rw_sales_std_range` →
+  `rw_outcome_std_range`, and so on).
+
+  `n_treatments`, `n_covariates`, `n_latent` and the `*_active_mask` keys were
+  already domain-neutral and are unchanged, as are the `cy/dc/dz/dy/zy/zc/cc/zz`
+  edge codes, which are mathematical notation rather than vocabulary. The
+  `latent_observed` name is deliberately left free for a future measured-latent
+  node family. Upstream `pymc_marketing` function names (`geometric_adstock`,
+  `weibull_adstock`) are theirs and keep their spelling.
+
+  **Corpus schema is now version 4.** `load_corpus` migrates v1, v2 and v3
+  archives automatically, renaming arrays, diagnostics keys and `prior_cond`
+  columns while leaving contents, dtypes and shapes byte-identical. A corpus
+  that mixes v3 and v4 names is rejected rather than guessed at. Corpora written
+  by this version cannot be read by older releases.
+
 - **Released stack / Python floor (0.0.2 candidate):** require Python 3.13+ and
   test Python 3.13/3.14 in CI. Replace Git development dependencies with registry
   releases: PyMC 6.2.0, pymc-marketing 1.1.0, pymc-extras 0.14.0, PyTensor 3.2.4,
@@ -104,9 +141,10 @@ read the migration notes before upgrading.
   `n_treatments`, `n_covariates`, and `n_latent`. Legacy `K_active`, `M_active`,
   `J_active`, `active_c_mask`, `active_m_mask`, and `active_j_mask` are migrated to
   their descriptive active-count and active-mask equivalents on load.
-- `min_dead_channels` is now `min_no_direct_effect_channels`; channels without a
-  direct sales edge may still have indirect effects. `rw_mean_range` is now
-  `rw_control_mean_range`, since it controls the control drive, not latent demand.
+- `min_dead_channels` is now `min_no_direct_effect_treatments`; treatments
+  without a direct outcome edge may still have indirect effects. `rw_mean_range`
+  is now `rw_covariate_mean_range`, since it governs the covariate drive, not
+  the unobserved latent.
 - Saturation wrappers accept `reference_level`, not `mean_x`; internal
   `saturation_scale` replaces `mean_ad`. The anchor is parameter-only, not an
   expected or realized channel mean. It is required by the oracle and shared by
@@ -117,12 +155,12 @@ read the migration notes before upgrading.
   preceding batch to preserve cell splits.
 - `world_model_template` replaces `world_model_batched`. This remains an
   experimental compilation-reuse path, not a production batching backend.
-- Remove the single-choice `texture` argument, unreachable `rw_channel_std_sigma`,
+- Remove the single-choice `texture` argument, unreachable `rw_treatment_std_sigma`,
   unused explicit-input draw wrapper, unused NumPy walk API, and obsolete symbols.
   Mechanism probabilities use named dictionaries; `SlotLayout` supports only the
   canonical eight-block layout. There are no compatibility aliases for removed APIs.
 - Replace the partial `true_contribution.csv` bundle export with the complete
-  `true_components.csv`, including `sales_noise`. Nonempty destinations are refused.
+  `true_components.csv`, including `outcome_noise`. Nonempty destinations are refused.
 - The pre-review modeling changes use a parentless intercept, iid scale-aware sales
   noise, relative channel-walk amplitudes, fixed walk normalization, mean-zero/unit-scale
   latent demand, and one structural amplitude per channel. These changes can alter

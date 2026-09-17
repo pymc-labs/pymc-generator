@@ -16,7 +16,7 @@ cfg = pg.make_scm_prior(n_treatments=5, n_covariates=3, n_latent=2,
                         edge_budget={"cy": (4, 4), "dc": (2, 2), "zc": (1, 2)},
                         n_cells=2, draws_per_cell=2, seed=42)
 corpus = pg.sample_prior_predictive(cfg)
-print("n_tasks:", corpus["spend_raw"].shape[0])
+print("n_tasks:", corpus["treatment_raw"].shape[0])
 ```
 
 Corpus mode scales up in **cells**: each cell fixes one structure and draws
@@ -32,53 +32,53 @@ float32/uint8/int32):
 
 | Key | Shape | What |
 | --- | --- | --- |
-| `spend_raw` | (n_tasks, n_time_steps, n_treatments) | media spend (observed input) |
-| `controls` | (n_tasks, n_time_steps, n_covariates) | observed controls |
-| `sales_raw` | (n_tasks, n_time_steps) | sales (observed target) |
-| `contributions_raw` | (n_tasks, n_time_steps, n_treatments) | per-channel **direct** contributions (truth) |
+| `treatment_raw` | (n_tasks, n_time_steps, n_treatments) | observed treatment input |
+| `controls` | (n_tasks, n_time_steps, n_covariates) | observed covariates |
+| `outcome_raw` | (n_tasks, n_time_steps) | outcome (observed target) |
+| `treatment_contribution_raw` | (n_tasks, n_time_steps, n_treatments) | per-treatment **direct** contributions (truth) |
 | `indirect_effects` | (n_tasks, n_time_steps) | total interaction-routed effect (truth) |
 | `indirect_effects_by_source` | (n_tasks, n_time_steps, 3) | telescoping split, order `(cc, zc, dc)` |
 | `baseline_raw` | (n_tasks, n_time_steps) | full baseline |
-| `demand` | (n_tasks, n_time_steps, n_latent) | latent demand series (truth) |
+| `demand` | (n_tasks, n_time_steps, n_latent) | latent-unobserved series (truth) |
 | `g` | (n_tasks, n_slots) | the packed DAG (all 8 edge blocks) |
 | `treatment_active_mask` / `covariate_active_mask` / `latent_active_mask` | (n_tasks, n_treatments / n_covariates / n_latent) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block, and `short_horizon_n_query` split metadata |
 
-`demand` is a latent factor pinned to mean 0 / scale 1, putting its `D→Y`,
+The latent-unobserved factor is pinned to mean 0 / scale 1, putting its `D→Y`,
 `D→C`, and `D→Z` magnitude in the loadings. The graph admits an exact sign
 flip (`eps_d`, `w_dc`, `u_dz`, and `delta_dy` all negated), but the supported
 prior's strictly positive `dy_coeff_range`, `dc_coeff_range`, and
-`dz_coeff_range` exclude the reflected parameters, so demand's sign is
+`dz_coeff_range` exclude the reflected parameters, so the latent-unobserved factor's sign is
 identified unless a user widens one of those ranges to admit negatives; then
 only `|D|` and the loading magnitudes are recoverable.
 
 `support_mask` is always a contiguous support prefix followed by a nonempty
 query suffix. `is_future=0` uses `diagnostics["short_horizon_n_query"]` query
-weeks; `is_future=1` uses the second half of the series. `sales_scale` is the
-standard deviation of supported sales, with the full-series standard deviation
+weeks; `is_future=1` uses the second half of the series. `outcome_scale` is the
+standard deviation of supported outcome, with the full-series standard deviation
 and then `1.0` as deterministic fallbacks for degenerate support windows.
 
 `diagnostics["signal"]["response_warmup_weeks"]` identifies a separate
-reproducibility boundary: the number of leading reported weeks whose media
+reproducibility boundary: the number of leading reported weeks whose treatment
 response reaches back before the window. It is the **realized** kernel support
-— the largest positive lag that carries nonzero normalized adstock weight —
-taken over the eligible direct channels, and `0` when `adstock_burn_in == 0`.
+— the largest positive lag that carries nonzero normalized carryover weight —
+taken over the eligible direct treatments, and `0` when `carryover_burn_in == 0`.
 So it is `0` for identity-only direct paths, `0` for a geometric kernel drawn at
 `alpha == 0` (an exact identity) or a Weibull kernel whose trailing taps are
 annihilated by the min-max normalization, and at most `l_max - 1`. When
-`summarize_signal_metrics` lacks the full adstock metadata (family, decay,
+`summarize_signal_metrics` lacks the full carryover metadata (family, decay,
 Weibull shape) it falls back to the conservative `l_max - 1` with burn-in.
 Reported weeks
-`0 .. response_warmup_weeks - 1` have a media response that depends on
-pre-window spend the corpus does not persist, so their targets are not functions
+`0 .. response_warmup_weeks - 1` have a treatment response that depends on
+pre-window treatment the corpus does not persist, so their targets are not functions
 of persisted inputs. This is not a train/query mask: `support_mask` remains only
-the temporal support/query split. With `adstock_burn_in == 0`, zero padding makes
-every reported response reproducible from persisted spend.
+the temporal support/query split. With `carryover_burn_in == 0`, zero padding makes
+every reported response reproducible from persisted treatments.
 
 ### Random-walk parameter labels
 
 Persisted `param_rw_*_std` labels declare a walk's **expected standard
-deviation** over the full simulated horizon `n_time_steps + adstock_burn_in`.
+deviation** over the full simulated horizon `n_time_steps + carryover_burn_in`.
 The guarantee is second-moment, and worth stating precisely:
 
 ```text
@@ -97,18 +97,18 @@ therefore neither the realized standard deviation of an individual path nor a
 standard deviation measured only over the reported window. `smoothness`
 likewise maps to an absolute moving-average kernel width in weeks, governed by
 `rw_smoothness_max_weeks` (26 by default) and clamped to that full horizon. For
-`positive_only` channel walks, `param_rw_c_std` is the pre-softplus amplitude,
+`positive_only` treatment walks, `param_rw_c_std` is the pre-softplus amplitude,
 so it is excluded from the signed-walk table below rather than reported with a
 misleadingly wide range.
 
 The signed `rw_d` / `rw_z` / `rw_b` walks are centred, smoothed Gaussian paths:
 cumulative sum, edge-padded moving average, full-path centring, then the fixed
-scale divisor. A channel's own drive is the *positive-only* version of the same
+scale divisor. A treatment's own drive is the *positive-only* version of the same
 construction — the identical signed path, wrapped in `softplus` — which is why
 its amplitude label is pre-softplus.
 
 Across 32 signed walks from eight worlds at `n_time_steps=52` and
-`adstock_burn_in=8`, the reported-window sd / declared `std` was:
+`carryover_burn_in=8`, the reported-window sd / declared `std` was:
 
 | signed group | reported-window sd / declared `std` | median |
 | --- | --- | --- |
@@ -124,7 +124,7 @@ it were the realized reported-window standard deviation.
 `param_rw_y_std` is **not** in that table, because `RW_Y` is not a walk. It is
 iid observation noise, `RW_Y = rw_y_std * eps_y`, with no cumulative sum, no
 smoothing and no centring, so its label is the exact per-week Normal σ:
-`sales_noise == param_rw_y_std * eps_y[adstock_burn_in:]` holds to the last bit
+`outcome_noise == param_rw_y_std * eps_y[carryover_burn_in:]` holds to the last bit
 (max absolute difference 0.0 over eight worlds). Its realized window sd still
 scatters — measured [0.838, 1.314], median 1.001, over the same eight worlds —
 but that is the sample sd of 52 standard normals under the acceptance filter,
@@ -140,57 +140,57 @@ at width 1 (the centring alone), and moves all 60 weeks. The paths are
 consequently drawn jointly, offline, as one multivariate normal; they are not a
 filtration you can simulate forward a week at a time.
 
-This does **not** leak future spend into the media response. Causality here is a
-property of the *response*: `f_k` applies a causal adstock kernel and a κ scale
-computed from parameters alone, so the response at week `t` reads only spend at
-`t' ≤ t`. Bumping one late week of observed spend and re-running the generator's
+This does **not** leak future treatment into the response. Causality here is a
+property of the *response*: `f_k` applies a causal carryover kernel and a κ scale
+computed from parameters alone, so the response at week `t` reads only treatment at
+`t' ≤ t`. Bumping one late week of observed treatment and re-running the generator's
 own response code leaves every earlier week bit-identical (18 of 18
-(world, channel) checks at exactly zero change). Non-adaptedness describes how
+(world, treatment) checks at exactly zero change). Non-adaptedness describes how
 `eps → path` factorizes; `eps` itself is exogenous.
 
 
-### Channel, adstock, and intervention audit metadata
+### Treatment, carryover, and intervention audit metadata
 
 The following arrays are persisted for every corpus, including empty
 `(n_tasks, 0)` schedule arrays when shocks are disabled. `n_shocks` is the
-configured `n_channel_shocks`, so every world has exactly `n_shocks` event
+configured `n_treatment_shocks`, so every world has exactly `n_shocks` event
 records.
 
 | Key | Shape | dtype | Meaning |
 | --- | --- | --- | --- |
 | `confounding_strength` | `(n_tasks,)` | `float32` | drawn per-world rho (`0` when disabled) |
-| `channel_level` | `(n_tasks, n_treatments)` | `float32` | `softplus(rw_c_mean)` reference level |
-| `saturation_scale` | `(n_tasks, n_treatments)` | `float32` | κ response anchor: a parameter-only **reference level**, not `E[C]` (zero-padded for inactive channels) |
-| `adstock_family` | `(n_tasks, n_treatments)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
-| `adstock_alpha` | `(n_tasks, n_treatments)` | `float32` | geometric decay parameter |
+| `treatment_level` | `(n_tasks, n_treatments)` | `float32` | `softplus(rw_c_mean)` reference level |
+| `saturation_scale` | `(n_tasks, n_treatments)` | `float32` | κ response anchor: a parameter-only **reference level**, not `E[C]` (zero-padded for inactive treatments) |
+| `carryover_family` | `(n_tasks, n_treatments)` | `uint8` | `0=none`, `1=geometric`, `2=Weibull` |
+| `carryover_alpha` | `(n_tasks, n_treatments)` | `float32` | geometric decay parameter |
 | `weibull_lam` | `(n_tasks, n_treatments)` | `float32` | Weibull scale parameter |
 | `weibull_k` | `(n_tasks, n_treatments)` | `float32` | Weibull shape parameter |
-| `channel_shock_mask` | `(n_tasks, n_time_steps, n_treatments)` | `uint8` | binary reported-window held-spend mask |
-| `channel_shock_channel` | `(n_tasks, n_shocks)` | `int32` | selected direct-channel index per event |
-| `channel_shock_start` | `(n_tasks, n_shocks)` | `int32` | reported-window event start |
-| `channel_shock_length` | `(n_tasks, n_shocks)` | `int32` | held duration in weeks |
-| `channel_shock_level_multiplier` | `(n_tasks, n_shocks)` | `float32` | sampled relative held-level multiplier |
-| `channel_shock_level` | `(n_tasks, n_shocks)` | `float32` | realized held level |
+| `treatment_shock_mask` | `(n_tasks, n_time_steps, n_treatments)` | `uint8` | binary reported-window held-treatment mask |
+| `treatment_shock_index` | `(n_tasks, n_shocks)` | `int32` | selected direct-treatment index per event |
+| `treatment_shock_start` | `(n_tasks, n_shocks)` | `int32` | reported-window event start |
+| `treatment_shock_length` | `(n_tasks, n_shocks)` | `int32` | held duration in weeks |
+| `treatment_shock_level_multiplier` | `(n_tasks, n_shocks)` | `float32` | sampled relative held-level multiplier |
+| `treatment_shock_level` | `(n_tasks, n_shocks)` | `float32` | realized held level |
 
 Together these schedule fields are observable intervention metadata: they
-reconstruct each reported held-spend window without storing a natural path or a
+reconstruct each reported held-treatment window without storing a natural path or a
 full burn-in mask. The realized level equals the multiplier times the selected
-`channel_level`. For an enabled schedule, events occupy globally
-non-overlapping deterministic time slots; channel selection may repeat because
-direct channels are sampled uniformly with replacement.
+`treatment_level`. For an enabled schedule, events occupy globally
+non-overlapping deterministic time slots; treatment selection may repeat because
+direct treatments are sampled uniformly with replacement.
 
-`saturation_scale` is the κ anchor each channel's response curve is normalized
+`saturation_scale` is the κ anchor each treatment's response curve is normalized
 by: `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted reference
 Z→C / C→C parent terms)`, accumulated in topological order. It is a
-**parameter-only reference level and deliberately not `E[C]`** — the channel
-equation applies `softplus` and the channel walk is itself a `softplus`, so the
+**parameter-only reference level and deliberately not `E[C]`** — the treatment
+equation applies `softplus` and the treatment walk is itself a `softplus`, so the
 anchor takes `softplus` of a mean where the world takes the mean of a
-`softplus`. Softplus being strictly convex, Jensen puts realized expected spend
+`softplus`. Softplus being strictly convex, Jensen puts realized expected treatment
 strictly above it: measured `E[C_k] / saturation_scale` ran 1.004–1.099 over 36
-(θ, channel) cells at 600 noise draws each, every cell above 1. Do not score it
-as a predicted channel level; it exists precisely because it reads no moment,
+(θ, treatment) cells at 600 noise draws each, every cell above 1. Do not score it
+as a predicted treatment level; it exists precisely because it reads no moment,
 which is what keeps `p(θ)` independent of the noise and the week-`t` response
-free of spend at `t' > t`.
+free of treatment at `t' > t`.
 
 Inspect the real arrays:
 
@@ -198,8 +198,8 @@ Inspect the real arrays:
 from scm_docs import corpus
 c = corpus()
 
-for key in ["spend_raw", "controls", "sales_raw", "contributions_raw",
-            "indirect_effects_by_source", "demand", "g", "treatment_active_mask"]:
+for key in ["treatment_raw", "covariates", "outcome_raw", "treatment_contribution_raw",
+            "indirect_effects_by_source", "latent_unobserved", "g", "treatment_active_mask"]:
     print(f"{key:<28} {str(c[key].shape):<14} {c[key].dtype}")
 ```
 
@@ -228,8 +228,8 @@ from scm_docs import corpus
 import numpy as np
 
 c = corpus()
-lhs = c["sales_raw"].astype(np.float64)
-rhs = (c["baseline_raw"] + c["contributions_raw"].sum(-1)
+lhs = c["outcome_raw"].astype(np.float64)
+rhs = (c["baseline_raw"] + c["treatment_contribution_raw"].sum(-1)
        + c["indirect_effects"]).astype(np.float64)
 print("sales = baseline + Σ direct + indirect")
 print("  max abs error over all tasks/weeks:", f"{np.abs(lhs - rhs).max():.2e}")
@@ -256,14 +256,14 @@ model inputs. Set `include_identifiability_labels=False` to omit both arrays;
 all observable arrays remain byte-identical and the aggregate signal diagnostics
 remain available.
 
-The `diagnostics["signal"]` block includes the metric and adstock-kernel
-versions plus `l_max`, `adstock_burn_in`, and `response_warmup_weeks`; use those
+The `diagnostics["signal"]` block includes the metric and carryover-kernel
+versions plus `l_max`, `carryover_burn_in`, and `response_warmup_weeks`; use those
 stored values rather than assuming configuration defaults when recomputing a
 loaded shard. Its kernel metadata is
-`adstock_kernel_semantics="normalized-causal-minmax-weibull-density"` at
-`adstock_kernel_version=3`, reflecting pymc-marketing's min-max rescaling before
+`carryover_kernel_semantics="normalized-causal-minmax-weibull-density"` at
+`carryover_kernel_version=3`, reflecting pymc-marketing's min-max rescaling before
 sum normalization. `frac_zero_contemporaneous_weight` reports the eligible direct
-channel share whose current-week normalized adstock weight is effectively zero.
+treatment share whose current-week normalized carryover weight is effectively zero.
 It is reported for inspection, not used to gate a corpus.
 
 ```python exec="1" source="block" result="text"
@@ -278,10 +278,10 @@ for line in lines:
 ```
 
 The default gate also limits amplitude and collinearity failures:
-`frac_contrib_rel_std_lt_001 <= 0.10` caps the share of direct channels whose
+`frac_contrib_rel_std_lt_001 <= 0.10` caps the share of direct treatments whose
 true contribution is too small to matter in loss units, and
 `frac_contrib_r2_gt_095 <= 0.10` caps the share whose contribution is a
-near-perfect linear combination of the baseline and other channels. A prior gate
+near-perfect linear combination of the baseline and other treatments. A prior gate
 PASS alone did not certify either property.
 
 !!! note "Tiny demo corpus"
@@ -306,8 +306,8 @@ pg.save_corpus(c, path)
 loaded = pg.load_corpus(path)
 
 print("saved to:", os.path.basename(path), f"({os.path.getsize(path):,} bytes)")
-print("round-trips spend_raw exactly:",
-      bool(np.array_equal(c["spend_raw"], loaded["spend_raw"])))
+print("round-trips treatment_raw exactly:",
+      bool(np.array_equal(c["treatment_raw"], loaded["treatment_raw"])))
 print("diagnostics restored as dict:", isinstance(loaded["diagnostics"], dict))
 ```
 
@@ -358,10 +358,10 @@ serves every level.
 | Axis | How | Knobs |
 | --- | --- | --- |
 | **Graph size** | how many nodes are live | `n_treatments`, `n_covariates`, `n_latent`, and their `*_active_range`s |
-| **Interactions** | how many arrows of each type | `edge_budget`, `min_no_direct_effect_channels` |
-| **Nonlinearity** | media-response family mix | `nonlinearity="diverse"` / `"linear"` |
+| **Interactions** | how many arrows of each type | `edge_budget`, `min_no_direct_effect_treatments` |
+| **Nonlinearity** | treatment-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` |
-| **Texture** | channels' and controls' high-frequency drive | explicit noise, pulse, and walk ranges |
+| **Texture** | treatments' and covariates' high-frequency drive | explicit noise, pulse, and walk ranges |
 
 ### The edge budget
 
@@ -386,9 +386,9 @@ cfg = pg.make_scm_prior(
 - Types **omitted** keep their per-pair Bernoulli base rate; `cy` keeps its `≥ 1`
   floor.
 
-### Direct-null channels
+### Direct-null treatments
 
-`min_no_direct_effect_channels` reserves active channels without a direct
+`min_no_direct_effect_treatments` reserves active treatments without a direct
 `C→Y` edge. Their direct contribution is zero. A `cy` budget alone cannot
 guarantee this because its arrow count is clamped to the active slots.
 
@@ -397,13 +397,13 @@ cfg = pg.make_scm_prior(
     n_treatments=10, n_covariates=6, n_latent=3,
     n_treatments_active_range=(2, 10),   # 2–10 active channels per task
     edge_budget={"cy": (1, 10)},
-    min_no_direct_effect_channels=1,   # at least one active channel has no direct effect
+    min_no_direct_effect_treatments=1,   # at least one active channel has no direct effect
 )
 ```
 
 The floor must be smaller than `n_treatments_active_range[0]` so the smallest
-cell still has a direct channel. Direct channels remain scattered over active
-slots. A direct-null channel can still reach `Y` as a **feeder** through `C→C`;
+cell still has a direct treatment. Direct treatments remain scattered over active
+slots. A direct-null treatment can still reach `Y` as a **feeder** through `C→C`;
 set `edge_budget["cc"] = 0` as well if it must have no path to `Y`.
 
 See the full configuration surface in the
@@ -422,7 +422,7 @@ I  = [lo, lo + w]             # ⊆ the global support, by construction
 ```
 
 — and that cell's parameter is drawn as `pm.Uniform(lo, lo + w)` instead of the
-global support. The v1 conditioned set is `adstock_alpha` (geometric decay) and
+global support. The v1 conditioned set is `carryover_alpha` (geometric decay) and
 `hill_shape` (Hill slope); width ranges are overridable per quantity via
 `prior_cond_width_ranges`.
 

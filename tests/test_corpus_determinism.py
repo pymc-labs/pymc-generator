@@ -20,7 +20,7 @@ import pymc_generator as pg
 import pymc_generator.world_model as world_model
 from pymc_generator import DataGenerator
 from pymc_generator.sampler import (
-    ADSTOCK_FAMILY_KEYS,
+    CARRYOVER_FAMILY_KEYS,
     CORPUS_STORAGE_MAX,
     MAX_TOPUPS_PER_CELL,
     SCMPrior,
@@ -64,7 +64,7 @@ def test_same_seed_generations_save_byte_identical_shards(tmp_path):
         elapsed = float(len(paths) + 1)
         corpus["diagnostics"]["timing"] = {
             "elapsed_s": elapsed,
-            "tasks_per_sec": len(corpus["sales_raw"]) / elapsed,
+            "tasks_per_sec": len(corpus["outcome_raw"]) / elapsed,
         }
         path = tmp_path / name
         pg.save_corpus(corpus, path)
@@ -161,7 +161,7 @@ def test_unsupported_schema_versions_are_refused_everywhere(
 
 def test_persistence_requires_diagnostics(tmp_path):
     path = tmp_path / "unstamped.npz"
-    payload = {"sales_raw": np.zeros((1, 4))}
+    payload = {"outcome_raw": np.zeros((1, 4))}
     with pytest.raises(ValueError, match="diagnostics"):
         pg.save_corpus(payload, path)
     assert not path.exists()
@@ -193,7 +193,7 @@ def test_partial_legacy_vocabulary_is_not_a_migration(tmp_path):
 
 
 def test_identity_only_response_accepts_a_short_horizon_with_burn_in():
-    """A linear (identity-adstock) preset convolves nothing, so no week is warmup."""
+    """A linear (identity-carryover) preset convolves nothing, so no week is warmup."""
     cfg = pg.make_scm_prior(
         n_treatments=1,
         n_covariates=1,
@@ -205,8 +205,8 @@ def test_identity_only_response_accepts_a_short_horizon_with_burn_in():
         draws_per_cell=1,
         seed=2,
     )
-    assert cfg.adstock_burn_in == cfg.l_max
-    assert cfg.adstock_family_probs[ADSTOCK_FAMILY_KEYS[0]] == 1.0
+    assert cfg.carryover_burn_in == cfg.l_max
+    assert cfg.carryover_family_probs[CARRYOVER_FAMILY_KEYS[0]] == 1.0
 
     corpus = pg.sample_prior_predictive(cfg)
     assert corpus["diagnostics"]["signal"]["response_warmup_weeks"] == 0
@@ -218,17 +218,17 @@ def test_zero_decay_geometric_only_response_accepts_a_short_horizon():
     cfg = _tiny_config(
         n_time_steps=8,
         l_max=8,
-        adstock_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
-        adstock_alpha_range=(0.0, 0.0),
+        carryover_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        carryover_alpha_range=(0.0, 0.0),
     )
-    assert cfg.adstock_burn_in == cfg.l_max
+    assert cfg.carryover_burn_in == cfg.l_max
     corpus = pg.sample_prior_predictive(cfg)
     assert corpus["diagnostics"]["signal"]["response_warmup_weeks"] == 0
     assert DataGenerator.validate_corpus(corpus) == []
 
 
 @pytest.mark.parametrize(
-    "adstock_family_probs",
+    "carryover_family_probs",
     (
         {"none": 0.0, "geometric": 1.0, "weibull": 0.0},
         {"none": 0.0, "geometric": 0.0, "weibull": 1.0},
@@ -236,14 +236,14 @@ def test_zero_decay_geometric_only_response_accepts_a_short_horizon():
     ),
     ids=("geometric", "weibull", "mixed"),
 )
-def test_carryover_admitting_families_still_reject_a_short_horizon(adstock_family_probs):
+def test_carryover_admitting_families_still_reject_a_short_horizon(carryover_family_probs):
     """Any family that can reach back keeps the boundary at the full l_max - 1."""
     with pytest.raises(ValueError, match="query overlap") as error:
         SCMPrior(
             n_time_steps=8,
             l_max=8,
-            adstock_burn_in=8,
-            adstock_family_probs=adstock_family_probs,
+            carryover_burn_in=8,
+            carryover_family_probs=carryover_family_probs,
         ).validate()
     assert "admitted_response_support_weeks = 7" in str(error.value)
 
@@ -334,10 +334,10 @@ def test_exhaustion_error_separates_filter_rejections_from_draw_failures(monkeyp
     (
         "rw_positive_mean_range",
         "beta_additive_range",
-        "rw_channel_std_range",
+        "rw_treatment_std_range",
         "rw_baseline_mean_range",
         "weibull_lam_range",
-        "channel_pulse_amp_range",
+        "treatment_pulse_amp_range",
     ),
 )
 def test_validate_rejects_ranges_the_float32_storage_cannot_hold(field):
@@ -347,8 +347,10 @@ def test_validate_rejects_ranges_the_float32_storage_cannot_hold(field):
 
 
 def test_validate_rejects_a_shock_level_range_beyond_float32():
-    with pytest.raises(ValueError, match="channel_shock_level_range bound .* exceeds the float32"):
-        SCMPrior(n_channel_shocks=1, channel_shock_level_range=(0.0, 1e39)).validate()
+    with pytest.raises(
+        ValueError, match="treatment_shock_level_range bound .* exceeds the float32"
+    ):
+        SCMPrior(n_treatment_shocks=1, treatment_shock_level_range=(0.0, 1e39)).validate()
 
 
 def test_the_largest_representable_bound_is_still_accepted():

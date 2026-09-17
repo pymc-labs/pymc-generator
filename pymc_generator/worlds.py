@@ -24,20 +24,20 @@ import numpy as np
 
 from .random_walk import _centred_walk_scale, _kernel_width
 from .sampler import (
-    ADSTOCK_FAMILY_KEYS,
+    CARRYOVER_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
     SCMPrior,
     _additive_task_ok,
     _slice_g_active,
     sample_g_additive,
 )
-from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION, per_channel_signal
+from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION, per_treatment_signal
 
 if TYPE_CHECKING:
     import pymc as pm
 
-#: Adstock family names, indexed by ``params["adstock_family"]``.
-ADSTOCK_NAMES = ADSTOCK_FAMILY_KEYS
+#: Carryover family names, indexed by ``params["carryover_family"]``.
+CARRYOVER_NAMES = CARRYOVER_FAMILY_KEYS
 
 #: Saturation family names, indexed by ``params["sat_family"]``.
 SATURATION_NAMES = SATURATION_FAMILY_KEYS
@@ -66,14 +66,14 @@ _LEGACY_WORLD_PARAM_NAMES = tuple(
         "gamma_zz",
         "delta_dy",
         "rho_zy",
-        "adstock_alpha",
+        "carryover_alpha",
         "weibull_lam",
         "weibull_k",
         "hf_sigma",
         "pulse_amp",
         "pulse_prob",
         "rw_c_mean",
-        "channel_level",
+        "treatment_level",
         "rw_c_std",
         "confounding_strength",
     )
@@ -100,8 +100,8 @@ class SCM:
     Attributes
     ----------
     data : dict
-        Active-size graph outputs — e.g. ``channels (n_time_steps, n_treatments)``,
-        ``sales (n_time_steps,)``, ``contributions (n_time_steps, n_treatments)``,
+        Active-size graph outputs — e.g. ``treatments (n_time_steps, n_treatments)``,
+        ``outcome (n_time_steps,)``, ``contributions (n_time_steps, n_treatments)``,
         ``saturation_scale (n_treatments,)``, and
         ``indirect_effects_by_source (n_time_steps, 3)`` in the locked (cc, zc, dc) order.
     g : dict
@@ -109,7 +109,7 @@ class SCM:
         ``g_zy``, ``g_zc``, ``g_cc``, ``g_zz``).
     params : dict
         Drawn SCM parameters (edge coefficients, per-node random-walk
-        params, per-channel mechanism families and texture).
+        params, per-treatment mechanism families and texture).
     cfg : SCMPrior
         An independent snapshot of the config the world was drawn from.
     name, purpose : str
@@ -137,29 +137,29 @@ class SCM:
 
     @property
     def n_time_steps(self) -> int:
-        return int(self.data["sales"].shape[0])
+        return int(self.data["outcome"].shape[0])
 
     @property
     def n_treatments(self) -> int:
-        return int(self.data["channels"].shape[1])
+        return int(self.data["treatments"].shape[1])
 
     @property
     def n_covariates(self) -> int:
-        return int(self.data["controls"].shape[1])
+        return int(self.data["covariates"].shape[1])
 
     @property
     def n_latent(self) -> int:
-        return int(self.data["demand"].shape[1])
+        return int(self.data["latent_unobserved"].shape[1])
 
     @property
     def exogenous(self) -> dict[str, np.ndarray]:
         """Raw full-horizon innovation draws, returned as defensive copies.
 
-        ``eps_c`` is the independent, pre-mixture channel innovation. The
+        ``eps_c`` is the independent, pre-mixture treatment innovation. The
         graph uses ``sqrt(1-rho**2) * eps_c + rho * eps_b[:, None]`` when
-        confounding is enabled. ``eps_c_pulse`` is a 0/1 Bernoulli channel
-        fire; ``eps_z_pulse`` is the 0/1 control fire, which the control
-        equation centres by subtracting ``control_pulse_prob``.
+        confounding is enabled. ``eps_c_pulse`` is a 0/1 Bernoulli treatment
+        fire; ``eps_z_pulse`` is the 0/1 covariate fire, which the covariate
+        equation centres by subtracting ``covariate_pulse_prob``.
         """
         return cast(dict[str, np.ndarray], _copy_audit_value(self._exogenous))
 
@@ -177,20 +177,20 @@ class SCM:
         )
 
     def reconstruction(self) -> np.ndarray:
-        """Σ of all true components — equals ``sales`` up to float error."""
+        """Σ of all true components — equals ``outcome`` up to float error."""
         d = self.data
         return np.asarray(
             d["baseline_intrinsic"]
-            + d["sales_noise"]
-            + d["confounder_contribution"].sum(1)
-            + d["control_contribution"].sum(1)
+            + d["outcome_noise"]
+            + d["latent_unobserved_contribution"].sum(1)
+            + d["covariate_contribution"].sum(1)
             + d["contributions"].sum(1)
             + d["indirect_effects_by_source"].sum(1)
         )
 
     def identity_error(self) -> float:
-        """Max |Σ true components − sales| (float64; ~1e-15 in practice)."""
-        return float(np.abs(self.reconstruction() - self.data["sales"]).max())
+        """Max |Σ true components − outcome| (float64; ~1e-15 in practice)."""
+        return float(np.abs(self.reconstruction() - self.data["outcome"]).max())
 
     def oracle_model(self, *, latent: Literal["marginal", "sampled"] = "marginal") -> pm.Model:
         """The observed-data posterior ``pm.Model`` for THIS world.
@@ -202,10 +202,10 @@ class SCM:
         default ``latent="marginal"`` analytically integrates the outcome-side
         Gaussian walks and is the recommended reference posterior.
         ``latent="sampled"`` reproduces the previous representation and is
-        required for posterior ``demand`` / ``baseline`` series. Requires an
+        required for posterior ``latent_unobserved`` / ``baseline`` series. Requires an
         SCM produced by ``sample_scm`` (which records the structural draw in
         ``extras``). The locked released stack supports NUTS for identity,
-        geometric, and Weibull adstock. Gradient availability does not
+        geometric, and Weibull carryover. Gradient availability does not
         establish convergence: inspect divergences, R-hat, and effective
         sample sizes. See the oracle guide for the conditioning caveats.
         """
@@ -217,20 +217,22 @@ class SCM:
                 "oracle_model() needs a world produced by sample_scm"
             )
         data = {
-            "channels": self.data["channels"],
-            "controls": self.data["controls"],
-            "sales": self.data["sales"],
+            "treatments": self.data["treatments"],
+            "covariates": self.data["covariates"],
+            "outcome": self.data["outcome"],
             "saturation_scale": self.data["saturation_scale"],
         }
-        if self.cfg.n_channel_shocks:
+        if self.cfg.n_treatment_shocks:
             data.update(
                 {
-                    "channel_shock_channel": self.data["channel_shock_channel"],
-                    "channel_shock_start": self.data["channel_shock_start"],
-                    "channel_shock_length": self.data["channel_shock_length"],
-                    "channel_shock_level_multiplier": self.data["channel_shock_level_multiplier"],
-                    "channel_shock_level": self.data["channel_shock_level"],
-                    "channel_level": self.params["channel_level"],
+                    "treatment_shock_index": self.data["treatment_shock_index"],
+                    "treatment_shock_start": self.data["treatment_shock_start"],
+                    "treatment_shock_length": self.data["treatment_shock_length"],
+                    "treatment_shock_level_multiplier": self.data[
+                        "treatment_shock_level_multiplier"
+                    ],
+                    "treatment_shock_level": self.data["treatment_shock_level"],
+                    "treatment_level": self.params["treatment_level"],
                 }
             )
         return build_oracle_model(
@@ -243,28 +245,28 @@ class SCM:
         )
 
     def signal(self) -> dict[str, Any]:
-        """Per-direct-channel signal metrics (see ``signal_diagnostics``).
+        """Per-direct-treatment signal metrics (see ``signal_diagnostics``).
 
-        Adds a ``"channel"`` key with the 0-based indices of the direct
-        (C→Y) channels the rows refer to.
+        Adds a ``"treatment"`` key with the 0-based indices of the direct
+        (C→Y) treatments the rows refer to.
         """
         d = self.data
         cy_mask = (np.asarray(self.g["g_cy"]) == 1)[None, :]
-        per = per_channel_signal(
-            d["channels"][None],
+        per = per_treatment_signal(
+            d["treatments"][None],
             d["contributions"][None],
-            d["sales"][None],
+            d["outcome"][None],
             cy_mask,
             l_max=self.cfg.l_max,
             baseline=d["baseline"][None],
-            adstock_family=np.asarray(self.params["adstock_family"])[None],
-            adstock_alpha=np.asarray(self.params["adstock_alpha"])[None],
+            carryover_family=np.asarray(self.params["carryover_family"])[None],
+            carryover_alpha=np.asarray(self.params["carryover_alpha"])[None],
             weibull_lam=np.asarray(self.params["weibull_lam"])[None],
             weibull_k=np.asarray(self.params["weibull_k"])[None],
-            adstock_burn_in=self.cfg.adstock_burn_in,
+            carryover_burn_in=self.cfg.carryover_burn_in,
         )
         out: dict[str, Any] = dict(per)
-        out["channel"] = np.nonzero(cy_mask[0])[0].astype(float)
+        out["treatment"] = np.nonzero(cy_mask[0])[0].astype(float)
         out["metric_version"] = SIGNAL_METRIC_VERSION
         out["metric_layout"] = SIGNAL_METRIC_LAYOUT
         return out
@@ -273,9 +275,9 @@ class SCM:
 def path_to_y(g: dict) -> dict[str, bool]:
     """Directed reachability to Y for every node.
 
-    A channel reaches Y via its own C->Y edge or a C->C chain into one; a
-    control via Z->Y, Z->C into a reaching channel, or a Z->Z chain into a
-    reaching control; a demand via D->Y, D->C, or D->Z into reaching nodes.
+    A treatment reaches Y via its own C->Y edge or a C->C chain into one; a
+    covariate via Z->Y, Z->C into a reaching treatment, or a Z->Z chain into a
+    reaching covariate; a latent_unobserved via D->Y, D->C, or D->Z into reaching nodes.
     """
     g_cy = np.asarray(g["g_cy"])
     g_cc = np.asarray(g["g_cc"])
@@ -373,8 +375,8 @@ def edges_with_coeffs(g: dict, params: dict) -> list[tuple[str, str, str, float]
     return out
 
 
-def channel_role(g: dict, k: int) -> str:
-    """direct | feeder (no C->Y but feeds other channels) | null (no effect on Y)."""
+def treatment_role(g: dict, k: int) -> str:
+    """direct | feeder (no C->Y but feeds other treatments) | null (no effect on Y)."""
     if g["g_cy"][k]:
         return "direct"
     if np.asarray(g["g_cc"])[k, :].any():
@@ -383,9 +385,9 @@ def channel_role(g: dict, k: int) -> str:
 
 
 def mechanism_label(params: dict, k: int) -> str:
-    """'saturation·adstock' label for channel ``k`` (e.g. ``hill·geometric``)."""
+    """'saturation·carryover' label for treatment ``k`` (e.g. ``hill·geometric``)."""
     sat = SATURATION_NAMES[int(params["sat_family"][k])]
-    ad = ADSTOCK_NAMES[int(params["adstock_family"][k])]
+    ad = CARRYOVER_NAMES[int(params["carryover_family"][k])]
     return f"{sat}·{ad}"
 
 
@@ -403,17 +405,17 @@ def _rw_parameters(params: dict, group: str, index: int) -> dict[str, float | bo
     return out
 
 
-def _channel_response_parameters(world: SCM, k: int) -> dict[str, Any]:
-    """The family-specific response inputs actually consumed for channel ``k``."""
+def _treatment_response_parameters(world: SCM, k: int) -> dict[str, Any]:
+    """The family-specific response inputs actually consumed for treatment ``k``."""
     params = world.params
-    ad_name = ADSTOCK_NAMES[int(params["adstock_family"][k])]
+    ad_name = CARRYOVER_NAMES[int(params["carryover_family"][k])]
     sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
-    adstock: dict[str, Any] = {"family": ad_name, "l_max": int(params["l_max"])}
+    carryover: dict[str, Any] = {"family": ad_name, "l_max": int(params["l_max"])}
     if ad_name == "geometric":
-        adstock["alpha"] = float(np.asarray(params["adstock_alpha"])[k])
+        carryover["alpha"] = float(np.asarray(params["carryover_alpha"])[k])
     elif ad_name == "weibull":
-        adstock["lam"] = float(np.asarray(params["weibull_lam"])[k])
-        adstock["k"] = float(np.asarray(params["weibull_k"])[k])
+        carryover["lam"] = float(np.asarray(params["weibull_lam"])[k])
+        carryover["k"] = float(np.asarray(params["weibull_k"])[k])
 
     saturation: dict[str, Any] = {
         "family": sat_name,
@@ -437,7 +439,7 @@ def _channel_response_parameters(world: SCM, k: int) -> dict[str, Any]:
         beta = float(np.asarray(params["beta"])[k])
         gate.update({"beta": beta, "value": beta})
     return {
-        "adstock": adstock,
+        "carryover": carryover,
         "saturation": saturation,
         "gate": gate,
     }
@@ -452,7 +454,7 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
             "rho": float(np.asarray(params["confounding_strength"])),
             "eps_c": "raw independent pre-mixture innovation",
             "eps_c_pulse": "0/1 Bernoulli fire",
-            "eps_z_pulse": "0/1 Bernoulli fire, centred by control_pulse_prob",
+            "eps_z_pulse": "0/1 Bernoulli fire, centred by covariate_pulse_prob",
         }
     }
     for j in range(n_latent):
@@ -468,11 +470,11 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
         values[f"Z{m + 1}"] = {
             "random_walk": _rw_parameters(params, "rw_z", m),
             "texture": {
-                "use_control_hf": bool(np.asarray(params["use_control_hf"])[m]),
-                "control_hf_sigma": float(np.asarray(params["control_hf_sigma"])[m]),
-                "use_control_pulse": bool(np.asarray(params["use_control_pulse"])[m]),
-                "control_pulse_amp": float(np.asarray(params["control_pulse_amp"])[m]),
-                "control_pulse_prob": float(np.asarray(params["control_pulse_prob"])[m]),
+                "use_covariate_hf": bool(np.asarray(params["use_covariate_hf"])[m]),
+                "covariate_hf_sigma": float(np.asarray(params["covariate_hf_sigma"])[m]),
+                "use_covariate_pulse": bool(np.asarray(params["use_covariate_pulse"])[m]),
+                "covariate_pulse_amp": float(np.asarray(params["covariate_pulse_amp"])[m]),
+                "covariate_pulse_prob": float(np.asarray(params["covariate_pulse_prob"])[m]),
             },
         }
         if parents:
@@ -497,7 +499,7 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
                 "pulse_amp": float(np.asarray(params["pulse_amp"])[k]),
                 "pulse_prob": float(np.asarray(params["pulse_prob"])[k]),
             },
-            "response": _channel_response_parameters(world, k),
+            "response": _treatment_response_parameters(world, k),
         }
         if parents:
             values[f"C{k + 1}"]["parents"] = parents
@@ -516,22 +518,22 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
     values["Y"] = {"iid_noise": _rw_parameters(params, "rw_y", 0)}
     if y_parents:
         values["Y"]["parents"] = y_parents
-    values["Y"]["non_media"] = {
+    values["Y"]["non_treatment"] = {
         "floor": world.cfg.baseline_floor,
         "floor_scope": world.cfg.baseline_floor_scope,
         "accumulation_order": ["B", *y_parents],
         "attribution": (
             "sequential_clipped_differences"
             if world.cfg.baseline_floor is not None
-            and world.cfg.baseline_floor_scope == "non_media"
+            and world.cfg.baseline_floor_scope == "non_treatment"
             else "additive"
         ),
     }
-    if "channel_shock" in params:
-        schedule = params["channel_shock"]
-        values["channel_shocks"] = {
+    if "treatment_shock" in params:
+        schedule = params["treatment_shock"]
+        values["treatment_shocks"] = {
             "n_shocks": int(schedule["n_shocks"]),
-            "channel": schedule["channel"],
+            "treatment": schedule["treatment"],
             "start_full": schedule["start_full"],
             "mask_full": schedule["mask_full"],
             "level_full": schedule["level_full"],
@@ -547,8 +549,8 @@ def _build_equations(world: SCM) -> dict[str, str]:
     """Readable vector assignments mirroring ``build_symbolic_graph`` exactly."""
     g, params = world.g, world.params
     n_treatments, n_covariates, n_latent = world.n_treatments, world.n_covariates, world.n_latent
-    shocks_enabled = "channel_shock" in params
-    n_time_steps_full = world.n_time_steps + world.cfg.adstock_burn_in
+    shocks_enabled = "treatment_shock" in params
+    n_time_steps_full = world.n_time_steps + world.cfg.carryover_burn_in
 
     def rw_scale(label: str, group: str, index: int) -> str:
         smoothness = float(np.asarray(params[group]["smoothness"])[index])
@@ -572,14 +574,14 @@ def _build_equations(world: SCM) -> dict[str, str]:
     equations: dict[str, str] = {
         "innovations": (
             "eps_c_eff = sqrt(1 - rho**2) * eps_c + rho * eps_b[:, None]; "
-            "eps_c is the raw independent pre-mixture channel innovation and "
+            "eps_c is the raw independent pre-mixture treatment innovation and "
             "eps_c_pulse is a 0/1 Bernoulli fire. rho=0 gives mutually independent "
             "exogenous vectors; rho!=0 makes eps_c_eff and eps_b dependent. "
-            "eps_z_pulse is the 0/1 control fire; the control equation centres it "
-            "by subtracting control_pulse_prob."
+            "eps_z_pulse is the 0/1 covariate fire; the covariate equation centres it "
+            "by subtracting covariate_pulse_prob."
         ),
         "RW": (
-            f"n_time_steps_full = n_time_steps + adstock_burn_in = {n_time_steps_full}. "
+            f"n_time_steps_full = n_time_steps + carryover_burn_in = {n_time_steps_full}. "
             "For each random-walk innovation column, "
             "q = edge_padded_MA(cumsum(eps), "
             "width=kernel_width(smoothness, rw_smoothness_max_weeks), "
@@ -594,10 +596,10 @@ def _build_equations(world: SCM) -> dict[str, str]:
         ),
     }
     if shocks_enabled:
-        equations["channel_shocks"] = (
-            "The exact full-horizon channel_shock mask and held levels clamp each "
-            "channel before adstock; the clamped path then adstocks with the "
-            "ordinary normalized causal kernel, so carryover from pre-shock spend "
+        equations["treatment_shocks"] = (
+            "The exact full-horizon treatment_shock mask and held levels clamp each "
+            "treatment before carryover; the clamped path then carryovers with the "
+            "ordinary normalized causal kernel, so carryover from pre-shock treatment "
             "decays across a held window instead of being discarded. C_base, "
             "C_no_cc, and C_no_cc_zc share the same clamp."
         )
@@ -614,16 +616,18 @@ def _build_equations(world: SCM) -> dict[str, str]:
         for m_parent in range(m):
             if g["g_zz"][m_parent, m]:
                 terms.append(f"gamma_zz[{m_parent}, {m}] * Z{m_parent + 1}_full")
-        control_hf_on = bool(np.asarray(params["use_control_hf"])[m])
-        control_pulse_on = bool(np.asarray(params["use_control_pulse"])[m])
+        covariate_hf_on = bool(np.asarray(params["use_covariate_hf"])[m])
+        covariate_pulse_on = bool(np.asarray(params["use_covariate_pulse"])[m])
         own = f"RW_full(eps_z[:, {m}], rw_z[{m}])"
-        if control_hf_on:
-            own += f" + control_hf_sigma[{m}] * eps_z_hf[:, {m}]"
-        if control_pulse_on:
-            own += f" + control_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - control_pulse_prob[{m}])"
+        if covariate_hf_on:
+            own += f" + covariate_hf_sigma[{m}] * eps_z_hf[:, {m}]"
+        if covariate_pulse_on:
+            own += (
+                f" + covariate_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - covariate_pulse_prob[{m}])"
+            )
         equations[f"Z{m + 1}"] = (
-            f"use_control_hf[{m}]={control_hf_on}; "
-            f"use_control_pulse[{m}]={control_pulse_on}; "
+            f"use_covariate_hf[{m}]={covariate_hf_on}; "
+            f"use_covariate_pulse[{m}]={covariate_pulse_on}; "
             f"own_Z{m + 1}_full = {own}; "
             f"Z{m + 1}_full = {_join_terms(f'own_Z{m + 1}_full', terms)}; "
             f"Z{m + 1} = Z{m + 1}_full[burn_in:]"
@@ -677,12 +681,12 @@ def _build_equations(world: SCM) -> dict[str, str]:
             f"C_no_cc_zc{k + 1}_full = {clamp(f'softplus({no_cc_zc_inner})', k)}; "
             f"C_no_cc_zc{k + 1} = C_no_cc_zc{k + 1}_full[burn_in:]"
         )
-        ad_name = ADSTOCK_NAMES[int(params["adstock_family"][k])]
+        ad_name = CARRYOVER_NAMES[int(params["carryover_family"][k])]
         sat_name = SATURATION_NAMES[int(params["sat_family"][k])]
         equations[f"f{k + 1}"] = (
-            f"ad_C{k + 1} = adstock[{ad_name}](C{k + 1}_full); "
+            f"ad_C{k + 1} = carryover[{ad_name}](C{k + 1}_full); "
             f"saturation_scale[{k}] = max(parameter-only reference level for C{k + 1}, 1e-8); "
-            f"f{k + 1}(X_full) = {sat_name}(adstock[{ad_name}](X_full)"
+            f"f{k + 1}(X_full) = {sat_name}(carryover[{ad_name}](X_full)"
             f"[burn_in:], saturation_scale[{k}]); "
             f"gate[{k}] = g_cy[{k}] * beta[{k}]"
         )
@@ -706,25 +710,25 @@ def _build_equations(world: SCM) -> dict[str, str]:
     b_terms = [f"delta_dy[{j}] * D{j + 1}_full" for j in range(n_latent) if g["g_dy"][j]] + [
         f"rho_zy[{m}] * Z{m + 1}_full" for m in range(n_covariates) if g["g_zy"][m]
     ]
-    if floor is not None and world.cfg.baseline_floor_scope == "non_media":
-        non_media = (
-            f"non_media_full = clip the running total at {float(floor)} as each parent "
+    if floor is not None and world.cfg.baseline_floor_scope == "non_treatment":
+        non_treatment = (
+            f"non_treatment_full = clip the running total at {float(floor)} as each parent "
             "joins, in the locked order B -> D1..DJ -> Z1..ZM; each per-node column is "
             "the telescoping difference that node caused, so the columns still sum "
-            "exactly to non_media_full while a negative rho_zy * Z is credited only "
+            "exactly to non_treatment_full while a negative rho_zy * Z is credited only "
             "down to the floor"
         )
     else:
-        non_media = f"non_media_full = {_join_terms('B_full', b_terms)}"
+        non_treatment = f"non_treatment_full = {_join_terms('B_full', b_terms)}"
     equations["Y"] = (
-        f"{non_media}; "
-        "sales_noise = rw_y[0].std * eps_y[burn_in:]; "
-        "baseline = non_media_full[burn_in:] + sales_noise; "
+        f"{non_treatment}; "
+        "outcome_noise = rw_y[0].std * eps_y[burn_in:]; "
+        "baseline = non_treatment_full[burn_in:] + outcome_noise; "
         "baseline_intrinsic = B; "
-        "Y (sales) = baseline + sum_k contributions_observed[:, k]. "
-        "Sales is never clipped: the observation noise is symmetric, so a clamp "
+        "Y (outcome) = baseline + sum_k contributions_observed[:, k]. "
+        "Outcome is never clipped: the observation noise is symmetric, so a clamp "
         "here would censor the OBSERVATION; the acceptance filter enforces "
-        "non-negative sales instead."
+        "non-negative outcome instead."
     )
     return equations
 
@@ -768,7 +772,7 @@ def draw_feasible_graph(
         The accepted active-size ``g`` blocks, or None when all
         ``max_graph_rounds`` draws failed the rule — the budget then admits no
         satisfying DAG at all (a budget can make one structurally impossible:
-        controls with no ``zy``/``zc``/``zz``/``dz`` arrow can never reach Y),
+        covariates with no ``zy``/``zc``/``zz``/``dz`` arrow can never reach Y),
         or admits one too rarely to find. None rather than an exception so a
         caller can probe several configs and report every infeasible one at
         once.
@@ -811,7 +815,7 @@ def sample_scm(
     nodes (edges that never reach Y) are NEVER allowed; fully-isolated null
     nodes are allowed only when ``connect_all=False`` — then builds the world's
     PyMC model and ``pm.draw``s candidates until one passes the realism filter
-    (finite arrays, non-negative sales, spend-CV floor, spike guards).
+    (finite arrays, non-negative outcome, treatment-CV floor, spike guards).
 
     Fully deterministic given ``(cfg, seed)``: one numpy RNG drives the DAG +
     structure draws and the per-round pm.draw seeds.
@@ -838,7 +842,7 @@ def sample_scm(
         worlds from the SAME built model, so exhausting all
         ``max_param_rounds * max_eps_draws`` candidates raises ``RuntimeError``
         — the accepted DAG's continuous priors keep producing unrealistic
-        worlds (non-finite arrays, negative sales, flat spend, spikes).
+        worlds (non-finite arrays, negative outcome, flat treatment, spikes).
     max_eps_draws : int
         Candidate worlds per round. Purely a batching knob (a bigger batch
         amortizes the compile over more candidates), but it multiplies the
@@ -894,16 +898,16 @@ def sample_scm(
         for b in range(max_eps_draws):
             d = {nm: np.array(drawn[nm][b], copy=True) for nm in out_names}
             check = {
-                k: v for k, v in d.items() if k not in ("channels_base", "contributions_observed")
+                k: v for k, v in d.items() if k not in ("treatments_base", "contributions_observed")
             }
             if _additive_task_ok(
-                spend=d["channels"],
-                sales=d["sales"],
+                treatment=d["treatments"],
+                outcome=d["outcome"],
                 arrays=check,
                 g_cy_active=g_act["g_cy"],
-                cv_floor=cfg.spend_cv_floor,
-                realism_spend=d.get("channels_unshocked"),
-                realism_sales=d.get("sales_unshocked"),
+                cv_floor=cfg.treatment_cv_floor,
+                realism_treatment=d.get("treatments_unshocked"),
+                realism_outcome=d.get("outcome_unshocked"),
             ):
                 return SCM(
                     data=d,
@@ -922,29 +926,29 @@ def sample_scm(
     raise RuntimeError(f"world {name!r}: no accepted draw in {max_param_rounds} rounds")
 
 
-def _assemble_channel_shock_schedule(
+def _assemble_treatment_shock_schedule(
     drawn: dict[str, np.ndarray], b: int, cfg: SCMPrior
 ) -> dict[str, Any]:
     """Reconstruct the accepted full-horizon shock inputs for graph replay."""
-    channel = np.array(drawn["channel_shock_channel"][b], dtype="int64", copy=True)
-    start_full = np.array(drawn["channel_shock_start"][b], dtype="int64", copy=True)
-    start_full += cfg.adstock_burn_in
-    length = np.array(drawn["channel_shock_length"][b], dtype="int64", copy=True)
-    level = np.array(drawn["channel_shock_level"][b], dtype="float64", copy=True)
-    mask_full = np.array(drawn["channel_shock_mask_full"][b], copy=True)
+    treatment = np.array(drawn["treatment_shock_index"][b], dtype="int64", copy=True)
+    start_full = np.array(drawn["treatment_shock_start"][b], dtype="int64", copy=True)
+    start_full += cfg.carryover_burn_in
+    length = np.array(drawn["treatment_shock_length"][b], dtype="int64", copy=True)
+    level = np.array(drawn["treatment_shock_level"][b], dtype="float64", copy=True)
+    mask_full = np.array(drawn["treatment_shock_mask_full"][b], copy=True)
     level_full = np.zeros(mask_full.shape, dtype="float64")
     occupied = np.zeros(mask_full.shape[0], dtype=bool)
-    for selected, start, duration, held_level in zip(channel, start_full, length, level):
+    for selected, start, duration, held_level in zip(treatment, start_full, length, level):
         end = int(start + duration)
         if occupied[int(start) : end].any():
-            raise AssertionError("channel shock windows must not overlap")
+            raise AssertionError("treatment shock windows must not overlap")
         occupied[int(start) : end] = True
         # This concrete replay schedule must agree with world_model's symbolic
         # sum. Stratified slots make windows disjoint, so assignment is equivalent.
         level_full[int(start) : end, int(selected)] = held_level
     return {
-        "n_shocks": int(cfg.n_channel_shocks),
-        "channel": channel,
+        "n_shocks": int(cfg.n_treatment_shocks),
+        "treatment": treatment,
         "start_full": start_full,
         "mask_full": mask_full,
         "level_full": level_full,
@@ -966,12 +970,12 @@ def _assemble_params(
     params["l_max"] = cfg.l_max
     params["baseline_floor"] = cfg.baseline_floor
     params["baseline_floor_scope"] = cfg.baseline_floor_scope
-    params["adstock_family"] = np.array(structural["adstock_family"], copy=True)
+    params["carryover_family"] = np.array(structural["carryover_family"], copy=True)
     params["sat_family"] = np.array(structural["sat_family"], copy=True)
     params["use_hf"] = np.array(structural["use_hf"], copy=True)
     params["use_pulse"] = np.array(structural["use_pulse"], copy=True)
-    params["use_control_hf"] = np.array(structural["use_control_hf"], copy=True)
-    params["use_control_pulse"] = np.array(structural["use_control_pulse"], copy=True)
+    params["use_covariate_hf"] = np.array(structural["use_covariate_hf"], copy=True)
+    params["use_covariate_pulse"] = np.array(structural["use_covariate_pulse"], copy=True)
     for suffix, positive_only in (
         ("d", False),
         ("z", False),
@@ -989,6 +993,6 @@ def _assemble_params(
             group_params["smoothness"] = np.array(structural[f"smoothness_{suffix}"], copy=True)
             group_params["rw_smoothness_max_weeks"] = cfg.rw_smoothness_max_weeks
         params[group] = group_params
-    if cfg.n_channel_shocks:
-        params["channel_shock"] = _assemble_channel_shock_schedule(drawn, b, cfg)
+    if cfg.n_treatment_shocks:
+        params["treatment_shock"] = _assemble_treatment_shock_schedule(drawn, b, cfg)
     return params
