@@ -17,7 +17,17 @@ read the migration notes before upgrading.
   establish numerical equivalence for the released stack below.
 - Tag releases reuse CI's locked verification and native package build, then
   prepare draft GitHub Releases with wheel, source archive, conda channel, and
-  SHA-256 checksums. PyPI/TestPyPI publishing and its unused permissions are removed.
+  SHA-256 checksums.
+- Publish the wheel and source archive to PyPI from the tag workflow using
+  trusted publishing (OIDC), so no API token is stored in the repository. The
+  `pypi-publish` job runs last, is bound to the `pypi` deployment environment
+  (maintainer approval required, `v*` tag refs only), and refuses to upload
+  anything other than the two expected files for the tagged version — the
+  conda channel archive and `SHA256SUMS` stay GitHub Release assets. Requires a
+  one-time PyPI trusted-publisher registration; see CONTRIBUTING.
+- Add `conda/recipes/conda-forge/meta.yaml`, the recipe to submit to
+  conda-forge/staged-recipes once the matching PyPI archive exists. It is
+  separate from the local-channel recipe under `conda/recipes/pymc-generator/`.
 - Source archives now include the complete test suite and developer/documentation
   support files. CI exercises the unpacked archive independently of the checkout.
 - Package metadata uses an SPDX MIT license expression and retains both copyright

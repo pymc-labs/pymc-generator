@@ -1,0 +1,85 @@
+# conda-forge submission recipe.
+#
+# This is NOT the recipe used by `scripts/build_conda.py`. That one lives in
+# `conda/recipes/pymc-generator/meta.yaml`, builds the local channel from a
+# freshly verified source archive, and takes its version and checksum from the
+# environment.
+#
+# This file is the copy that goes to conda-forge/staged-recipes as
+# `recipes/pymc-generator/meta.yaml`. It can only be submitted once the matching
+# version exists on PyPI, because `source.url` points at the published archive.
+#
+# To refresh `sha256` after a PyPI upload:
+#
+#   version=0.0.2
+#   curl -sSL "https://pypi.io/packages/source/p/pymc-generator/pymc_generator-${version}.tar.gz" \
+#     | shasum -a 256
+#
+# Once the feedstock exists, conda-forge's autotick bot maintains this file and
+# this copy becomes historical; keep it in sync only while the feedstock is
+# still pending.
+{% set name = "pymc-generator" %}
+{% set version = "0.0.2" %}
+{% set python_min = "3.13" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/pymc_generator-{{ version }}.tar.gz
+  # Replace with the checksum of the archive actually published to PyPI.
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+
+build:
+  number: 0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  entry_points:
+    - pymc-generator = pymc_generator.cli:main
+
+requirements:
+  host:
+    - python {{ python_min }}
+    - pip
+    - setuptools >=77
+    - wheel
+  run:
+    # Mirrors pyproject.toml. Transitive packages (arviz, numba, pydantic,
+    # scikit-learn, preliz, pymc-extras) are resolved through pymc and
+    # pymc-marketing and are deliberately not re-declared.
+    - python >={{ python_min }}
+    - numpy
+    - scipy
+    - pandas
+    - matplotlib-base
+    - xarray
+    - pytensor >=3.2.3,<4
+    - pymc >=6.2,<7
+    - pymc-marketing >=1.1,<2
+
+test:
+  requires:
+    - python {{ python_min }}
+    - pip
+  imports:
+    - pymc_generator
+  commands:
+    - pip check
+    - pymc-generator --help
+
+about:
+  home: https://github.com/pymc-labs/pymc-generator
+  summary: Synthetic MMM worlds with known structural decompositions
+  description: |
+    Simulate synthetic marketing-mix-model worlds with exact causal
+    decompositions, producing human-readable dataset bundles and PFN-ready
+    corpora. Built on PyTensor, PyMC and pymc-marketing.
+  license: MIT
+  license_file: LICENSE
+  doc_url: https://github.com/pymc-labs/pymc-generator
+  dev_url: https://github.com/pymc-labs/pymc-generator
+
+extra:
+  recipe-maintainers:
+    - cetagostini

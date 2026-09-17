@@ -186,11 +186,38 @@ no sensitive material.
 - The tag workflow reuses CI's locked tests, lint/type checks, wheel smoke test,
   and native conda build. Conda packages use that same verified source archive.
   It creates a **draft GitHub Release** containing the wheel, source archive,
-  `conda-channel.tar.gz`, and `SHA256SUMS`; it does not upload to PyPI.
+  `conda-channel.tar.gz`, and `SHA256SUMS`.
+- The final `pypi-publish` job then uploads **only** the wheel and source
+  archive to PyPI through [trusted publishing][tp]: GitHub mints a short-lived
+  OIDC token, so no API token is stored in this repository. A guard step fails
+  the job if `dist/` holds anything other than the two expected files for the
+  tagged version, which keeps `conda-channel.tar.gz` and `SHA256SUMS` out of
+  the upload.
+- Publication is irreversible: PyPI never lets a version be replaced. The job
+  therefore runs last and is bound to the `pypi` deployment environment, which
+  requires a maintainer's approval and only accepts `v*` tag refs. Nothing is
+  uploaded until someone approves that deployment.
 - Review the draft, documentation checks, and installation evidence before
-  publishing it. uv and native conda are the primary installation paths.
+  approving. uv/PyPI and native conda are the primary installation paths.
   Repository visibility is a separate final readiness decision, never an
   automatic build or release step.
+
+[tp]: https://docs.pypi.org/trusted-publishers/
+
+### One-time registry prerequisites
+
+- **PyPI.** A project owner must register a trusted publisher at
+  <https://pypi.org/manage/account/publishing/> with owner `pymc-labs`,
+  repository `pymc-generator`, workflow `release.yml`, and environment `pypi`.
+  Until that exists, `pypi-publish` fails authentication and no other job is
+  affected. For the very first upload use PyPI's *pending* publisher form,
+  because the project name is not registered yet.
+- **conda-forge.** Submit `conda/recipes/conda-forge/meta.yaml` to
+  [staged-recipes](https://github.com/conda-forge/staged-recipes) as
+  `recipes/pymc-generator/meta.yaml` **after** the PyPI upload exists, since
+  the recipe's `source.url` and `sha256` reference the published archive. The
+  in-repo recipe under `conda/recipes/pymc-generator/` builds the local channel
+  and is not the feedstock recipe.
 
 Before publishing a draft, maintainers must check that the release commit has
 passing CI, documentation, and applicable security results, review migration notes and scientific
