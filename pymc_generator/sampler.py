@@ -11,8 +11,7 @@ per-control / per-confounder contributions, ``baseline_intrinsic`` and the
 telescoping 3-source indirect split ``(cc, zc, dc)``.
 
 The corpus schema is the dict-of-ndarrays documented in
-:func:`sample_prior_predictive` — the same format the structural-pfn training
-pipeline consumes (persist with ``pymc_generator.save_corpus``).
+:func:`sample_prior_predictive` (persist with ``pymc_generator.save_corpus``).
 """
 
 from __future__ import annotations
@@ -83,8 +82,8 @@ def _default_saturation_family_probs() -> dict[str, float]:
 MAX_TOPUPS_PER_CELL = 8
 
 #: Default per-quantity width ranges for the prior-conditioning hyperprior
-#: (ACE). Mirrors the pymc-pfn precedent (``MMMv0Config``:
-#: ``adstock_alpha_width_range=(0.05, 0.45)``, ``hill_n_width_range=(0.2, 1.6)``).
+#: (ACE). Each width spans a useful fraction of that quantity's full prior
+#: range, narrow enough to inform a cell without collapsing it to a point.
 PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
     "adstock_alpha": (0.05, 0.45),
     "hill_shape": (0.2, 1.6),

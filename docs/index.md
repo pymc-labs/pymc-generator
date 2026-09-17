@@ -5,14 +5,13 @@ hide:
 ---
 
 <div class="pg-hero" markdown>
-<span class="pg-hero__eyebrow">synthetic MMM · exact ground truth</span>
+<span class="pg-hero__eyebrow">structural causal models · exact ground truth</span>
 
-# Simulate marketing worlds. <span class="pg-gradient-text">Know the answer.</span>
+# Simulate causal worlds. <span class="pg-gradient-text">Know the answer.</span>
 
-Thousands of marketing-mix-model **worlds**, each an additive structural causal
-model built as one PyTensor / PyMC graph — so a single draw gives you the
-observable data *and* the exact causal decomposition of sales, reproducibly from
-a seed.
+Thousands of **worlds**, each a random Pearlian DAG compiled into one
+PyTensor / PyMC graph — so a single draw gives you the observable data *and*
+the exact causal decomposition of the outcome, reproducibly from a seed.
 
 <div class="pg-hero__cta" markdown>
 [Get started :material-arrow-right:](getting-started.md){ .pg-btn .pg-btn--primary }
@@ -28,16 +27,17 @@ a seed.
 <div class="pg-card" markdown>
 <div class="pg-card__icon">🎲</div>
 ### Draw a world
-Every prior is a PyMC distribution; every mechanism (adstock, saturation) is
-pymc-marketing's own. One `pm.draw` yields the series and the truth together.
+Every prior is a PyMC distribution; the treatment response mechanisms
+(carryover, saturation) are pymc-marketing's own. One `pm.draw` yields the
+series and the truth together.
 </div>
 
 <div class="pg-card" markdown>
 <div class="pg-card__icon">🧮</div>
 ### Exact decomposition
-Sales splits into per-channel direct contributions, baseline drivers, and a
-telescoping indirect split — holding to **float precision (~1e-15)**, not a
-Taylor approximation.
+The outcome splits into per-treatment direct contributions, baseline drivers,
+and a telescoping indirect split — holding to **float precision (~1e-15)**,
+not a Taylor approximation.
 </div>
 
 <div class="pg-card" markdown>
@@ -49,9 +49,9 @@ description, the DAG, and diagnostic figures.
 
 <div class="pg-card" markdown>
 <div class="pg-card__icon">🧱</div>
-### Training corpora
-Stack thousands of worlds into the tensor `.npz` format amortized-inference /
-PFN pipelines consume — with the decomposition targets baked in.
+### Stacked corpora
+Stack thousands of worlds into one padded tensor `.npz` with explicit active
+counts and masks — decomposition targets included.
 </div>
 
 </div>

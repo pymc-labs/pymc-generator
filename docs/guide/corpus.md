@@ -1,8 +1,8 @@
 # Generating a corpus
 
 A **corpus** stacks many worlds into a dict of numpy arrays over `n_tasks` tasks
-and `n_time_steps` weeks — the tensor format amortized-inference / PFN pipelines
-consume, with the decomposition targets baked in. Generate it functionally with
+and `n_time_steps` weeks — one padded tensor archive, with the decomposition
+targets baked in. Generate it functionally with
 [`sample_prior_predictive`](../reference/corpus.md#pymc_generator.sampler.sample_prior_predictive)
 or through the [`DataGenerator`](../reference/corpus.md#pymc_generator.data_generator.DataGenerator)
 facade.
@@ -411,8 +411,7 @@ See the full configuration surface in the
 
 ## Prior conditioning (ACE)
 
-A PFN checkpoint distills the prior it was trained on. **ACE-style prior
-conditioning** makes the prior an *input*: with
+**ACE-style prior conditioning** makes the prior an *input*: with
 `make_scm_prior(..., prior_conditioning=True)`, each **cell** draws a narrowed
 prior interval per conditioned quantity —
 

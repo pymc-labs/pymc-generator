@@ -1,8 +1,8 @@
 """High-level generation facade + corpus persistence.
 
-Provides a clean, tested interface for generating synthetic MMM worlds at
-scale, plus the ``.npz`` persistence format that PFN training pipelines
-(e.g. structural-pfn) consume directly.
+Provides a clean, tested interface for generating structural causal model
+worlds at scale, plus the ``.npz`` persistence format that stacks many worlds
+into one padded tensor archive.
 
 Design Principles:
 1. Model-independent - generates data without any learned model

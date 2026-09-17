@@ -2,8 +2,7 @@
 
 A :class:`Scenario` fixes graph sizes and per-edge-type arrow budgets so a
 decomposition failure can be traced to the pathway that broke. The five
-default scenarios (ported from structural-pfn's inspection-dataset tooling)
-cover: pure direct effects, demand-confounded spend, promo-driven spend,
+default scenarios cover: pure direct effects, demand-confounded spend, promo-driven spend,
 channel halo, and everything at once.
 """
 

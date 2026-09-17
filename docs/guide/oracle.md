@@ -87,8 +87,8 @@ column before comparing, or sum `baseline_intrinsic`, `confounder_contribution`,
 and `control_contribution`. Comparing the two baseline labels without this
 adjustment includes the realized observation noise in the recovery error.
 
-The shared prior definitions make this a useful reference for PFNs trained with
-the same configuration, including [ACE prior-conditioning](corpus.md#prior-conditioning-ace)
+The shared prior definitions make this a useful reference for amortized models
+trained with the same configuration, including [ACE prior-conditioning](corpus.md#prior-conditioning-ace)
 intervals that `SCM.oracle_model()` picks up automatically. Shared priors alone do
 not remove the plug-in conditioning qualification.
 
