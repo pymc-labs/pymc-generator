@@ -198,8 +198,8 @@ Inspect the real arrays:
 from scm_docs import corpus
 c = corpus()
 
-for key in ["treatment_raw", "controls", "outcome_raw", "treatment_contribution_raw",
-            "indirect_effects_by_source", "demand", "g", "treatment_active_mask"]:
+for key in ["treatment_raw", "covariates", "outcome_raw", "treatment_contribution_raw",
+            "indirect_effects_by_source", "latent_unobserved", "g", "treatment_active_mask"]:
     print(f"{key:<28} {str(c[key].shape):<14} {c[key].dtype}")
 ```
 
@@ -358,7 +358,7 @@ serves every level.
 | Axis | How | Knobs |
 | --- | --- | --- |
 | **Graph size** | how many nodes are live | `n_treatments`, `n_covariates`, `n_latent`, and their `*_active_range`s |
-| **Interactions** | how many arrows of each type | `edge_budget`, `min_no_direct_effect_channels` |
+| **Interactions** | how many arrows of each type | `edge_budget`, `min_no_direct_effect_treatments` |
 | **Nonlinearity** | treatment-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` |
 | **Texture** | treatments' and covariates' high-frequency drive | explicit noise, pulse, and walk ranges |
@@ -388,7 +388,7 @@ cfg = pg.make_scm_prior(
 
 ### Direct-null treatments
 
-`min_no_direct_effect_channels` reserves active treatments without a direct
+`min_no_direct_effect_treatments` reserves active treatments without a direct
 `C→Y` edge. Their direct contribution is zero. A `cy` budget alone cannot
 guarantee this because its arrow count is clamped to the active slots.
 
@@ -397,7 +397,7 @@ cfg = pg.make_scm_prior(
     n_treatments=10, n_covariates=6, n_latent=3,
     n_treatments_active_range=(2, 10),   # 2–10 active channels per task
     edge_budget={"cy": (1, 10)},
-    min_no_direct_effect_channels=1,   # at least one active channel has no direct effect
+    min_no_direct_effect_treatments=1,   # at least one active channel has no direct effect
 )
 ```
 

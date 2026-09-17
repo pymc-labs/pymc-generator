@@ -50,7 +50,7 @@ and decomposition validation is required.
 The two outcome blocks keep their original positions in packed `g`.
 Their names change from `db` to `dy` and `zb` to `zy` in `edge_types`,
 `edge_base_rates`, `edge_marginals`, and `edge_budget`. The diagnostic
-`min_dead_channels` becomes `min_no_direct_effect_channels`.
+`min_dead_channels` becomes `min_no_direct_effect_treatments`.
 
 The Python API uses only the new names: `g_dy`, `g_zy`, `delta_dy`, `rho_zy`,
 `dy_coeff_range`, and `zy_coeff_range`. Old keyword arguments and graph-dict

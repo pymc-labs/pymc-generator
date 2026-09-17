@@ -267,7 +267,7 @@ treatment-only lift test.
 
 ## Direct-null treatments
 
-`min_no_direct_effect_channels: int = 0` is the minimum number of **active**
+`min_no_direct_effect_treatments: int = 0` is the minimum number of **active**
 treatments each cell leaves without a direct `C→Y` edge. Their **direct**
 contribution is zero; their total causal effect need not be. A `cy` budget is
 an absolute arrow count clamped to the eligible slots, so a cell drawing
@@ -281,26 +281,26 @@ cfg = make_scm_prior(
     n_treatments=10, n_covariates=6, n_latent=3,
     n_treatments_active_range=(2, 10),
     edge_budget={"cy": (1, 10)},
-    min_no_direct_effect_channels=1,
+    min_no_direct_effect_treatments=1,
 )
 ```
 
 - The maximum direct-treatment count is
-  `max(1, n_treatments_active - min_no_direct_effect_channels)`. The existing
+  `max(1, n_treatments_active - min_no_direct_effect_treatments)`. The existing
   budget or Bernoulli sampler operates subject to this cap, and the mandatory
   `cy ≥ 1` guard still applies.
 - It applies to the Bernoulli path too: without a `cy` budget, surplus live
   treatments are demoted uniformly at random after the per-slot draw.
 - Live treatments are scattered over **all** active slots, so slot index carries no
   information about the label.
-- `min_no_direct_effect_channels` must be `< n_treatments_active_range[0]`; a floor the
+- `min_no_direct_effect_treatments` must be `< n_treatments_active_range[0]`; a floor the
   smallest drawable cell could not honour is a validation error, not a silently
   dropped constraint.
 - A direct-null treatment can still
   reach `Y` through another treatment (`worlds.treatment_role` reports that as a
   `feeder`); pin `edge_budget={"cc": 0}` for "no path to `Y`".
 - `0` (the default) is inert: identical draws, no extra RNG, and
-  `diagnostics["min_no_direct_effect_channels"]` records the resolved value.
+  `diagnostics["min_no_direct_effect_treatments"]` records the resolved value.
 
 ## Identifiability labels
 

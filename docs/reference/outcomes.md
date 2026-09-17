@@ -74,7 +74,7 @@ dependencies and column masks, not every corpus array:
 ```python
 outcome_only = pg.outcome_distributions(
     {"outcome_raw": corpus["outcome_raw"]},
-    quantities=("sales",),
+    quantities=("outcome",),
     normalize="none",
 )
 print(outcome_only.table())

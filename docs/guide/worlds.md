@@ -115,7 +115,7 @@ print("identity error :", f"{scm.identity_error():.2e}")
 
 # 3. signal() — per-direct-channel signal metrics
 sig = scm.signal()
-print("direct channels:", (sig["channel"].astype(int) + 1).tolist())
+print("direct channels:", (sig["treatment"].astype(int) + 1).tolist())
 print("treatment_cv       :", sig["treatment_cv"].round(2).tolist())
 print("contrib_cv     :", sig["contrib_cv"].round(2).tolist())
 print("spearman       :", sig["spearman"].round(2).tolist())
