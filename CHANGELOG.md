@@ -54,12 +54,22 @@ read the migration notes before upgrading.
   test Python 3.13/3.14 in CI. Replace Git development dependencies with registry
   releases: PyMC 6.2.0, pymc-marketing 1.1.0, pymc-extras 0.14.0, PyTensor 3.2.4,
   and PreliZ 0.27.1 in the lock. The native channel now contains only this
-  project, with dependencies from conda-forge and selected source-version parity
-  with uv. On macOS arm64, all 353 arrays across eight preservation cases matched
-  the original baseline exactly on both Python 3.13.9 and 3.14.0. Generation code,
-  seeds, sampler settings, and numerical tolerances were unchanged. This measured
-  result is not a general numerical-equivalence guarantee across versions or
-  platforms.
+  project, with dependencies from conda-forge. On macOS arm64, all 353 arrays
+  across eight preservation cases matched the original baseline exactly on both
+  Python 3.13.9 and 3.14.0. Generation code, seeds, sampler settings, and
+  numerical tolerances were unchanged. This measured result is not a general
+  numerical-equivalence guarantee across versions or platforms. The 3.13 floor
+  is a deliberate project policy, not an upstream constraint: the pinned
+  modeling stack still supports 3.12.
+- **Declared `xarray` explicitly:** `mechanisms` imports `pytensor.xtensor`,
+  whose type module imports xarray at module level. xarray is not a core
+  PyTensor requirement, so it is now a direct dependency instead of relying on
+  pymc-marketing to supply it transitively.
+- **Conda run constraints mirror `pyproject.toml`:** the recipe no longer pins
+  runtime dependencies with exact `==` versions or re-declares transitive
+  packages. Exact pins made the package uninstallable beside other conda-forge
+  content; reproduction of the validated stack belongs to `uv.lock` and the
+  explicit environment export.
 - **Oracle sampler eligibility:** the released stack supports gradients through
   Weibull carryover, removing the previous forced Metropolis restriction. Update
   the oracle regression test to require finite, nontrivial gradients for all
@@ -121,7 +131,7 @@ read the migration notes before upgrading.
   3.12/3.13 CI matrix. At that stage all 153 previously locked dependency versions
   and sources were unchanged; the compatibility upgrade above supersedes that
   stack and matrix. Installed wheels are exercised through real generation and
-  persistence, and Pages publication remains blocked while the repository is private.
+  persistence.
 - Preserve the original 2024 Carlos Trujillo copyright from the upstream
   extraction alongside the 2026 PyMC Labs notice.
 - Enforce persistence versions before legacy migration. Reject partial legacy

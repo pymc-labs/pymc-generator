@@ -31,7 +31,7 @@ PyMC 6.2.0, PyTensor 3.2.4, and pymc-marketing 1.1.0; no Git development
 companions are required. Dependency upgrades can change numerical results even
 with the same seeds. See [getting started](docs/getting-started.md) for installation
 and executable examples, and [CONTRIBUTING.md](CONTRIBUTING.md) for development
-and documentation environments. Repository access is required while it remains private.
+and documentation environments.
 
 ## Install with conda
 
