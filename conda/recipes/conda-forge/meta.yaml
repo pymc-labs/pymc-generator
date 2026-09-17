@@ -75,8 +75,7 @@ about:
     Generate structural causal models as PyTensor / PyMC graphs and draw
     both the observable series and the exact additive decomposition of the
     outcome. Emits human-readable dataset bundles and stacked tensor corpora.
-    Marketing-mix-model-shaped data is the default vocabulary, not the limit
-    of the machinery. Built on PyTensor, PyMC and pymc-marketing.
+    Built on PyTensor, PyMC and pymc-marketing.
   license: MIT
   license_file: LICENSE
   doc_url: https://github.com/pymc-labs/pymc-generator

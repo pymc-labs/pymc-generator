@@ -5,10 +5,7 @@ turns each into one PyTensor / PyMC graph, and emits both the observable series
 and the exact additive decomposition of the outcome that produced them.
 
 The generated model is an additive structural system — a linear predictor per
-node, plus explicitly bounded nonlinearity. That makes it a natural fit for
-marketing-mix-model-shaped problems, and the default vocabulary uses that
-domain (treatments are "channels" with "spend", the outcome is "sales"), but
-the machinery itself is not specific to marketing. See
+node, plus explicitly bounded nonlinearity. See
 [scope and limits](#scope-and-limits) for what is and is not representable
 today.
 
@@ -129,11 +126,6 @@ structural equations.
 - **Time.** Each non-outcome node carries its own smoothed random-walk drive,
   with optional high-frequency texture and Bernoulli pulses. Time is an axis,
   not a node in the DAG.
-- **Vocabulary vs mathematics.** The API and the persisted corpus schema use
-  marketing names (`spend_raw`, `sales_raw`, channels, controls, demand). The
-  mathematics behind covariates, confounders, baseline, and outcome is generic
-  additive structural machinery; only the treatment pipeline — softplus plus
-  carryover and saturation — is domain-shaped.
 
 ## Data contracts and interpretation
 

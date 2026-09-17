@@ -12,8 +12,6 @@ hide:
 Thousands of **worlds**, each a random Pearlian DAG compiled into one
 PyTensor / PyMC graph — so a single draw gives you the observable data *and*
 the exact causal decomposition of the outcome, reproducibly from a seed.
-Marketing-mix-model-shaped data is the default vocabulary, not the limit of
-the machinery.
 
 <div class="pg-hero__cta" markdown>
 [Get started :material-arrow-right:](getting-started.md){ .pg-btn .pg-btn--primary }

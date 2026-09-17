@@ -411,8 +411,7 @@ See the full configuration surface in the
 
 ## Prior conditioning (ACE)
 
-An amortized model distills the prior it was trained on. **ACE-style prior
-conditioning** makes the prior an *input*: with
+**ACE-style prior conditioning** makes the prior an *input*: with
 `make_scm_prior(..., prior_conditioning=True)`, each **cell** draws a narrowed
 prior interval per conditioned quantity —
 
