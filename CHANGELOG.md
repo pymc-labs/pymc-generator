@@ -6,6 +6,8 @@ read the migration notes before upgrading.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-18
+
 ### Added
 
 - Document the project as what it is: a **structural causal model generator**,
