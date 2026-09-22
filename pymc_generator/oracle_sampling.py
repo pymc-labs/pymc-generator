@@ -751,6 +751,8 @@ ORACLE_CONFIG_TOPOLOGY_FIELDS = (
 )
 ORACLE_CONFIG_FIXED_NUMERIC_FIELDS = (
     "carryover_alpha_range",
+    "weibull_lam_range",
+    "weibull_k_range",
     "rw_covariate_mean_range",
     "rw_std_sigma",
     "rw_positive_mean_range",
@@ -1159,12 +1161,14 @@ class OracleTemplate:
     def __post_init__(self) -> None:
         if self.shared_names != ORACLE_SHARED_DATA_NAMES:
             raise ValueError("OracleTemplate shared variable names are part of its contract")
-        # A manually constructed public template explicitly opts into the
-        # legacy eight-input contract by omitting dynamic names.  Templates
-        # produced by build_oracle_template always pass the complete contract.
-        contract = self.shared_names if self.data_contract is None else tuple(self.data_contract)
+        if self.data_contract is None:
+            raise ValueError("OracleTemplate requires an explicit data_contract")
+        contract = tuple(self.data_contract)
         if len(set(contract)) != len(contract) or not set(self.shared_names) <= set(contract):
             raise ValueError("OracleTemplate data contract must include required shared variables")
+        if not set(contract) <= set(ORACLE_DATA_NAMES):
+            unexpected = sorted(set(contract) - set(ORACLE_DATA_NAMES))
+            raise ValueError(f"OracleTemplate data contract has unknown variables: {unexpected}")
         object.__setattr__(self, "data_contract", contract)
         object.__setattr__(
             self,
@@ -1190,8 +1194,8 @@ class OracleTemplate:
         ]
         extras = [
             name
-            for name in ORACLE_DATA_NAMES
-            if isinstance(self.model.named_vars.get(name), SharedVariable) and name not in contract
+            for name, variable in self.model.named_vars.items()
+            if isinstance(variable, SharedVariable) and name not in contract
         ]
         if missing:
             raise ValueError(f"oracle template is missing required shared variables: {missing}")

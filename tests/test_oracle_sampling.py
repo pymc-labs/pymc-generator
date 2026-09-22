@@ -7,6 +7,7 @@ receipt extractor.
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -814,6 +815,7 @@ def _shared_template_and_world(*, changed_sales=0.0, selected=(0, 1, 2)):
         latent="marginal",
         observed_indices=tuple(selected),
         reported_rows=3,
+        data_contract=oracle.ORACLE_SHARED_DATA_NAMES,
     )
     return template, world
 
@@ -924,6 +926,36 @@ def test_changed_fixed_config_fails_before_binding():
     assert fake.payloads == []
 
 
+@pytest.mark.parametrize("field", ["weibull_lam_range", "weibull_k_range"])
+def test_changed_fixed_weibull_config_fails_before_binding(field):
+    template, world = _shared_template_and_world()
+    template = replace(template, config_contract={field: (2.0, 8.0)})
+    setattr(world.cfg, field, (3.0, 8.0))
+    fake = _FakeCompiled(_valid_tree())
+    with pytest.raises(ValueError, match=f"{field}.*unsupported"):
+        _compiled(template, fake).fit(world)
+    assert fake.payloads == []
+
+
+def test_oracle_config_classification_is_exhaustive_and_disjoint():
+    schema = oracle.ORACLE_CONFIG_SCHEMA
+    topology = set(schema["topology"])
+    fixed = set(schema["fixed_numeric"])
+    runtime = set(schema["runtime_data"])
+    assert topology.isdisjoint(fixed)
+    assert topology.isdisjoint(runtime)
+    assert fixed.isdisjoint(runtime)
+    assert {"weibull_lam_range", "weibull_k_range"} <= fixed
+    assert (
+        set(
+            oracle._oracle_config_contract(
+                SimpleNamespace(**{name: name for name in topology | fixed})
+            )
+        )
+        == topology | fixed
+    )
+
+
 def test_compiled_fit_forces_blocking_and_receipts_nutpie_version():
     template, world = _shared_template_and_world()
     fake = _FakeCompiled(_valid_tree())
@@ -960,8 +992,40 @@ def test_compiled_fit_rejects_latent_mismatch_before_binding():
 def test_template_rejects_missing_shared_variable():
     with oracle.pm.Model() as model:
         oracle.pm.Data("channels_data", np.zeros((4, 1)))
-    with pytest.raises(ValueError, match="missing required shared variables"):
+    with pytest.raises(ValueError, match="explicit data_contract"):
         pg.OracleTemplate(model, "sig", "marginal", (0,))
+
+
+def test_template_rejects_graph_connected_unexpected_shared_variable():
+    with oracle.pm.Model() as model:
+        values = {
+            "channels_data": np.zeros((4, 1)),
+            "controls_data": np.ones((4, 1)),
+            "sales_data": np.arange(4, dtype=float),
+            "saturation_scale_data": np.ones(1),
+            "g_cy_data": np.ones(1),
+            "g_db_data": np.zeros(1),
+            "g_zb_data": np.ones(1),
+            "observed_indices_data": np.asarray([0, 1, 2], dtype="int64"),
+        }
+        for name, value in values.items():
+            oracle.pm.Data(name, value)
+        scale = oracle.pm.Data("unexpected_runtime_scale", np.ones(1))
+        oracle.pm.Normal(
+            "connected_likelihood",
+            mu=scale[0] * model["channels_data"][:, 0],
+            sigma=1.0,
+            observed=model["sales_data"],
+        )
+    with pytest.raises(ValueError, match="outside its explicit contract"):
+        pg.OracleTemplate(
+            model,
+            "sig",
+            "marginal",
+            (0,),
+            reported_rows=3,
+            data_contract=oracle.ORACLE_SHARED_DATA_NAMES,
+        )
 
 
 def test_signature_excludes_compatible_prior_and_walk_values():
@@ -985,6 +1049,98 @@ def test_signature_change_fails_closed_without_binding():
     with pytest.raises(ValueError, match="structural signature"):
         compiled.fit(changed)
     assert fake.payloads == []
+
+
+def _generated_world(*, prior_conditioning=False):
+    cfg = pg.make_scm_prior(
+        n_time_steps=20,
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_cells=2,
+        prior_conditioning=prior_conditioning,
+    )
+    return pg.sample_scm(cfg, seed=3, max_eps_draws=4)
+
+
+def _evaluate_generated_template(template, worlds, *, point=None):
+    logp = template.model.compile_logp()
+    dynamic_names = set(template.data_contract or ()) - set(oracle.ORACLE_SHARED_DATA_NAMES)
+    values = []
+    for world in worlds:
+        payload = oracle._oracle_payload(
+            world,
+            np.asarray(template.observed_indices, dtype="int64"),
+            dynamic_names=dynamic_names,
+        )
+        oracle.pm.set_data(payload, model=template.model)
+        values.append(float(logp(template.model.initial_point() if point is None else point)))
+    return values
+
+
+def test_generated_oracle_prior_interval_graph_restores_without_stale_data():
+    world_a = _generated_world(prior_conditioning=True)
+    world_b = copy.deepcopy(world_a)
+    world_b.data["outcome"] = world_b.data["outcome"] + 1.0
+    world_b.extras["prior_cond"] = {
+        "carryover_alpha": (0.25, 0.10),
+        "hill_shape": (2.1, 0.2),
+    }
+    template = pg.build_oracle_template(world_a, latent="marginal")
+    first, changed, restored = _evaluate_generated_template(template, [world_a, world_b, world_a])
+    assert changed != first
+    assert restored == first
+
+
+def test_generated_oracle_marginal_walk_graph_restores_without_stale_data():
+    world_a = _generated_world()
+    world_b = copy.deepcopy(world_a)
+    world_b.extras["structural"]["smoothness_d"] = np.full_like(
+        world_b.extras["structural"]["smoothness_d"], 0.95
+    )
+    world_b.extras["structural"]["smoothness_b"] = np.full_like(
+        world_b.extras["structural"]["smoothness_b"], 0.95
+    )
+    template = pg.build_oracle_template(world_a, latent="marginal")
+    first, changed, restored = _evaluate_generated_template(template, [world_a, world_b, world_a])
+    assert changed != first
+    assert restored == first
+
+
+def test_generated_oracle_sampled_walk_graph_restores_without_stale_data():
+    world_a = _generated_world()
+    world_b = copy.deepcopy(world_a)
+    world_b.extras["structural"]["smoothness_b"] = np.full_like(
+        world_b.extras["structural"]["smoothness_b"], 0.95
+    )
+    template = pg.build_oracle_template(world_a, latent="sampled")
+    point = template.model.initial_point()
+    point["eps_b"] = np.ones_like(point["eps_b"])
+    first, changed, restored = _evaluate_generated_template(
+        template, [world_a, world_b, world_a], point=point
+    )
+    assert changed != first
+    assert restored == first
+
+
+def test_generated_oracle_point_mass_rejected_before_model_construction():
+    world = _generated_world(prior_conditioning=False)
+    world.extras["prior_cond"] = {"carryover_alpha": (0.3, 0.0)}
+    world.oracle_model = lambda **kwargs: (_ for _ in ()).throw(AssertionError("built graph"))
+    with pytest.raises(ValueError, match="zero-width.*point masses"):
+        pg.build_oracle_template(world)
+
+
+def test_generated_oracle_topology_change_splits_signature():
+    interval = _generated_world(prior_conditioning=True)
+    point = copy.deepcopy(interval)
+    point.extras["prior_cond"]["carryover_alpha"] = (
+        point.extras["prior_cond"]["carryover_alpha"][0],
+        0.0,
+    )
+    assert oracle._world_signature(
+        interval, latent="marginal", observed_count=20
+    ) != oracle._world_signature(point, latent="marginal", observed_count=20)
 
 
 def test_compiled_receipt_data_identities_are_stable():
