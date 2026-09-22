@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from .describe import describe_scm
     from .diagnostics import DataDiagnostics, data_diagnostics
     from .oracle_sampling import (
+        ORACLE_CONFIG_SCHEMA,
+        ORACLE_DATA_NAMES,
         ORACLE_DYNAMIC_DATA_NAMES,
         ORACLE_SHARED_DATA_NAMES,
         CompiledOracle,
@@ -93,6 +95,8 @@ _LAZY_IMPORTS = {
     "OracleSamplingResult": (".oracle_sampling", "OracleSamplingResult"),
     "ORACLE_SHARED_DATA_NAMES": (".oracle_sampling", "ORACLE_SHARED_DATA_NAMES"),
     "ORACLE_DYNAMIC_DATA_NAMES": (".oracle_sampling", "ORACLE_DYNAMIC_DATA_NAMES"),
+    "ORACLE_DATA_NAMES": (".oracle_sampling", "ORACLE_DATA_NAMES"),
+    "ORACLE_CONFIG_SCHEMA": (".oracle_sampling", "ORACLE_CONFIG_SCHEMA"),
     "OracleTemplate": (".oracle_sampling", "OracleTemplate"),
     "OracleModelTemplate": (".oracle_sampling", "OracleModelTemplate"),
     "CompiledOracle": (".oracle_sampling", "CompiledOracle"),
@@ -123,6 +127,8 @@ __all__ = [
     "OracleSamplingResult",
     "ORACLE_SHARED_DATA_NAMES",
     "ORACLE_DYNAMIC_DATA_NAMES",
+    "ORACLE_DATA_NAMES",
+    "ORACLE_CONFIG_SCHEMA",
     "OracleTemplate",
     "OracleModelTemplate",
     "CompiledOracle",

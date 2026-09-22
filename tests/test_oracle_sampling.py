@@ -833,6 +833,25 @@ class _FakeCompiled:
         return self.tree
 
 
+class _EvaluatingCompiled(_FakeCompiled):
+    """Small compiled-model stand-in that evaluates the connected PyMC graph."""
+
+    def __init__(self, tree, model):
+        super().__init__(tree)
+        self.model = model
+        self.logps = []
+        self._logp = model.compile_logp()
+
+    def with_data(self, **payload):
+        super().with_data(**payload)
+        oracle.pm.set_data(payload, model=self.model)
+        return self
+
+    def sample(self, **kwargs):
+        self.logps.append(float(self._logp(self.model.initial_point())))
+        return super().sample(**kwargs)
+
+
 def _compiled(template, fake):
     return pg.CompiledOracle(template, fake, sampler=lambda bound, **kwargs: bound.sample(**kwargs))
 
@@ -863,6 +882,46 @@ def test_compile_oracle_compiles_once_and_binds_each_fit(monkeypatch):
     assert not np.array_equal(fake.payloads[0]["sales_data"], fake.payloads[1]["sales_data"])
     assert set(fake.payloads[0]) == set(pg.ORACLE_SHARED_DATA_NAMES)
     assert np.array_equal(fake.payloads[0]["observed_indices_data"], [0, 1, 2])
+
+
+def test_compiled_fit_reuses_one_connected_graph_without_stale_data():
+    template, world = _shared_template_and_world()
+    _, changed = _shared_template_and_world(changed_sales=10.0)
+    fake = _EvaluatingCompiled(_valid_tree(), template.model)
+    compiled = _compiled(template, fake)
+
+    compiled.fit(world)
+    compiled.fit(changed)
+    compiled.fit(world)
+
+    assert len(fake.logps) == 3
+    assert fake.logps[0] == pytest.approx(fake.logps[2])
+    assert fake.logps[0] != pytest.approx(fake.logps[1])
+
+
+def test_zero_width_conditioning_rejected_before_runtime_binding():
+    _, world = _shared_template_and_world()
+    world.extras["prior_cond"] = {"carryover_alpha": (0.2, 0.0)}
+    with pytest.raises(ValueError, match="zero-width.*unsupported"):
+        oracle._dynamic_payload(world, {"prior_cond_carryover_alpha_data"})
+
+
+def test_point_mass_and_interval_have_distinct_topologies():
+    _, world = _shared_template_and_world()
+    interval = oracle._world_signature(world, latent="marginal", observed_count=3)
+    world.extras["prior_cond"] = {"carryover_alpha": (0.2, 0.0)}
+    point = oracle._world_signature(world, latent="marginal", observed_count=3)
+    assert point != interval
+
+
+def test_changed_fixed_config_fails_before_binding():
+    template, world = _shared_template_and_world()
+    template = replace(template, config_contract={"rw_std_sigma": 1.0})
+    world.cfg = SimpleNamespace(__dataclass_fields__={}, rw_std_sigma=2.0)
+    fake = _FakeCompiled(_valid_tree())
+    with pytest.raises(ValueError, match="rw_std_sigma.*unsupported"):
+        _compiled(template, fake).fit(world)
+    assert fake.payloads == []
 
 
 def test_compiled_fit_forces_blocking_and_receipts_nutpie_version():

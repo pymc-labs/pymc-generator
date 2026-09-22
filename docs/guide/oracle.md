@@ -61,6 +61,27 @@ The five original public objects are:
   Topology, rank, or unsupported-shape changes fail closed with a signature or
   shape error. A compiled owner is process-local and serialized for safe use.
 
+#### Reusable data/configuration contract
+
+The template carries an explicit data contract. The required legacy inputs are
+`channels_data`, `controls_data`, `sales_data`, `saturation_scale_data`,
+`g_cy_data`, `g_db_data`, `g_zb_data`, and `observed_indices_data`; generated
+Oracle templates additionally require the four runtime numeric inputs
+`prior_cond_carryover_alpha_data`, `prior_cond_hill_shape_data`,
+`walk_width_d_data`, and `walk_width_b_data`. Manually constructed templates
+must pass the exact names they provide in `data_contract`; missing or extra
+known Oracle inputs fail closed before binding.
+
+The structural signature contains only topology, rank/shape, distribution-family,
+and branch choices. Prior interval endpoints and walk smoothness are compatible
+runtime data and are validated through the named `pm.Data` inputs. Other numeric
+configuration values consumed while constructing prior bounds are an explicit
+fixed compatibility contract (see `ORACLE_CONFIG_SCHEMA`); changing one raises
+an incompatibility instead of silently recompiling or binding stale values.
+Zero-width prior conditioning is a separate point-mass topology. Direct
+one-shot model construction supports it, but reusable templates reject it
+before compilation/binding because a point mass cannot be rebound soundly.
+
 Configuration is validated before model construction: draw/tune/chain/core
 counts, target acceptance, seed, latent mode, Boolean options, thresholds, and
 JSON-native sampler options must satisfy their declared types and ranges. Reserved

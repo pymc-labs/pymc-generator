@@ -722,15 +722,59 @@ ORACLE_SHARED_DATA_NAMES = (
     "g_zb_data",
     "observed_indices_data",
 )
-# Optional data used by templates produced by build_oracle_model.  Keeping
-# these separate preserves the historical low-level template contract while
-# allowing compatible worlds to replace prior intervals and walk operators.
+# Numeric values which are intentionally runtime data.  Their shapes and
+# distribution families are part of the graph contract; their values are not.
 ORACLE_DYNAMIC_DATA_NAMES = (
     "prior_cond_carryover_alpha_data",
     "prior_cond_hill_shape_data",
     "walk_width_d_data",
     "walk_width_b_data",
 )
+ORACLE_DATA_NAMES = ORACLE_SHARED_DATA_NAMES + ORACLE_DYNAMIC_DATA_NAMES
+
+# ``_world_signature`` must not accidentally become a hash of every SCMPrior
+# field.  The first group is graph topology/rank, while the second group is
+# consumed while constructing numerical RV bounds and is therefore fixed for a
+# compiled template.  The latter is deliberately not silently recompiled: a
+# changed value is an incompatibility unless it has a named pm.Data above.
+ORACLE_CONFIG_TOPOLOGY_FIELDS = (
+    "n_treatments",
+    "n_covariates",
+    "n_latent",
+    "n_time_steps",
+    "l_max",
+    "carryover_burn_in",
+    "rw_smoothness_max_weeks",
+    "outcome_std_mode",
+    "baseline_floor",
+    "baseline_floor_scope",
+)
+ORACLE_CONFIG_FIXED_NUMERIC_FIELDS = (
+    "carryover_alpha_range",
+    "rw_covariate_mean_range",
+    "rw_std_sigma",
+    "rw_positive_mean_range",
+    "rw_treatment_std_range",
+    "rw_baseline_mean_range",
+    "rw_baseline_std_sigma",
+    "rw_baseline_std_sigma_effective",
+    "rw_baseline_std_range",
+    "rw_outcome_std_sigma",
+    "rw_outcome_std_range",
+    "dc_coeff_range",
+    "dz_coeff_range",
+    "zc_coeff_range",
+    "cc_coeff_range",
+    "zz_coeff_range",
+    "dy_coeff_range",
+    "zy_coeff_range",
+    "beta_additive_range",
+)
+ORACLE_CONFIG_SCHEMA = {
+    "topology": ORACLE_CONFIG_TOPOLOGY_FIELDS,
+    "fixed_numeric": ORACLE_CONFIG_FIXED_NUMERIC_FIELDS,
+    "runtime_data": ORACLE_DYNAMIC_DATA_NAMES,
+}
 
 
 def _array_identity(value: Any) -> dict[str, object]:
@@ -785,7 +829,7 @@ def _normalise_observed_indices(
 
 
 def _signature_structural(value: Any) -> Any:
-    """Return structural choices while leaving compatible smoothness numeric."""
+    """Return graph choices while leaving compatible numeric values as data."""
     if isinstance(value, Mapping):
         return {
             str(key): _signature_structural(item)
@@ -795,6 +839,36 @@ def _signature_structural(value: Any) -> Any:
     if isinstance(value, (list, tuple, np.ndarray)):
         return [_signature_structural(item) for item in np.asarray(value).tolist()]
     return value
+
+
+def _oracle_config_contract(cfg: Any) -> dict[str, Any]:
+    """Capture config values consumed by the Oracle graph.
+
+    Numeric fields are a compatibility contract, not signature inputs: putting
+    them in the signature would make a changed value look like a topology
+    change and encourage accidental recompilation.  Runtime-varying values
+    (prior intervals and walk widths) are represented by ``pm.Data`` instead.
+    """
+    if cfg is None:
+        return {}
+    fields = (*ORACLE_CONFIG_TOPOLOGY_FIELDS, *ORACLE_CONFIG_FIXED_NUMERIC_FIELDS)
+    return {name: _signature_value(getattr(cfg, name)) for name in fields if hasattr(cfg, name)}
+
+
+def _validate_oracle_config_contract(world: Any, expected: Mapping[str, Any]) -> None:
+    if not expected:
+        return
+    actual = _oracle_config_contract(getattr(world, "cfg", None))
+    for name, value in expected.items():
+        if name not in actual:
+            raise ValueError(
+                f"incompatible Oracle config: field {name!r} is missing from the world"
+            )
+        if actual[name] != value:
+            raise ValueError(
+                f"incompatible Oracle config field {name!r}: changing this numerical "
+                "graph-construction value is unsupported; use a new Oracle template"
+            )
 
 
 def _signature_warmup(world: Any) -> int:
@@ -828,19 +902,30 @@ def _world_signature(world: Any, *, latent: str, observed_count: int) -> str:
     structural = getattr(world, "extras", {}).get("structural", {})
     graph = getattr(world, "g", {})
     data = getattr(world, "data", {})
-    cfg_fields = {
-        name: getattr(cfg, name)
-        for name in getattr(cfg, "__dataclass_fields__", {})
-        if name not in ("n_time_steps",)
-    }
+    # Only topology/rank/shape/family choices belong in this hash.  In
+    # particular, prior interval endpoints and smoothness values are runtime
+    # data; fixed config numerics are checked separately at fit time.
+    cfg_fields = {}
+    if cfg is not None:
+        for name in ORACLE_CONFIG_TOPOLOGY_FIELDS:
+            if not hasattr(cfg, name):
+                continue
+            value = getattr(cfg, name)
+            # The floor's numerical value is an embedded constant and is
+            # checked by the config contract; only its presence is topology.
+            cfg_fields[name] = (value is not None) if name == "baseline_floor" else value
     prior_cond = getattr(world, "extras", {}).get("prior_cond") or {}
-    prior_topology = {
-        str(key): "constant"
-        for key, value in prior_cond.items()
-        if isinstance(value, (tuple, list, np.ndarray))
-        and len(value) == 2
-        and float(value[1]) == 0.0
-    }
+    prior_topology = {}
+    for key, value in prior_cond.items():
+        # Intervals (including the unconditioned support) are runtime data and
+        # therefore intentionally absent from the signature.  Point masses
+        # have a different RV topology and are recorded explicitly.
+        if (
+            isinstance(value, (tuple, list, np.ndarray))
+            and len(value) == 2
+            and float(value[1]) == 0.0
+        ):
+            prior_topology[str(key)] = "point_mass"
     payload = {
         "latent": latent,
         "observed_count": int(observed_count),
@@ -852,8 +937,15 @@ def _world_signature(world: Any, *, latent: str, observed_count: int) -> str:
             for name, value in graph.items()
             if name in ("g_cy", "g_dy", "g_zy")
         },
-        "structural": _signature_structural(structural),
-        "config": cfg_fields,
+        # Oracle graph construction consumes only mechanism families from the
+        # sampled structure. Walk smoothness is runtime data; texture flags and
+        # other generation-only metadata must not split reusable templates.
+        "structural": {
+            name: _signature_structural(structural[name])
+            for name in ("carryover_family", "sat_family")
+            if name in structural
+        },
+        "config_topology": cfg_fields,
         "n_time_steps": int(np.asarray(data["outcome"]).shape[0]),
     }
     encoded = json.dumps(_signature_value(payload), sort_keys=True, separators=(",", ":")).encode()
@@ -874,6 +966,17 @@ def _dynamic_payload(world: Any, names: set[str]) -> dict[str, np.ndarray]:
     ):
         if name not in names:
             continue
+        if quantity in prior:
+            raw = prior[quantity]
+            if (
+                isinstance(raw, (tuple, list, np.ndarray))
+                and len(raw) == 2
+                and float(raw[1]) == 0.0
+            ):
+                raise ValueError(
+                    f"incompatible prior conditioning for {quantity!r}: zero-width "
+                    "point masses are unsupported by reusable Oracle templates"
+                )
         cfg = world.cfg
         if quantity == "carryover_alpha":
             support = cfg.carryover_alpha_range
@@ -913,6 +1016,29 @@ def _dynamic_payload(world: Any, names: set[str]) -> dict[str, np.ndarray]:
                     rw_smoothness_max_weeks=int(world.cfg.rw_smoothness_max_weeks),
                 )
     return result
+
+
+def _required_dynamic_names(world: Any) -> set[str]:
+    extras = getattr(world, "extras", {})
+    prior = extras.get("prior_cond") or {}
+    required = {
+        {
+            "carryover_alpha": "prior_cond_carryover_alpha_data",
+            "hill_shape": "prior_cond_hill_shape_data",
+        }[key]
+        for key in prior
+        if key in {"carryover_alpha", "hill_shape"}
+    }
+    structural = extras.get("structural", {})
+    required.update(
+        name
+        for key, name in (
+            ("smoothness_d", "walk_width_d_data"),
+            ("smoothness_b", "walk_width_b_data"),
+        )
+        if key in structural
+    )
+    return required
 
 
 def _oracle_payload(
@@ -1027,10 +1153,24 @@ class OracleTemplate:
     observed_indices: tuple[int, ...]
     shared_names: tuple[str, ...] = ORACLE_SHARED_DATA_NAMES
     reported_rows: int | None = None
+    data_contract: tuple[str, ...] | None = None
+    config_contract: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.shared_names != ORACLE_SHARED_DATA_NAMES:
             raise ValueError("OracleTemplate shared variable names are part of its contract")
+        # A manually constructed public template explicitly opts into the
+        # legacy eight-input contract by omitting dynamic names.  Templates
+        # produced by build_oracle_template always pass the complete contract.
+        contract = self.shared_names if self.data_contract is None else tuple(self.data_contract)
+        if len(set(contract)) != len(contract) or not set(self.shared_names) <= set(contract):
+            raise ValueError("OracleTemplate data contract must include required shared variables")
+        object.__setattr__(self, "data_contract", contract)
+        object.__setattr__(
+            self,
+            "config_contract",
+            {} if self.config_contract is None else dict(self.config_contract),
+        )
         if self.latent not in ("marginal", "sampled"):
             raise ValueError("OracleTemplate latent must be 'marginal' or 'sampled'")
         if not self.observed_indices:
@@ -1045,11 +1185,18 @@ class OracleTemplate:
         object.__setattr__(self, "reported_rows", reported_rows)
         missing = [
             name
-            for name in self.shared_names
+            for name in contract
             if not isinstance(self.model.named_vars.get(name), SharedVariable)
+        ]
+        extras = [
+            name
+            for name in ORACLE_DATA_NAMES
+            if isinstance(self.model.named_vars.get(name), SharedVariable) and name not in contract
         ]
         if missing:
             raise ValueError(f"oracle template is missing required shared variables: {missing}")
+        if extras:
+            raise ValueError(f"oracle template has data outside its explicit contract: {extras}")
 
 
 @dataclass(slots=True)
@@ -1069,7 +1216,7 @@ class CompiledOracle:
             raise ValueError("the maintained compiled Oracle backend is numba")
         missing = [
             name
-            for name in ORACLE_SHARED_DATA_NAMES
+            for name in self.template.data_contract or ()
             if not isinstance(self.template.model.named_vars.get(name), SharedVariable)
         ]
         if missing:
@@ -1115,6 +1262,7 @@ class CompiledOracle:
             )
         if len(indices) != len(self.template.observed_indices):
             raise ValueError("a compiled Oracle cannot change the observed-index rank")
+        _validate_oracle_config_contract(world, self.template.config_contract or {})
         expected_signature = _world_signature(
             world, latent=self.template.latent, observed_count=len(indices)
         )
@@ -1122,11 +1270,16 @@ class CompiledOracle:
             raise ValueError(
                 "world structural signature does not match the compiled Oracle template"
             )
-        dynamic_names = {
-            name for name in ORACLE_DYNAMIC_DATA_NAMES if name in self.template.model.named_vars
-        }
+        contract = self.template.data_contract or ORACLE_SHARED_DATA_NAMES
+        dynamic_names = set(contract) - set(ORACLE_SHARED_DATA_NAMES)
+        missing_dynamic = _required_dynamic_names(world) - dynamic_names
+        if missing_dynamic:
+            raise ValueError(
+                "Oracle template data contract is missing required runtime inputs: "
+                + repr(sorted(missing_dynamic))
+            )
         payload = _oracle_payload(world, indices, dynamic_names=dynamic_names)
-        if set(payload) != set(ORACLE_SHARED_DATA_NAMES) | dynamic_names:
+        if set(payload) != set(contract):
             raise ValueError("Oracle data payload does not exactly match the required shared set")
         for name in ORACLE_SHARED_DATA_NAMES + tuple(sorted(dynamic_names)):
             variable = self.template.model.named_vars[name]
@@ -1202,6 +1355,15 @@ def build_oracle_template(
     to obtain that domain from ``observed_indices_data``; this avoids guessing
     warmup from private configuration details and fixes non-zero-warmup worlds.
     """
+    prior_cond = getattr(world, "extras", {}).get("prior_cond") or {}
+    if any(
+        isinstance(value, (tuple, list, np.ndarray)) and len(value) == 2 and float(value[1]) == 0.0
+        for value in prior_cond.values()
+    ):
+        raise ValueError(
+            "reusable Oracle templates do not support zero-width prior point masses; "
+            "use a nonzero interval or build a one-shot model"
+        )
     model = world.oracle_model(latent=latent)
     try:
         default_indices_var = model.named_vars["observed_indices_data"]
@@ -1218,12 +1380,18 @@ def build_oracle_template(
         if not np.array_equal(indices, default_indices):
             model = world.oracle_model(latent=latent, observed_indices=indices)
     signature = _world_signature(world, latent=latent, observed_count=len(indices))
+    contract = tuple(name for name in ORACLE_DATA_NAMES if name in model.named_vars)
+    if set(contract) != set(ORACLE_DATA_NAMES):
+        missing = sorted(set(ORACLE_DATA_NAMES) - set(contract))
+        raise ValueError(f"oracle model data contract is incomplete; missing {missing}")
     return OracleTemplate(
         model=model,
         signature=signature,
         latent=latent,
         observed_indices=tuple(int(index) for index in indices),
         reported_rows=n_reported_rows,
+        data_contract=contract,
+        config_contract=_oracle_config_contract(getattr(world, "cfg", None)),
     )
 
 
@@ -1251,6 +1419,8 @@ OracleModelTemplate = OracleTemplate
 __all__ = [
     "ORACLE_SHARED_DATA_NAMES",
     "ORACLE_DYNAMIC_DATA_NAMES",
+    "ORACLE_DATA_NAMES",
+    "ORACLE_CONFIG_SCHEMA",
     "OracleHealthCriteria",
     "OracleSamplingConfig",
     "OracleSamplingReceipt",

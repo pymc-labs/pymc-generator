@@ -1376,7 +1376,7 @@ def build_oracle_model(
             )
         prior_data: dict[str, Any] = {}
         prior_bounds: dict[str, tuple[Any, Any]] = {}
-        prior_static: dict[str, tuple[float, float]] = {}
+        prior_points: dict[str, float] = {}
         for quantity, name in (
             ("carryover_alpha", "prior_cond_carryover_alpha_data"),
             ("hill_shape", "prior_cond_hill_shape_data"),
@@ -1399,9 +1399,12 @@ def build_oracle_model(
                     )
                 if low < support[0] or low + width > support[1]:
                     raise ValueError(f"prior conditioning for {quantity!r} exceeds its support")
+                if width == 0.0:
+                    # A point mass is a distinct, non-rebindable topology.
+                    # Direct model construction remains sound; the reusable
+                    # Oracle layer rejects it before compilation/binding.
+                    prior_points[quantity] = low
                 encoded = (1.0, low, width)
-                if width == 0:
-                    prior_static[quantity] = (low, low)
             prior_data[quantity] = pm.Data(name, np.asarray(encoded, dtype="float64"))
             enabled = pt.gt(prior_data[quantity][0], 0.5)
             prior_bounds[quantity] = (
@@ -1416,9 +1419,9 @@ def build_oracle_model(
         def _oracle_spec(key: str):
             name, lo, hi, shape = specs[key]
             if key == "carryover_alpha":
-                lo, hi = prior_static.get("carryover_alpha", prior_bounds["carryover_alpha"])
+                lo, hi = prior_bounds["carryover_alpha"]
             elif key == "hill_slope":
-                lo, hi = prior_static.get("hill_shape", prior_bounds["hill_shape"])
+                lo, hi = prior_bounds["hill_shape"]
             return name, lo, hi, shape
 
         # Shared prior definitions — identical names, ranges and shapes to the
@@ -1455,7 +1458,26 @@ def build_oracle_model(
         _apply_outcome_std_scale(cfg, rw, g_cy, beta)
         delta_dy = _uniform(*specs["delta_dy"])
         rho_zy = _uniform(*specs["rho_zy"])
-        mech: dict[str, Any] = {name: _uniform(*_oracle_spec(name)) for name in mech_names}
+        mech: dict[str, Any] = {}
+        for name in mech_names:
+            point_quantity: str | None = (
+                "carryover_alpha"
+                if name == "carryover_alpha"
+                else "hill_shape"
+                if name == "hill_slope"
+                else None
+            )
+            if point_quantity is not None and point_quantity in prior_points:
+                _, _, _, shape = _oracle_spec(name)
+                mech[name] = pm.Deterministic(
+                    name,
+                    pt.full(
+                        (shape,) if isinstance(shape, int) else shape,
+                        prior_points[point_quantity],
+                    ),
+                )
+            else:
+                mech[name] = _uniform(*_oracle_spec(name))
         mech_params: dict[str, Any] = {
             "l_max": cfg.l_max,
             "carryover_family": structural["carryover_family"],
