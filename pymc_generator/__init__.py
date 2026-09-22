@@ -21,6 +21,13 @@ if TYPE_CHECKING:
     from .data_generator import DataGenerator, load_corpus, save_corpus
     from .describe import describe_scm
     from .diagnostics import DataDiagnostics, data_diagnostics
+    from .oracle_harness import (
+        OracleRunSpec,
+        OracleWorldSpec,
+        canonical_numerical_hash,
+        run_frozen_cohort,
+        run_pair,
+    )
     from .oracle_sampling import (
         ORACLE_CONFIG_SCHEMA,
         ORACLE_DATA_NAMES,
@@ -90,6 +97,11 @@ _LAZY_IMPORTS = {
     "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
     "OracleSamplingConfig": (".oracle_sampling", "OracleSamplingConfig"),
+    "OracleRunSpec": (".oracle_harness", "OracleRunSpec"),
+    "OracleWorldSpec": (".oracle_harness", "OracleWorldSpec"),
+    "canonical_numerical_hash": (".oracle_harness", "canonical_numerical_hash"),
+    "run_frozen_cohort": (".oracle_harness", "run_frozen_cohort"),
+    "run_pair": (".oracle_harness", "run_pair"),
     "OracleHealthCriteria": (".oracle_sampling", "OracleHealthCriteria"),
     "OracleSamplingReceipt": (".oracle_sampling", "OracleSamplingReceipt"),
     "OracleSamplingResult": (".oracle_sampling", "OracleSamplingResult"),
@@ -122,6 +134,11 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "OracleHealthCriteria",
+    "OracleRunSpec",
+    "OracleWorldSpec",
+    "canonical_numerical_hash",
+    "run_frozen_cohort",
+    "run_pair",
     "OracleSamplingConfig",
     "OracleSamplingReceipt",
     "OracleSamplingResult",
