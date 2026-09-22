@@ -193,7 +193,27 @@ def test_config_accepts_pymc_sampler_and_serializes_it():
     assert config.to_dict()["nuts_sampler"] == "pymc"
 
 
-@pytest.mark.parametrize("key", ["draws", "tune", "chains", "cores", "target_accept", "random_seed", "progressbar", "compute_convergence_checks", "discard_tuned_samples", "nuts_sampler", "model", "step", "trace", "backend", "return_inferencedata", "var_names"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "draws",
+        "tune",
+        "chains",
+        "cores",
+        "target_accept",
+        "random_seed",
+        "progressbar",
+        "compute_convergence_checks",
+        "discard_tuned_samples",
+        "nuts_sampler",
+        "model",
+        "step",
+        "trace",
+        "backend",
+        "return_inferencedata",
+        "var_names",
+    ],
+)
 def test_config_rejects_reserved_sampler_kwargs(key):
     with pytest.raises(ValueError):
         pg.OracleSamplingConfig(sampler_kwargs={key: 1}).validate()
@@ -235,7 +255,9 @@ def test_config_copies_nested_sampler_kwargs():
         config.sampler_kwargs["nuts"]["max_treedepth"] = 1
 
 
-@pytest.mark.parametrize("field", ["draws", "tune", "chains", "cores", "target_accept", "random_seed", "latent"])
+@pytest.mark.parametrize(
+    "field", ["draws", "tune", "chains", "cores", "target_accept", "random_seed", "latent"]
+)
 def test_config_to_dict_is_json_native(field):
     config = pg.OracleSamplingConfig()
     assert json.dumps(config.to_dict(), allow_nan=False)
@@ -553,7 +575,11 @@ def _metric_dataset(value, name="theta"):
 
 def _patch_arviz(monkeypatch, *, rhat=1.003, bulk=612.4, tail=488.2, bfmi=0.84):
     monkeypatch.setattr(oracle.az, "rhat", lambda *args, **kwargs: _metric_dataset(rhat))
-    monkeypatch.setattr(oracle.az, "ess", lambda *args, **kwargs: _metric_dataset(bulk if kwargs.get("method") == "bulk" else tail))
+    monkeypatch.setattr(
+        oracle.az,
+        "ess",
+        lambda *args, **kwargs: _metric_dataset(bulk if kwargs.get("method") == "bulk" else tail),
+    )
     monkeypatch.setattr(oracle.az, "bfmi", lambda *args, **kwargs: np.asarray([bfmi, bfmi + 0.01]))
 
 
@@ -612,9 +638,12 @@ def test_tree_depth_max_does_not_infer_saturation(monkeypatch):
     "tree_kwargs,metric",
     [
         ({"include_stats": False}, "divergences"),
-        ({"diverging": np.array([[True, False]])}, "rhat"),
+        ({"diverging": None}, "divergences"),
         ({"diverging": np.zeros((2, 4), dtype=bool), "energy": np.full((2, 4), np.nan)}, "bfmi"),
-        ({"diverging": np.zeros((2, 4), dtype=bool), "tree_depth": np.full((2, 4), np.nan)}, "tree_depth_max"),
+        (
+            {"diverging": np.zeros((2, 4), dtype=bool), "tree_depth": np.full((2, 4), np.nan)},
+            "tree_depth_max",
+        ),
     ],
 )
 def test_missing_prerequisites_are_unavailable(monkeypatch, tree_kwargs, metric):
@@ -656,7 +685,9 @@ def test_malformed_metric_shape_is_invalid(monkeypatch):
     tree = _valid_tree()
     stats = tree["sample_stats"].to_dataset()
     stats["tree_depth"] = (("chain",), np.array([1, 2]))
-    tree = xr.DataTree.from_dict({"/posterior": tree["posterior"].to_dataset(), "/sample_stats": stats})
+    tree = xr.DataTree.from_dict(
+        {"/posterior": tree["posterior"].to_dataset(), "/sample_stats": stats}
+    )
     _patch_arviz(monkeypatch)
     result, _ = _sample(monkeypatch, tree)
     diagnostic = result.receipt.to_dict()["diagnostics"]["tree_depth_max"]

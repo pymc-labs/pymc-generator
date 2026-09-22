@@ -18,7 +18,9 @@ from importlib import metadata
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+import arviz as az  # type: ignore[import-untyped]
 import numpy as np
+import pymc as pm
 from xarray import DataTree
 
 from .worlds import SCM
@@ -369,7 +371,15 @@ def _scalar_values(value: Any) -> np.ndarray:
     return np.asarray(getattr(value, "values", value), dtype=float).reshape(-1)
 
 
-def _arviz_metric(az: Any, fn: str, posterior: Any, method: str, reduction: str) -> dict[str, Any]:
+def _arviz_metric(
+    az: Any,
+    fn: str,
+    posterior: Any,
+    method: str,
+    reduction: str,
+    *,
+    report_method: bool = True,
+) -> dict[str, Any]:
     try:
         values = _scalar_values(getattr(az, fn)(posterior, method=method))
     except Exception:
@@ -377,10 +387,13 @@ def _arviz_metric(az: Any, fn: str, posterior: Any, method: str, reduction: str)
     finite = values[np.isfinite(values)]
     if not finite.size:
         return _metric("invalid", reason="no_finite_result")
+    metadata = {"reduction": reduction}
+    if report_method:
+        metadata["method"] = method
     return _metric(
         "available",
         float(np.max(finite) if reduction == "max" else np.min(finite)),
-        **{"method": method, "reduction": reduction},
+        **metadata,
     )
 
 
@@ -432,7 +445,7 @@ def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, An
                     raise ValueError
                 finite = values[np.isfinite(values)]
                 if finite.size != values.size:
-                    diagnostics[name] = _metric("invalid", reason="non_finite_result")
+                    diagnostics[name] = _metric("unavailable", reason="non_finite_result")
                 elif name == "divergences":
                     diagnostics[name] = _metric("available", int(np.sum(values.astype(bool))))
                 else:
@@ -448,7 +461,7 @@ def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, An
                 finite = values[np.isfinite(values)]
                 if finite.size != values.size:
                     diagnostics["tree_depth_saturation"] = _metric(
-                        "invalid", reason="non_finite_result"
+                        "unavailable", reason="non_finite_result"
                     )
                 else:
                     diagnostics["tree_depth_saturation"] = _metric(
@@ -468,29 +481,38 @@ def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, An
             diagnostics["bfmi"] = _metric("unavailable", reason="energy_missing")
         else:
             try:
-                if not _valid_sampling_stat(sample_stats["energy"], sizes):
+                energy = sample_stats["energy"]
+                if not _valid_sampling_stat(energy, sizes):
                     raise ValueError
-                values = _scalar_values(az.bfmi(sample_stats))
-                finite = values[np.isfinite(values)]
-                diagnostics["bfmi"] = (
-                    _metric("available", float(np.min(finite)), reduction="min")
-                    if finite.size
-                    else _metric("invalid", reason="no_finite_result")
-                )
+                if not np.all(np.isfinite(np.asarray(energy.values, dtype=float))):
+                    diagnostics["bfmi"] = _metric("unavailable", reason="non_finite_energy")
+                else:
+                    values = _scalar_values(az.bfmi(sample_stats))
+                    finite = values[np.isfinite(values)]
+                    diagnostics["bfmi"] = (
+                        _metric("available", float(np.min(finite)), reduction="min")
+                        if finite.size
+                        else _metric("invalid", reason="no_finite_result")
+                    )
             except Exception:
                 diagnostics["bfmi"] = _metric("invalid", reason="arviz_bfmi_failed")
-    if posterior is None:
-        diagnostics["rhat"] = _metric("unavailable", reason="posterior_group_missing")
-        diagnostics["ess_bulk"] = _metric("unavailable", reason="posterior_group_missing")
-        diagnostics["ess_tail"] = _metric("unavailable", reason="posterior_group_missing")
+    if posterior is None or not stats_present:
+        reason = "posterior_group_missing" if posterior is None else "sample_stats_group_missing"
+        diagnostics["rhat"] = _metric("unavailable", reason=reason)
+        diagnostics["ess_bulk"] = _metric("unavailable", reason=reason)
+        diagnostics["ess_tail"] = _metric("unavailable", reason=reason)
     else:
         diagnostics["rhat"] = (
             _metric("unavailable", reason="fewer_than_two_chains")
             if chains is None or chains < 2
             else _arviz_metric(az, "rhat", posterior, "rank", "max")
         )
-        diagnostics["ess_bulk"] = _arviz_metric(az, "ess", posterior, "bulk", "min")
-        diagnostics["ess_tail"] = _arviz_metric(az, "ess", posterior, "tail", "min")
+        diagnostics["ess_bulk"] = _arviz_metric(
+            az, "ess", posterior, "bulk", "min", report_method=False
+        )
+        diagnostics["ess_tail"] = _arviz_metric(
+            az, "ess", posterior, "tail", "min", report_method=False
+        )
     return diagnostics, sizes
 
 
@@ -535,7 +557,9 @@ def _health(diagnostics: Mapping[str, Any], criteria: OracleHealthCriteria) -> d
                     }
                 )
     failures.sort(key=lambda item: (item["code"], item["metric"]))
-    missing.sort()
+    if diagnostics.get("tree_depth_max", {}).get("status") != "available":
+        missing.append("tree_depth_max")
+    missing = sorted(set(missing))
     return {
         "status": "unhealthy"
         if failures
@@ -583,8 +607,8 @@ def sample_oracle(
         raise TypeError("criteria must be an OracleHealthCriteria")
     config.validate()
     criteria.validate()
-    if not isinstance(world, SCM):
-        raise TypeError("world must be an SCM")
+    if not callable(getattr(world, "oracle_model", None)):
+        raise TypeError("world must provide a callable oracle_model")
     identities = {}
     for name, identity in (
         ("world", world_identity),
@@ -594,9 +618,6 @@ def sample_oracle(
         if identity is not None and not isinstance(identity, Mapping):
             raise TypeError(f"{name}_identity must be a mapping or None")
         identities[name] = _immutable({} if identity is None else identity, path=f"{name}_identity")
-
-    import arviz as az  # type: ignore[import-untyped]
-    import pymc as pm
 
     started = time.monotonic()
     model = world.oracle_model(latent=config.latent)
