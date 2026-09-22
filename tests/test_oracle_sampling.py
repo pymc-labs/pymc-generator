@@ -22,6 +22,7 @@ import xarray as xr
 
 import pymc_generator as pg
 import pymc_generator.oracle_sampling as oracle
+import pymc_generator.world_model as world_model
 
 DEFAULT_REQUESTED = {
     "draws": 800,
@@ -940,25 +941,49 @@ def test_changed_fixed_weibull_config_fails_before_binding(field):
     assert fake.payloads == []
 
 
+def _cfg_access_inventory(tree: ast.Module, seam: set[str]) -> dict[str, set[str]]:
+    """Collect direct ``cfg.<field>`` accesses from each named source seam."""
+    return {
+        node.name: {
+            child.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "cfg"
+        }
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in seam
+    }
+
+
+def _assert_cfg_accesses_classified(tree: ast.Module, seam: set[str], classified: set[str]) -> None:
+    accessed = set().union(*_cfg_access_inventory(tree, seam).values())
+    assert accessed, "the source seams must yield a nonempty cfg access inventory"
+    assert accessed <= classified, f"unclassified cfg fields: {sorted(accessed - classified)}"
+
+
 def test_oracle_config_classification_covers_builder_accesses_and_is_disjoint():
-    """The inventory comes from the builder seam, not from the schema under test."""
-    tree = ast.parse(Path(oracle.__file__).read_text())
+    """The inventory comes from the world-model builder seam, not its schema."""
     seam = {
         "_uniform_prior_specs",
         "_walk_priors",
         "build_oracle_model",
         "_validate_oracle_treatment_shocks",
     }
-    accessed: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in seam:
-            accessed.update(
-                child.attr
-                for child in ast.walk(node)
-                if isinstance(child, ast.Attribute)
-                and isinstance(child.value, ast.Name)
-                and child.value.id == "cfg"
-            )
+    tree = ast.parse(Path(world_model.__file__).read_text())
+    inventory = _cfg_access_inventory(tree, seam)
+    assert set(inventory) == seam
+    assert inventory["_uniform_prior_specs"] >= {
+        "carryover_alpha_range",
+        "weibull_lam_range",
+        "weibull_k_range",
+    }
+    assert inventory["_walk_priors"] >= {"rw_smoothness_max_weeks", "outcome_std_mode"}
+    assert inventory["build_oracle_model"] >= {"l_max", "carryover_burn_in"}
+    assert inventory["_validate_oracle_treatment_shocks"] >= {
+        "n_treatment_shocks",
+        "treatment_shock_level_range",
+    }
 
     schema = oracle.ORACLE_CONFIG_SCHEMA
     topology = set(schema["topology"])
@@ -970,9 +995,13 @@ def test_oracle_config_classification_covers_builder_accesses_and_is_disjoint():
     assert topology.isdisjoint(runtime)
     assert fixed.isdisjoint(runtime)
     assert classified.isdisjoint(runtime)
-    assert accessed <= classified
+    _assert_cfg_accesses_classified(tree, seam, classified)
     assert {"weibull_lam_range", "weibull_k_range"} <= fixed
     assert {"n_treatment_shocks", "treatment_shock_length_range"} <= validation_only
+
+    synthetic = ast.parse("def build_oracle_model(cfg):\n    return cfg.synthetic_unclassified\n")
+    with pytest.raises(AssertionError, match="synthetic_unclassified"):
+        _assert_cfg_accesses_classified(synthetic, {"build_oracle_model"}, classified)
 
 
 def test_compiled_fit_forces_blocking_and_receipts_nutpie_version():
