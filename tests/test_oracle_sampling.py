@@ -7,13 +7,16 @@ receipt extractor.
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytensor
 import pytest
 import xarray as xr
 
@@ -937,23 +940,39 @@ def test_changed_fixed_weibull_config_fails_before_binding(field):
     assert fake.payloads == []
 
 
-def test_oracle_config_classification_is_exhaustive_and_disjoint():
+def test_oracle_config_classification_covers_builder_accesses_and_is_disjoint():
+    """The inventory comes from the builder seam, not from the schema under test."""
+    tree = ast.parse(Path(oracle.__file__).read_text())
+    seam = {
+        "_uniform_prior_specs",
+        "_walk_priors",
+        "build_oracle_model",
+        "_validate_oracle_treatment_shocks",
+    }
+    accessed: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in seam:
+            accessed.update(
+                child.attr
+                for child in ast.walk(node)
+                if isinstance(child, ast.Attribute)
+                and isinstance(child.value, ast.Name)
+                and child.value.id == "cfg"
+            )
+
     schema = oracle.ORACLE_CONFIG_SCHEMA
     topology = set(schema["topology"])
     fixed = set(schema["fixed_numeric"])
     runtime = set(schema["runtime_data"])
+    validation_only = set(schema["validation_only"])
+    classified = topology | fixed | validation_only
     assert topology.isdisjoint(fixed)
     assert topology.isdisjoint(runtime)
     assert fixed.isdisjoint(runtime)
+    assert classified.isdisjoint(runtime)
+    assert accessed <= classified
     assert {"weibull_lam_range", "weibull_k_range"} <= fixed
-    assert (
-        set(
-            oracle._oracle_config_contract(
-                SimpleNamespace(**{name: name for name in topology | fixed})
-            )
-        )
-        == topology | fixed
-    )
+    assert {"n_treatment_shocks", "treatment_shock_length_range"} <= validation_only
 
 
 def test_compiled_fit_forces_blocking_and_receipts_nutpie_version():
@@ -996,7 +1015,8 @@ def test_template_rejects_missing_shared_variable():
         pg.OracleTemplate(model, "sig", "marginal", (0,))
 
 
-def test_template_rejects_graph_connected_unexpected_shared_variable():
+@pytest.mark.parametrize("shared_name", ["unexpected_runtime_scale", None])
+def test_template_rejects_graph_connected_unexpected_shared_variable(shared_name):
     with oracle.pm.Model() as model:
         values = {
             "channels_data": np.zeros((4, 1)),
@@ -1010,14 +1030,14 @@ def test_template_rejects_graph_connected_unexpected_shared_variable():
         }
         for name, value in values.items():
             oracle.pm.Data(name, value)
-        scale = oracle.pm.Data("unexpected_runtime_scale", np.ones(1))
+        scale = pytensor.shared(np.ones(1), name=shared_name)
         oracle.pm.Normal(
             "connected_likelihood",
             mu=scale[0] * model["channels_data"][:, 0],
             sigma=1.0,
             observed=model["sales_data"],
         )
-    with pytest.raises(ValueError, match="outside its explicit contract"):
+    with pytest.raises(ValueError, match="outside its explicit contract|unnamed"):
         pg.OracleTemplate(
             model,
             "sig",
@@ -1081,15 +1101,32 @@ def _evaluate_generated_template(template, worlds, *, point=None):
 def test_generated_oracle_prior_interval_graph_restores_without_stale_data():
     world_a = _generated_world(prior_conditioning=True)
     world_b = copy.deepcopy(world_a)
-    world_b.data["outcome"] = world_b.data["outcome"] + 1.0
     world_b.extras["prior_cond"] = {
         "carryover_alpha": (0.25, 0.10),
         "hill_shape": (2.1, 0.2),
     }
+    for name in world_a.data:
+        assert np.array_equal(world_a.data[name], world_b.data[name]), name
+
     template = pg.build_oracle_template(world_a, latent="marginal")
-    first, changed, restored = _evaluate_generated_template(template, [world_a, world_b, world_a])
-    assert changed != first
-    assert restored == first
+    dynamic_names = set(template.data_contract or ()) - set(oracle.ORACLE_SHARED_DATA_NAMES)
+    point = template.model.initial_point()
+    prior_logp = template.model.compile_logp(vars=[template.model["hill_slope"]], jacobian=False)
+    values = []
+    for world in (world_a, world_b, world_a):
+        payload = oracle._oracle_payload(
+            world,
+            np.asarray(template.observed_indices, dtype="int64"),
+            dynamic_names=dynamic_names,
+        )
+        oracle.pm.set_data(payload, model=template.model)
+        values.append(float(prior_logp(point)))
+
+    # The fixed point is graph-connected to the interval bounds, so this is a
+    # prior-only proof that binding changes and is restored; sales_data never
+    # changes in this A -> B -> A walk.
+    assert values[1] != pytest.approx(values[0])
+    assert values[2] == pytest.approx(values[0])
 
 
 def test_generated_oracle_marginal_walk_graph_restores_without_stale_data():

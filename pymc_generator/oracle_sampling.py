@@ -25,6 +25,8 @@ from typing import Any, Literal, cast
 import arviz as az  # type: ignore[import-untyped]
 import numpy as np
 import pymc as pm
+from pytensor.graph.traversal import graph_inputs
+from pytensor.tensor.random.variable import RandomGeneratorSharedVariable
 from pytensor.tensor.sharedvar import SharedVariable
 from xarray import DataTree
 
@@ -771,11 +773,28 @@ ORACLE_CONFIG_FIXED_NUMERIC_FIELDS = (
     "dy_coeff_range",
     "zy_coeff_range",
     "beta_additive_range",
+    # These ranges are read while constructing the shared prior-spec table,
+    # even when this world's selected mechanism does not use their RVs.
+    "treatment_hf_sigma_range",
+    "treatment_pulse_prob_range",
+    "treatment_pulse_amp_range",
+    "covariate_hf_sigma_range",
+    "covariate_pulse_prob_range",
+    "covariate_pulse_amp_range",
+)
+# Shock metadata is validated at the oracle builder seam but does not create an
+# Oracle RV.  It is still pinned in the template contract so changing the
+# validation domain cannot silently reuse a compiled template.
+ORACLE_CONFIG_VALIDATION_FIELDS = (
+    "n_treatment_shocks",
+    "treatment_shock_length_range",
+    "treatment_shock_level_range",
 )
 ORACLE_CONFIG_SCHEMA = {
     "topology": ORACLE_CONFIG_TOPOLOGY_FIELDS,
     "fixed_numeric": ORACLE_CONFIG_FIXED_NUMERIC_FIELDS,
     "runtime_data": ORACLE_DYNAMIC_DATA_NAMES,
+    "validation_only": ORACLE_CONFIG_VALIDATION_FIELDS,
 }
 
 
@@ -853,7 +872,11 @@ def _oracle_config_contract(cfg: Any) -> dict[str, Any]:
     """
     if cfg is None:
         return {}
-    fields = (*ORACLE_CONFIG_TOPOLOGY_FIELDS, *ORACLE_CONFIG_FIXED_NUMERIC_FIELDS)
+    fields = (
+        *ORACLE_CONFIG_TOPOLOGY_FIELDS,
+        *ORACLE_CONFIG_FIXED_NUMERIC_FIELDS,
+        *ORACLE_CONFIG_VALIDATION_FIELDS,
+    )
     return {name: _signature_value(getattr(cfg, name)) for name in fields if hasattr(cfg, name)}
 
 
@@ -1145,6 +1168,21 @@ def _receipt_for_compiled_fit(
     return OracleSamplingResult(idata=idata, receipt=receipt)
 
 
+def _graph_shared_variables(model: pm.Model) -> tuple[SharedVariable, ...]:
+    """Return non-RNG shared leaves reachable from the model's PyTensor graph."""
+    outputs: list[Any] = []
+    for attr in ("basic_RVs", "observed_RVs", "deterministics", "potentials"):
+        outputs.extend(getattr(model, attr, ()))
+    logp = model.logp()
+    outputs.extend(logp if isinstance(logp, list) else (logp,))
+    return tuple(
+        variable
+        for variable in graph_inputs(outputs)
+        if isinstance(variable, SharedVariable)
+        and not isinstance(variable, RandomGeneratorSharedVariable)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class OracleTemplate:
     """Full-horizon graph and its explicit reusable structural signature."""
@@ -1201,6 +1239,55 @@ class OracleTemplate:
             raise ValueError(f"oracle template is missing required shared variables: {missing}")
         if extras:
             raise ValueError(f"oracle template has data outside its explicit contract: {extras}")
+
+        # ``named_vars`` is only a registry: raw ``pytensor.shared`` leaves
+        # connected to a likelihood (and unnamed leaves) need not appear there.
+        graph_shared = _graph_shared_variables(self.model)
+        graph_by_name: dict[str, SharedVariable] = {}
+        duplicate_names: set[str] = set()
+        unnamed = 0
+        for variable in graph_shared:
+            name = variable.name
+            if name is None:
+                unnamed += 1
+                continue
+            if name in graph_by_name and graph_by_name[name] is not variable:
+                duplicate_names.add(name)
+            graph_by_name[name] = variable
+        if unnamed:
+            raise ValueError(
+                "oracle template has unnamed shared variables outside its explicit contract"
+            )
+        if duplicate_names:
+            raise ValueError(
+                "oracle template has duplicate shared variable names in its graph: "
+                f"{sorted(duplicate_names)}"
+            )
+        graph_extras = sorted(set(graph_by_name) - set(contract))
+        if graph_extras:
+            raise ValueError(
+                "oracle template has graph-connected data outside its explicit contract: "
+                f"{graph_extras}"
+            )
+        mismatched = sorted(
+            name
+            for name, variable in graph_by_name.items()
+            if self.model.named_vars.get(name) is not variable
+        )
+        if mismatched:
+            raise ValueError(
+                "oracle template has shared variables whose graph object does not match "
+                f"the declared contract: {mismatched}"
+            )
+        bad_names = sorted(
+            name
+            for name, variable in self.model.named_vars.items()
+            if isinstance(variable, SharedVariable) and variable.name != name
+        )
+        if bad_names:
+            raise ValueError(
+                f"oracle template has unnamed or mismatched shared declarations: {bad_names}"
+            )
 
 
 @dataclass(slots=True)
