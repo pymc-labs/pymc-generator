@@ -202,6 +202,13 @@ def test_config_accepts_pymc_sampler_and_serializes_it():
         "cores",
         "target_accept",
         "random_seed",
+        "seed",
+        "save_warmup",
+        "progress_bar",
+        "blocking",
+        "sampler",
+        "adaptation",
+        "return_raw_trace",
         "progressbar",
         "compute_convergence_checks",
         "discard_tuned_samples",
@@ -241,13 +248,13 @@ def test_invalid_config_is_rejected_before_model_or_sampling(monkeypatch):
 
 
 def test_config_copies_nested_sampler_kwargs():
-    nested = {"nuts": {"max_treedepth": 10}, "seed": [1, 2]}
+    nested = {"nuts": {"max_treedepth": 10}, "custom": [1, 2]}
     config = pg.OracleSamplingConfig(sampler_kwargs=nested)
     nested["nuts"]["max_treedepth"] = 99
-    nested["seed"].append(3)
+    nested["custom"].append(3)
     assert config.to_dict()["sampler_kwargs"] == {
         "nuts": {"max_treedepth": 10},
-        "seed": [1, 2],
+        "custom": [1, 2],
     }
     with pytest.raises(TypeError):
         config.sampler_kwargs["new"] = 1
@@ -562,6 +569,7 @@ def test_receipt_environment_has_versioned_runtime_fields(monkeypatch):
         "pymc",
         "pytensor",
         "pymc_marketing",
+        "nutpie",
     }
     assert all(isinstance(value, str) and value for value in environment.values())
 
@@ -773,6 +781,21 @@ def _shared_template_and_world(*, changed_sales=0.0, selected=(0, 1, 2)):
     with oracle.pm.Model() as model:
         for name, value in values.items():
             oracle.pm.Data(name, value)
+        # Every rebound value participates in one connected observed graph;
+        # this is intentionally not a disconnected pm.Data placeholder.
+        mu = (
+            model["channels_data"][:, 0] * model["g_cy_data"][0]
+            + model["controls_data"][:, 0] * model["g_zb_data"][0]
+            + model["saturation_scale_data"][0]
+            + model["g_db_data"][0]
+            + model["g_zb_data"][0]
+        )
+        oracle.pm.Normal(
+            "connected_likelihood",
+            mu=mu[model["observed_indices_data"]],
+            sigma=1.0,
+            observed=model["sales_data"][model["observed_indices_data"]],
+        )
     world = SimpleNamespace(
         data={
             "treatments": values["channels_data"],
@@ -842,6 +865,20 @@ def test_compile_oracle_compiles_once_and_binds_each_fit(monkeypatch):
     assert np.array_equal(fake.payloads[0]["observed_indices_data"], [0, 1, 2])
 
 
+def test_compiled_fit_forces_blocking_and_receipts_nutpie_version():
+    template, world = _shared_template_and_world()
+    fake = _FakeCompiled(_valid_tree())
+    result = _compiled(template, fake).fit(world)
+    assert fake.sample_calls[0]["blocking"] is True
+    receipt = result.receipt.to_dict()
+    assert receipt["sampling"]["effective"]["inference_library"] == "nutpie"
+    assert (
+        receipt["sampling"]["effective"]["inference_library_version"]
+        == oracle._versions()["nutpie"]
+    )
+    assert receipt["identities"]["compile"]["owner_pid"] == __import__("os").getpid()
+
+
 def test_compiled_fit_selector_uses_reported_row_coordinates():
     template, world = _shared_template_and_world(selected=(0, 2))
     fake = _FakeCompiled(_valid_tree())
@@ -852,11 +889,32 @@ def test_compiled_fit_selector_uses_reported_row_coordinates():
         compiled.fit(world, observed_indices=[0])
 
 
+def test_compiled_fit_rejects_latent_mismatch_before_binding():
+    template, world = _shared_template_and_world()
+    fake = _FakeCompiled(_valid_tree())
+    compiled = _compiled(template, fake)
+    with pytest.raises(ValueError, match="latent"):
+        compiled.fit(world, pg.OracleSamplingConfig(latent="sampled"))
+    assert fake.payloads == []
+
+
 def test_template_rejects_missing_shared_variable():
     with oracle.pm.Model() as model:
         oracle.pm.Data("channels_data", np.zeros((4, 1)))
     with pytest.raises(ValueError, match="missing required shared variables"):
         pg.OracleTemplate(model, "sig", "marginal", (0,))
+
+
+def test_signature_excludes_compatible_prior_and_walk_values():
+    _, world = _shared_template_and_world()
+    world.extras["structural"] = {"carryover_family": np.asarray([1])}
+    first = oracle._world_signature(world, latent="marginal", observed_count=3)
+    world.extras["structural"].update(
+        {"smoothness_d": np.asarray([0.1]), "smoothness_b": np.asarray([0.8])}
+    )
+    world.extras["prior_cond"] = {"carryover_alpha": (0.2, 0.3)}
+    second = oracle._world_signature(world, latent="marginal", observed_count=3)
+    assert first == second
 
 
 def test_signature_change_fails_closed_without_binding():
@@ -874,11 +932,11 @@ def test_compiled_receipt_data_identities_are_stable():
     template, world = _shared_template_and_world()
     first = _compiled(template, _FakeCompiled(_valid_tree())).fit(world)
     second = _compiled(template, _FakeCompiled(_valid_tree())).fit(world)
-    assert first.receipt.to_dict()["identities"] == second.receipt.to_dict()["identities"]
-    assert first.receipt.to_dict()["sampling"]["compile"] == {
-        "engine": "nutpie",
-        "backend": "numba",
-    }
+    first_identities = first.receipt.to_dict()["identities"]
+    second_identities = second.receipt.to_dict()["identities"]
+    assert first_identities["compile"]["instance_id"] != second_identities["compile"]["instance_id"]
+    assert first_identities["compile"]["owner_pid"] == second_identities["compile"]["owner_pid"]
+    assert first.receipt.to_dict()["sampling"]["compile"] == first_identities["compile"]
 
 
 def test_compile_and_sampling_exceptions_are_not_retried(monkeypatch):

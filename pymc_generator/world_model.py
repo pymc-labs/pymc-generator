@@ -35,7 +35,7 @@ import pytensor.tensor as pt
 from pytensor.tensor.sharedvar import SharedVariable
 
 from . import mechanisms
-from .random_walk import _kernel_width, _walk_basis
+from .random_walk import _kernel_width, _walk_basis, walk_width_index
 from .sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
 from .signal_diagnostics import admitted_response_support_weeks
 from .symbolic_graph import (
@@ -255,11 +255,12 @@ def sample_prior_cond(
     return out
 
 
-def _uniform(name: str, lo: float, hi: float, shape):
-    """A ``pm.Uniform`` prior, or a constant when the range is degenerate (lo == hi)."""
-    lo, hi = float(lo), float(hi)
-    if lo == hi:
-        return pt.as_tensor_variable(np.full(shape, lo, dtype="float64"))
+def _uniform(name: str, lo: Any, hi: Any, shape):
+    """A ``pm.Uniform`` prior, or a constant for numeric degenerate bounds."""
+    if isinstance(lo, (int, float, np.number)) and isinstance(hi, (int, float, np.number)):
+        lo, hi = float(lo), float(hi)
+        if lo == hi:
+            return pt.as_tensor_variable(np.full(shape, lo, dtype="float64"))
     return pm.Uniform(name, lo, hi, shape=shape)
 
 
@@ -1280,7 +1281,10 @@ def build_oracle_model(
     burn_in = cfg.carryover_burn_in
     g_dy = np.asarray(g_active["g_dy"], dtype="float64")
     g_zy = np.asarray(g_active["g_zy"], dtype="float64")
-    specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
+    # Prior-conditioning bounds are attached below as pm.Data so compatible
+    # conditioned worlds can share this graph.  The rank/warmup calculation
+    # above remains structural and therefore fail-closes when it changes.
+    specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, None)
     # How far back the response reaches decides how many leading weeks the
     # zero-padded convolution of reported treatment cannot reproduce. The families
     # are fixed per treatment, but the kernel SHAPE parameters are free RVs here,
@@ -1289,7 +1293,8 @@ def build_oracle_model(
     # the sampler is free to move away from. `_uniform_prior_specs` has already
     # resolved `prior_cond`, so reading the geometric decay range back out of it
     # ties the slice to the exact inference prior the oracle registers below.
-    _, carryover_alpha_lo, carryover_alpha_hi, _ = specs["carryover_alpha"]
+    warmup_specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, prior_cond)
+    _, carryover_alpha_lo, carryover_alpha_hi, _ = warmup_specs["carryover_alpha"]
     warmup = (
         admitted_response_support_weeks(
             carryover_family[g_cy != 0.0],
@@ -1350,17 +1355,107 @@ def build_oracle_model(
         basis = _walk_basis(n_time_steps_full, width)[rows]
         return np.asarray(basis @ basis.T)
 
+    def _walk_gram_stack() -> np.ndarray:
+        n_widths = _kernel_width(
+            1.0, n_time_steps_full, rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks
+        )
+        return np.stack(
+            [
+                np.asarray(_walk_basis(n_time_steps_full, width)[rows])
+                @ np.asarray(_walk_basis(n_time_steps_full, width)[rows]).T
+                for width in range(1, n_widths + 1)
+            ]
+        )
+
     with pm.Model() as model:
+        supported_prior_keys = {"carryover_alpha", "hill_shape"}
+        if prior_cond is not None and set(prior_cond) - supported_prior_keys:
+            raise ValueError(
+                "unsupported prior conditioning keys: "
+                + repr(sorted(set(prior_cond) - supported_prior_keys))
+            )
+        prior_data: dict[str, Any] = {}
+        prior_bounds: dict[str, tuple[Any, Any]] = {}
+        prior_static: dict[str, tuple[float, float]] = {}
+        for quantity, name in (
+            ("carryover_alpha", "prior_cond_carryover_alpha_data"),
+            ("hill_shape", "prior_cond_hill_shape_data"),
+        ):
+            support = (
+                cfg.carryover_alpha_range
+                if quantity == "carryover_alpha"
+                else mechanisms.SATURATION_PRIOR_RANGES["hill"]["slope"]
+            )
+            raw = None if prior_cond is None else prior_cond.get(quantity)
+            if raw is None:
+                encoded = (0.0, float(support[0]), float(support[1] - support[0]))
+            else:
+                if not isinstance(raw, (tuple, list, np.ndarray)) or len(raw) != 2:
+                    raise ValueError(f"prior conditioning for {quantity!r} must be (low, width)")
+                low, width = float(raw[0]), float(raw[1])
+                if not np.isfinite([low, width]).all() or width < 0:
+                    raise ValueError(
+                        f"prior conditioning for {quantity!r} must be finite and nonnegative"
+                    )
+                if low < support[0] or low + width > support[1]:
+                    raise ValueError(f"prior conditioning for {quantity!r} exceeds its support")
+                encoded = (1.0, low, width)
+                if width == 0:
+                    prior_static[quantity] = (low, low)
+            prior_data[quantity] = pm.Data(name, np.asarray(encoded, dtype="float64"))
+            enabled = pt.gt(prior_data[quantity][0], 0.5)
+            prior_bounds[quantity] = (
+                pt.switch(enabled, prior_data[quantity][1], float(support[0])),
+                pt.switch(
+                    enabled,
+                    prior_data[quantity][1] + prior_data[quantity][2],
+                    float(support[1]),
+                ),
+            )
+
+        def _oracle_spec(key: str):
+            name, lo, hi, shape = specs[key]
+            if key == "carryover_alpha":
+                lo, hi = prior_static.get("carryover_alpha", prior_bounds["carryover_alpha"])
+            elif key == "hill_slope":
+                lo, hi = prior_static.get("hill_shape", prior_bounds["hill_shape"])
+            return name, lo, hi, shape
+
         # Shared prior definitions — identical names, ranges and shapes to the
         # generative model (the drift-guard tests compare them one by one).
+        # Width indices are runtime data: one compiled graph supports every
+        # compatible smoothness value while preserving the selected operator's
+        # shape.  The stack dimensions remain structural (horizon/max width).
+        width_d = pm.Data(
+            "walk_width_d_data",
+            walk_width_index(
+                np.asarray(structural.get("smoothness_d", ()), dtype="float64"),
+                n_time_steps_full,
+                rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
+            ),
+        )
+        width_b = pm.Data(
+            "walk_width_b_data",
+            walk_width_index(
+                np.asarray(structural.get("smoothness_b", ()), dtype="float64"),
+                n_time_steps_full,
+                rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
+            ),
+        )
         rw = _walk_priors(
-            cfg, structural, n_treatments, n_covariates, n_latent, include=("d", "b", "y")
+            cfg,
+            structural,
+            n_treatments,
+            n_covariates,
+            n_latent,
+            include=("d", "b", "y"),
+            width_indices={"rw_d": width_d, "rw_b": width_b},
         )
         beta = _uniform(*specs["beta"])
         _apply_outcome_std_scale(cfg, rw, g_cy, beta)
         delta_dy = _uniform(*specs["delta_dy"])
         rho_zy = _uniform(*specs["rho_zy"])
-        mech: dict[str, Any] = {name: _uniform(*specs[name]) for name in mech_names}
+        mech: dict[str, Any] = {name: _uniform(*_oracle_spec(name)) for name in mech_names}
         mech_params: dict[str, Any] = {
             "l_max": cfg.l_max,
             "carryover_family": structural["carryover_family"],
@@ -1412,8 +1507,8 @@ def build_oracle_model(
                 "outcome_mu",
                 rw["rw_b"]["mean"][0] + term_zy + contributions.sum(axis=1),
             )
-            covariance = (rw["rw_b"]["std"][0] ** 2) * pt.as_tensor_variable(
-                _walk_gram(structural["smoothness_b"][0])
+            covariance = (rw["rw_b"]["std"][0] ** 2) * pt.take(
+                pt.as_tensor_variable(_walk_gram_stack()), width_b[0], axis=0
             )
             covariance = covariance + (rw["rw_y"]["std"][0] ** 2) * pt.eye(
                 rows.size, dtype="float64"
@@ -1422,8 +1517,8 @@ def build_oracle_model(
                 if g_dy[j] == 0.0:
                     continue
                 loading = g_db_t[j] * delta_dy[j]
-                covariance = covariance + (loading**2) * pt.as_tensor_variable(
-                    _walk_gram(structural["smoothness_d"][j])
+                covariance = covariance + (loading**2) * pt.take(
+                    pt.as_tensor_variable(_walk_gram_stack()), width_d[j], axis=0
                 )
             # The floor only guards the float64 covariance factorization; it
             # is too small to provide material likelihood information.

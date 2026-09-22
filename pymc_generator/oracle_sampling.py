@@ -15,6 +15,7 @@ import os
 import platform
 import threading
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import metadata
@@ -39,6 +40,22 @@ _RESERVED_SAMPLER_KWARGS = frozenset(
         "cores",
         "target_accept",
         "random_seed",
+        # These are direct Nutpie controls.  Compiled ownership and the
+        # validated config must remain the sole source of these values.
+        "seed",
+        "save_warmup",
+        "progress_bar",
+        "blocking",
+        "sampler",
+        "adaptation",
+        "init_mean",
+        "return_raw_trace",
+        "progress_callback",
+        "progress_template",
+        "progress_style",
+        "progress_rate",
+        "zarr_store",
+        "store_unconstrained",
         "progressbar",
         "compute_convergence_checks",
         "discard_tuned_samples",
@@ -583,6 +600,7 @@ def _versions() -> dict[str, str]:
         "pymc": "pymc",
         "pytensor": "pytensor",
         "pymc_marketing": "pymc-marketing",
+        "nutpie": "nutpie",
     }
     result = {"python": platform.python_version()}
     for key, package in names.items():
@@ -704,6 +722,15 @@ ORACLE_SHARED_DATA_NAMES = (
     "g_zb_data",
     "observed_indices_data",
 )
+# Optional data used by templates produced by build_oracle_model.  Keeping
+# these separate preserves the historical low-level template contract while
+# allowing compatible worlds to replace prior intervals and walk operators.
+ORACLE_DYNAMIC_DATA_NAMES = (
+    "prior_cond_carryover_alpha_data",
+    "prior_cond_hill_shape_data",
+    "walk_width_d_data",
+    "walk_width_b_data",
+)
 
 
 def _array_identity(value: Any) -> dict[str, object]:
@@ -757,34 +784,140 @@ def _normalise_observed_indices(
     return result
 
 
+def _signature_structural(value: Any) -> Any:
+    """Return structural choices while leaving compatible smoothness numeric."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _signature_structural(item)
+            for key, item in value.items()
+            if not str(key).startswith("smoothness_")
+        }
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [_signature_structural(item) for item in np.asarray(value).tolist()]
+    return value
+
+
+def _signature_warmup(world: Any) -> int:
+    """Resolve the response-history rank implied by this world's prior bounds."""
+    cfg = getattr(world, "cfg", None)
+    if cfg is None or int(getattr(cfg, "carryover_burn_in", 0)) <= 0:
+        return 0
+    structural = getattr(world, "extras", {}).get("structural", {})
+    prior_cond = getattr(world, "extras", {}).get("prior_cond")
+    alpha_range = cfg.carryover_alpha_range
+    if prior_cond is not None and "carryover_alpha" in prior_cond:
+        lo, width = prior_cond["carryover_alpha"]
+        alpha_range = (float(lo), float(lo) + float(width))
+    from .signal_diagnostics import admitted_response_support_weeks
+
+    families = np.asarray(structural.get("carryover_family", ()))
+    g_cy = np.asarray(getattr(world, "g", {}).get("g_cy", ()))
+    direct = families[g_cy != 0.0]
+    return int(
+        admitted_response_support_weeks(
+            direct,
+            cfg.l_max,
+            carryover_alpha_range=alpha_range,
+        )
+    )
+
+
 def _world_signature(world: Any, *, latent: str, observed_count: int) -> str:
-    """Hash graph topology/configuration, excluding compatible data values."""
+    """Hash topology/rank choices, excluding compatible data values."""
     cfg = getattr(world, "cfg", None)
     structural = getattr(world, "extras", {}).get("structural", {})
     graph = getattr(world, "g", {})
     data = getattr(world, "data", {})
+    cfg_fields = {
+        name: getattr(cfg, name)
+        for name in getattr(cfg, "__dataclass_fields__", {})
+        if name not in ("n_time_steps",)
+    }
+    prior_cond = getattr(world, "extras", {}).get("prior_cond") or {}
+    prior_topology = {
+        str(key): "constant"
+        for key, value in prior_cond.items()
+        if isinstance(value, (tuple, list, np.ndarray))
+        and len(value) == 2
+        and float(value[1]) == 0.0
+    }
     payload = {
         "latent": latent,
         "observed_count": int(observed_count),
+        "response_warmup": _signature_warmup(world),
+        "prior_conditioning_topology": prior_topology,
         "graph_shapes": {name: np.asarray(value).shape for name, value in graph.items()},
         "graph_topology": {
             name: np.asarray(value).astype(float).tolist()
             for name, value in graph.items()
             if name in ("g_cy", "g_dy", "g_zy")
         },
-        "structural": structural,
-        "config": {
-            name: getattr(cfg, name)
-            for name in getattr(cfg, "__dataclass_fields__", {})
-            if name not in ("n_time_steps",)
-        },
+        "structural": _signature_structural(structural),
+        "config": cfg_fields,
         "n_time_steps": int(np.asarray(data["outcome"]).shape[0]),
     }
     encoded = json.dumps(_signature_value(payload), sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _oracle_payload(world: Any, observed_indices: np.ndarray) -> dict[str, np.ndarray]:
+def _dynamic_payload(world: Any, names: set[str]) -> dict[str, np.ndarray]:
+    """Resolve compatible numeric prior/walk values for a model's pm.Data."""
+    extras = getattr(world, "extras", {})
+    prior = extras.get("prior_cond") or {}
+    supported = {"carryover_alpha", "hill_shape"}
+    if set(prior) - supported:
+        raise ValueError(f"unsupported prior conditioning keys: {sorted(set(prior) - supported)!r}")
+    result: dict[str, np.ndarray] = {}
+    for quantity, name in (
+        ("carryover_alpha", "prior_cond_carryover_alpha_data"),
+        ("hill_shape", "prior_cond_hill_shape_data"),
+    ):
+        if name not in names:
+            continue
+        cfg = world.cfg
+        if quantity == "carryover_alpha":
+            support = cfg.carryover_alpha_range
+        else:
+            from . import mechanisms
+
+            support = mechanisms.SATURATION_PRIOR_RANGES["hill"]["slope"]
+        if quantity in prior:
+            raw = prior[quantity]
+            if not isinstance(raw, (tuple, list, np.ndarray)) or len(raw) != 2:
+                raise ValueError(f"unsupported prior conditioning for {quantity!r}")
+            lo, width = float(raw[0]), float(raw[1])
+            if (
+                not np.isfinite([lo, width]).all()
+                or width < 0
+                or lo < support[0]
+                or lo + width > support[1]
+            ):
+                raise ValueError(f"incompatible prior conditioning for {quantity!r}")
+            result[name] = np.asarray([1.0, lo, width], dtype="float64")
+        else:
+            result[name] = np.asarray([0.0, support[0], support[1] - support[0]], dtype="float64")
+    if "walk_width_d_data" in names or "walk_width_b_data" in names:
+        from .random_walk import walk_width_index
+
+        structural = extras.get("structural", {})
+        n_full = int(np.asarray(world.data["outcome"]).shape[0]) + int(world.cfg.carryover_burn_in)
+        for key, name in (
+            ("smoothness_d", "walk_width_d_data"),
+            ("smoothness_b", "walk_width_b_data"),
+        ):
+            if name in names:
+                values = np.asarray(structural.get(key, ()), dtype="float64")
+                result[name] = walk_width_index(
+                    values,
+                    n_full,
+                    rw_smoothness_max_weeks=int(world.cfg.rw_smoothness_max_weeks),
+                )
+    return result
+
+
+def _oracle_payload(
+    world: Any, observed_indices: np.ndarray, *, dynamic_names: set[str] | None = None
+) -> dict[str, np.ndarray]:
     try:
         data = world.data
         graph = world.g
@@ -802,6 +935,8 @@ def _oracle_payload(world: Any, observed_indices: np.ndarray) -> dict[str, np.nd
         }
     except (AttributeError, KeyError) as error:
         raise TypeError("world does not expose the required Oracle data") from error
+    if dynamic_names:
+        payload.update(_dynamic_payload(world, dynamic_names))
     return payload
 
 
@@ -866,7 +1001,7 @@ def _receipt_for_compiled_fit(
                         for name in getattr(_group(idata, "sample_stats"), "data_vars", {})
                     ),
                     "inference_library": "nutpie",
-                    "inference_library_version": versions.get("pymc", "unavailable"),
+                    "inference_library_version": versions.get("nutpie", "unavailable"),
                     "step_methods": {"status": "unavailable", "reason": "not_exposed"},
                     "mass_matrix": {"status": "unavailable", "reason": "not_exposed"},
                 },
@@ -926,6 +1061,7 @@ class CompiledOracle:
     sampler: Any | None = None
     backend: str = "numba"
     _owner_pid: int = field(default_factory=os.getpid, init=False, repr=False)
+    _instance_id: str = field(default_factory=lambda: uuid.uuid4().hex, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -958,8 +1094,19 @@ class CompiledOracle:
             raise TypeError("config and criteria must use the Oracle sampling types")
         config.validate()
         criteria.validate()
+        if config.latent != self.template.latent:
+            raise ValueError("config.latent must match the compiled Oracle template latent mode")
         if config.nuts_sampler != "nutpie":
             raise ValueError("CompiledOracle requires nuts_sampler='nutpie'")
+        for name, identity in (
+            ("world", world_identity),
+            ("source", source_identity),
+            ("configuration", configuration_identity),
+        ):
+            if identity is not None and not isinstance(identity, Mapping):
+                raise TypeError(f"{name}_identity must be a mapping or None")
+            if identity is not None:
+                _immutable(identity, path=f"{name}_identity")
         if observed_indices is None:
             indices = np.asarray(self.template.observed_indices, dtype="int64")
         else:
@@ -975,10 +1122,13 @@ class CompiledOracle:
             raise ValueError(
                 "world structural signature does not match the compiled Oracle template"
             )
-        payload = _oracle_payload(world, indices)
-        if set(payload) != set(ORACLE_SHARED_DATA_NAMES):
+        dynamic_names = {
+            name for name in ORACLE_DYNAMIC_DATA_NAMES if name in self.template.model.named_vars
+        }
+        payload = _oracle_payload(world, indices, dynamic_names=dynamic_names)
+        if set(payload) != set(ORACLE_SHARED_DATA_NAMES) | dynamic_names:
             raise ValueError("Oracle data payload does not exactly match the required shared set")
-        for name in ORACLE_SHARED_DATA_NAMES:
+        for name in ORACLE_SHARED_DATA_NAMES + tuple(sorted(dynamic_names)):
             variable = self.template.model.named_vars[name]
             expected = np.asarray(variable.get_value())
             shape = tuple(int(size) for size in expected.shape)
@@ -1013,6 +1163,7 @@ class CompiledOracle:
                 "seed": config.random_seed,
                 "save_warmup": not config.discard_tuned_samples,
                 "progress_bar": config.progressbar,
+                "blocking": True,
             }
             kwargs.update(_mutable(config.sampler_kwargs))
             idata = self.sampler(bound, **kwargs)
@@ -1024,7 +1175,12 @@ class CompiledOracle:
             criteria=criteria,
             started=started,
             template_signature=self.template.signature,
-            compile_identity={"engine": "nutpie", "backend": self.backend},
+            compile_identity={
+                "engine": "nutpie",
+                "backend": self.backend,
+                "instance_id": self._instance_id,
+                "owner_pid": self._owner_pid,
+            },
             observed_indices=indices,
             payload=payload,
             world_identity=world_identity,
@@ -1094,6 +1250,7 @@ OracleModelTemplate = OracleTemplate
 
 __all__ = [
     "ORACLE_SHARED_DATA_NAMES",
+    "ORACLE_DYNAMIC_DATA_NAMES",
     "OracleHealthCriteria",
     "OracleSamplingConfig",
     "OracleSamplingReceipt",
