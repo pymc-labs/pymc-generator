@@ -19,8 +19,12 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 
 import numpy as np
+from xarray import DataTree
 
-_NUTS_SAMPLER = "nutpie"
+from .worlds import SCM
+
+_DEFAULT_NUTS_SAMPLER: Literal["nutpie", "pymc"] = "nutpie"
+_ALLOWED_NUTS_SAMPLERS = frozenset({"nutpie", "pymc"})
 _RESERVED_SAMPLER_KWARGS = frozenset(
     {
         "draws",
@@ -105,7 +109,7 @@ def _validate_nonnegative(value: Any, name: str, *, integer: bool = False) -> No
 class OracleSamplingConfig:
     """Validated options for one automatic Nutpie sampling call."""
 
-    draws: int = 500
+    draws: int = 800
     tune: int = 500
     chains: int = 4
     cores: int = 4
@@ -115,6 +119,7 @@ class OracleSamplingConfig:
     discard_tuned_samples: bool = True
     progressbar: bool = False
     compute_convergence_checks: bool = False
+    nuts_sampler: Literal["nutpie", "pymc"] = _DEFAULT_NUTS_SAMPLER
     sampler_kwargs: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -139,6 +144,10 @@ class OracleSamplingConfig:
             raise ValueError("latent must be 'marginal' or 'sampled'")
         for name in ("discard_tuned_samples", "progressbar", "compute_convergence_checks"):
             _validate_bool(getattr(self, name), name)
+        if not isinstance(self.nuts_sampler, str):
+            raise TypeError("nuts_sampler must be a string")
+        if self.nuts_sampler not in _ALLOWED_NUTS_SAMPLERS:
+            raise ValueError("nuts_sampler must be 'nutpie' or 'pymc'")
         if not isinstance(self.sampler_kwargs, Mapping):
             raise TypeError("sampler_kwargs must be a mapping")
         for key in self.sampler_kwargs:
@@ -160,6 +169,7 @@ class OracleSamplingConfig:
             "discard_tuned_samples": self.discard_tuned_samples,
             "progressbar": self.progressbar,
             "compute_convergence_checks": self.compute_convergence_checks,
+            "nuts_sampler": self.nuts_sampler,
             "sampler_kwargs": _plain(self.sampler_kwargs),
         }
 
@@ -246,7 +256,12 @@ class OracleSamplingReceipt:
     limitations: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        for name in (
+        if type(self.schema_version) is not int or self.schema_version != 1:
+            raise ValueError("schema_version must be the integer 1")
+        for name in ("kind", "package_version"):
+            if not isinstance(getattr(self, name), str):
+                raise TypeError(f"{name} must be a string")
+        mapping_names = (
             "environment",
             "identities",
             "oracle",
@@ -255,12 +270,23 @@ class OracleSamplingReceipt:
             "posterior",
             "diagnostics",
             "health",
-        ):
-            object.__setattr__(self, name, _immutable(getattr(self, name), path=name))
-        limitations = tuple(self.limitations)
-        if any(not isinstance(item, str) for item in limitations):
+        )
+        for name in mapping_names:
+            value = getattr(self, name)
+            if not isinstance(value, Mapping):
+                raise TypeError(f"{name} must be a mapping")
+            frozen = _immutable(value, path=name)
+            if name == "environment" and any(not isinstance(item, str) for item in frozen.values()):
+                raise TypeError("environment values must be strings")
+            if name == "identities" and any(
+                not isinstance(item, Mapping) for item in frozen.values()
+            ):
+                raise TypeError("identity values must be mappings")
+            object.__setattr__(self, name, frozen)
+        if not isinstance(self.limitations, tuple):
+            raise TypeError("limitations must be a tuple")
+        if any(not isinstance(item, str) for item in self.limitations):
             raise TypeError("limitations must contain only strings")
-        object.__setattr__(self, "limitations", limitations)
 
     def to_dict(self) -> dict[str, object]:
         return cast(
@@ -291,8 +317,12 @@ class OracleSamplingReceipt:
 class OracleSamplingResult:
     """The unmodified posterior DataTree and its posterior-free receipt."""
 
-    idata: Any
+    idata: DataTree
     receipt: OracleSamplingReceipt
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.idata, DataTree):
+            raise TypeError("idata must be an xarray.DataTree")
 
 
 def _metric(status: str, value: Any = None, **extra: Any) -> dict[str, Any]:
@@ -315,16 +345,26 @@ def _group(idata: Any, name: str) -> Any:
         return None
 
 
-def _present_groups(idata: Any) -> list[str]:
-    # DataTree group access is intentionally bracket-only.  These are the
-    # groups emitted by PyMC's InferenceData/DataTree contract.
-    known = ("posterior", "sample_stats", "prior", "prior_predictive", "observed_data", "constant_data")
-    return sorted(name for name in known if _group(idata, name) is not None)
+def _present_groups(idata: DataTree) -> list[str]:
+    """Return every actual descendant group, using DataTree bracket access."""
+    groups: list[str] = []
+
+    def visit(node: DataTree, prefix: str = "") -> None:
+        for name in node.children:
+            child = cast(DataTree, node[name])
+            path = f"{prefix}/{name}" if prefix else str(name)
+            groups.append(path)
+            visit(child, path)
+
+    visit(idata)
+    return sorted(groups)
 
 
 def _scalar_values(value: Any) -> np.ndarray:
     if hasattr(value, "data_vars"):
-        arrays = [np.asarray(item.values, dtype=float).reshape(-1) for item in value.data_vars.values()]
+        arrays = [
+            np.asarray(item.values, dtype=float).reshape(-1) for item in value.data_vars.values()
+        ]
         return np.concatenate(arrays) if arrays else np.asarray([], dtype=float)
     return np.asarray(getattr(value, "values", value), dtype=float).reshape(-1)
 
@@ -337,10 +377,26 @@ def _arviz_metric(az: Any, fn: str, posterior: Any, method: str, reduction: str)
     finite = values[np.isfinite(values)]
     if not finite.size:
         return _metric("invalid", reason="no_finite_result")
-    return _metric("available", float(np.max(finite) if reduction == "max" else np.min(finite)), **{"method": method, "reduction": reduction})
+    return _metric(
+        "available",
+        float(np.max(finite) if reduction == "max" else np.min(finite)),
+        **{"method": method, "reduction": reduction},
+    )
 
 
-def _diagnostics(idata: Any, az: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+def _valid_sampling_stat(stat: Any, sizes: Mapping[str, Any]) -> bool:
+    dims = tuple(getattr(stat, "dims", ()))
+    stat_sizes = getattr(stat, "sizes", {})
+    return (
+        dims == ("chain", "draw")
+        and int(stat_sizes.get("chain", 0)) > 0
+        and int(stat_sizes.get("draw", 0)) > 0
+        and (sizes.get("chain") is None or int(stat_sizes["chain"]) == int(sizes["chain"]))
+        and (sizes.get("draw") is None or int(stat_sizes["draw"]) == int(sizes["draw"]))
+    )
+
+
+def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     posterior = _group(idata, "posterior")
     sample_stats = _group(idata, "sample_stats")
     posterior_present = posterior is not None
@@ -365,9 +421,8 @@ def _diagnostics(idata: Any, az: Any) -> tuple[dict[str, Any], dict[str, Any]]:
                 continue
             try:
                 stat = sample_stats[field]
-                dims = set(getattr(stat, "dims", ()))
                 values = np.asarray(stat.values)
-                if values.size == 0 or not {"chain", "draw"}.issubset(dims):
+                if not _valid_sampling_stat(stat, sizes):
                     raise ValueError
                 if (
                     name == "divergences"
@@ -388,7 +443,7 @@ def _diagnostics(idata: Any, az: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             try:
                 stat = sample_stats["reached_max_treedepth"]
                 values = np.asarray(stat.values)
-                if not {"chain", "draw"}.issubset(set(getattr(stat, "dims", ()) )):
+                if not _valid_sampling_stat(stat, sizes):
                     raise ValueError
                 finite = values[np.isfinite(values)]
                 if finite.size != values.size:
@@ -397,7 +452,9 @@ def _diagnostics(idata: Any, az: Any) -> tuple[dict[str, Any], dict[str, Any]]:
                     )
                 else:
                     diagnostics["tree_depth_saturation"] = _metric(
-                        "available", int(np.sum(finite.astype(bool))), source="reached_max_treedepth"
+                        "available",
+                        int(np.sum(finite.astype(bool))),
+                        source="reached_max_treedepth",
                     )
             except Exception:
                 diagnostics["tree_depth_saturation"] = _metric(
@@ -411,6 +468,8 @@ def _diagnostics(idata: Any, az: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             diagnostics["bfmi"] = _metric("unavailable", reason="energy_missing")
         else:
             try:
+                if not _valid_sampling_stat(sample_stats["energy"], sizes):
+                    raise ValueError
                 values = _scalar_values(az.bfmi(sample_stats))
                 finite = values[np.isfinite(values)]
                 diagnostics["bfmi"] = (
@@ -460,21 +519,27 @@ def _health(diagnostics: Mapping[str, Any], criteria: OracleHealthCriteria) -> d
     missing = []
     for metric, (threshold_name, code, crosses) in threshold_map.items():
         threshold = getattr(criteria, threshold_name)
-        if threshold is None:
-            continue
         record = diagnostics.get(metric, {"status": "unavailable"})
-        if record.get("status") == "available":
+        if record.get("status") != "available":
+            missing.append(metric)
+            continue
+        if threshold is not None:
             observed = record["value"]
             if crosses(observed, threshold):
-                failures.append({"code": code, "metric": metric, "observed": observed, "threshold": threshold})
-        elif required[metric]:
-            missing.append(metric)
-        else:
-            missing.append(metric)
+                failures.append(
+                    {
+                        "code": code,
+                        "metric": metric,
+                        "observed": observed,
+                        "threshold": threshold,
+                    }
+                )
     failures.sort(key=lambda item: (item["code"], item["metric"]))
     missing.sort()
     return {
-        "status": "unhealthy" if failures else ("unknown" if any(required[m] and m in missing for m in required) else "healthy"),
+        "status": "unhealthy"
+        if failures
+        else ("unknown" if any(required[m] and m in missing for m in required) else "healthy"),
         "criteria": criteria.to_dict(),
         "failure_reasons": failures,
         "missing_diagnostics": missing,
@@ -501,7 +566,7 @@ def _versions() -> dict[str, str]:
 
 
 def sample_oracle(
-    world: Any,
+    world: SCM,
     config: OracleSamplingConfig | None = None,
     *,
     criteria: OracleHealthCriteria | None = None,
@@ -518,17 +583,20 @@ def sample_oracle(
         raise TypeError("criteria must be an OracleHealthCriteria")
     config.validate()
     criteria.validate()
+    if not isinstance(world, SCM):
+        raise TypeError("world must be an SCM")
     identities = {}
     for name, identity in (
         ("world", world_identity),
         ("source", source_identity),
         ("configuration", configuration_identity),
     ):
+        if identity is not None and not isinstance(identity, Mapping):
+            raise TypeError(f"{name}_identity must be a mapping or None")
         identities[name] = _immutable({} if identity is None else identity, path=f"{name}_identity")
 
     import arviz as az  # type: ignore[import-untyped]
     import pymc as pm
-    import xarray as xr
 
     started = time.monotonic()
     model = world.oracle_model(latent=config.latent)
@@ -543,10 +611,10 @@ def sample_oracle(
         discard_tuned_samples=config.discard_tuned_samples,
         progressbar=config.progressbar,
         compute_convergence_checks=config.compute_convergence_checks,
-        nuts_sampler=_NUTS_SAMPLER,
+        nuts_sampler=config.nuts_sampler,
         **_mutable(config.sampler_kwargs),
     )
-    if not isinstance(idata, xr.DataTree):
+    if not isinstance(idata, DataTree):
         raise TypeError("pm.sample must return an xarray.DataTree")
     diagnostics, sizes = _diagnostics(idata, az)
     health = _health(diagnostics, criteria)
@@ -555,14 +623,15 @@ def sample_oracle(
     draws = sizes.get("draw")
     requested = config.to_dict()
     requested.pop("latent")
-    requested["nuts_sampler"] = _NUTS_SAMPLER
     sampling = {
         "requested": requested,
         "effective": {
             "groups": _present_groups(idata),
             "n_chains": int(n_chains) if n_chains is not None else None,
             "draws_per_chain": int(draws) if draws is not None else None,
-            "sample_stat_names": sorted(str(name) for name in getattr(_group(idata, "sample_stats"), "data_vars", {})),
+            "sample_stat_names": sorted(
+                str(name) for name in getattr(_group(idata, "sample_stats"), "data_vars", {})
+            ),
             "inference_library": "pymc",
             "inference_library_version": _versions()["pymc"],
             "step_methods": {"status": "unavailable", "reason": "not_exposed_by_sampling_result"},
