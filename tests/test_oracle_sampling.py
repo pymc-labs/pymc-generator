@@ -756,6 +756,152 @@ def test_arviz_errors_become_deterministic_invalid_diagnostics(monkeypatch):
         assert diagnostics[metric]["reason"]
 
 
+# Reusable compiled Oracle lifecycle ----------------------------------------
+
+
+def _shared_template_and_world(*, changed_sales=0.0, selected=(0, 1, 2)):
+    values = {
+        "channels_data": np.zeros((4, 1)),
+        "controls_data": np.ones((4, 1)),
+        "sales_data": np.arange(4, dtype=float) + changed_sales,
+        "saturation_scale_data": np.ones(1),
+        "g_cy_data": np.ones(1),
+        "g_db_data": np.zeros(1),
+        "g_zb_data": np.ones(1),
+        "observed_indices_data": np.asarray(selected, dtype="int64"),
+    }
+    with oracle.pm.Model() as model:
+        for name, value in values.items():
+            oracle.pm.Data(name, value)
+    world = SimpleNamespace(
+        data={
+            "treatments": values["channels_data"],
+            "covariates": values["controls_data"],
+            "outcome": values["sales_data"],
+            "saturation_scale": values["saturation_scale_data"],
+        },
+        g={"g_cy": values["g_cy_data"], "g_dy": values["g_db_data"], "g_zy": values["g_zb_data"]},
+        cfg=SimpleNamespace(__dataclass_fields__={}),
+        extras={"structural": {}},
+    )
+    signature = oracle._world_signature(world, latent="marginal", observed_count=len(selected))
+    template = pg.OracleTemplate(
+        model=model,
+        signature=signature,
+        latent="marginal",
+        observed_indices=tuple(selected),
+        reported_rows=3,
+    )
+    return template, world
+
+
+class _FakeCompiled:
+    def __init__(self, tree):
+        self.tree = tree
+        self.payloads = []
+        self.sample_calls = []
+
+    def with_data(self, **payload):
+        self.payloads.append({name: np.array(value, copy=True) for name, value in payload.items()})
+        return self
+
+    def sample(self, **kwargs):
+        self.sample_calls.append(kwargs)
+        return self.tree
+
+
+def _compiled(template, fake):
+    return pg.CompiledOracle(template, fake, sampler=lambda bound, **kwargs: bound.sample(**kwargs))
+
+
+def test_compile_oracle_compiles_once_and_binds_each_fit(monkeypatch):
+    template, world = _shared_template_and_world()
+    _, changed = _shared_template_and_world(changed_sales=10.0)
+    fake = _FakeCompiled(_valid_tree())
+    compile_calls = []
+    sample_calls = []
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "nutpie",
+        SimpleNamespace(
+            compile_pymc_model=lambda model, **kwargs: (
+                compile_calls.append((model, kwargs)) or fake
+            ),
+            sample=lambda bound, **kwargs: sample_calls.append(bound) or bound.sample(**kwargs),
+        ),
+    )
+    compiled = pg.compile_oracle(template)
+    compiled.fit(world)
+    compiled.fit(changed)
+    assert len(compile_calls) == 1
+    assert compile_calls[0][1] == {"backend": "numba"}
+    assert len(fake.payloads) == 2
+    assert sample_calls == [fake, fake]
+    assert not np.array_equal(fake.payloads[0]["sales_data"], fake.payloads[1]["sales_data"])
+    assert set(fake.payloads[0]) == set(pg.ORACLE_SHARED_DATA_NAMES)
+    assert np.array_equal(fake.payloads[0]["observed_indices_data"], [0, 1, 2])
+
+
+def test_compiled_fit_selector_uses_reported_row_coordinates():
+    template, world = _shared_template_and_world(selected=(0, 2))
+    fake = _FakeCompiled(_valid_tree())
+    compiled = _compiled(template, fake)
+    compiled.fit(world, observed_indices=[1, 2])
+    assert np.array_equal(fake.payloads[0]["observed_indices_data"], [1, 2])
+    with pytest.raises(ValueError, match="observed-index rank"):
+        compiled.fit(world, observed_indices=[0])
+
+
+def test_template_rejects_missing_shared_variable():
+    with oracle.pm.Model() as model:
+        oracle.pm.Data("channels_data", np.zeros((4, 1)))
+    with pytest.raises(ValueError, match="missing required shared variables"):
+        pg.OracleTemplate(model, "sig", "marginal", (0,))
+
+
+def test_signature_change_fails_closed_without_binding():
+    template, world = _shared_template_and_world()
+    _, changed = _shared_template_and_world()
+    changed.g["g_cy"] = np.zeros(1)
+    fake = _FakeCompiled(_valid_tree())
+    compiled = _compiled(template, fake)
+    with pytest.raises(ValueError, match="structural signature"):
+        compiled.fit(changed)
+    assert fake.payloads == []
+
+
+def test_compiled_receipt_data_identities_are_stable():
+    template, world = _shared_template_and_world()
+    first = _compiled(template, _FakeCompiled(_valid_tree())).fit(world)
+    second = _compiled(template, _FakeCompiled(_valid_tree())).fit(world)
+    assert first.receipt.to_dict()["identities"] == second.receipt.to_dict()["identities"]
+    assert first.receipt.to_dict()["sampling"]["compile"] == {
+        "engine": "nutpie",
+        "backend": "numba",
+    }
+
+
+def test_compile_and_sampling_exceptions_are_not_retried(monkeypatch):
+    template, world = _shared_template_and_world()
+    compile_calls = []
+
+    def fail_compile(*args, **kwargs):
+        compile_calls.append((args, kwargs))
+        raise RuntimeError("compile failed")
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "nutpie", SimpleNamespace(compile_pymc_model=fail_compile)
+    )
+    with pytest.raises(RuntimeError, match="compile failed"):
+        pg.compile_oracle(template)
+    assert len(compile_calls) == 1
+
+    fake = _FakeCompiled(_valid_tree())
+    fake.with_data = lambda **payload: (_ for _ in ()).throw(RuntimeError("bind failed"))
+    with pytest.raises(RuntimeError, match="bind failed"):
+        _compiled(template, fake).fit(world)
+
+
 # Health tri-state semantics ------------------------------------------------
 
 

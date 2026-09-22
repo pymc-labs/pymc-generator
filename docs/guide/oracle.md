@@ -15,7 +15,11 @@ because of missing upstream gradients.
 
 ## Public sampling API
 
-The five public objects are:
+The maintained public objects include the sampling types below and the explicit
+reusable lifecycle `OracleTemplate`, `CompiledOracle`, `build_oracle_template`,
+and `compile_oracle`.
+
+The five original public objects are:
 
 - `OracleSamplingConfig`: frozen sampling options. The forward-looking
   maintained API defaults are `draws=800`, `tune=500`, `chains=4`, `cores=4`,
@@ -43,10 +47,19 @@ The five public objects are:
 - `OracleSamplingResult`: the pair `result.idata` and `result.receipt`.
   `result.idata` is the unmodified PyMC 6 `xarray.DataTree`.
 - `sample_oracle(world, config=None, *, criteria=None, world_identity=None,
-  source_identity=None, configuration_identity=None)`: builds through
-  `world.oracle_model(latent=config.latent)`, samples once, and returns an
-  `OracleSamplingResult`. `None` uses the corresponding defaults; identity
-  arguments are caller-supplied metadata and are not inferred.
+  source_identity=None, configuration_identity=None)`: a one-shot convenience
+  wrapper. It builds through `world.oracle_model(latent=config.latent)`, samples
+  once, and returns an `OracleSamplingResult`; it does not cache compilation.
+- `build_oracle_template(world, *, latent="marginal", observed_indices=None)`:
+  builds one full-horizon graph and records its structural signature. Observation
+  selectors use reported-row coordinates (after response-history/carryover warmup),
+  defaulting to every reported row. This model-history warmup is distinct from
+  MCMC tuning (warmup) draws configured by `tune`.
+- `compile_oracle(template_or_world)`: compiles exactly once with Nutpie/Numba.
+  Call `compiled.fit(other_world, ...)` for compatible worlds. Each fit binds a
+  fresh data view with `with_data`; values are never copied into the receipt.
+  Topology, rank, or unsupported-shape changes fail closed with a signature or
+  shape error. A compiled owner is process-local and serialized for safe use.
 
 Configuration is validated before model construction: draw/tune/chain/core
 counts, target acceptance, seed, latent mode, Boolean options, thresholds, and
@@ -62,7 +75,18 @@ health, and limitation codes. `to_json()` uses canonical JSON without NaN values
 
 For example, an experiment can explicitly override the maintained sampler
 request with `pg.OracleSamplingConfig(nuts_sampler="pymc")`; the default remains
-`"nutpie"`.
+`"nutpie"`. For repeated compatible fits, prefer the explicit lifecycle:
+
+```python
+compiled = pg.compile_oracle(world)
+first = compiled.fit(world, world_identity={"id": "w0"})
+second = compiled.fit(other_world, world_identity={"id": "w1"})
+```
+
+The compiled receipt records the structural template signature, compile backend,
+observed-index identity, and a hash/dtype/shape identity for every shared data
+payload. It records no posterior values. There are no retry or fallback paths;
+compile, binding, and sampling exceptions propagate unchanged.
 
 ```python
 import pymc_generator as pg
@@ -270,6 +294,9 @@ The API reference documents these mode-dependent qualifications:
    reported window (zero-padded start) while generation used
    `carryover_burn_in` weeks of real history. With burn-in enabled the oracle
    therefore observes `sales[warmup:]`, where `warmup` is the response support
+   after that response-history burn-in. This is a data/model-history offset, not
+   MCMC tuning or warmup draws; `tune` controls only the sampler's adaptation
+   iterations.
    **admitted by the oracle's own inference priors**: the direct treatments'
    carryover families, `l_max`, and the geometric decay range *after* any ACE
    prior-conditioning narrowing. Weibull's shape box

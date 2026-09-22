@@ -8,9 +8,12 @@ could be diagnosed from it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
 import platform
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -21,6 +24,7 @@ from typing import Any, Literal, cast
 import arviz as az  # type: ignore[import-untyped]
 import numpy as np
 import pymc as pm
+from pytensor.tensor.sharedvar import SharedVariable
 from xarray import DataTree
 
 from .worlds import SCM
@@ -597,6 +601,7 @@ def sample_oracle(
     world_identity: Mapping[str, object] | None = None,
     source_identity: Mapping[str, object] | None = None,
     configuration_identity: Mapping[str, object] | None = None,
+    observed_indices: np.ndarray | list[int] | list[bool] | None = None,
 ) -> OracleSamplingResult:
     """Build and sample a world's observed-data oracle exactly once."""
     config = OracleSamplingConfig() if config is None else config
@@ -620,7 +625,10 @@ def sample_oracle(
         identities[name] = _immutable({} if identity is None else identity, path=f"{name}_identity")
 
     started = time.monotonic()
-    model = world.oracle_model(latent=config.latent)
+    if observed_indices is None:
+        model = world.oracle_model(latent=config.latent)
+    else:
+        model = world.oracle_model(latent=config.latent, observed_indices=observed_indices)
     idata = pm.sample(
         model=model,
         draws=config.draws,
@@ -682,10 +690,419 @@ def sample_oracle(
     return OracleSamplingResult(idata=idata, receipt=receipt)
 
 
+# Reusable compiled-oracle API ---------------------------------------------
+
+# These names intentionally mirror the recovered producer.  The first seven
+# are the historical shared inputs; the selector is the maintained extension.
+ORACLE_SHARED_DATA_NAMES = (
+    "channels_data",
+    "controls_data",
+    "sales_data",
+    "saturation_scale_data",
+    "g_cy_data",
+    "g_db_data",
+    "g_zb_data",
+    "observed_indices_data",
+)
+
+
+def _array_identity(value: Any) -> dict[str, object]:
+    array = np.ascontiguousarray(np.asarray(value))
+    return {
+        "sha256": hashlib.sha256(array.tobytes()).hexdigest(),
+        "dtype": str(array.dtype),
+        "shape": [int(size) for size in array.shape],
+    }
+
+
+def _signature_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return {"dtype": str(value.dtype), "shape": list(value.shape), "values": value.tolist()}
+    if isinstance(value, Mapping):
+        return {
+            str(key): _signature_value(item)
+            for key, item in sorted(value.items(), key=lambda p: str(p[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_signature_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _normalise_observed_indices(
+    observed_indices: np.ndarray | list[int] | list[bool] | None,
+    n_reported_rows: int,
+) -> np.ndarray:
+    if observed_indices is None:
+        result = np.arange(n_reported_rows, dtype="int64")
+    else:
+        raw = np.asarray(observed_indices)
+        if raw.ndim != 1:
+            raise ValueError("observed_indices must be one-dimensional")
+        if np.issubdtype(raw.dtype, np.bool_):
+            if raw.size != n_reported_rows:
+                raise ValueError("observed_indices boolean mask has the wrong length")
+            result = np.flatnonzero(raw).astype("int64")
+        elif np.issubdtype(raw.dtype, np.integer):
+            result = raw.astype("int64", copy=True)
+        else:
+            raise TypeError("observed_indices must contain integers or booleans")
+    if result.size == 0:
+        raise ValueError("observed_indices must select at least one reported row")
+    if np.any(result < 0) or np.any(result >= n_reported_rows):
+        raise ValueError("observed_indices contains an out-of-range reported row")
+    if np.unique(result).size != result.size:
+        raise ValueError("observed_indices must not contain duplicates")
+    return result
+
+
+def _world_signature(world: Any, *, latent: str, observed_count: int) -> str:
+    """Hash graph topology/configuration, excluding compatible data values."""
+    cfg = getattr(world, "cfg", None)
+    structural = getattr(world, "extras", {}).get("structural", {})
+    graph = getattr(world, "g", {})
+    data = getattr(world, "data", {})
+    payload = {
+        "latent": latent,
+        "observed_count": int(observed_count),
+        "graph_shapes": {name: np.asarray(value).shape for name, value in graph.items()},
+        "graph_topology": {
+            name: np.asarray(value).astype(float).tolist()
+            for name, value in graph.items()
+            if name in ("g_cy", "g_dy", "g_zy")
+        },
+        "structural": structural,
+        "config": {
+            name: getattr(cfg, name)
+            for name in getattr(cfg, "__dataclass_fields__", {})
+            if name not in ("n_time_steps",)
+        },
+        "n_time_steps": int(np.asarray(data["outcome"]).shape[0]),
+    }
+    encoded = json.dumps(_signature_value(payload), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _oracle_payload(world: Any, observed_indices: np.ndarray) -> dict[str, np.ndarray]:
+    try:
+        data = world.data
+        graph = world.g
+        payload = {
+            # Own each buffer before handing it to Nutpie. A bound compiled
+            # view must not alias a mutable SCM payload across sequential fits.
+            "channels_data": np.array(data["treatments"], copy=True),
+            "controls_data": np.array(data["covariates"], copy=True),
+            "sales_data": np.array(data["outcome"], copy=True),
+            "saturation_scale_data": np.array(data["saturation_scale"], copy=True),
+            "g_cy_data": np.array(graph["g_cy"], copy=True),
+            "g_db_data": np.array(graph["g_dy"], copy=True),
+            "g_zb_data": np.array(graph["g_zy"], copy=True),
+            "observed_indices_data": np.array(observed_indices, dtype="int64", copy=True),
+        }
+    except (AttributeError, KeyError) as error:
+        raise TypeError("world does not expose the required Oracle data") from error
+    return payload
+
+
+def _receipt_for_compiled_fit(
+    idata: DataTree,
+    *,
+    config: OracleSamplingConfig,
+    criteria: OracleHealthCriteria,
+    started: float,
+    template_signature: str,
+    compile_identity: Mapping[str, object],
+    observed_indices: np.ndarray,
+    payload: Mapping[str, np.ndarray],
+    world_identity: Mapping[str, object] | None,
+    source_identity: Mapping[str, object] | None,
+    configuration_identity: Mapping[str, object] | None,
+) -> OracleSamplingResult:
+    diagnostics, sizes = _diagnostics(idata, az)
+    health = _health(diagnostics, criteria)
+    posterior = _group(idata, "posterior")
+    versions = _versions()
+    try:
+        package_version = metadata.version("pymc-generator")
+    except metadata.PackageNotFoundError:
+        from ._version import __version__
+
+        package_version = __version__
+    n_chains, draws = sizes.get("chain"), sizes.get("draw")
+    requested = config.to_dict()
+    requested.pop("latent")
+    identity_values = {
+        "world": {} if world_identity is None else world_identity,
+        "source": {} if source_identity is None else source_identity,
+        "configuration": {} if configuration_identity is None else configuration_identity,
+        "template": {"signature": template_signature},
+        "compile": dict(compile_identity),
+        "observed_indices": _array_identity(observed_indices),
+        "data": {name: _array_identity(value) for name, value in sorted(payload.items())},
+    }
+    receipt = OracleSamplingReceipt(
+        schema_version=1,
+        kind="pymc_generator.oracle_compiled_sampling_receipt",
+        package_version=package_version,
+        environment=_immutable(versions),
+        identities=_immutable(identity_values),
+        oracle=_immutable(
+            {
+                "builder": "SCM.oracle_model",
+                "latent": config.latent,
+                "observed_indices": "reported_rows",
+            }
+        ),
+        sampling=_immutable(
+            {
+                "requested": requested,
+                "effective": {
+                    "groups": _present_groups(idata),
+                    "n_chains": int(n_chains) if n_chains is not None else None,
+                    "draws_per_chain": int(draws) if draws is not None else None,
+                    "sample_stat_names": sorted(
+                        str(name)
+                        for name in getattr(_group(idata, "sample_stats"), "data_vars", {})
+                    ),
+                    "inference_library": "nutpie",
+                    "inference_library_version": versions.get("pymc", "unavailable"),
+                    "step_methods": {"status": "unavailable", "reason": "not_exposed"},
+                    "mass_matrix": {"status": "unavailable", "reason": "not_exposed"},
+                },
+                "compile": dict(compile_identity),
+            }
+        ),
+        timing=_immutable({"elapsed_seconds": float(time.monotonic() - started)}),
+        posterior=_immutable({"present": posterior is not None, "included_in_receipt": False}),
+        diagnostics=_immutable(diagnostics),
+        health=_immutable(health),
+        limitations=_LIMITATIONS + ("compiled_model_ownership_is_process_local",),
+    )
+    return OracleSamplingResult(idata=idata, receipt=receipt)
+
+
+@dataclass(frozen=True, slots=True)
+class OracleTemplate:
+    """Full-horizon graph and its explicit reusable structural signature."""
+
+    model: pm.Model
+    signature: str
+    latent: Literal["marginal", "sampled"]
+    observed_indices: tuple[int, ...]
+    shared_names: tuple[str, ...] = ORACLE_SHARED_DATA_NAMES
+    reported_rows: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.shared_names != ORACLE_SHARED_DATA_NAMES:
+            raise ValueError("OracleTemplate shared variable names are part of its contract")
+        if self.latent not in ("marginal", "sampled"):
+            raise ValueError("OracleTemplate latent must be 'marginal' or 'sampled'")
+        if not self.observed_indices:
+            raise ValueError("OracleTemplate must select at least one observed row")
+        reported_rows = (
+            len(self.observed_indices) if self.reported_rows is None else self.reported_rows
+        )
+        if not isinstance(reported_rows, int) or reported_rows < len(self.observed_indices):
+            raise ValueError("reported_rows must be an integer covering observed_indices")
+        if any(index < 0 or index >= reported_rows for index in self.observed_indices):
+            raise ValueError("observed_indices contains an out-of-range reported row")
+        object.__setattr__(self, "reported_rows", reported_rows)
+        missing = [
+            name
+            for name in self.shared_names
+            if not isinstance(self.model.named_vars.get(name), SharedVariable)
+        ]
+        if missing:
+            raise ValueError(f"oracle template is missing required shared variables: {missing}")
+
+
+@dataclass(slots=True)
+class CompiledOracle:
+    """One process-local Nutpie compilation, safely reused for sequential fits."""
+
+    template: OracleTemplate
+    compiled: Any
+    sampler: Any | None = None
+    backend: str = "numba"
+    _owner_pid: int = field(default_factory=os.getpid, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.backend != "numba":
+            raise ValueError("the maintained compiled Oracle backend is numba")
+        missing = [
+            name
+            for name in ORACLE_SHARED_DATA_NAMES
+            if not isinstance(self.template.model.named_vars.get(name), SharedVariable)
+        ]
+        if missing:
+            raise ValueError(f"compiled oracle missing required shared variables: {missing}")
+
+    def fit(
+        self,
+        world: SCM,
+        config: OracleSamplingConfig | None = None,
+        *,
+        criteria: OracleHealthCriteria | None = None,
+        observed_indices: np.ndarray | list[int] | list[bool] | None = None,
+        world_identity: Mapping[str, object] | None = None,
+        source_identity: Mapping[str, object] | None = None,
+        configuration_identity: Mapping[str, object] | None = None,
+    ) -> OracleSamplingResult:
+        config = OracleSamplingConfig() if config is None else config
+        criteria = OracleHealthCriteria() if criteria is None else criteria
+        if not isinstance(config, OracleSamplingConfig) or not isinstance(
+            criteria, OracleHealthCriteria
+        ):
+            raise TypeError("config and criteria must use the Oracle sampling types")
+        config.validate()
+        criteria.validate()
+        if config.nuts_sampler != "nutpie":
+            raise ValueError("CompiledOracle requires nuts_sampler='nutpie'")
+        if observed_indices is None:
+            indices = np.asarray(self.template.observed_indices, dtype="int64")
+        else:
+            indices = _normalise_observed_indices(
+                observed_indices, self.template.reported_rows or 0
+            )
+        if len(indices) != len(self.template.observed_indices):
+            raise ValueError("a compiled Oracle cannot change the observed-index rank")
+        expected_signature = _world_signature(
+            world, latent=self.template.latent, observed_count=len(indices)
+        )
+        if expected_signature != self.template.signature:
+            raise ValueError(
+                "world structural signature does not match the compiled Oracle template"
+            )
+        payload = _oracle_payload(world, indices)
+        if set(payload) != set(ORACLE_SHARED_DATA_NAMES):
+            raise ValueError("Oracle data payload does not exactly match the required shared set")
+        for name in ORACLE_SHARED_DATA_NAMES:
+            variable = self.template.model.named_vars[name]
+            expected = np.asarray(variable.get_value())
+            shape = tuple(int(size) for size in expected.shape)
+            if payload[name].shape != shape:
+                raise ValueError(
+                    f"{name} shape {payload[name].shape} does not match template {shape}"
+                )
+            if payload[name].dtype != expected.dtype:
+                if name != "observed_indices_data" or not np.issubdtype(expected.dtype, np.integer):
+                    raise ValueError(
+                        f"{name} dtype {payload[name].dtype} does not match template {expected.dtype}"
+                    )
+                limits = np.iinfo(expected.dtype)
+                if np.any(payload[name] < limits.min) or np.any(payload[name] > limits.max):
+                    raise ValueError(f"{name} values do not fit template dtype {expected.dtype}")
+                payload[name] = payload[name].astype(expected.dtype, copy=True)
+        if not callable(self.sampler):
+            raise TypeError("CompiledOracle requires the injected Nutpie sampling callable")
+        if os.getpid() != self._owner_pid:
+            raise RuntimeError("CompiledOracle is process-local and cannot be used after fork")
+        started = time.monotonic()
+        # Nutpie's with_data returns a new bound compiled model; it does not
+        # recompile. The lock also prevents accidental sharing of a bound view.
+        with self._lock:
+            bound = self.compiled.with_data(**payload)
+            kwargs = {
+                "draws": config.draws,
+                "tune": config.tune,
+                "chains": config.chains,
+                "cores": config.cores,
+                "target_accept": config.target_accept,
+                "seed": config.random_seed,
+                "save_warmup": not config.discard_tuned_samples,
+                "progress_bar": config.progressbar,
+            }
+            kwargs.update(_mutable(config.sampler_kwargs))
+            idata = self.sampler(bound, **kwargs)
+        if not isinstance(idata, DataTree):
+            raise TypeError("Nutpie compiled sampling must return an xarray.DataTree")
+        return _receipt_for_compiled_fit(
+            idata,
+            config=config,
+            criteria=criteria,
+            started=started,
+            template_signature=self.template.signature,
+            compile_identity={"engine": "nutpie", "backend": self.backend},
+            observed_indices=indices,
+            payload=payload,
+            world_identity=world_identity,
+            source_identity=source_identity,
+            configuration_identity=configuration_identity,
+        )
+
+
+def build_oracle_template(
+    world: SCM,
+    *,
+    latent: Literal["marginal", "sampled"] = "marginal",
+    observed_indices: np.ndarray | list[int] | list[bool] | None = None,
+) -> OracleTemplate:
+    """Build one full-horizon Oracle graph without compiling or sampling.
+
+    Observation selectors are expressed in the reported-row coordinate system,
+    which excludes the model's carryover warmup.  Build the default graph first
+    to obtain that domain from ``observed_indices_data``; this avoids guessing
+    warmup from private configuration details and fixes non-zero-warmup worlds.
+    """
+    model = world.oracle_model(latent=latent)
+    try:
+        default_indices_var = model.named_vars["observed_indices_data"]
+        default_indices = np.asarray(default_indices_var.get_value(), dtype="int64")
+    except (AttributeError, KeyError, TypeError) as error:
+        raise ValueError("oracle_model must expose observed_indices_data as shared data") from error
+    n_reported_rows = int(default_indices.size)
+    if n_reported_rows < 1:
+        raise ValueError("oracle model must expose at least one reported row")
+    if observed_indices is None:
+        indices = default_indices
+    else:
+        indices = _normalise_observed_indices(observed_indices, n_reported_rows)
+        if not np.array_equal(indices, default_indices):
+            model = world.oracle_model(latent=latent, observed_indices=indices)
+    signature = _world_signature(world, latent=latent, observed_count=len(indices))
+    return OracleTemplate(
+        model=model,
+        signature=signature,
+        latent=latent,
+        observed_indices=tuple(int(index) for index in indices),
+        reported_rows=n_reported_rows,
+    )
+
+
+def compile_oracle(template: OracleTemplate | SCM, **kwargs: Any) -> CompiledOracle:
+    """Compile exactly once with Nutpie/Numba; use :meth:`CompiledOracle.fit` thereafter."""
+    if isinstance(template, SCM):
+        template = build_oracle_template(template, **kwargs)
+    elif kwargs:
+        raise TypeError("kwargs are only accepted when compiling directly from an SCM")
+    if not isinstance(template, OracleTemplate):
+        raise TypeError("template must be an OracleTemplate or SCM")
+    try:
+        import nutpie  # type: ignore[import-untyped]
+    except ImportError as error:
+        raise ImportError("compile_oracle requires the optional nutpie dependency") from error
+    compiled = nutpie.compile_pymc_model(template.model, backend="numba")
+    return CompiledOracle(template=template, compiled=compiled, sampler=nutpie.sample)
+
+
+# Explicit aliases make the lifecycle discoverable while retaining a compact name.
+OracleCompiledModel = CompiledOracle
+OracleModelTemplate = OracleTemplate
+
+
 __all__ = [
+    "ORACLE_SHARED_DATA_NAMES",
     "OracleHealthCriteria",
     "OracleSamplingConfig",
     "OracleSamplingReceipt",
     "OracleSamplingResult",
+    "OracleTemplate",
+    "OracleCompiledModel",
+    "CompiledOracle",
+    "OracleModelTemplate",
+    "build_oracle_template",
+    "compile_oracle",
     "sample_oracle",
 ]

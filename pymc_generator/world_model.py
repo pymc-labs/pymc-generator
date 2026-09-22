@@ -1107,6 +1107,7 @@ def build_oracle_model(
     prior_cond: dict[str, tuple[float, float]] | None = None,
     *,
     latent: Literal["marginal", "sampled"] = "marginal",
+    observed_indices: np.ndarray | list[int] | list[bool] | None = None,
 ) -> pm.Model:
     """The observed-data variant of :func:`build_world_model` — the posterior oracle.
 
@@ -1310,6 +1311,32 @@ def build_oracle_model(
         )
     n_time_steps_full = n_time_steps + burn_in
     window = slice(burn_in, None)
+    n_reported_rows = n_time_steps - warmup
+    if observed_indices is None:
+        selected_indices = np.arange(n_reported_rows, dtype="int64")
+    else:
+        raw_indices = np.asarray(observed_indices)
+        if raw_indices.ndim != 1:
+            raise ValueError("observed_indices must be a one-dimensional index or mask")
+        if np.issubdtype(raw_indices.dtype, np.bool_):
+            if raw_indices.size != n_reported_rows:
+                raise ValueError(
+                    "observed_indices boolean mask must have one entry per reported row"
+                )
+            selected_indices = np.flatnonzero(raw_indices).astype("int64")
+        else:
+            if not np.issubdtype(raw_indices.dtype, np.integer):
+                raise TypeError("observed_indices must contain integers or booleans")
+            selected_indices = raw_indices.astype("int64", copy=True)
+        if selected_indices.size == 0:
+            raise ValueError("observed_indices must select at least one reported row")
+        if np.any(selected_indices < 0) or np.any(selected_indices >= n_reported_rows):
+            raise ValueError(
+                f"observed_indices must be within [0, {n_reported_rows}); "
+                f"got {selected_indices.tolist()}"
+            )
+        if np.unique(selected_indices).size != selected_indices.size:
+            raise ValueError("observed_indices must not contain duplicates")
     rows = np.arange(burn_in + warmup, n_time_steps_full)
     _validate_oracle_treatment_shocks(cfg, g_cy, data, n_time_steps)
     mech_names = _live_mechanism_param_names(structural)
@@ -1342,9 +1369,23 @@ def build_oracle_model(
             **mech,
         }
 
-        # Observed inputs enter as constants (static shapes — the carryover
-        # convolution indexes by the static time length).
-        treatments_t = pt.as_tensor_variable(treatments)
+        # Every world-varying numerical input is a named shared variable.  These
+        # names are part of the reusable compiled-oracle contract.
+        channels_t = pm.Data("channels_data", treatments)
+        controls_t = pm.Data("controls_data", covariates)
+        sales_t = pm.Data("sales_data", outcome)
+        saturation_scale_t = pm.Data("saturation_scale_data", saturation_scale)
+        g_cy_t = pm.Data("g_cy_data", g_cy)
+        g_db_t = pm.Data("g_db_data", g_dy)
+        g_zb_t = pm.Data("g_zb_data", g_zy)
+        observed_indices_t = pm.Data("observed_indices_data", selected_indices)
+        # Selectors are reported-row coordinates. Offset them by the discarded
+        # response-history prefix; this is unrelated to sampler tune/warmup draws.
+
+        # Treatment response on the OBSERVED treatment: the same carryover /
+        # saturation code as generation.  Shapes are structural and therefore
+        # cannot be changed through with_data.
+        treatments_t = channels_t
 
         # Treatment response on the OBSERVED treatment: the same carryover / κ-relative
         # saturation code as generation. Held-level windows are already baked
@@ -1352,11 +1393,11 @@ def build_oracle_model(
         contrib_cols = []
         for k in range(n_treatments):
             ad_obs = _carryover_col(treatments_t[:, k], mech_params, k)
-            scale_k = pt.as_tensor_variable(saturation_scale[k])
+            scale_k = saturation_scale_t[k]
             f_obs = _saturate_col(ad_obs, scale_k, mech_params, k)
-            contrib_cols.append((g_cy[k] * beta[k]) * f_obs)
+            contrib_cols.append((g_cy_t[k] * beta[k]) * f_obs)
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
-        term_zy = pt.dot(pt.as_tensor_variable(covariates), g_zy * rho_zy)  # (n_time_steps,)
+        term_zy = pt.dot(controls_t, g_zb_t * rho_zy)  # (n_time_steps,)
 
         if latent == "marginal":
             if cfg.baseline_floor is not None:
@@ -1380,7 +1421,7 @@ def build_oracle_model(
             for j in range(n_latent):
                 if g_dy[j] == 0.0:
                     continue
-                loading = g_dy[j] * delta_dy[j]
+                loading = g_db_t[j] * delta_dy[j]
                 covariance = covariance + (loading**2) * pt.as_tensor_variable(
                     _walk_gram(structural["smoothness_d"][j])
                 )
@@ -1389,9 +1430,11 @@ def build_oracle_model(
             covariance = covariance + 1e-12 * pt.eye(rows.size, dtype="float64")
             pm.MvNormal(
                 "outcome",
-                mu=outcome_mu[warmup:],
-                cov=covariance,
-                observed=outcome[warmup:],
+                mu=outcome_mu[observed_indices_t + warmup],
+                cov=pt.take(
+                    pt.take(covariance, observed_indices_t, axis=0), observed_indices_t, axis=1
+                ),
+                observed=sales_t[observed_indices_t + warmup],
             )
         else:
             # Latent latent_unobserved + baseline walks: the SAME transform generation
@@ -1417,21 +1460,19 @@ def build_oracle_model(
                 # in the same locked order (confounders, then covariates).
                 running = _clip(walk_b[window])
                 for j in range(n_latent):
-                    running = _clip(running + (g_dy[j] * delta_dy[j]) * D_full[window][:, j])
+                    running = _clip(running + (g_db_t[j] * delta_dy[j]) * D_full[window][:, j])
                 for m in range(n_covariates):
-                    running = _clip(
-                        running + (g_zy[m] * rho_zy[m]) * pt.as_tensor_variable(covariates)[:, m]
-                    )
+                    running = _clip(running + (g_zb_t[m] * rho_zy[m]) * controls_t[:, m])
                 baseline = pm.Deterministic("baseline", running)
             else:
-                term_dy = pt.dot(D_full[window], g_dy * delta_dy)  # (n_time_steps,)
+                term_dy = pt.dot(D_full[window], g_db_t * delta_dy)  # (n_time_steps,)
                 baseline = pm.Deterministic("baseline", term_dy + term_zy + _clip(walk_b)[window])
             outcome_mu = pm.Deterministic("outcome_mu", baseline + contributions.sum(axis=1))
             pm.Normal(
                 "outcome",
-                mu=outcome_mu[warmup:],
+                mu=outcome_mu[observed_indices_t + warmup],
                 sigma=rw["rw_y"]["std"][0],
-                observed=outcome[warmup:],
+                observed=sales_t[observed_indices_t + warmup],
             )
 
     return model
