@@ -13,6 +13,139 @@ diagnostics. With the locked released stack, identity, geometric, and Weibull
 carryover parameters are NUTS-eligible; Weibull no longer requires Metropolis
 because of missing upstream gradients.
 
+## Public sampling API
+
+The five public objects are:
+
+- `OracleSamplingConfig`: frozen sampling options. The forward-looking
+  maintained API defaults are `draws=800`, `tune=500`, `chains=4`, `cores=4`,
+  `target_accept=0.9`, and `random_seed=None`. The default latent representation
+  is `"marginal"`; `discard_tuned_samples=True`, `progressbar=False`, and
+  `compute_convergence_checks=False`. The explicit `nuts_sampler` config field
+  defaults to `"nutpie"` and accepts `"pymc"` for an experiment that needs the
+  PyMC sampler. Use `sampler_kwargs` only for additional, non-reserved PyMC
+  options. These defaults are not retrospective provenance for any earlier
+  experiment.
+
+  In particular, the historical fixed-configuration 700-world PFN Oracle
+  experiment did not use this maintained API/default set, including requested
+  Nutpie, and this API establishes nothing about that experiment's effective
+  backend. Its separately recorded selected records used `draws=1000`,
+  `tune=900`, `chains=5`, `cores=5`, `target_accept=0.95`, `draw_diag`, and no
+  retained warmup; those records do not identify a recovered backend.
+- `OracleHealthCriteria`: thresholds and whether each diagnostic is required.
+  Its defaults are zero divergences, maximum rank R-hat `1.01`, minimum bulk
+  and tail ESS `400` (all required), maximum tree-depth saturation `0` and
+  minimum BFMI `0.3` (both optional).
+- `OracleSamplingReceipt`: immutable, JSON-native provenance and diagnostic
+  metadata. Call `receipt.to_dict()` or `receipt.to_json()`; posterior values
+  are not copied into it.
+- `OracleSamplingResult`: the pair `result.idata` and `result.receipt`.
+  `result.idata` is the unmodified PyMC 6 `xarray.DataTree`.
+- `sample_oracle(world, config=None, *, criteria=None, world_identity=None,
+  source_identity=None, configuration_identity=None)`: builds through
+  `world.oracle_model(latent=config.latent)`, samples once, and returns an
+  `OracleSamplingResult`. `None` uses the corresponding defaults; identity
+  arguments are caller-supplied metadata and are not inferred.
+
+Configuration is validated before model construction: draw/tune/chain/core
+counts, target acceptance, seed, latent mode, Boolean options, thresholds, and
+JSON-native sampler options must satisfy their declared types and ranges. Reserved
+sampling controls cannot be smuggled through `sampler_kwargs`; invalid input
+raises instead of being coerced, clipped, retried, or silently replaced. A model
+or sampling exception propagates unchanged and produces no partial receipt.
+
+The receipt records schema and package/environment versions, caller identities,
+the oracle builder and latent mode, requested/effective sampling metadata,
+elapsed timing, posterior presence (without posterior contents), diagnostics,
+health, and limitation codes. `to_json()` uses canonical JSON without NaN values.
+
+For example, an experiment can explicitly override the maintained sampler
+request with `pg.OracleSamplingConfig(nuts_sampler="pymc")`; the default remains
+`"nutpie"`.
+
+```python
+import pymc_generator as pg
+
+cfg = pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1, n_time_steps=28)
+world = pg.sample_scm(cfg, seed=8)
+result = pg.sample_oracle(world)
+
+# PyMC 6 returns a DataTree: use bracket access for groups.
+post = result.idata["posterior"]["contributions"]
+print("posterior shape:", post.shape)
+print("health:", result.receipt.to_dict()["health"]["status"])
+```
+
+`result.idata["posterior"]` and `result.idata["sample_stats"]` are the supported
+forms for DataTree groups; use bracket access consistently. Compare the oracle's
+`contributions` against the world's
+**`contributions_observed`** (the response evaluated on the observed treatment)
+— that is the quantity an observational fit estimates. The do()-style
+`contributions` truth additionally removes upstream influence from treatment;
+recovering that causal target requires assumptions beyond an observational fit.
+
+`random_seed=None` intentionally leaves seed selection to the sampling stack.
+For a reproducible batch, pass an explicit per-world seed (for example,
+`base_seed + world_index`) in each `OracleSamplingConfig`, and record the world
+identity alongside the receipt. A fixed seed does not promise identical draws
+across PyMC, Nutpie, PyTensor, NumPy, compiler, hardware, or other numerical-stack
+versions; exact cross-stack draw reproducibility is not guaranteed.
+
+### Diagnostics and health
+
+Each receipt diagnostic metric has status `available`, `unavailable`, or
+`invalid`. The metrics are `divergences`, `rhat`, `ess_bulk`, `ess_tail`,
+`tree_depth_max`, `tree_depth_saturation`, and `bfmi`. Missing prerequisites are
+`unavailable`; malformed data, failed diagnostic computation, or no finite result
+is `invalid`. An available metric includes its value (and, where applicable,
+method/reduction metadata). Tree-depth maximum and tree-depth saturation are
+separate metrics: an observed maximum does not by itself establish saturation.
+
+Health is tri-state and evaluated in this order. Thresholds and availability
+requirements are independent: setting a threshold to `None` disables that
+threshold, but does not make a diagnostic optional when its `require_*` flag is
+`True`.
+
+1. If **any available metric** crosses its enabled threshold, status is
+   `"unhealthy"`.
+2. Otherwise, if any **required** metric is `unavailable` or `invalid`—even when
+   that metric's threshold is disabled—status is `"unknown"`.
+3. Otherwise, status is `"healthy"`.
+
+Optional unavailable diagnostics are retained as missing diagnostics and do not
+change the status. A `healthy` result means only that the available, enabled
+checks did not fail and required checks were available; it is not a convergence
+guarantee, a scientific-validity claim, or evidence of recovery.
+
+### Requested versus effective sampling
+
+The receipt's `sampling.requested` records the requested draws, tuning, chains,
+cores, target acceptance, seed, options, and the explicit `nuts_sampler` value
+(default `"nutpie"`, or `"pymc"` when overridden). `sampling.effective` records
+what can be read from the returned DataTree, such as
+present groups, chain/draw counts, sample-stat names, and the PyMC inference
+library/version. The returned sampling result does **not** expose the effective
+backend, step-method class, or mass-matrix representation. Accordingly,
+`step_methods` and `mass_matrix` are reported as unavailable rather than guessed;
+requesting Nutpie is not evidence for a particular effective step or mass matrix.
+There are no undocumented backend fallbacks, retries, or successful results after
+an exception.
+
+### Receipt limits
+
+The receipt contains no posterior draws, posterior values, coordinates, model
+graph, initial points, sample-stat arrays, or prior-predictive values. It does not
+invent world/source/configuration IDs or hashes. Its health status must not be
+used as a convergence, scientific-validity, or universal-recovery claim. The
+oracle is a structure-known, plug-in reference and is not an exact joint DGP
+posterior or a do()-style contribution estimand. It does not establish exact
+cross-stack draw reproducibility, step-method selection, or a diagonal/dense
+mass matrix. The corresponding
+receipt limitation codes are `health_is_not_a_convergence_guarantee`,
+`oracle_is_a_structure_known_plugin_reference`, `posterior_draws_are_not_included`,
+and `step_method_and_mass_matrix_are_not_observed`.
+
 ## The recipe
 
 Draw a world, build its oracle from the world object itself, fit it with
