@@ -21,6 +21,13 @@ if TYPE_CHECKING:
     from .data_generator import DataGenerator, load_corpus, save_corpus
     from .describe import describe_scm
     from .diagnostics import DataDiagnostics, data_diagnostics
+    from .oracle_sampling import (
+        OracleHealthCriteria,
+        OracleSamplingConfig,
+        OracleSamplingReceipt,
+        OracleSamplingResult,
+        sample_oracle,
+    )
     from .outcomes import (
         OUTCOME_QUANTITIES,
         OutcomeDistributions,
@@ -72,6 +79,11 @@ _LAZY_IMPORTS = {
     "describe_scm": (".describe", "describe_scm"),
     "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
+    "OracleSamplingConfig": (".oracle_sampling", "OracleSamplingConfig"),
+    "OracleHealthCriteria": (".oracle_sampling", "OracleHealthCriteria"),
+    "OracleSamplingReceipt": (".oracle_sampling", "OracleSamplingReceipt"),
+    "OracleSamplingResult": (".oracle_sampling", "OracleSamplingResult"),
+    "sample_oracle": (".oracle_sampling", "sample_oracle"),
     "SCENARIOS": (".scenarios", "SCENARIOS"),
     "SIGNAL_METRIC_VERSION": (".signal_diagnostics", "SIGNAL_METRIC_VERSION"),
     "SIGNAL_METRIC_LAYOUT": (".signal_diagnostics", "SIGNAL_METRIC_LAYOUT"),
@@ -89,6 +101,10 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "OracleHealthCriteria",
+    "OracleSamplingConfig",
+    "OracleSamplingReceipt",
+    "OracleSamplingResult",
     "OUTCOME_QUANTITIES",
     "SCENARIOS",
     "SCMPrior",
@@ -106,6 +122,7 @@ __all__ = [
     "describe_scm",
     "draw_worlds",
     "outcome_distributions",
+    "sample_oracle",
     "sample_prior_predictive",
     "load_corpus",
     "make_scm_prior",
