@@ -28,15 +28,23 @@ The five original public objects are:
   `compute_convergence_checks=False`. The explicit `nuts_sampler` config field
   defaults to `"nutpie"` and accepts `"pymc"` for an experiment that needs the
   PyMC sampler. Use `sampler_kwargs` only for additional, non-reserved PyMC
-  options. These defaults are not retrospective provenance for any earlier
-  experiment.
+  options. For Nutpie, `adaptation` is validated against the installed
+  Nutpie 0.16.11 values (`"diag"`, `"draw_diag"`, `"low_rank"`, and `"flow"`)
+  and defaults to `"diag"`. It is passed through `nuts_sampler_kwargs` for
+  one-shot PyMC delegation and as `adaptation` for compiled Nutpie sampling.
+  A non-default adaptation request is rejected with `nuts_sampler="pymc"`
+  rather than silently ignored. These defaults are not retrospective provenance
+  for any earlier experiment.
 
   In particular, the historical fixed-configuration 700-world PFN Oracle
-  experiment did not use this maintained API/default set, including requested
-  Nutpie, and this API establishes nothing about that experiment's effective
-  backend. Its separately recorded selected records used `draws=1000`,
-  `tune=900`, `chains=5`, `cores=5`, `target_accept=0.95`, `draw_diag`, and no
-  retained warmup; those records do not identify a recovered backend.
+  experiment did not use this maintained API/default set. A matched forward
+  request is explicit, for example
+  `pg.OracleSamplingConfig(draws=1000, tune=900, chains=5, cores=5,
+  target_accept=0.95, nuts_sampler="nutpie", adaptation="draw_diag")`.
+  That records a request only; it does not establish the historical effective
+  backend, mass matrix, or adaptation behavior. Its separately recorded
+  selected records used `draws=1000`, `tune=900`, `chains=5`, `cores=5`,
+  `target_accept=0.95`, `draw_diag`, and no retained warmup.
 - `OracleHealthCriteria`: thresholds and whether each diagnostic is required.
   Its defaults are zero divergences, maximum rank R-hat `1.01`, minimum bulk
   and tail ESS `400` (all required), maximum tree-depth saturation `0` and
@@ -166,14 +174,16 @@ guarantee, a scientific-validity claim, or evidence of recovery.
 ### Requested versus effective sampling
 
 The receipt's `sampling.requested` records the requested draws, tuning, chains,
-cores, target acceptance, seed, options, and the explicit `nuts_sampler` value
-(default `"nutpie"`, or `"pymc"` when overridden). `sampling.effective` records
+cores, target acceptance, seed, options, explicit `nuts_sampler` value (default
+`"nutpie"`, or `"pymc"` when overridden), and Nutpie `adaptation` request.
+`sampling.effective` records
 what can be read from the returned DataTree, such as
 present groups, chain/draw counts, sample-stat names, and the PyMC inference
 library/version. The returned sampling result does **not** expose the effective
 backend, step-method class, or mass-matrix representation. Accordingly,
 `step_methods` and `mass_matrix` are reported as unavailable rather than guessed;
-requesting Nutpie is not evidence for a particular effective step or mass matrix.
+requesting Nutpie or an adaptation mode is not evidence for a particular
+effective backend, step, mass matrix, or effective adaptation behavior.
 There are no undocumented backend fallbacks, retries, or successful results after
 an exception.
 
@@ -217,7 +227,7 @@ import numpy as np
 with oracle:
     idata = pm.sample(draws=500, tune=500, chains=2)
 
-post = idata.posterior["contributions"]        # (chain, draw, n_time_steps, n_treatments)
+post = idata["posterior"]["contributions"]  # (chain, draw, n_time_steps, n_treatments)
 bands = post.quantile([0.05, 0.5, 0.95], dim=("chain", "draw"))
 # the observed-path truth, shape (n_time_steps, n_treatments)
 truth = world.data["contributions_observed"]

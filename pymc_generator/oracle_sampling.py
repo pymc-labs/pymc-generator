@@ -33,7 +33,9 @@ from xarray import DataTree
 from .worlds import SCM
 
 _DEFAULT_NUTS_SAMPLER: Literal["nutpie", "pymc"] = "nutpie"
+_DEFAULT_NUTPIE_ADAPTATION: Literal["diag", "draw_diag", "low_rank", "flow"] = "diag"
 _ALLOWED_NUTS_SAMPLERS = frozenset({"nutpie", "pymc"})
+_ALLOWED_NUTPIE_ADAPTATIONS = frozenset({"diag", "draw_diag", "low_rank", "flow"})
 _RESERVED_SAMPLER_KWARGS = frozenset(
     {
         "draws",
@@ -62,6 +64,7 @@ _RESERVED_SAMPLER_KWARGS = frozenset(
         "compute_convergence_checks",
         "discard_tuned_samples",
         "nuts_sampler",
+        "nuts_sampler_kwargs",
         "model",
         "step",
         "trace",
@@ -145,6 +148,7 @@ class OracleSamplingConfig:
     progressbar: bool = False
     compute_convergence_checks: bool = False
     nuts_sampler: Literal["nutpie", "pymc"] = _DEFAULT_NUTS_SAMPLER
+    adaptation: Literal["diag", "draw_diag", "low_rank", "flow"] = _DEFAULT_NUTPIE_ADAPTATION
     sampler_kwargs: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -173,6 +177,14 @@ class OracleSamplingConfig:
             raise TypeError("nuts_sampler must be a string")
         if self.nuts_sampler not in _ALLOWED_NUTS_SAMPLERS:
             raise ValueError("nuts_sampler must be 'nutpie' or 'pymc'")
+        if not isinstance(self.adaptation, str):
+            raise TypeError("adaptation must be a string")
+        if self.adaptation not in _ALLOWED_NUTPIE_ADAPTATIONS:
+            raise ValueError("adaptation must be one of 'diag', 'draw_diag', 'low_rank', or 'flow'")
+        if self.nuts_sampler == "pymc" and self.adaptation != _DEFAULT_NUTPIE_ADAPTATION:
+            raise ValueError(
+                "adaptation is Nutpie-only; use nuts_sampler='nutpie' for a non-default request"
+            )
         if not isinstance(self.sampler_kwargs, Mapping):
             raise TypeError("sampler_kwargs must be a mapping")
         for key in self.sampler_kwargs:
@@ -195,6 +207,7 @@ class OracleSamplingConfig:
             "progressbar": self.progressbar,
             "compute_convergence_checks": self.compute_convergence_checks,
             "nuts_sampler": self.nuts_sampler,
+            "adaptation": self.adaptation,
             "sampler_kwargs": _plain(self.sampler_kwargs),
         }
 
@@ -661,6 +674,11 @@ def sample_oracle(
         progressbar=config.progressbar,
         compute_convergence_checks=config.compute_convergence_checks,
         nuts_sampler=config.nuts_sampler,
+        **(
+            {"nuts_sampler_kwargs": {"adaptation": config.adaptation}}
+            if config.nuts_sampler == "nutpie"
+            else {}
+        ),
         **_mutable(config.sampler_kwargs),
     )
     if not isinstance(idata, DataTree):
@@ -1408,6 +1426,7 @@ class CompiledOracle:
                 "save_warmup": not config.discard_tuned_samples,
                 "progress_bar": config.progressbar,
                 "blocking": True,
+                "adaptation": config.adaptation,
             }
             kwargs.update(_mutable(config.sampler_kwargs))
             idata = self.sampler(bound, **kwargs)

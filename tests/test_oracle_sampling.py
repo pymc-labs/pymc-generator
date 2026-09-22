@@ -35,6 +35,7 @@ DEFAULT_REQUESTED = {
     "progressbar": False,
     "compute_convergence_checks": False,
     "nuts_sampler": "nutpie",
+    "adaptation": "diag",
     "sampler_kwargs": {},
 }
 
@@ -196,6 +197,25 @@ def test_config_accepts_pymc_sampler_and_serializes_it():
     config = pg.OracleSamplingConfig(nuts_sampler="pymc")
     config.validate()
     assert config.to_dict()["nuts_sampler"] == "pymc"
+    assert config.to_dict()["adaptation"] == "diag"
+
+
+@pytest.mark.parametrize("adaptation", ["diag", "draw_diag", "low_rank", "flow"])
+def test_config_accepts_nutpie_adaptation_values(adaptation):
+    config = pg.OracleSamplingConfig(adaptation=adaptation)
+    config.validate()
+    assert config.to_dict()["adaptation"] == adaptation
+
+
+@pytest.mark.parametrize("adaptation", [None, True, 1, "other"])
+def test_config_rejects_invalid_adaptation_values(adaptation):
+    with pytest.raises((TypeError, ValueError)):
+        pg.OracleSamplingConfig(adaptation=adaptation).validate()
+
+
+def test_config_rejects_nondefault_adaptation_for_pymc():
+    with pytest.raises(ValueError, match="Nutpie-only"):
+        pg.OracleSamplingConfig(nuts_sampler="pymc", adaptation="draw_diag")
 
 
 @pytest.mark.parametrize(
@@ -213,6 +233,7 @@ def test_config_accepts_pymc_sampler_and_serializes_it():
         "blocking",
         "sampler",
         "adaptation",
+        "nuts_sampler_kwargs",
         "return_raw_trace",
         "progressbar",
         "compute_convergence_checks",
@@ -376,11 +397,32 @@ def test_sample_oracle_uses_only_scm_oracle_model_and_one_nuts_call(monkeypatch,
         "progressbar": False,
         "compute_convergence_checks": False,
         "nuts_sampler": nuts_sampler,
+        **({"nuts_sampler_kwargs": {"adaptation": "diag"}} if nuts_sampler == "nutpie" else {}),
         "nuts": {"max_treedepth": 12},
     }
     assert result.idata is tree
     assert isinstance(result.idata, xr.DataTree)
     assert result.receipt.to_dict()["sampling"]["requested"]["nuts_sampler"] == nuts_sampler
+
+
+def test_one_shot_nutpie_passes_exact_adaptation_through_supported_kwargs(monkeypatch):
+    result, calls = _sample(
+        monkeypatch, _valid_tree(), adaptation="draw_diag", nuts_sampler="nutpie"
+    )
+    assert calls[0]["nuts_sampler_kwargs"] == {"adaptation": "draw_diag"}
+    assert result.receipt.to_dict()["sampling"]["requested"]["adaptation"] == "draw_diag"
+
+
+def test_nondefault_nutpie_adaptation_rejects_before_sampling(monkeypatch):
+    world, model_calls = _world()
+    sample_calls = []
+    monkeypatch.setattr(oracle.pm, "sample", lambda **kwargs: sample_calls.append(kwargs))
+    with pytest.raises(ValueError, match="Nutpie-only"):
+        pg.sample_oracle(
+            world, pg.OracleSamplingConfig(nuts_sampler="pymc", adaptation="draw_diag")
+        )
+    assert model_calls == []
+    assert sample_calls == []
 
 
 def test_non_datatree_sampling_result_is_rejected(monkeypatch):
@@ -1004,12 +1046,14 @@ def test_oracle_config_classification_covers_builder_accesses_and_is_disjoint():
         _assert_cfg_accesses_classified(synthetic, {"build_oracle_model"}, classified)
 
 
-def test_compiled_fit_forces_blocking_and_receipts_nutpie_version():
+def test_compiled_fit_passes_adaptation_and_binds_requested_receipt():
     template, world = _shared_template_and_world()
     fake = _FakeCompiled(_valid_tree())
-    result = _compiled(template, fake).fit(world)
+    result = _compiled(template, fake).fit(world, pg.OracleSamplingConfig(adaptation="draw_diag"))
     assert fake.sample_calls[0]["blocking"] is True
+    assert fake.sample_calls[0]["adaptation"] == "draw_diag"
     receipt = result.receipt.to_dict()
+    assert receipt["sampling"]["requested"]["adaptation"] == "draw_diag"
     assert receipt["sampling"]["effective"]["inference_library"] == "nutpie"
     assert (
         receipt["sampling"]["effective"]["inference_library_version"]
