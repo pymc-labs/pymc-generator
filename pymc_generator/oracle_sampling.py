@@ -1084,6 +1084,24 @@ def _required_dynamic_names(world: Any) -> set[str]:
     return required
 
 
+def _normalise_int32_payload(value: Any, *, name: str) -> np.ndarray:
+    """Convert a discrete payload to int32 without accepting lossy values."""
+    raw = np.asarray(value)
+    if raw.dtype.kind == "b" or raw.dtype.kind not in "iuf":
+        raise ValueError(f"{name} values must be numeric integers")
+    if raw.dtype.kind == "f" and (
+        not np.isfinite(raw).all() or not np.equal(raw, np.floor(raw)).all()
+    ):
+        raise ValueError(f"{name} values must be integral")
+    limits = np.iinfo(np.int32)
+    if np.any(raw < limits.min) or np.any(raw > limits.max):
+        raise ValueError(f"{name} values do not fit int32")
+    converted = raw.astype(np.int32)
+    if not np.array_equal(converted.astype(raw.dtype), raw):
+        raise ValueError(f"{name} values cannot be represented exactly as int32")
+    return converted
+
+
 def _oracle_payload(
     world: Any, observed_indices: np.ndarray, *, dynamic_names: set[str] | None = None
 ) -> dict[str, np.ndarray]:
@@ -1106,6 +1124,10 @@ def _oracle_payload(
         raise TypeError("world does not expose the required Oracle data") from error
     if dynamic_names:
         payload.update(_dynamic_payload(world, dynamic_names))
+    if "walk_width_b_data" in payload:
+        payload["walk_width_b_data"] = _normalise_int32_payload(
+            payload["walk_width_b_data"], name="walk_width_b_data"
+        )
     return payload
 
 
