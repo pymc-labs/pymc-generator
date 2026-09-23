@@ -1351,7 +1351,15 @@ class CompiledOracle:
         if surface is None:
             surface = getattr(self.compiled, "shared_variables", None)
         if surface is not None:
-            keys = tuple(str(key) for key in surface)
+            # Nutpie 0.16.11 exposes this as dict[SharedVariable, str],
+            # whereas older versions exposed an iterable of names.  Do not
+            # stringify values: malformed surfaces must fail closed.
+            if isinstance(surface, Mapping):
+                keys = tuple(surface.values())
+            else:
+                keys = tuple(surface)
+            if any(not isinstance(key, str) for key in keys):
+                raise TypeError("compiled oracle shared-variable names must be strings")
             if len(set(keys)) != len(keys):
                 raise ValueError("compiled oracle has duplicate shared-variable names")
             expected = set(self.template.data_contract or ())

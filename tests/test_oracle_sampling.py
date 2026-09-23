@@ -867,10 +867,12 @@ def _shared_template_and_world(*, changed_sales=0.0, selected=(0, 1, 2)):
 
 
 class _FakeCompiled:
-    def __init__(self, tree):
+    def __init__(self, tree, *, shared_var_keys=None):
         self.tree = tree
         self.payloads = []
         self.sample_calls = []
+        if shared_var_keys is not None:
+            self.shared_var_keys = shared_var_keys
 
     def with_data(self, **payload):
         self.payloads.append({name: np.array(value, copy=True) for name, value in payload.items()})
@@ -902,6 +904,36 @@ class _EvaluatingCompiled(_FakeCompiled):
 
 def _compiled(template, fake):
     return pg.CompiledOracle(template, fake, sampler=lambda bound, **kwargs: bound.sample(**kwargs))
+
+
+@pytest.mark.parametrize(
+    ("surface", "message"),
+    [
+        ({}, "surface"),
+        ({"first": "channels_data", "second": "channels_data"}, "duplicate"),
+        ({"first": "channels_data", "second": "not_contract"}, "surface"),
+        ({"first": 1}, "names must be strings"),
+    ],
+)
+def test_compiled_oracle_rejects_invalid_shared_variable_surface(surface, message):
+    template, _ = _shared_template_and_world()
+    with pytest.raises((TypeError, ValueError), match=message):
+        _compiled(template, _FakeCompiled(_valid_tree(), shared_var_keys=surface))
+
+
+def test_compiled_oracle_accepts_nutpie_shared_variable_mapping():
+    template, _ = _shared_template_and_world()
+    variables = {
+        name: template.model.named_vars[name] for name in pg.ORACLE_SHARED_DATA_NAMES
+    }
+    compiled = _compiled(
+        template,
+        _FakeCompiled(
+            _valid_tree(),
+            shared_var_keys={variable: name for name, variable in variables.items()},
+        ),
+    )
+    assert compiled is not None
 
 
 def test_compile_oracle_compiles_once_and_binds_each_fit(monkeypatch):
