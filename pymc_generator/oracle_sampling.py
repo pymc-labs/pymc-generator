@@ -1301,7 +1301,7 @@ class OracleTemplate:
         if graph_extras or contract_extras:
             raise ValueError(
                 "oracle template data contract must exactly match graph-connected data: "
-                f"missing={graph_extras}, disconnected={contract_extras}"
+                f"graph/unexpected extras={graph_extras}, contract/disconnected missing={contract_extras}"
             )
         mismatched = sorted(
             name

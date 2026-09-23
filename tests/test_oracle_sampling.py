@@ -1220,7 +1220,7 @@ def test_template_rejects_graph_connected_unexpected_shared_variable(shared_name
             sigma=1.0,
             observed=model["sales_data"],
         )
-    with pytest.raises(ValueError, match="outside its explicit contract|unnamed"):
+    with pytest.raises(ValueError, match="graph/unexpected extras|unnamed"):
         pg.OracleTemplate(
             model,
             "sig",
