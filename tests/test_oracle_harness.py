@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import stat
 import sys
 from dataclasses import replace
 from importlib import metadata
@@ -138,6 +139,14 @@ def _fake_run_kwargs():
             backend="numba", _instance_id="fake", _owner_pid=os.getpid(), template_signature="s"
         ),
     }
+
+
+def test_immutable_artifact_is_owner_only(tmp_path):
+    artifact = tmp_path / "artifact.json"
+
+    harness._write_immutable(artifact, {"status": "complete"})
+
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
 
 
 def test_frozen_run_compiles_once_per_signature_and_derives_seeds(tmp_path):

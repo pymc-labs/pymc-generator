@@ -467,7 +467,7 @@ def _write_immutable(path: Path, payload: Mapping[str, object] | str) -> str:
         raise FileExistsError(f"immutable artifact already exists: {path}")
     content = _canonical_content(payload)
     temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(content)
