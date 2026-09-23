@@ -192,6 +192,57 @@ def test_invalid_cohort_is_rejected_before_loader(tmp_path):
         )
 
 
+def test_hash_mixed_cells_are_canonical_and_fail_closed():
+    values = [None, "hello", b"bytes", True, 7, 1.5, float("nan"), float("inf"), float("-inf")]
+
+    def make(values):
+        dataset = xr.Dataset(
+            {
+                "mixed": (("chain", "draw"), [values]),
+                "numeric": (("chain", "draw"), [[1.0] * len(values)]),
+            },
+            coords={"chain": [0], "draw": list(range(len(values)))},
+        )
+        return xr.DataTree.from_dict({"/posterior": dataset, "/sample_stats": dataset})
+
+    first = make(values)
+    second = make(list(values))
+    assert canonical_numerical_hash(first) == canonical_numerical_hash(second)
+    changed = list(values)
+    changed[1] = "changed"
+    assert canonical_numerical_hash(first) != canonical_numerical_hash(make(changed))
+    with pytest.raises(TypeError, match="unsupported mixed-array"):
+        canonical_numerical_hash(make([object()] * len(values)))
+
+
+def test_hash_changes_sample_stat_numeric_and_boolean_values():
+    def make(value, flag):
+        posterior = xr.Dataset({"theta": (("chain", "draw"), [[1.0]])})
+        stats = xr.Dataset(
+            {
+                "divergence_message": (("chain", "draw"), [["ok"]]),
+                "diverged": (("chain", "draw"), [[flag]]),
+                "energy": (("chain", "draw"), [[value]]),
+            }
+        )
+        return xr.DataTree.from_dict({"/posterior": posterior, "/sample_stats": stats})
+
+    baseline = canonical_numerical_hash(make(1.0, False))
+    assert baseline != canonical_numerical_hash(make(2.0, False))
+    assert baseline != canonical_numerical_hash(make(1.0, True))
+    stats = xr.Dataset(
+        {
+            "divergence_message": (("chain", "draw"), [["changed"]]),
+            "diverged": (("chain", "draw"), [[False]]),
+            "energy": (("chain", "draw"), [[1.0]]),
+        }
+    )
+    posterior = xr.Dataset({"theta": (("chain", "draw"), [[1.0]])})
+    assert baseline != canonical_numerical_hash(
+        xr.DataTree.from_dict({"/posterior": posterior, "/sample_stats": stats})
+    )
+
+
 def test_hash_excludes_container_metadata():
     coords = {"chain": [0], "draw": [0]}
     dataset = xr.Dataset({"theta": (("chain", "draw"), [[1.0]])}, coords=coords)

@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import struct
 import subprocess
 import sys
 import uuid
@@ -110,6 +111,42 @@ def _group(idata: Any, name: str) -> Any:
     return getattr(node, "ds", node)
 
 
+def _canonical_cell(value: Any) -> bytes:
+    """Encode the deliberately small, deterministic mixed-array value domain."""
+    if value is None:
+        return b"n"
+    if isinstance(value, (str, np.str_)):
+        raw = str(value).encode("utf-8")
+        return b"s" + struct.pack(">Q", len(raw)) + raw
+    if isinstance(value, (bytes, np.bytes_)):
+        raw = bytes(value)
+        return b"b" + struct.pack(">Q", len(raw)) + raw
+    if isinstance(value, (bool, np.bool_)):
+        return b"t" + (b"1" if bool(value) else b"0")
+    if isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
+        raw = str(int(value)).encode("ascii")
+        return b"i" + struct.pack(">Q", len(raw)) + raw
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        if np.isnan(number):
+            token = b"nan"
+        elif np.isposinf(number):
+            token = b"+inf"
+        elif np.isneginf(number):
+            token = b"-inf"
+        else:
+            token = number.hex().encode("ascii")
+        return b"f" + struct.pack(">Q", len(token)) + token
+    raise TypeError(f"unsupported mixed-array value type: {type(value).__name__}")
+
+
+def _hash_mixed_array(digest: Any, array: np.ndarray) -> None:
+    for value in array.ravel(order="C"):
+        encoded = _canonical_cell(value)
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+
+
 def _numerical_group_hash(idata: Any, group_name: str) -> str:
     """Hash numerical values and structural array metadata, never xarray attrs."""
     digest = hashlib.sha256()
@@ -123,7 +160,12 @@ def _numerical_group_hash(idata: Any, group_name: str) -> str:
     for name in names:
         variable = dataset[name]
         array = np.asarray(variable.values)
-        if not np.issubdtype(array.dtype, np.number) and not np.issubdtype(array.dtype, np.bool_):
+        is_mixed = array.dtype.kind in {"O", "U", "S"}
+        if (
+            not is_mixed
+            and not np.issubdtype(array.dtype, np.number)
+            and not np.issubdtype(array.dtype, np.bool_)
+        ):
             raise TypeError(f"{group_name}/{name} is not numeric")
         contiguous = np.ascontiguousarray(array)
         metadata_value = {
@@ -133,7 +175,10 @@ def _numerical_group_hash(idata: Any, group_name: str) -> str:
             "shape": [int(size) for size in contiguous.shape],
         }
         digest.update(_canonical_bytes(metadata_value))
-        digest.update(contiguous.tobytes(order="C"))
+        if is_mixed:
+            _hash_mixed_array(digest, contiguous)
+        else:
+            digest.update(contiguous.tobytes(order="C"))
     return digest.hexdigest()
 
 
