@@ -1241,8 +1241,8 @@ class OracleTemplate:
         if self.data_contract is None:
             raise ValueError("OracleTemplate requires an explicit data_contract")
         contract = tuple(self.data_contract)
-        if len(set(contract)) != len(contract) or not set(self.shared_names) <= set(contract):
-            raise ValueError("OracleTemplate data contract must include required shared variables")
+        if len(set(contract)) != len(contract):
+            raise ValueError("OracleTemplate data contract must not contain duplicate variables")
         if not set(contract) <= set(ORACLE_DATA_NAMES):
             unexpected = sorted(set(contract) - set(ORACLE_DATA_NAMES))
             raise ValueError(f"OracleTemplate data contract has unknown variables: {unexpected}")
@@ -1267,17 +1267,11 @@ class OracleTemplate:
         missing = [
             name
             for name in contract
-            if not isinstance(self.model.named_vars.get(name), SharedVariable)
-        ]
-        extras = [
-            name
-            for name, variable in self.model.named_vars.items()
-            if isinstance(variable, SharedVariable) and name not in contract
+            if name in self.model.named_vars
+            and not isinstance(self.model.named_vars.get(name), SharedVariable)
         ]
         if missing:
             raise ValueError(f"oracle template is missing required shared variables: {missing}")
-        if extras:
-            raise ValueError(f"oracle template has data outside its explicit contract: {extras}")
 
         # ``named_vars`` is only a registry: raw ``pytensor.shared`` leaves
         # connected to a likelihood (and unnamed leaves) need not appear there.
@@ -1303,15 +1297,16 @@ class OracleTemplate:
                 f"{sorted(duplicate_names)}"
             )
         graph_extras = sorted(set(graph_by_name) - set(contract))
-        if graph_extras:
+        contract_extras = sorted(set(contract) - set(graph_by_name))
+        if graph_extras or contract_extras:
             raise ValueError(
-                "oracle template has graph-connected data outside its explicit contract: "
-                f"{graph_extras}"
+                "oracle template data contract must exactly match graph-connected data: "
+                f"missing={graph_extras}, disconnected={contract_extras}"
             )
         mismatched = sorted(
             name
             for name, variable in graph_by_name.items()
-            if self.model.named_vars.get(name) is not variable
+            if name in self.model.named_vars and self.model.named_vars.get(name) is not variable
         )
         if mismatched:
             raise ValueError(
@@ -1347,10 +1342,25 @@ class CompiledOracle:
         missing = [
             name
             for name in self.template.data_contract or ()
-            if not isinstance(self.template.model.named_vars.get(name), SharedVariable)
+            if name in self.template.model.named_vars
+            and not isinstance(self.template.model.named_vars.get(name), SharedVariable)
         ]
         if missing:
             raise ValueError(f"compiled oracle missing required shared variables: {missing}")
+        surface = getattr(self.compiled, "shared_var_keys", None)
+        if surface is None:
+            surface = getattr(self.compiled, "shared_variables", None)
+        if surface is not None:
+            keys = tuple(str(key) for key in surface)
+            if len(set(keys)) != len(keys):
+                raise ValueError("compiled oracle has duplicate shared-variable names")
+            expected = set(self.template.data_contract or ())
+            actual = set(keys)
+            if actual != expected:
+                raise ValueError(
+                    "compiled oracle shared-variable surface does not match template contract: "
+                    f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+                )
 
     def fit(
         self,
@@ -1412,7 +1422,11 @@ class CompiledOracle:
         if set(payload) != set(contract):
             raise ValueError("Oracle data payload does not exactly match the required shared set")
         for name in ORACLE_SHARED_DATA_NAMES + tuple(sorted(dynamic_names)):
-            variable = self.template.model.named_vars[name]
+            variable = self.template.model.named_vars.get(name)
+            if not isinstance(variable, SharedVariable):
+                variable = next(
+                    item for item in _graph_shared_variables(self.template.model) if item.name == name
+                )
             expected = np.asarray(variable.get_value())
             shape = tuple(int(size) for size in expected.shape)
             if payload[name].shape != shape:
@@ -1511,10 +1525,15 @@ def build_oracle_template(
         if not np.array_equal(indices, default_indices):
             model = world.oracle_model(latent=latent, observed_indices=indices)
     signature = _world_signature(world, latent=latent, observed_count=len(indices))
-    contract = tuple(name for name in ORACLE_DATA_NAMES if name in model.named_vars)
-    if set(contract) != set(ORACLE_DATA_NAMES):
-        missing = sorted(set(ORACLE_DATA_NAMES) - set(contract))
-        raise ValueError(f"oracle model data contract is incomplete; missing {missing}")
+    graph_names = {
+        variable.name
+        for variable in _graph_shared_variables(model)
+        if variable.name is not None
+    }
+    contract = tuple(name for name in ORACLE_DATA_NAMES if name in graph_names)
+    unknown = sorted(graph_names - set(ORACLE_DATA_NAMES))
+    if unknown:
+        raise ValueError(f"oracle model data contract has unknown variables: {unknown}")
     return OracleTemplate(
         model=model,
         signature=signature,
