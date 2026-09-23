@@ -910,9 +910,9 @@ def _compiled(template, fake):
     ("surface", "message"),
     [
         ({}, "surface"),
-        ({"first": "channels_data", "second": "channels_data"}, "duplicate"),
-        ({"first": "channels_data", "second": "not_contract"}, "surface"),
-        ({"first": 1}, "names must be strings"),
+        ({"first": "channels_data", "second": "channels_data"}, "mapping keys"),
+        ({"first": "channels_data", "second": "not_contract"}, "mapping keys"),
+        ({"first": 1}, "mapping keys"),
     ],
 )
 def test_compiled_oracle_rejects_invalid_shared_variable_surface(surface, message):
@@ -930,7 +930,7 @@ def test_compiled_oracle_accepts_nutpie_shared_variable_mapping():
         template,
         _FakeCompiled(
             _valid_tree(),
-            shared_var_keys={variable: name for name, variable in variables.items()},
+            shared_var_keys={variable: f"internal-{name}" for name, variable in variables.items()},
         ),
     )
     assert compiled is not None

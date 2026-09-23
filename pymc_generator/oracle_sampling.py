@@ -1351,11 +1351,24 @@ class CompiledOracle:
         if surface is None:
             surface = getattr(self.compiled, "shared_variables", None)
         if surface is not None:
-            # Nutpie 0.16.11 exposes this as dict[SharedVariable, str],
-            # whereas older versions exposed an iterable of names.  Do not
-            # stringify values: malformed surfaces must fail closed.
+            # Nutpie 0.16.11 exposes this as dict[SharedVariable, str]. The
+            # values are opaque internal IDs; the public payload names come
+            # from the mapping keys. Older versions exposed an iterable of
+            # names. Malformed surfaces must fail closed.
             if isinstance(surface, Mapping):
-                keys = tuple(surface.values())
+                mapped_keys: list[str] = []
+                for variable in surface:
+                    if not isinstance(variable, SharedVariable):
+                        raise TypeError(
+                            "compiled oracle shared-variable mapping keys must be SharedVariables"
+                        )
+                    name = variable.name
+                    if not isinstance(name, str) or not name:
+                        raise ValueError(
+                            "compiled oracle shared-variable mapping keys must have names"
+                        )
+                    mapped_keys.append(name)
+                keys = tuple(mapped_keys)
             else:
                 keys = tuple(surface)
             if any(not isinstance(key, str) for key in keys):
