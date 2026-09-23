@@ -1241,6 +1241,82 @@ def test_signature_excludes_compatible_prior_and_walk_values():
     assert first == second
 
 
+def test_fixed_baseline_range_changes_signature_and_graph_parameterization():
+    constant = _generated_world()
+    smooth = copy.deepcopy(constant)
+    constant.cfg.rw_baseline_std_range = (0.0, 0.0)
+    smooth.cfg.rw_baseline_std_range = (0.1, 0.2)
+
+    constant_signature = oracle._world_signature(constant, latent="marginal", observed_count=20)
+    smooth_signature = oracle._world_signature(smooth, latent="marginal", observed_count=20)
+    assert constant_signature != smooth_signature
+
+    constant_model = constant.oracle_model(latent="marginal")
+    smooth_model = smooth.oracle_model(latent="marginal")
+    constant_free = {rv.name for rv in constant_model.free_RVs}
+    smooth_free = {rv.name for rv in smooth_model.free_RVs}
+    assert "rw_b_std_rel" not in constant_free
+    assert "rw_b_std_rel" in smooth_free
+
+
+@pytest.mark.parametrize("field", oracle.ORACLE_CONFIG_FIXED_NUMERIC_FIELDS)
+def test_every_fixed_numeric_config_field_changes_signature(field):
+    _, world = _shared_template_and_world()
+    world.cfg = pg.SCMPrior()
+    first = oracle._world_signature(world, latent="marginal", observed_count=3)
+    changed = copy.deepcopy(world)
+    value = getattr(changed.cfg, field)
+    if field == "rw_baseline_std_sigma_effective":
+        changed.cfg.rw_baseline_std_sigma = 0.1
+    else:
+        if isinstance(value, tuple):
+            changed_value = tuple(float(item) + 0.1 for item in value)
+        elif value is None:
+            changed_value = 0.1
+        else:
+            changed_value = float(value) + 0.1
+        setattr(changed.cfg, field, changed_value)
+    assert oracle._world_signature(changed, latent="marginal", observed_count=3) != first
+
+
+def test_fixed_signature_cache_compiles_constant_smooth_constant_twice():
+    constant = _generated_world()
+    smooth = copy.deepcopy(constant)
+    constant.cfg.rw_baseline_std_range = (0.0, 0.0)
+    smooth.cfg.rw_baseline_std_range = (0.1, 0.2)
+    compiled_by_signature = {}
+    compiled = []
+    compile_calls = []
+    for world in (constant, smooth, constant):
+        signature = oracle._world_signature(world, latent="marginal", observed_count=20)
+        if signature not in compiled_by_signature:
+            compile_calls.append(signature)
+            compiled_by_signature[signature] = object()
+        compiled.append(compiled_by_signature[signature])
+    assert len(compile_calls) == 2
+    assert compiled[0] is compiled[2]
+    assert compiled[0] is not compiled[1]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        True,
+        np.bool_(True),
+        float("nan"),
+        float("inf"),
+        np.asarray([np.nan]),
+        np.asarray([object()], dtype=object),
+        object(),
+    ],
+)
+def test_invalid_fixed_numeric_config_values_fail_closed(value):
+    _, world = _shared_template_and_world()
+    world.cfg = SimpleNamespace(rw_std_sigma=value)
+    with pytest.raises((TypeError, ValueError), match="fixed Oracle config field"):
+        oracle._world_signature(world, latent="marginal", observed_count=3)
+
+
 def test_signature_change_fails_closed_without_binding():
     template, world = _shared_template_and_world()
     _, changed = _shared_template_and_world()

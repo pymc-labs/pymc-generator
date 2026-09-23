@@ -840,6 +840,52 @@ def _signature_value(value: Any) -> Any:
     return repr(value)
 
 
+def _fixed_numeric_signature_value(value: Any, *, path: str = "value") -> Any:
+    """Canonicalize a validated-config numeric value without object fallbacks.
+
+    Fixed numeric config fields are embedded in the PyMC graph.  Unlike the
+    general receipt/signature normalizer above, this boundary must not turn an
+    unsupported object into a process-dependent ``repr``.  The accepted
+    domain mirrors the numeric scalar/container forms accepted by ``SCMPrior``
+    validation and emits only JSON-native values.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{path} must contain numeric values, not bool")
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError(f"{path} must contain only finite numbers")
+        return numeric
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind not in "iu" and value.dtype.kind not in "f":
+            raise TypeError(f"{path} arrays must have an integer or floating dtype")
+        if np.issubdtype(value.dtype, np.floating) and not np.isfinite(value).all():
+            raise ValueError(f"{path} must contain only finite numbers")
+        return {
+            "dtype": str(value.dtype),
+            "shape": [int(size) for size in value.shape],
+            "values": _fixed_numeric_signature_value(value.tolist(), path=path),
+        }
+    if isinstance(value, Mapping):
+        keys = list(value)
+        if any(not isinstance(key, str) for key in keys):
+            raise TypeError(f"{path} mapping keys must be strings")
+        return {
+            key: _fixed_numeric_signature_value(value[key], path=f"{path}.{key}")
+            for key in sorted(keys)
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _fixed_numeric_signature_value(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    raise TypeError(f"{path} must contain only numeric scalars, sequences, arrays, or mappings")
+
+
 def _normalise_observed_indices(
     observed_indices: np.ndarray | list[int] | list[bool] | None,
     n_reported_rows: int,
@@ -883,10 +929,9 @@ def _signature_structural(value: Any) -> Any:
 def _oracle_config_contract(cfg: Any) -> dict[str, Any]:
     """Capture config values consumed by the Oracle graph.
 
-    Numeric fields are a compatibility contract, not signature inputs: putting
-    them in the signature would make a changed value look like a topology
-    change and encourage accidental recompilation.  Runtime-varying values
-    (prior intervals and walk widths) are represented by ``pm.Data`` instead.
+    Fixed numeric fields are embedded graph constants and are both signature
+    inputs and a compatibility contract. Runtime-varying values (prior
+    intervals and walk widths) are represented by ``pm.Data`` instead.
     """
     if cfg is None:
         return {}
@@ -895,7 +940,17 @@ def _oracle_config_contract(cfg: Any) -> dict[str, Any]:
         *ORACLE_CONFIG_FIXED_NUMERIC_FIELDS,
         *ORACLE_CONFIG_VALIDATION_FIELDS,
     )
-    return {name: _signature_value(getattr(cfg, name)) for name in fields if hasattr(cfg, name)}
+    result: dict[str, Any] = {}
+    for name in fields:
+        if not hasattr(cfg, name):
+            continue
+        value = getattr(cfg, name)
+        result[name] = (
+            _fixed_numeric_signature_value(value, path=f"config.{name}")
+            if name in ORACLE_CONFIG_FIXED_NUMERIC_FIELDS
+            else _signature_value(value)
+        )
+    return result
 
 
 def _validate_oracle_config_contract(world: Any, expected: Mapping[str, Any]) -> None:
@@ -945,18 +1000,34 @@ def _world_signature(world: Any, *, latent: str, observed_count: int) -> str:
     structural = getattr(world, "extras", {}).get("structural", {})
     graph = getattr(world, "g", {})
     data = getattr(world, "data", {})
-    # Only topology/rank/shape/family choices belong in this hash.  In
-    # particular, prior interval endpoints and smoothness values are runtime
-    # data; fixed config numerics are checked separately at fit time.
+    # Topology/rank/shape/family choices and fixed numeric values belong in
+    # this hash. Runtime-varying prior intervals and walk widths are data.
     cfg_fields = {}
+    cfg_fixed_numeric = {}
     if cfg is not None:
         for name in ORACLE_CONFIG_TOPOLOGY_FIELDS:
             if not hasattr(cfg, name):
                 continue
             value = getattr(cfg, name)
-            # The floor's numerical value is an embedded constant and is
-            # checked by the config contract; only its presence is topology.
+            # The floor's numerical value is an embedded constant; only its
+            # presence is topology (its value is fingerprinted below when it
+            # is a fixed numeric field).
             cfg_fields[name] = (value is not None) if name == "baseline_floor" else value
+        for name in ORACLE_CONFIG_FIXED_NUMERIC_FIELDS:
+            if not hasattr(cfg, name):
+                continue
+            try:
+                cfg_fixed_numeric[name] = _fixed_numeric_signature_value(
+                    getattr(cfg, name), path=f"config.{name}"
+                )
+                json.dumps(
+                    cfg_fixed_numeric[name],
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"cannot canonicalize fixed Oracle config field {name!r}") from exc
     prior_cond = getattr(world, "extras", {}).get("prior_cond") or {}
     prior_topology = {}
     for key, value in prior_cond.items():
@@ -989,9 +1060,15 @@ def _world_signature(world: Any, *, latent: str, observed_count: int) -> str:
             if name in structural
         },
         "config_topology": cfg_fields,
+        "config_fixed_numeric": cfg_fixed_numeric,
         "n_time_steps": int(np.asarray(data["outcome"]).shape[0]),
     }
-    encoded = json.dumps(_signature_value(payload), sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(
+        _signature_value(payload),
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
