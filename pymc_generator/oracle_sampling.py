@@ -1124,10 +1124,9 @@ def _oracle_payload(
         raise TypeError("world does not expose the required Oracle data") from error
     if dynamic_names:
         payload.update(_dynamic_payload(world, dynamic_names))
-    if "walk_width_b_data" in payload:
-        payload["walk_width_b_data"] = _normalise_int32_payload(
-            payload["walk_width_b_data"], name="walk_width_b_data"
-        )
+    for name in ("walk_width_d_data", "walk_width_b_data"):
+        if name in payload:
+            payload[name] = _normalise_int32_payload(payload[name], name=name)
     return payload
 
 
