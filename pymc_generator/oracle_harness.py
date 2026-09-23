@@ -288,9 +288,15 @@ class OracleRunSpec:
         keys = [world.key for world in self.worlds]
         if len(set(keys)) != len(keys):
             raise ValueError("frozen Oracle cohort contains duplicate world identities")
-        seeds = [world.world_seed + 2 for world in self.worlds]
-        if len(set(seeds)) != len(seeds):
-            raise ValueError("frozen Oracle cohort contains colliding effective random seeds")
+        seeds_by_case: dict[str, set[int]] = {}
+        seeds: list[int] = []
+        for world in self.worlds:
+            seed = world.world_seed + 2
+            seeds.append(seed)
+            case_seeds = seeds_by_case.setdefault(world.case_id, set())
+            if seed in case_seeds:
+                raise ValueError("frozen Oracle cohort contains colliding effective random seeds")
+            case_seeds.add(seed)
         if any(seed < 0 for seed in seeds):
             raise ValueError("world_seed + 2 must be a nonnegative random seed")
         expected = {f"{case}/w0000" for case in _FROZEN_CASES}

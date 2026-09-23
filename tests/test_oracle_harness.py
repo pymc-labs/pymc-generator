@@ -57,7 +57,7 @@ def _spec(run_id: str = "run", submission_id: str | None = None) -> OracleRunSpe
             case,
             "w0000",
             f"source:{case}",
-            index,
+            20270000,
             (0, 2),
             source_digest=f"{index + 1:064x}",
         )
@@ -149,7 +149,7 @@ def test_immutable_artifact_is_owner_only(tmp_path):
     assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
 
 
-def test_frozen_run_compiles_once_per_signature_and_derives_seeds(tmp_path):
+def test_frozen_run_compiles_once_per_signature_and_accepts_cross_case_seed_equality(tmp_path):
     fit_calls: list[tuple[str, int]] = []
     compile_calls: list[str] = []
 
@@ -175,7 +175,7 @@ def test_frozen_run_compiles_once_per_signature_and_derives_seeds(tmp_path):
     )
     assert len(selected["rows"]) == 7
     assert compile_calls == ["shared"]
-    assert sorted(seed for _, seed in fit_calls) == list(range(2, 9))
+    assert sorted(seed for _, seed in fit_calls) == [20270002] * 7
 
 
 def test_invalid_cohort_is_rejected_before_loader(tmp_path):
@@ -230,10 +230,15 @@ def test_source_digest_is_required():
         OracleWorldSpec("constant_intercept", "w0000", "source", 1, (0,))
 
 
-def test_effective_seed_collisions_are_rejected_before_fitting(tmp_path):
+def test_effective_seed_collisions_within_case_are_rejected_before_fitting(tmp_path):
     spec = _spec()
     worlds = list(spec.worlds)
-    worlds[1] = replace(worlds[1], world_seed=worlds[0].world_seed)
+    worlds[1] = replace(
+        worlds[1],
+        case_id=worlds[0].case_id,
+        world_id="w0001",
+        world_seed=worlds[0].world_seed,
+    )
     invalid = OracleRunSpec(
         spec.run_id,
         worlds,
