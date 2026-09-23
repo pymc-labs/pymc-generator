@@ -947,7 +947,10 @@ def test_compiled_fit_reuses_one_connected_graph_without_stale_data():
     assert fake.logps[0] != pytest.approx(fake.logps[1])
 
 
-def _dynamic_width_world(smoothness_b):
+def _dynamic_width_world(smoothness_b, *, smoothness_d=None):
+    structural = {"smoothness_b": np.asarray(smoothness_b)}
+    if smoothness_d is not None:
+        structural["smoothness_d"] = np.asarray(smoothness_d)
     return SimpleNamespace(
         data={
             "treatments": np.zeros((4, 1)),
@@ -957,7 +960,7 @@ def _dynamic_width_world(smoothness_b):
         },
         g={"g_cy": np.ones(1), "g_dy": np.zeros(1), "g_zy": np.ones(1)},
         cfg=SimpleNamespace(carryover_burn_in=0, rw_smoothness_max_weeks=26),
-        extras={"structural": {"smoothness_b": np.asarray(smoothness_b)}},
+        extras={"structural": structural},
     )
 
 
@@ -987,6 +990,38 @@ def test_oracle_payload_rejects_lossy_walk_width_b_values(monkeypatch, values, m
     with pytest.raises(ValueError, match=message):
         oracle._oracle_payload(
             world, np.asarray([0], dtype="int64"), dynamic_names={"walk_width_b_data"}
+        )
+
+
+def test_oracle_payload_normalises_historical_int64_walk_width_d():
+    world = _dynamic_width_world([0], smoothness_d=np.asarray([0, 1], dtype="int64"))
+    payload = oracle._oracle_payload(
+        world, np.asarray([0], dtype="int64"), dynamic_names={"walk_width_d_data"}
+    )
+    assert payload["walk_width_d_data"].dtype == np.dtype("int32")
+    np.testing.assert_array_equal(payload["walk_width_d_data"], np.asarray([0, 3], dtype="int32"))
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (np.asarray([1.5]), "integral"),
+        (np.asarray([np.nan]), "integral"),
+        (np.asarray([np.iinfo(np.int32).max + 1], dtype="int64"), "fit int32"),
+        (np.asarray([True]), "numeric integers"),
+    ],
+)
+def test_oracle_payload_rejects_lossy_walk_width_d_values_before_binding(
+    monkeypatch, values, message
+):
+    monkeypatch.setattr(
+        "pymc_generator.random_walk.walk_width_index",
+        lambda *args, **kwargs: values,
+    )
+    world = _dynamic_width_world([0], smoothness_d=[0])
+    with pytest.raises(ValueError, match=message):
+        oracle._oracle_payload(
+            world, np.asarray([0], dtype="int64"), dynamic_names={"walk_width_d_data"}
         )
 
 
