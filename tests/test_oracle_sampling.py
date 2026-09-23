@@ -923,9 +923,7 @@ def test_compiled_oracle_rejects_invalid_shared_variable_surface(surface, messag
 
 def test_compiled_oracle_accepts_nutpie_shared_variable_mapping():
     template, _ = _shared_template_and_world()
-    variables = {
-        name: template.model.named_vars[name] for name in pg.ORACLE_SHARED_DATA_NAMES
-    }
+    variables = {name: template.model.named_vars[name] for name in pg.ORACLE_SHARED_DATA_NAMES}
     compiled = _compiled(
         template,
         _FakeCompiled(

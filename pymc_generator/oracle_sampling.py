@@ -1446,7 +1446,9 @@ class CompiledOracle:
             variable = self.template.model.named_vars.get(name)
             if not isinstance(variable, SharedVariable):
                 variable = next(
-                    item for item in _graph_shared_variables(self.template.model) if item.name == name
+                    item
+                    for item in _graph_shared_variables(self.template.model)
+                    if item.name == name
                 )
             expected = np.asarray(variable.get_value())
             shape = tuple(int(size) for size in expected.shape)
@@ -1547,9 +1549,7 @@ def build_oracle_template(
             model = world.oracle_model(latent=latent, observed_indices=indices)
     signature = _world_signature(world, latent=latent, observed_count=len(indices))
     graph_names = {
-        variable.name
-        for variable in _graph_shared_variables(model)
-        if variable.name is not None
+        variable.name for variable in _graph_shared_variables(model) if variable.name is not None
     }
     contract = tuple(name for name in ORACLE_DATA_NAMES if name in graph_names)
     unknown = sorted(graph_names - set(ORACLE_DATA_NAMES))
