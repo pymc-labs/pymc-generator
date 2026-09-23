@@ -55,6 +55,9 @@ read the migration notes before upgrading.
   public `build_world_model`, `sample_structure`, `sample_prior_cond`, and `draw_worlds`.
 - A plug-in posterior oracle with sampled or analytically marginalized Gaussian
   outcome-side latents. It is a reference model, not a universal recovery bound.
+  Oracle templates expose all compatible changing inputs as named `pm.Data`,
+  support one Nutpie/Numba compilation across compatible fits, fail closed on
+  structural changes, and emit posterior-free data/template/compile receipts.
 - Configurable intercept/non-media floors, control shocks and centered pulses,
   direct-null channel floors, baseline/channel innovation confounding, and held-spend
   interventions that retain ordinary adstock carryover.

@@ -631,6 +631,41 @@ def test_oracle_warmup_exempts_identity_carryover():
     assert shapes == {"identity": (20,), "geometric": (16,)}
 
 
+def test_oracle_observed_indices_are_reported_coordinates_and_select_likelihood_rows():
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=20,
+        l_max=5,
+        nonlinearity="linear",
+        carryover_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        edge_budget={
+            "cy": (1, 1),
+            "dc": 0,
+            "dy": 0,
+            "zy": 0,
+            "dz": 0,
+            "zc": 0,
+            "cc": 0,
+            "zz": 0,
+        },
+    )
+    world = pg.sample_scm(cfg, seed=24, max_eps_draws=4)
+    warmup = cfg.l_max - 1
+    selected = [0, 3]
+    for latent in ("marginal", "sampled"):
+        model = world.oracle_model(latent=latent, observed_indices=selected)
+        assert np.array_equal(model["observed_indices_data"].get_value(), selected)
+        assert tuple(model["outcome"].shape.eval()) == (len(selected),)
+        assert tuple(model["contributions"].shape.eval()) == (cfg.n_time_steps, 1)
+        assert tuple(model["outcome_mu"].shape.eval()) == (cfg.n_time_steps,)
+    default = world.oracle_model()
+    assert np.array_equal(
+        default["observed_indices_data"].get_value(), np.arange(cfg.n_time_steps - warmup)
+    )
+
+
 def test_oracle_warmup_follows_the_carryover_its_own_priors_admit():
     """The discarded prefix is the priors' reach, not the carryover family label.
 
