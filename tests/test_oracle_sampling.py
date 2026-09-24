@@ -21,6 +21,7 @@ import pytest
 import xarray as xr
 
 import pymc_generator as pg
+import pymc_generator.oracle_harness as harness
 import pymc_generator.oracle_sampling as oracle
 import pymc_generator.world_model as world_model
 
@@ -960,6 +961,115 @@ def test_compile_oracle_compiles_once_and_binds_each_fit(monkeypatch):
     assert not np.array_equal(fake.payloads[0]["sales_data"], fake.payloads[1]["sales_data"])
     assert set(fake.payloads[0]) == set(pg.ORACLE_SHARED_DATA_NAMES)
     assert np.array_equal(fake.payloads[0]["observed_indices_data"], [0, 1, 2])
+
+
+def test_generated_compiled_receipt_binds_canonical_78_observed_indices(monkeypatch):
+    """Characterize selector identities at the real template/receipt boundary."""
+    cfg = pg.make_scm_prior(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=78,
+        n_cells=2,
+        nonlinearity="linear",
+        carryover_burn_in=0,
+        rw_baseline_std_range=(0.0, 0.0),
+    )
+    world = pg.sample_scm(cfg, seed=3, name="constant_intercept", max_eps_draws=4)
+    canonical = np.arange(78)
+    template = pg.build_oracle_template(world, latent="sampled", observed_indices=canonical)
+    fake = _FakeCompiled(_valid_tree())
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "nutpie",
+        SimpleNamespace(
+            compile_pymc_model=lambda model, **kwargs: fake,
+            sample=lambda bound, **kwargs: bound.sample(**kwargs),
+        ),
+    )
+    compiled = pg.compile_oracle(template)
+    config = pg.OracleSamplingConfig(latent="sampled")
+    source_identity = {"sha256": "a" * 64}
+    identity = {
+        "case_id": "constant_intercept",
+        "world_id": "w0000",
+        "world_seed": 3,
+    }
+    result = compiled.fit(
+        world,
+        config,
+        observed_indices=canonical,
+        world_identity=identity,
+        source_identity=source_identity,
+        configuration_identity={"effective_config": config.to_dict()},
+    )
+    receipt = result.receipt.to_dict()
+    identities = receipt["identities"]
+    expected_top = {
+        "sha256": "58b8e8054c706b441b6a0cff1e509bfbc6adefe0ce02755d6fd338569c02f4a1",
+        "dtype": "int64",
+        "shape": [78],
+    }
+    expected_data = {
+        "sha256": "1ac67e2a4e99bdcb7c75f22c2538cf87d89f03d07af4a4560f0332c2a234ca53",
+        "dtype": "int32",
+        "shape": [78],
+    }
+    assert template.observed_indices == tuple(range(78))
+    assert template.model.named_vars["observed_indices_data"].get_value().dtype == np.dtype("int32")
+    np.testing.assert_array_equal(fake.payloads[0]["observed_indices_data"], canonical)
+    assert identities["observed_indices"] == expected_top
+    assert identities["data"]["observed_indices_data"] == expected_data
+    assert identities["observed_indices"] != identities["data"]["observed_indices_data"]
+
+    world_spec = harness.OracleWorldSpec(
+        "constant_intercept",
+        "w0000",
+        "fixture:constant_intercept",
+        3,
+        tuple(int(index) for index in canonical),
+        source_identity=source_identity,
+    )
+    validation_spec = SimpleNamespace(
+        package_identity={"version": receipt["package_version"]},
+        environment_identity={"python": receipt["environment"]["python"]},
+        nutpie_version=receipt["environment"]["nutpie"],
+    )
+    compile_identity = identities["compile"]
+    assert (
+        harness._validate_receipt(
+            result.receipt,
+            spec=validation_spec,
+            world_spec=world_spec,
+            config=config,
+            template_signature=template.signature,
+            compile_identity=compile_identity,
+        )
+        is result.receipt
+    )
+
+    assert len(fake.payloads) == 1
+    with pytest.raises(ValueError, match="out-of-range"):
+        compiled.fit(world, config, observed_indices=np.append(canonical[:-1], 78))
+    assert len(fake.payloads) == 1
+
+    reordered = canonical[::-1]
+    reordered_result = compiled.fit(world, config, observed_indices=reordered)
+    reordered_identities = reordered_result.receipt.to_dict()["identities"]
+    assert reordered_identities["observed_indices"] != identities["observed_indices"]
+    assert (
+        reordered_identities["data"]["observed_indices_data"]
+        != identities["data"]["observed_indices_data"]
+    )
+    with pytest.raises(ValueError, match="selector identity"):
+        harness._validate_receipt(
+            result.receipt,
+            spec=validation_spec,
+            world_spec=replace(world_spec, observed_indices=tuple(int(i) for i in reordered)),
+            config=config,
+            template_signature=template.signature,
+            compile_identity=compile_identity,
+        )
 
 
 def test_compiled_fit_reuses_one_connected_graph_without_stale_data():
