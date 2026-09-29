@@ -157,6 +157,7 @@ nav:
       - Generating a corpus: guide/corpus.md
       - The posterior oracle: guide/oracle.md
       - Interrogating the data: guide/data-diagnostics.md
+      - Comparing worlds: guide/world-descriptors.md
   - Examples:
       - End-to-end tour: examples/index.ipynb
       - MMM recovery case study: examples/simple-model.ipynb
@@ -173,3 +174,4 @@ nav:
       - Signal diagnostics: reference/signal.md
       - Outcome distributions: reference/outcomes.md
       - Data diagnostics: reference/diagnostics.md
+      - World descriptors: reference/descriptors.md
