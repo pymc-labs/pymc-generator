@@ -20,6 +20,8 @@ it.
 | [`SCENARIOS`](scenarios.md) | [Named scenarios](scenarios.md) | Five named audit scenarios. |
 | [`outcome_distributions`](outcomes.md#pymc_generator.outcomes.outcome_distributions) | [Outcome distributions](outcomes.md) | Pool worlds along the quantity axis: outcome and contribution magnitudes. |
 | [`data_diagnostics`](diagnostics.md#pymc_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
+| [`world_descriptors`](descriptors.md#pymc_generator.descriptors.world_descriptors) / [`ObservedWorlds`](descriptors.md#pymc_generator.descriptors.ObservedWorlds) | [World descriptors](descriptors.md) | One row of named statistics per world, for generated or observed data. |
+| [`summarize_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.summarize_descriptors) / [`bin_counts`](descriptors.md#pymc_generator.descriptor_analysis.bin_counts) / [`nearest_worlds`](descriptors.md#pymc_generator.descriptor_analysis.nearest_worlds) / [`compare_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.compare_descriptors) | [World descriptors](descriptors.md) | Independent between-world analyses: distributions, region counts, similarity, reference comparison. |
 
 ## Import surface
 
@@ -43,6 +45,12 @@ pg.DataGenerator             # a facade over corpus generation + validation
 pg.save_corpus, pg.load_corpus
 pg.outcome_distributions     # outcome/contribution magnitudes across worlds
 pg.data_diagnostics          # dependence / VIF / dynamics / contribution hierarchy
+pg.world_descriptors         # one row of statistics per world
+pg.ObservedWorlds            # observed datasets as worlds (series only)
+pg.summarize_descriptors     # descriptor distributions, optionally by stratum
+pg.bin_counts                # worlds per explicit descriptor region
+pg.nearest_worlds            # most similar worlds in a chosen feature space
+pg.compare_descriptors       # where one collection sits relative to another
 ```
 
 Public symbols are lazy-loaded, so `import pymc_generator` stays light — the

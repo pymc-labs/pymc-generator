@@ -8,6 +8,19 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Compare worlds with each other. `world_descriptors` turns a corpus, a list of
+  `SCM` worlds or observed datasets (`ObservedWorlds`) into one row of named,
+  mask-aware statistics per world — level-to-variation, CV, zero fraction,
+  roughness, spikes, autocorrelation and pairwise correlation in levels and
+  differences, reduced across the active nodes of each role — with explicit
+  valid/ineligible/undefined status and optional, unobservable contribution
+  shares. Four independent functions analyse those rows:
+  `summarize_descriptors` (distributions per stratum), `bin_counts` (worlds and
+  distinct generation cells per explicit region), `nearest_worlds` (similarity
+  on a reference-fitted `DescriptorScale`, with self, same-cell and stratum
+  exclusions) and `compare_descriptors` (midrank percentiles and distribution
+  shifts against a reference). Post-hoc only: no generation, RNG or schema
+  change, and no information, significance or optimality claims.
 - Document the project as what it is: a **structural causal model generator**,
   rather than an MMM dataset generator. A new README "Scope and limits" section
   states the representable structure, the exact carryover and saturation
