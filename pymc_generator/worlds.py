@@ -110,6 +110,11 @@ class SCM:
     params : dict
         Drawn SCM parameters (edge coefficients, per-node random-walk
         params, per-treatment mechanism families and texture).
+        Enabled reference priors additionally record
+        ``treatment_reference_contribution`` / ``treatment_reference_input`` and
+        ``covariate_reference_contribution`` / ``covariate_reference_input``.
+        Treatment references are post-carryover and pre-edge-gate; controls are
+        nominal pre-edge-gate, pre-floor linear responses.
     cfg : SCMPrior
         An independent snapshot of the config the world was drawn from.
     name, purpose : str
@@ -170,7 +175,12 @@ class SCM:
 
     @property
     def equation_parameters(self) -> dict[str, Any]:
-        """Executed equation inputs, returned as recursively defensive copies."""
+        """Executed equation inputs, returned as recursively defensive copies.
+
+        Enabled contribution priors appear in each ``Cn.response.reference``
+        or ``Zn.outcome_reference``, including the drawn target, actual reference
+        input, and the pre-gate/pre-floor stage at which it applies.
+        """
         return cast(
             dict[str, Any],
             _copy_audit_value(_build_equation_parameters(self)),
@@ -391,6 +401,18 @@ def mechanism_label(params: dict, k: int) -> str:
     return f"{sat}·{ad}"
 
 
+def parameter_text(params: dict, value, legacy_spec: str = ".2f") -> str:
+    """Render a drawn mechanism parameter or coefficient for a world description.
+
+    Opt-in mechanism priors admit values spanning many orders of magnitude, so
+    they use four significant digits (keeping a requested sign); legacy worlds
+    keep their fixed-decimal ``legacy_spec`` text.
+    """
+    if params.get("mechanism_priors_enabled", False):
+        return format(value, "+.4g" if legacy_spec.startswith("+") else ".4g")
+    return format(value, legacy_spec)
+
+
 def _rw_parameters(params: dict, group: str, index: int) -> dict[str, float | bool]:
     """Concrete inputs for one executed random-walk or iid-noise column."""
     values = params[group]
@@ -438,11 +460,19 @@ def _treatment_response_parameters(world: SCM, k: int) -> dict[str, Any]:
     if g_cy:
         beta = float(np.asarray(params["beta"])[k])
         gate.update({"beta": beta, "value": beta})
-    return {
+    response: dict[str, Any] = {
         "carryover": carryover,
         "saturation": saturation,
         "gate": gate,
     }
+    if "treatment_reference_contribution" in params:
+        response["reference"] = {
+            "contribution": float(np.asarray(params["treatment_reference_contribution"])[k]),
+            "input": float(np.asarray(params["treatment_reference_input"])[k]),
+            "multiplier": float(world.cfg.treatment_reference_multiplier),
+            "stage": "post_carryover_pre_gate",
+        }
+    return response
 
 
 def _build_equation_parameters(world: SCM) -> dict[str, Any]:
@@ -477,6 +507,14 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
                 "covariate_pulse_prob": float(np.asarray(params["covariate_pulse_prob"])[m]),
             },
         }
+        if "covariate_reference_contribution" in params:
+            values[f"Z{m + 1}"]["outcome_reference"] = {
+                "contribution": float(np.asarray(params["covariate_reference_contribution"])[m]),
+                "input": float(np.asarray(params["covariate_reference_input"])[m]),
+                "rho_zy": float(np.asarray(params["rho_zy"])[m]),
+                "g_zy": int(np.asarray(g["g_zy"])[m]),
+                "stage": "pre_gate_pre_floor",
+            }
         if parents:
             values[f"Z{m + 1}"]["parents"] = parents
     for k in range(n_treatments):
@@ -977,6 +1015,8 @@ def _assemble_params(
     params["l_max"] = cfg.l_max
     params["baseline_floor"] = cfg.baseline_floor
     params["baseline_floor_scope"] = cfg.baseline_floor_scope
+    if cfg.mechanism_priors_enabled:
+        params["mechanism_priors_enabled"] = True
     params["carryover_family"] = np.array(structural["carryover_family"], copy=True)
     params["sat_family"] = np.array(structural["sat_family"], copy=True)
     params["use_hf"] = np.array(structural["use_hf"], copy=True)

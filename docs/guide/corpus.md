@@ -428,6 +428,17 @@ set `edge_budget["cc"] = 0` as well if it must have no path to `Y`.
 See the full configuration surface in the
 [API reference](../reference/config.md).
 
+## Mechanism-prior metadata
+
+Non-default effective [mechanism priors](../reference/config.md#mechanism-priors)
+add `diagnostics["mechanism_priors"]`: the complete saturation shape supports,
+MM scale distribution, and treatment/control reference-target ranges and scales.
+This block survives corpus save/load and does not change the array schema.
+It is absent for legacy defaults. Targets are nominal responses before edge
+gates; treatment references are post-carryover and control references are
+pre-floor. The usual contribution arrays remain the executed, gated truth.
+
+
 ## Prior conditioning (ACE)
 
 **ACE-style prior conditioning** makes the prior an *input*: with
@@ -444,6 +455,8 @@ I  = [lo, lo + w]             # ⊆ the global support, by construction
 global support. The v1 conditioned set is `carryover_alpha` (geometric decay) and
 `hill_shape` (Hill slope); width ranges are overridable per quantity via
 `prior_cond_width_ranges`.
+The Hill global support is the configured
+`saturation_prior_ranges["hill"]["slope"]`, not a fixed module constant.
 
 The draws are recorded in the corpus so consumers can expose them as
 conditioning features:

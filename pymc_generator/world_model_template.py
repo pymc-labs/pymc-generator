@@ -33,9 +33,10 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 from pymc.pytensorf import convert_data
+from pytensor.graph import ancestors
 
 from .random_walk import walk_width_index
-from .sampler import SCMPrior
+from .sampler import SATURATION_FAMILY_KEYS, SCMPrior
 from .symbolic_graph import build_symbolic_graph
 from .world_model import (
     _apply_outcome_std_scale,
@@ -161,6 +162,14 @@ def build_cell_inputs(
         "rw_width_c": _pad_to(_widths("smoothness_c"), n_treatments, "int64"),
         "rw_width_b": _widths("smoothness_b"),
     }
+    if cfg.treatment_reference_contribution_range is not None:
+        # Synthetic slots must stay inside the validated coefficient support.
+        padding_family = next(
+            i
+            for i, family in enumerate(SATURATION_FAMILY_KEYS)
+            if cfg.saturation_family_probs[family] > 0.0
+        )
+        payload["sat_family"][len(structural["sat_family"]) :] = padding_family
     # ``pm.Data`` normalizes integer arrays (int64 -> int32), so route the payload
     # through the same conversion; otherwise the compiled function rejects these
     # arrays for risking a precision loss.
@@ -261,12 +270,14 @@ def build_world_model_template(
             specs,
             rw,
             c_level,
+            g=g_data,
             carryover_family=data["carryover_family"],
             sat_family=data["sat_family"],
             use_hf=_texture_flag(cfg.treatment_hf_sigma_range, n_treatments),
             use_pulse=_texture_flag(cfg.treatment_pulse_prob_range, n_treatments),
             use_covariate_hf=_texture_flag(cfg.covariate_hf_sigma_range, n_covariates),
             use_covariate_pulse=_texture_flag(cfg.covariate_pulse_prob_range, n_covariates),
+            dynamic_family=True,
         )
         _apply_outcome_std_scale(cfg, rw, g_data["g_cy"], params["beta"])
 
@@ -298,7 +309,13 @@ def build_world_model_template(
         out_names = tuple(outputs)
         for name in out_names:
             pm.Deterministic(name, outputs[name])
-        param_names = _register_param_reports(params, rw, c_level, confounding_strength)
+        param_names = _register_param_reports(
+            params,
+            rw,
+            c_level,
+            confounding_strength,
+            cfg=cfg,
+        )
 
     return model, out_names, param_names
 
@@ -348,10 +365,16 @@ def compile_template_draw_fn(
     input_names: tuple[str, ...] = TEMPLATE_STRUCTURE_INPUT_NAMES,
     mode: str = "FAST_COMPILE",
 ) -> TemplateDrawFn:
-    """Compile the template's draw function with structure as positional inputs."""
+    """Compile with only structure inputs reached by the requested outputs."""
     with model:
         out_vars = [model[name] for name in out_names]
         input_vars = [model[name] for name in input_names]
+    # One-slot graphs have no C->C / Z->Z recursion, and parameter-only draws
+    # may read no structure at all. Do not pass absent dependencies to compile.
+    reached = set(ancestors(out_vars))
+    inputs = [(name, var) for name, var in zip(input_names, input_vars) if var in reached]
+    input_names = tuple(name for name, _ in inputs)
+    input_vars = [var for _, var in inputs]
     fn, ordered_rngs = _get_cached_draw_fn(
         model,
         out_vars,

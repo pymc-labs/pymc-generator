@@ -20,8 +20,8 @@ from pymc_generator.symbolic_graph import _saturate_col
 #: the reference level, so an anchor of 1.0 would hide dropped input scaling.
 REFERENCE_LEVEL = 3.0
 
-#: One mid-range shape parameterization per family, from
-#: :data:`~pymc_generator.mechanisms.SATURATION_PRIOR_RANGES`.
+#: One mid-range shape parameterization per family, within the legacy defaults of
+#: :attr:`~pymc_generator.sampler.SCMPrior.saturation_prior_ranges`.
 FAMILY_SHAPES: dict[str, dict[str, float]] = {
     "hill": {"slope": 2.0, "kappa_mult": 1.2},
     "logistic": {"lam": 1.7},

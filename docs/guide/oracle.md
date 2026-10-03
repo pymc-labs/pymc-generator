@@ -77,6 +77,13 @@ So the default oracle has **no `baseline` and no `demand` deterministic**: its
 mode trades fewer sampled dimensions for an `O(n³)` Cholesky factorization per
 likelihood evaluation; neither representation is uniformly cheaper.
 
+With opt-in [mechanism priors](../reference/config.md#mechanism-priors), both
+modes also expose the derived `beta` / `rho_zy` and the
+`treatment_reference_input` / `covariate_reference_input` deterministics when
+reference targets are enabled; the targets, not `beta` / `rho_zy`, are then the
+free variables. Under `mm_scale_prior="log_uniform"` the free variable is
+`mm_kappa_mult_log`, with `mm_kappa_mult` as its deterministic.
+
 What is comparable, in both modes: `contributions` against
 `world.data["contributions_observed"]` (exactly), and `outcome_mu` against
 `world.data["outcome"]` for total mean fit. Sampled mode's `baseline` is the
