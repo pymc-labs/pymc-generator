@@ -856,6 +856,13 @@ def sample_scm(
     from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
     cfg.validate()
+    if cfg.trajectory_metadata_enabled:
+        raise ValueError(
+            "sample_scm does not support composable trajectory knobs yet (per-input "
+            "inclusion probabilities or onset/offset/flighting/level_jump/seasonal/trend "
+            "components): single-world extraction and replay of those components is not "
+            "implemented. Generate corpora with sample_prior_predictive instead."
+        )
     rng = np.random.default_rng(seed)
     n_time_steps = cfg.n_time_steps
 

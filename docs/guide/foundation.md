@@ -65,14 +65,21 @@ exists in the drawn DAG:
 $$
 \begin{aligned}
 D_j &= \mathrm{RW}_j && \text{(latent-unobserved factor — a random walk)}\\[2pt]
-F_m &= \mathrm{RW}_m + s_m\,\eta_{tm} + c_m\,(h_{tm} - q_m),\quad h_{tm}\sim\mathrm{Bernoulli}(q_m) && \text{(covariate's own drive)}\\[2pt]
-Z_m &= \textstyle\sum_j u_{jm}\,D_j + \sum_{m'<m} \gamma_{m'm}\,Z_{m'} + F_m && \text{(covariate)}\\[2pt]
+F_m &= \mathrm{RW}_m + s_m\,\eta_{tm} + c_m\,(h_{tm} - q_m) + L_{tm},\quad h_{tm}\sim\mathrm{Bernoulli}(q_m) && \text{(covariate's own drive)}\\[2pt]
+Z_m &= \chi_{tm}\Big(\textstyle\sum_j u_{jm}\,D_j + \sum_{m'<m} \gamma_{m'm}\,Z_{m'} + F_m\Big) && \text{(covariate)}\\[2pt]
 E_k &= \mathrm{RW}_k + \sigma_k\,\varepsilon_{tk} + a_k\,b_{tk},\quad b_{tk}\sim\mathrm{Bernoulli}(p_k) && \text{(treatment's own drive)}\\[2pt]
-C_k &= \mathrm{softplus}\!\Big(\textstyle\sum_j w_{jk} D_j + \sum_m v_{mk} Z_m + \sum_{k'<k}\alpha_{k'k} C_{k'} + E_k\Big) && \text{(treatment — non-negative)}\\[2pt]
+C_k &= \chi_{tk}\,M_{tk}\,\mathrm{softplus}\!\Big(\textstyle\sum_j w_{jk} D_j + \sum_m v_{mk} Z_m + \sum_{k'<k}\alpha_{k'k} C_{k'} + E_k\Big) && \text{(treatment — non-negative)}\\[2pt]
 B &= \max(\mathrm{RW}_B,\ \texttt{baseline\_floor}) && \text{(intercept)}\\[2pt]
 Y &= B + \textstyle\sum_j \delta_j D_j + \sum_m \rho_m Z_m + \sum_k g^{cy}_k\,\beta_k\, f_k(C_k) + \mathrm{RW}_Y && \text{(outcome)}
 \end{aligned}
 $$
+
+Each texture term ($s_m\eta_{tm}$, $c_m(h_{tm} - q_m)$, $\sigma_k\varepsilon_{tk}$,
+$a_k b_{tk}$) is present only on an input that carries it, and $\chi$ (an on/off
+gate), $L$ (a covariate level shift) and $M$ (a positive treatment level
+multiplier) are the per-input [trajectories](#input-trajectories). Under the
+default `make_scm_prior` preset every input carries both texture terms,
+$\chi \equiv 1$, $L \equiv 0$ and $M \equiv 1$.
 
 Two structural facts do the heavy lifting:
 
@@ -136,9 +143,11 @@ holidays, price steps — actually look like. Two properties matter:
   level to anchor on, so $s_m$ and $c_m$ are drawn as factors of
   $\texttt{rw\_z\_std}[m]$, which keeps them scale-free.
 - **The pulse is centred** on its own fire probability, so both added terms are
-  mean-zero ($E[F_m - \mathrm{RW}_m]=0$): a covariate's expected level is still
-  its walk mean — **exactly**, because a covariate applies no activation — and
-  the parameter-only saturation reference levels below are untouched.
+  mean-zero ($E[F_m - \mathrm{RW}_m]=0$ while $L \equiv 0$): a covariate's
+  expected level is still its walk mean — **exactly**, because a covariate
+  applies no activation, as long as neither it nor any upstream $Z \to Z$
+  ancestor carries a trajectory gate or level component — and the
+  parameter-only saturation reference levels below are untouched.
   (The treatment pulse is deliberately *not* centred — a treatment is positive and
   its level may rise.)
 
@@ -147,6 +156,31 @@ Measured on 18 covariates over six worlds at `n_time_steps=78`: $R^2$ against a
 to **0.64** (range 0.22–0.93), i.e. the variation that identifies $\rho_m$
 grows ~6.5× at the median. Set the three `covariate_*_range` knobs to
 `(0.0, 0.0)` to recover the pre-texture (smooth-walk-only) covariates exactly.
+
+### Input trajectories
+
+Beyond texture, each treatment and each covariate can carry — independently
+per input, each with its own inclusion probability — on/off **gates** (a delayed
+onset, an offset, periodic flighting) and **level** components (held jumps, a
+seasonal sinusoid, a linear trend). The sign of the node decides how they
+compose:
+
+- On a signed covariate they are **additive**: $L_{tm}$ joins the own drive in
+  covariate units, and the gate $\chi_{tm}$ zeroes the whole assembled
+  covariate — parents included — so an off-week is exactly 0 in every term the
+  covariate feeds.
+- On a non-negative treatment they are **additive in log-level**
+  (multiplicative on the series):
+  $M_{tk} = e^{\text{seasonal} + \text{trend}}\prod_e f_e^{\mathbf{1}[t \ge \tau_e]} > 0$
+  and $\chi_{tk} \in \{0, 1\}$ multiply the activated input, so $C_k \ge 0$
+  always, $C_k = 0$ exactly on off-weeks, and a jump factor of 2 doubles it
+  exactly. (A held-level shock still overrides both.)
+
+The same $\chi$ and $M$ shape every intervention variant of the decomposition,
+so its identities stay exact. See [Input trajectories](trajectories.md) for the
+archetypes — delayed start, flighting, doubling, decay, seasonality, trend —
+and the [configuration reference](../reference/config.md#composable-input-trajectories)
+for every prior.
 
 ### The intercept, and what is *not* censored
 
@@ -279,6 +313,13 @@ kept if it *looks like data a modeller would actually get*:
 4. **Outcome spike guard** — `max(outcome) / median(outcome) < 8`.
 5. **Treatment spike guard** — per treatment, `max / median < 50`.
 
+With trajectory schedule components enabled, checks 3–5 read the
+schedule-free **natural** treatment path and the outcome built from it, so a
+deliberate launch, stop or flight is not rejected for looking unlike organic
+texture; a scheduled treatment may also clear the CV floor on its own
+schedule. Finiteness and non-negative outcome stay on the actual series
+([details](trajectories.md#realism-with-schedules)).
+
 ## Assumptions in one place
 
 These are the modeling commitments baked into the generator. They are
@@ -290,7 +331,13 @@ deliberate, and they bound what a model trained on this data can learn.
   path carries carryover and saturation; every other loading is linear on the
   child's pre-activation scale (observed-scale linear for `B`, `Z` and `Y`,
   softplus-curved for a treatment).
-- **Treatment is non-negative.** Treatments pass through `softplus`.
+- **Treatment is non-negative.** Treatments pass through `softplus`, and their
+  trajectories only multiply that by an on/off gate and a positive level
+  multiplier.
+- **Inputs carry trajectories; the baseline does not.** Gates, jumps,
+  seasonality and trends shape treatments and covariates only. The baseline
+  process is unchanged (a smoothed walk with no explicit seasonal term), and no
+  Fourier series are added as covariates.
 - **Latent-unobserved factor is never observed.** `D` drives both treatments (`dc`) and the
   outcome (`dy`) — getting attribution right despite `D` is the core task.
 - **Acyclicity by construction.** `C→C` and `Z→Z` live on the strict upper
@@ -298,12 +345,14 @@ deliberate, and they bound what a model trained on this data can learn.
 - **κ-relative saturation.** Each curve's knee is set from a parameter-only
   **reference level** — an anchor, not $E[C_k]$:
   `softplus(softplus(rw_c_mean) + pulse_amp * pulse_prob + weighted reference
-  Z→C / C→C parent terms)`. Latent `D→C` drops out because the latent-unobserved factor is mean-zero,
+  Z→C / C→C parent terms)`, the pulse term only for a treatment that carries
+  pulses. Latent `D→C` drops out because the latent-unobserved factor is mean-zero,
   and covariate texture drops out because both of its terms are mean-zero (its
   pulse is centred). The treatment softplus makes $E[C_k]$ strictly larger than
   the anchor (measured $E[C_k]/\texttt{saturation\_scale}$ 1.004–1.099); the
   anchor's value is that it reads no moment at all. The same pinned scale is
-  used for every decomposition variant.
+  used for every decomposition variant. Trajectory components stay out of it
+  too, so a doubled treatment runs at twice its κ-relative level.
 - **Carryover burn-in.** Worlds simulate `n_time_steps + carryover_burn_in` weeks and
   report the last `n_time_steps`, so the reported window sees real history.
   `carryover_burn_in` is either `0` (off — the raw `SCMPrior` default, with
