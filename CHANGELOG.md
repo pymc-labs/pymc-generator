@@ -8,6 +8,84 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Composable per-input trajectories (#24). Every treatment and covariate can
+  carry, independently per input, any subset of eight components — the existing
+  `hf` noise and `pulse`s, `onset` / `offset` / `flighting` on/off gates,
+  `level_jump`s, a `seasonal` sinusoid and a `trend` — each with its own
+  per-cell inclusion probability (`{treatment,covariate}_<component>_inclusion_prob`;
+  `hf` / `pulse` default to `1.0`, the rest to `0.0`) and priors on `SCMPrior`
+  (`*_onset_frac_range`, `*_offset_frac_range`, `*_flighting_period_weeks_range`,
+  `*_flighting_duty_range`, `*_level_jump_count`,
+  `treatment_level_jump_factor_range`, `covariate_level_jump_size_range`,
+  `*_seasonal_amplitude_range`, `*_seasonal_period_weeks_range`,
+  `treatment_trend_log_change_range`, `covariate_trend_change_range`), plus
+  `trajectory_inclusion_probs()`, `trajectory_components_enabled` and
+  `trajectory_metadata_enabled`. Covariates compose additively and stay signed;
+  treatments compose additively in log-level (multiplicatively on the series),
+  stay `>= 0`, are exactly
+  `0.0` on off-weeks outside shocks and double exactly under a factor-2 jump.
+  Every decomposition variant shares the schedule, so the identities are
+  unchanged, and shocks still override it. Validation keeps at least two
+  on-weeks of every gated input inside each task's support prefix, requires a
+  full flighting period inside the reported window
+  (`*_flighting_period_weeks_range[1] <= n_time_steps`) so every flighting input
+  switches off in it, bounds a treatment's log-level swing at
+  `TRAJECTORY_MAX_LOG_SHIFT = 3.0` (about ×20; inclusive, with a `1e-12`
+  relative tolerance so a swing of exactly 3.0 on paper passes despite
+  rounding), and requires the summed level reach to fit float32 corpus storage
+  (`rw_positive_mean_range[1] * exp(swing)` for treatments,
+  `max|rw_covariate_mean_range|` plus the included covariate level terms for
+  covariates); with schedule components the corpus also rejects any draw that
+  would not survive the float32 cast, instead of storing `inf`.
+  With schedules enabled, the realism filter's CV and spike checks read the
+  schedule-free natural path (a scheduled treatment may also clear the CV floor
+  on its own schedule); finiteness and non-negative outcome stay on the actual
+  series. `make_scm_prior(trajectories=...)` adds `"composable"` (every
+  component at moderate prevalence, with wider input level and variation
+  priors) and the eight archetypes in `presets.TRAJECTORY_ARCHETYPES`
+  (`always_on_spikes`, `periodic_on_off`, `delayed_start`, `ramp_up`,
+  `decay_to_zero`, `level_doubling`, `seasonal`, `trend`); their gate windows,
+  flighting periods and seasonal period follow `n_time_steps` / `query_frac`
+  (with the same `n_query` rounding `SCMPrior` uses, e.g. for a float32 value),
+  and an infeasible horizon raises `ValueError` before `**overrides` apply
+  (they cannot rescue it; set the trajectory knobs directly instead), naming the
+  next longer horizon at which the complete config validates (a bounded search:
+  100,000 horizons and at most 1,000 full validations; feasibility is not
+  monotone in the horizon) and attaching the config's own validation error at
+  the requested horizon, if any, as `__cause__`.
+  The default `"texture"` is unchanged.
+- Corpora from configs that set any `*_inclusion_prob` away from its default
+  (`SCMPrior.trajectory_metadata_enabled`) carry six optional arrays —
+  `treatment_components` / `covariate_components` flags, `treatment_activity` /
+  `covariate_activity` gate schedules and `treatment_log_level_shift` /
+  `covariate_level_shift` — and `diagnostics["trajectory"]` (component layout,
+  effective inclusion probabilities, realised prevalence over active inputs and
+  its denominators). `validate_corpus` checks the block end to end:
+  co-presence, shapes and dtypes, binary flags and activity, zero padding,
+  per-cell constant flags, activity `1` / shift `0.0` on active inputs without
+  a gate / level component and, conversely, at least one off-week in the window
+  and at least two on-weeks in the task's support window for any gated input,
+  week 0 off under `onset` and the last week off under `offset`;
+  `treatment_raw == 0` on activity-off weeks outside shocks and
+  `covariates == 0` on covariate off-weeks; the layout; the inclusion echo,
+  where an echo of exactly `0.0` or `1.0` requires prevalence `0` or `1`; and
+  an exact prevalence recomputation. It also gains one
+  global rule, `treatment_raw >= 0`, which every corpus the generator produced
+  before already satisfies, so no existing corpus is newly rejected.
+  **Schema and RNG impact:** no schema-version bump — the block is optional,
+  and v4 corpora without it are unchanged. With every new knob at its default,
+  same-seed corpora, `sample_scm` worlds, bundle data and template draws are
+  bit-identical to before (`write_scenario_bundles`' `recipe.json` lists the new
+  `SCMPrior` fields at their defaults). Fractional inclusion flags draw from
+  child streams spawned off the corpus RNG and consume none of its state, but a
+  cell that wires a component generally reaches different PyMC random streams,
+  so its other draws change at the same seed (stream stability on enabling is
+  tracked in #28), and corpora of two configs stay aligned only while their
+  acceptance counts match.
+  `sample_scm` (and with it single-world extraction, descriptions, bundles,
+  replay and the oracle) rejects every `*_inclusion_prob` away from its default
+  for now, and the experimental template path rejects schedule components and
+  per-input `hf` / `pulse` inclusion (#27).
 - Compare worlds with each other. `world_descriptors` turns a corpus, a list of
   `SCM` worlds or observed datasets (`ObservedWorlds`) into one row of named,
   mask-aware statistics per world — level-to-variation, CV, zero fraction,

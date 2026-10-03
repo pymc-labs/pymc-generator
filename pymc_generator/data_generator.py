@@ -56,8 +56,12 @@ from .slots import (
     LEGACY_PRIOR_COND_COLUMNS_V3,
     PRIOR_COND_LAYOUT,
     PRIOR_COND_QUANTITIES,
+    TRAJECTORY_ARRAY_FIELDS,
+    TRAJECTORY_COMPONENTS,
+    TRAJECTORY_INPUTS,
     SlotLayout,
 )
+from .trajectories import GATE_COMPONENTS, LEVEL_COMPONENTS, summarize_component_prevalence
 
 # ---------------------------------------------------------------------------
 # Schema-version and timing guards (shared by validate / save / load)
@@ -296,6 +300,21 @@ class DataGenerator:
             if key not in corpus:
                 errors.append(f"Missing required key: {key}")
 
+        # The optional trajectory block is all or nothing: its six arrays and
+        # their diagnostics summary travel together.
+        diagnostics = corpus.get("diagnostics")
+        trajectory_parts = {key: key in corpus for key in TRAJECTORY_ARRAY_FIELDS}
+        trajectory_parts["diagnostics trajectory"] = (
+            isinstance(diagnostics, dict) and "trajectory" in diagnostics
+        )
+        has_trajectory = all(trajectory_parts.values())
+        if any(trajectory_parts.values()) and not has_trajectory:
+            missing = ", ".join(part for part, present in trajectory_parts.items() if not present)
+            errors.append(
+                "trajectory arrays and diagnostics trajectory must be present together; "
+                f"missing {missing}"
+            )
+
         signal_label_keys = ("signal_metrics", "signal_metric_valid")
         if any(key in corpus for key in signal_label_keys):
             errors.append("signal labels must live under the identifiability metadata block")
@@ -363,10 +382,14 @@ class DataGenerator:
             "edge": layout.n_slots,
             "shock": n_treatment_shocks,
             "indirect_source": 3,
+            "component": len(TRAJECTORY_COMPONENTS),
         }
+        array_fields = dict(CORPUS_ARRAY_FIELDS)
+        if has_trajectory:
+            array_fields.update(TRAJECTORY_ARRAY_FIELDS)
         field_specs = {
             key: (tuple(dimensions[axis] for axis in axes), dtype)
-            for key, (axes, dtype) in CORPUS_ARRAY_FIELDS.items()
+            for key, (axes, dtype) in array_fields.items()
         }
         if "prior_cond" in corpus:
             field_specs["prior_cond"] = ((n_tasks, len(PRIOR_COND_LAYOUT)), np.float32)
@@ -441,6 +464,10 @@ class DataGenerator:
         if not positive_outcome_scale:
             errors.append("outcome_scale must be positive")
         treatment_raw = corpus["treatment_raw"].astype(np.float64)
+        # Treatments are nonnegative by construction: softplus levels under
+        # nonnegative envelopes, nonnegative held shock levels, zero off-weeks.
+        if (treatment_raw < 0.0).any():
+            errors.append("treatment_raw must be nonnegative")
         expected_treatment_means = treatment_raw.mean(axis=1)
         if not np.allclose(
             corpus["treatment_means"], expected_treatment_means, rtol=1e-6, atol=1e-7
@@ -484,7 +511,6 @@ class DataGenerator:
                 errors.append(f"{key} is not binary")
 
         short_n_query = None
-        diagnostics = corpus.get("diagnostics")
         if isinstance(diagnostics, dict) and isinstance(diagnostics.get("signal"), dict):
             candidate = diagnostics.get("short_horizon_n_query")
             if (
@@ -690,7 +716,7 @@ class DataGenerator:
             cell_ids, np.arange(len(cell_ids), dtype=cell_ids.dtype)
         ):
             errors.append("cell_id must contain contiguous nonnegative ids")
-        cell_level_keys = (
+        cell_level_keys: tuple[str, ...] = (
             "g",
             "treatment_active_mask",
             "covariate_active_mask",
@@ -701,6 +727,8 @@ class DataGenerator:
             "treatment_active",
             "is_val",
         )
+        if has_trajectory:
+            cell_level_keys += ("treatment_components", "covariate_components")
         for cell in cell_ids:
             in_cell = corpus["cell_id"] == cell
             for key in cell_level_keys:
@@ -838,6 +866,137 @@ class DataGenerator:
                 errors.append(f"{key} has nonzero inactive-latent_unobserved padding")
         if (corpus["saturation_scale"][active_treatment == 1] <= 0.0).any():
             errors.append("saturation_scale must be positive for active treatments")
+
+        if has_trajectory:
+            # Component flags are per input (constant within a cell, checked with
+            # the cell-level keys above). On an active input, no gate form means
+            # always on and no level form means no shift; an off-week zeroes the
+            # observed series, except where a held treatment shock overrides it.
+            # Conversely, config validation guarantees that an included gate form
+            # switches its input off at least once yet keeps 2 on-weeks inside the
+            # support window, that an onset launches at week >= 1, and that an
+            # offset stops by the last week.
+            gate_columns = [TRAJECTORY_COMPONENTS.index(name) for name in GATE_COMPONENTS]
+            level_columns = [TRAJECTORY_COMPONENTS.index(name) for name in LEVEL_COMPONENTS]
+            in_support = corpus["support_mask"][:, :, None] == 1
+            flags_binary = True
+            for input_type, inactive, activity_key, shift_key in (
+                ("treatment", inactive_c, "treatment_activity", "treatment_log_level_shift"),
+                ("covariate", inactive_m, "covariate_activity", "covariate_level_shift"),
+            ):
+                flags_key = f"{input_type}_components"
+                flags, activity = corpus[flags_key], corpus[activity_key]
+                # Both have already been validated as uint8.
+                if (flags > 1).any():
+                    flags_binary = False
+                    errors.append(f"{flags_key} is not binary")
+                if (activity > 1).any():
+                    errors.append(f"{activity_key} is not binary")
+                if (flags[inactive] != 0).any():
+                    errors.append(f"{flags_key} has nonzero inactive-{input_type} padding")
+                for key in (activity_key, shift_key):
+                    if _padded_nonzero(corpus[key], inactive):
+                        errors.append(f"{key} has nonzero inactive-{input_type} padding")
+                gated = flags[..., gate_columns].any(axis=-1)
+                if _padded_nonzero(activity != 1, ~inactive & ~gated):
+                    errors.append(
+                        f"{activity_key} must be 1 for active {input_type}s "
+                        "without a gate component"
+                    )
+                gated &= ~inactive
+                on_weeks = activity != 0
+                if (gated & on_weeks.all(axis=1)).any():
+                    errors.append(
+                        f"{activity_key} never switches off for an active {input_type} "
+                        "with a gate component"
+                    )
+                if (gated & ((on_weeks & in_support).sum(axis=1) < 2)).any():
+                    errors.append(
+                        f"{activity_key} keeps fewer than 2 on-weeks inside the support window "
+                        f"for an active {input_type} with a gate component"
+                    )
+                for component, week, label in (
+                    ("onset", 0, "week 0"),
+                    ("offset", -1, "the last week"),
+                ):
+                    carried = ~inactive & (flags[..., TRAJECTORY_COMPONENTS.index(component)] != 0)
+                    if (carried & on_weeks[:, week, :]).any():
+                        errors.append(
+                            f"{activity_key} must be 0 at {label} for an active {input_type} "
+                            f"with an {component} component"
+                        )
+                unshifted = ~inactive & ~flags[..., level_columns].any(axis=-1)
+                if _padded_nonzero(corpus[shift_key], unshifted):
+                    errors.append(
+                        f"{shift_key} must be 0 for active {input_type}s without a level component"
+                    )
+            treatment_off = (corpus["treatment_activity"] == 0) & (shock_mask == 0)
+            if (corpus["treatment_raw"][treatment_off] != 0).any():
+                errors.append(
+                    "treatment_raw must be 0 on treatment_activity off-weeks outside shocks"
+                )
+            if (corpus["covariates"][corpus["covariate_activity"] == 0] != 0).any():
+                errors.append("covariates must be 0 on covariate_activity off-weeks")
+            trajectory_diagnostics = diagnostics["trajectory"]
+            if not isinstance(trajectory_diagnostics, dict):
+                errors.append("diagnostics trajectory must be a mapping")
+            else:
+                trajectory_layout: Any = trajectory_diagnostics.get("components")
+                try:
+                    normalized_trajectory_layout = list(trajectory_layout)
+                except TypeError:
+                    normalized_trajectory_layout = None
+                if normalized_trajectory_layout != list(TRAJECTORY_COMPONENTS):
+                    errors.append(
+                        "diagnostics trajectory components do not match the canonical layout"
+                    )
+                inclusion_probs: Any = trajectory_diagnostics.get("inclusion_probs")
+                inclusion_valid = (
+                    isinstance(inclusion_probs, dict)
+                    and set(inclusion_probs) == set(TRAJECTORY_INPUTS)
+                    and all(
+                        isinstance(probs, dict)
+                        and set(probs) == set(TRAJECTORY_COMPONENTS)
+                        and all(
+                            isinstance(prob, (float, np.floating)) and 0.0 <= prob <= 1.0
+                            for prob in probs.values()
+                        )
+                        for probs in inclusion_probs.values()
+                    )
+                )
+                if not inclusion_valid:
+                    errors.append(
+                        "diagnostics trajectory inclusion_probs must map every input and "
+                        "component to a float in [0, 1]"
+                    )
+                # Recounting non-binary flags would only restate the error above.
+                if flags_binary:
+                    recounted = summarize_component_prevalence(
+                        corpus["treatment_components"],
+                        corpus["covariate_components"],
+                        active_treatment,
+                        active_covariate,
+                    )
+                    for key in ("prevalence", "n_inputs"):
+                        if not _diagnostic_equal(trajectory_diagnostics.get(key), recounted[key]):
+                            errors.append(
+                                f"diagnostics trajectory {key} does not match recomputation"
+                            )
+                    # An exact echo pins the flags: generation draws none at
+                    # probability 0 and flags every active input at probability 1.
+                    if inclusion_valid:
+                        for input_type in TRAJECTORY_INPUTS:
+                            prevalence = recounted["prevalence"][input_type]
+                            counted = recounted["n_inputs"][input_type] > 0
+                            for component in TRAJECTORY_COMPONENTS:
+                                prob = inclusion_probs[input_type][component]
+                                if (prob == 0.0 and prevalence[component] != 0.0) or (
+                                    prob == 1.0 and counted and prevalence[component] != 1.0
+                                ):
+                                    errors.append(
+                                        "diagnostics trajectory inclusion_probs contradict the "
+                                        f"stored {input_type}_components for {component}"
+                                    )
 
         graph = layout.unpack(corpus["g"])
         treatment_present = ~inactive_c

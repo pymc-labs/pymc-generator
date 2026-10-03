@@ -123,9 +123,17 @@ structural equations.
   `pm.MvNormal` in the oracle's marginal mode). The linear-predictor machinery
   is GLM-shaped, but **no other GLM family or link function is implemented
   today**; adding one would be a likelihood swap, not a redesign.
-- **Time.** Each non-outcome node carries its own smoothed random-walk drive,
-  with optional high-frequency texture and Bernoulli pulses. Time is an axis,
-  not a node in the DAG.
+- **Time.** Each non-outcome node carries its own smoothed random-walk drive.
+  Each treatment and covariate can also carry, independently per input, any
+  subset of eight [trajectory components](docs/guide/trajectories.md) —
+  high-frequency texture, Bernoulli pulses, onset/offset/flighting on-off
+  gates, level jumps, a seasonal sinusoid and a linear trend — additive on
+  signed covariates and additive in log-level (multiplicative on the series)
+  on non-negative treatments, which are exactly zero on off-weeks outside
+  held-level shocks. Any `*_inclusion_prob` away from its default is
+  corpus-only for now (`sample_scm` rejects it). The baseline process is
+  unchanged (no explicit seasonal term), and no Fourier series are added as
+  covariates. Time is an axis, not a node in the DAG.
 
 
 ## Data contracts and interpretation

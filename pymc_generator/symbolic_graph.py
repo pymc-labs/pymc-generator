@@ -18,9 +18,17 @@ and centered pulses. These terms add higher-frequency variation but do not
 guarantee informative response curves or identification. Supplied innovations
 may be correlated by the configured baseline/treatment confounding mechanism.
 
+Optional composable trajectory components (``params["trajectory"]``, see
+:mod:`pymc_generator.trajectories`) shape each input independently: covariate
+level components add to its own drive and its gate zeroes the assembled
+covariate; a treatment's level components multiply its activated input and its
+gate zeroes it. Every decomposition variant below shares the treatment's
+schedule, so the identities are unchanged. Inputs that carry no component are
+built exactly as without the parameter.
+
 ``C_base`` removes all incoming treatment interactions while retaining the same
-own-drive realizations, including any execution noise and pulses. With each
-response function fixed across counterfactual paths:
+own-drive realizations, including any execution noise, pulses and trajectory
+schedule. With each response function fixed across counterfactual paths:
 
 .. code-block:: text
 
@@ -48,7 +56,7 @@ import numpy as np
 import pytensor.tensor as pt
 from pytensor.tensor import TensorVariable
 
-from . import mechanisms
+from . import mechanisms, trajectories
 from .random_walk import symbolic_random_walk, symbolic_random_walk_by_width
 from .sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
@@ -288,7 +296,11 @@ def _reference_levels(
     mean-zero (its pulse is centred on its own fire probability). A covariate
     applies NO activation, so unlike a treatment its level claim is exact —
     ``E[Z_m]`` is ``rw_z_mean`` plus its upstream ``Z -> Z`` terms, which is
-    exactly the ``z_levels`` recursion below.
+    exactly the ``z_levels`` recursion below — as long as neither it nor any
+    upstream ``Z -> Z`` ancestor carries a gate or level trajectory component.
+    Gates, jumps, trends and seasonality move a level
+    away from this anchor; the anchors deliberately stay parameter-only and
+    exclude them, for treatments too (a doubled treatment runs at twice its κ).
     """
     dot_kw = {"dynamic_g": dynamic_g}
     z_levels: list[TensorVariable] = []
@@ -407,7 +419,10 @@ def build_symbolic_graph(
     params : dict
         SCM parameters — the continuous ones may be symbolic (PyMC RV)
         tensors or concrete numpy; families/smoothness are concrete. Assembled
-        by :func:`pymc_generator.world_model.build_world_model`.
+        by :func:`pymc_generator.world_model.build_world_model`. An optional
+        ``params["trajectory"]`` (from
+        :func:`pymc_generator.trajectories.trajectory_params`, or the same layout
+        with numpy values) adds the composable per-input trajectory components.
     eps : dict
         The caller's noise RVs, each with leading dim
         ``n_time_steps_full = n_time_steps + burn_in``:
@@ -462,6 +477,13 @@ def build_symbolic_graph(
         ``indirect_effects`` (n_time_steps,),
         ``indirect_effects_by_source`` (n_time_steps, 3),
         ``outcome`` (n_time_steps,), ``outcome_noise`` (n_time_steps,).
+    With ``params["trajectory"]`` also ``treatment_activity`` /
+    ``covariate_activity`` (n_time_steps, n) int8 gate schedules (1 = on),
+    ``treatment_log_level_shift`` / ``covariate_level_shift`` (n_time_steps, n)
+    summed level components (exactly 0 where an input carries none), and the
+    schedule-free realism references ``treatments_natural`` / ``outcome_natural``.
+    With treatment shocks, ``treatments_unshocked`` / ``outcome_unshocked`` are
+    the natural recursion: no shocks and no trajectory schedule.
 
     Notes
     -----
@@ -617,6 +639,17 @@ def build_symbolic_graph(
     eps_z_hf = _required_eps(eps, "eps_z_hf", bool(use_covariate_hf.any()))
     eps_z_pulse = _required_eps(eps, "eps_z_pulse", bool(use_covariate_pulse.any()))
 
+    # Composable per-input trajectory components (see pymc_generator.trajectories).
+    # Absent: every input keeps exactly the legacy equation. Present: an input is
+    # wired only with the components its concrete ``use`` flags select, so a
+    # component it does not carry adds nothing to it and none of its draws reach it.
+    trajectory = params.get("trajectory")
+    weeks = trajectories.time_index(n_time_steps, burn_in)
+    z_activity: list[TensorVariable | None] = []
+    z_level_shift: list[TensorVariable | None] = []
+    c_activity: list[TensorVariable | None] = []
+    c_log_level_shift: list[TensorVariable | None] = []
+
     # -- confounders D (n_time_steps_full, n_latent): pure random walks -------------------------
     d_cols = [
         _mask(active_j, j, _walk_column(eps_d[:, j], params["rw_d"], j, n_time_steps_full))
@@ -640,9 +673,25 @@ def build_symbolic_graph(
             own = own + covariate_hf_sigma[m] * eps_z_hf[:, m]
         if use_covariate_pulse[m]:
             own = own + covariate_pulse_amp[m] * (eps_z_pulse[:, m] - covariate_pulse_prob[m])
+        z_gate = None
+        if trajectory is not None:
+            # Signed, additive level components join the own drive; the gate
+            # wraps the assembled covariate (ancestors included) so an off-week
+            # is exactly 0 for Z, Z->C, Z->Z and Z->Y alike.
+            z_shift = trajectories.level_shift_column(
+                trajectory["covariate"], m, weeks, n_time_steps, log_level=False
+            )
+            if z_shift is not None:
+                own = own + z_shift
+            z_gate = trajectories.activity_column(trajectory["covariate"], m, weeks)
+            z_level_shift.append(z_shift)
+            z_activity.append(z_gate)
         term_d = _dot_terms(d_cols, g_dz[:, m], u_dz[:, m], n_time_steps_full, **dot_kw)
         term_z = _dot_terms(z_cols[:m], g_zz[:m, m], gamma_zz[:m, m], n_time_steps_full, **dot_kw)
-        z_cols.append(_mask(active_m, m, term_d + term_z + own))
+        z_value = term_d + term_z + own
+        if z_gate is not None:
+            z_value = pt.switch(z_gate, z_value, 0.0)
+        z_cols.append(_mask(active_m, m, z_value))
     Z = pt.stack(z_cols, axis=1) if n_covariates > 0 else pt.zeros((n_time_steps_full, 0))
 
     # -- treatments C (n_time_steps_full, n_treatments): D->C + Z->C + upstream C->C + own drive -----
@@ -672,11 +721,35 @@ def build_symbolic_graph(
             own = own + hf_sigma[k] * eps_c_hf[:, k]
         if use_pulse[k]:
             own = own + pulse_amp[k] * eps_c_pulse[:, k]
+        c_gate = c_multiplier = None
+        if trajectory is not None:
+            # A treatment's level components multiply its activated input (a sum
+            # in log-level) and its gate zeroes it; both shape every variant the
+            # decomposition compares, never the schedule-free natural recursion.
+            c_multiplier = trajectories.treatment_multiplier_column(
+                trajectory["treatment"], k, weeks, n_time_steps
+            )
+            c_gate = trajectories.activity_column(trajectory["treatment"], k, weeks)
+            c_activity.append(c_gate)
+            c_log_level_shift.append(
+                trajectories.level_shift_column(
+                    trajectory["treatment"], k, weeks, n_time_steps, log_level=True
+                )
+            )
+
+        def _scheduled(x: TensorVariable, _mult=c_multiplier, _gate=c_gate) -> TensorVariable:
+            if _mult is not None:
+                x = x * _mult
+            if _gate is not None:
+                x = cast(TensorVariable, pt.switch(_gate, x, 0.0))
+            return x
+
         term_d = _dot_terms(d_cols, g_dc[:, k], w_dc[:, k], n_time_steps_full, **dot_kw)
         term_z = _dot_terms(z_cols, g_zc[:, k], v_zc[:, k], n_time_steps_full, **dot_kw)
         # The natural recursion is retained solely for the realism reference.
         # The observed recursion instead sees already-clamped upstream parents,
-        # which is the SCM meaning of a treatment intervention.
+        # which is the SCM meaning of a treatment intervention. The natural one
+        # also carries no trajectory schedule: it is the organic input.
         term_c_unshocked = _dot_terms(
             c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full, **dot_kw
         )
@@ -690,15 +763,23 @@ def build_symbolic_graph(
             _mask(
                 active_c,
                 k,
-                _clamp_treatment(pt.softplus(term_d + term_z + term_c + own), params, k),
+                _clamp_treatment(
+                    _scheduled(pt.softplus(term_d + term_z + term_c + own)), params, k
+                ),
             )
         )
-        c_base_cols.append(_mask(active_c, k, _clamp_treatment(pt.softplus(own), params, k)))
+        c_base_cols.append(
+            _mask(active_c, k, _clamp_treatment(_scheduled(pt.softplus(own)), params, k))
+        )
         c_no_cc_cols.append(
-            _mask(active_c, k, _clamp_treatment(pt.softplus(term_d + term_z + own), params, k))
+            _mask(
+                active_c,
+                k,
+                _clamp_treatment(_scheduled(pt.softplus(term_d + term_z + own)), params, k),
+            )
         )
         c_no_cc_zc_cols.append(
-            _mask(active_c, k, _clamp_treatment(pt.softplus(term_d + own), params, k))
+            _mask(active_c, k, _clamp_treatment(_scheduled(pt.softplus(term_d + own)), params, k))
         )
     C = pt.stack(c_cols, axis=1)
     C_base = pt.stack(c_base_cols, axis=1)
@@ -903,9 +984,10 @@ def build_symbolic_graph(
         # output must not displace an existing one.
         "outcome_noise": outcome_noise,
     }
+
     # These are intentionally audit-only paths.  They are drawn to decide
     # whether the *natural* world is realistic, never persisted in corpora.
-    if params.get("treatment_shock") is not None:
+    def _natural_outputs() -> tuple[TensorVariable, TensorVariable]:
         # Reuse the pinned parameter-only anchors. This leaves every persisted
         # response array unchanged; only these audit-only outputs and
         # realism-filter acceptance can move.
@@ -916,6 +998,41 @@ def build_symbolic_graph(
             unshocked_contribs.append(
                 g_cy[k] * beta[k] * _saturate_col(ad_unshocked, scale_k, params, k)
             )
-        outputs["treatments_unshocked"] = pt.stack(c_unshocked_cols, axis=1)[window]
-        outputs["outcome_unshocked"] = baseline + pt.stack(unshocked_contribs, axis=1).sum(axis=1)
+        return (
+            pt.stack(c_unshocked_cols, axis=1)[window],
+            baseline + pt.stack(unshocked_contribs, axis=1).sum(axis=1),
+        )
+
+    if params.get("treatment_shock") is not None:
+        outputs["treatments_unshocked"], outputs["outcome_unshocked"] = _natural_outputs()
+    if trajectory is not None:
+
+        def _per_input(cols: list, n: int, dtype: str, fill: float) -> TensorVariable:
+            if n == 0:
+                return pt.zeros((n_time_steps, 0), dtype=dtype)
+            full = [
+                pt.cast(col, dtype) if col is not None else pt.full(n_time_steps_full, fill, dtype)
+                for col in cols
+            ]
+            return cast(TensorVariable, pt.stack(full, axis=1)[window])
+
+        # 1 where the input's gates are on (ones without a gate); the summed
+        # level component (treatments: log-level), exactly 0.0 without one.
+        outputs["treatment_activity"] = _per_input(c_activity, n_treatments, "int8", 1)
+        outputs["covariate_activity"] = _per_input(z_activity, n_covariates, "int8", 1)
+        outputs["treatment_log_level_shift"] = _per_input(
+            c_log_level_shift, n_treatments, "float64", 0.0
+        )
+        outputs["covariate_level_shift"] = _per_input(z_level_shift, n_covariates, "float64", 0.0)
+        # The schedule-free realism reference (no shocks, no treatment schedule,
+        # natural parents). It aliases an existing pair whenever that pair is
+        # already schedule-free, so a cell with nothing wired adds no compute.
+        treatment_scheduled = any(col is not None for col in c_activity + c_log_level_shift)
+        if "treatments_unshocked" in outputs:
+            natural = (outputs["treatments_unshocked"], outputs["outcome_unshocked"])
+        elif treatment_scheduled:
+            natural = _natural_outputs()
+        else:
+            natural = (outputs["treatments"], outputs["outcome"])
+        outputs["treatments_natural"], outputs["outcome_natural"] = natural
     return {"outputs": outputs}

@@ -78,7 +78,10 @@ def check_template_supported(cfg: SCMPrior) -> None:
 
     Treatment shocks and prior conditioning both add per-world structure that is
     still baked into the graph, and a non-degenerate confounding range would need
-    its own input slot. Recipes using them must stay on the per-world path.
+    its own input slot. Composable trajectory components and per-input hf/pulse
+    inclusion are per-cell structure the template does not take as inputs yet
+    (its texture flags are all-or-none). Recipes using them must stay on the
+    per-world path.
     """
     if cfg.n_treatment_shocks:
         raise ValueError("template generation does not support treatment shocks yet")
@@ -91,6 +94,22 @@ def check_template_supported(cfg: SCMPrior) -> None:
                 "template generation requires a fixed confounding_strength; "
                 f"got range {cfg.confounding_strength_range}"
             )
+    if cfg.trajectory_components_enabled:
+        raise ValueError(
+            "template generation does not support composable trajectory components "
+            "(onset, offset, flighting, level_jump, seasonal, trend) yet"
+        )
+    for input_type, probs in cfg.trajectory_inclusion_probs().items():
+        for component, range_name in (("hf", "hf_sigma_range"), ("pulse", "pulse_prob_range")):
+            # The template wires a texture term for every node whenever its
+            # range is live (_texture_flag), i.e. it assumes inclusion 1.
+            live = float(getattr(cfg, f"{input_type}_{range_name}")[1]) > 0.0
+            if probs[component] != (1.0 if live else 0.0):
+                raise ValueError(
+                    "template generation requires all-or-none texture "
+                    f"({input_type}_{component}_inclusion_prob=1.0), got "
+                    f"{getattr(cfg, f'{input_type}_{component}_inclusion_prob')!r}"
+                )
 
 
 def _pad_to(values, width: int, dtype: str) -> np.ndarray:
