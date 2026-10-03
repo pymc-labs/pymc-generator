@@ -104,18 +104,6 @@ def root_saturation(x: TensorVariable, alpha: TensorVariable) -> TensorVariable:
 # --------------------------------------------------------------------------
 
 
-#: Sensible Uniform prior ranges per family shape parameter. Chosen so that on
-#: an input with mean 1 every family is monotone increasing and O(1)-scaled
-#: (max ≲ 2 on x ∈ [0, 2]).
-SATURATION_PRIOR_RANGES: dict[str, dict[str, tuple[float, float]]] = {
-    "hill": {"slope": (1.0, 3.0), "kappa_mult": (0.7, 1.5)},
-    "logistic": {"lam": (0.5, 3.0)},
-    "michaelis_menten": {"kappa_mult": (0.7, 1.5)},
-    "tanh": {"c": (0.3, 1.5)},
-    "root": {"alpha": (0.3, 0.9)},
-}
-
-
 def hill_kappa_relative(x, reference_level, *, slope, kappa_mult) -> TensorVariable:
     """Hill curve with κ = kappa_mult · reference_level; unit asymptote."""
     safe_reference_level = pt.maximum(reference_level, 1e-8)
@@ -126,6 +114,39 @@ def logistic_kappa_relative(x, reference_level, *, lam) -> TensorVariable:
     """Logistic curve with half-point ln(3)/lam · reference_level."""
     safe_reference_level = pt.maximum(reference_level, 1e-8)
     return logistic_saturation(x / safe_reference_level, lam)
+
+
+def stable_hill_kappa_relative(x, reference_level, *, slope, kappa_mult) -> TensorVariable:
+    """The same Hill curve in log space, with an exact zero at zero input.
+
+    Opt-in mechanism priors can put the operating point far below κ or admit
+    steep slopes. Neither a power ratio nor subtracting that ratio from one
+    is numerically safe there. A positive surrogate keeps the unselected
+    zero-input branch and its gradients finite without changing the response.
+    """
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    positive = pt.gt(x, 0.0)
+    safe_x = pt.switch(positive, x, 1.0)
+    ratio = safe_x / (kappa_mult * safe_reference_level)
+    # One rounded ratio is far more accurate near the knee than subtracting
+    # three absolute logarithms. Separate logs remain for unrepresentable ratios.
+    direct = pt.ge(ratio, np.finfo("float64").tiny) & pt.le(ratio, np.finfo("float64").max)
+    log_ratio = pt.switch(
+        direct,
+        pt.log(pt.switch(direct, ratio, 1.0)),
+        pt.log(safe_x) - pt.log(safe_reference_level) - pt.log(kappa_mult),
+    )
+    log_odds = slope * log_ratio
+    response = pt.exp(log_odds - pt.logaddexp(0.0, log_odds))
+    result: TensorVariable = pt.switch(positive, response, 0.0)
+    return result
+
+
+def stable_logistic_kappa_relative(x, reference_level, *, lam) -> TensorVariable:
+    """The same unit-asymptote logistic curve without subtraction cancellation."""
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    result: TensorVariable = pt.tanh((x / safe_reference_level) * (lam / 2.0))
+    return result
 
 
 def michaelis_menten_kappa_relative(x, reference_level, *, kappa_mult) -> TensorVariable:
@@ -178,6 +199,8 @@ def apply_geometric_carryover(
 
     Delegates to ``pymc_marketing.mmm.transformers.geometric_adstock`` (ConvMode
     ``After``, ``normalize=True``). ``alpha`` may be a float or a symbolic scalar.
+    Normalization divides the kernel weights by their sum; it does not map
+    data to [0, 1]. The result stays in the input's units.
     """
     out: XTensorVariable = _pmm.geometric_adstock(
         _as_time(x[:, 0]), alpha=alpha, l_max=int(l_max), dim="time", normalize=True

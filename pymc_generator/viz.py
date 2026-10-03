@@ -29,7 +29,14 @@ from .diagnostics import (
     DataDiagnostics,
 )
 from .outcomes import OutcomeDistributions, QuantityDistribution, StatName, _q_key
-from .worlds import SCM, edges_with_coeffs, mechanism_label, node_status, treatment_role
+from .worlds import (
+    SCM,
+    edges_with_coeffs,
+    mechanism_label,
+    node_status,
+    parameter_text,
+    treatment_role,
+)
 
 # Validated categorical palette — slots are assigned in FIXED order per entity
 # and reused consistently across every figure of a bundle.
@@ -323,7 +330,7 @@ def plot_treatments(world: SCM, path: str, title: str | None = None) -> None:
                 lw=1.5,
                 label=f"true contribution ({contrib_scale})",
             )
-            tag = f"β={params['beta'][k]:.2f}"
+            tag = f"β={parameter_text(params, params['beta'][k])}"
         else:
             tag = f"no direct edge ({treatment_role(g, k)})"
         ax.set_title(f"C{k + 1} — {mechanism_label(params, k)} — {tag}", fontsize=9, color=INK)

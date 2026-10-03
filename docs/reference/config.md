@@ -5,6 +5,182 @@ Build configs through [`make_scm_prior`](#pymc_generator.presets.make_scm_prior)
 texture — and reach for [`SCMPrior`](#pymc_generator.sampler.SCMPrior) directly
 only when you need a field the preset does not surface.
 
+## Mechanism priors
+
+`SCMPrior.saturation_prior_ranges` configures the dimensionless shape supports
+for each nonlinear family. Supply the complete nested mapping below; there are
+no shape parameters for `linear`.
+
+| Family | Parameter | Default range | Domain |
+| --- | --- | --- | --- |
+| `hill` | `slope` | `(1.0, 3.0)` | `0 < lo <= hi` |
+| `hill` | `kappa_mult` | `(0.7, 1.5)` | `0 < lo <= hi` |
+| `logistic` | `lam` | `(0.5, 3.0)` | `0 < lo <= hi` |
+| `michaelis_menten` | `kappa_mult` | `(0.7, 1.5)` | `0 < lo <= hi` |
+| `tanh` | `c` | `(0.3, 1.5)` | `0 < lo <= hi` |
+| `root` | `alpha` | `(0.3, 0.9)` | `0 < lo <= hi <= 1` |
+
+Bounds must be finite real numbers, not booleans or numeric strings, and must
+fit the existing float32 corpus-storage maximum. Unknown or missing families
+and parameters raise `ValueError`. Equal bounds fix a parameter exactly and
+consume no random draw. The defaults are the former module-constant ranges;
+each configuration owns its mapping.
+
+Shape parameters are uniform on their configured ranges, except that
+`mm_scale_prior="log_uniform"` opts into
+
+$$
+\log K_k \sim \mathrm{U}(\log a,\log b),\qquad
+\kappa_k = K_k r_k,\qquad
+p(K_k)=\frac{1}{K_k\log(b/a)}.
+$$
+
+Here `(a, b)` is
+`saturation_prior_ranges["michaelis_menten"]["kappa_mult"]` and `r_k` is the
+existing parameter-only `saturation_scale`. A broad range such as `(0.01, 100)`
+spreads the half-saturation point over four orders of magnitude: small `K`
+saturates early; large `K` is nearly linear around the anchor.
+`mm_scale_prior="uniform"` is the **default**, retaining the old law and seeded
+outputs. Fixed MM bounds remain exactly their original value, including in
+log-uniform mode. Distinct bounds that collapse to the same float64 logarithm
+are rejected rather than replaced by an out-of-support constant, and
+`exp(log K)` is clipped to `[a, b]` so rounded logarithmic bounds never place
+`K` an ulp outside the configured support. The lower MM bound times the
+minimum anchor `1e-8` must stay positive, so a zero treatment input never
+evaluates `0/0`.
+
+Hill [prior conditioning](../guide/corpus.md#prior-conditioning-ace) uses the configured `slope`
+support too. Its width ranges must fit that support, and with conditioning
+enabled every width must exceed `8 * eps32 * max(|support|)`, the narrowest
+interval float32 `prior_cond` labels resolve, so stored intervals still match
+the interval actually used. Narrow or very large supports may require
+overriding `prior_cond_width_ranges["hill_shape"]`. With
+`prior_conditioning=False`, only explicitly configured width ranges are checked
+against their supports.
+
+### Reference-contribution priors
+
+These optional priors replace raw outcome coefficients, not input-to-input
+edge loadings:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `treatment_reference_contribution_range` | `None` | Per-treatment `q_k ~ U(lo, hi)`; `0 <= lo <= hi`, `hi > 0` |
+| `treatment_reference_multiplier` | `1.0` | Positive reference input relative to `r_k` |
+| `covariate_reference_contribution_range` | `None` | Per-control `q_m ~ U(lo, hi)`; signed bounds allowed |
+| `covariate_reference_scale` | `1.0` | Fixed positive reference input in covariate units |
+
+With treatment targets enabled, for the drawn saturation shape:
+
+$$
+x_{\mathrm{ref},k}=m r_k,\qquad
+\beta_k=\frac{q_k}{f_k(x_{\mathrm{ref},k};r_k)},\qquad
+\beta_k f_k(x_{\mathrm{ref},k};r_k)=q_k.
+$$
+
+This is mathematically `q_k / f_k(m; 1)`. The implementation evaluates the
+actual parameter-only input and anchor with the shared response function,
+avoiding a separately rounded calibration point for steep curves.
+
+The target is the nominal response at a **post-carryover saturation input**,
+before the `g_cy` edge gate. With a valid unit-mass carryover kernel, holding
+raw treatment at `x_ref` for the kernel's full span gives this steady-state
+response. It is not a claim about finite-window means, cold starts, trajectories,
+or an invalid legacy Weibull kernel that produces zero carryover. A treatment
+without a direct outcome edge still contributes exactly zero.
+
+For controls, `rho_zy[m] = q_m / covariate_reference_scale` (computed as `q_m`
+times the float64 reciprocal of the scale). This is the nominal
+linear response at the fixed positive reference input, **before `g_zy` and any
+absorbing baseline floor**. Negative targets mean negative loadings; a control
+series remains signed. The fixed input avoids division by a zero or signed
+realized control mean. Under `baseline_floor_scope="non_treatment"`, credited
+control contributions are clipped differences and need not equal this nominal
+target.
+
+Both reference scales come from parameters, never a statistic of a realized
+series. Each enabled target prior takes precedence over `beta_additive_range`
+or `zy_coeff_range`, respectively; those raw ranges remain validated.
+`None` retains the corresponding raw-coefficient prior. Relative outcome noise
+still scales with `sqrt(sum((g_cy * beta)**2))`, now using the **derived beta**,
+not the reference target. Reference scalars are validated even when unused,
+but changing an unused scalar introduces no graph or RNG changes.
+
+Impossible reference configurations raise field-specific errors: the
+reference response must be normal (not subnormal) and representable, nonzero targets must
+not derive zero float64 coefficients, and coefficient support must fit the
+float32 corpus-storage maximum. Target supports containing zero are checked at
+their smallest nonzero float64 draw, not only at their endpoints. There is no
+silent clamping of targets or coefficients. With treatment targets enabled, the
+multiplier must produce a normal (not subnormal) positive input even at the
+generator's minimum anchor `r_k=1e-8`. Treatment coefficient bounds keep a
+small rounding margin, widened for Hill by its slope and tail depth. Actual
+reference-input products, including those from an oracle's supplied
+`saturation_scale`, must remain finite and positive. A drawn input or
+coefficient that still leaves this domain through rounding raises the same
+named `ValueError` in `sample_scm` and in corpus generation; corpus generation
+never resamples it. Opt-in mechanism settings use numerically stable,
+mathematically equivalent Hill/logistic evaluation; the legacy default graph
+and arithmetic remain unchanged. Descriptions and DOT graphs of opt-in worlds
+print saturation shape parameters, `beta` and edge coefficients with four
+significant digits, and conditioning intervals exactly.
+
+```python exec="1" source="block" result="text"
+import numpy as np
+from pymc_generator import SCMPrior, make_scm_prior, sample_scm
+
+shapes = SCMPrior().saturation_prior_ranges
+shapes["michaelis_menten"]["kappa_mult"] = (0.01, 100.0)
+families = ("linear", "hill", "logistic", "michaelis_menten", "tanh", "root")
+cfg = make_scm_prior(
+    n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=32,
+    saturation_prior_ranges=shapes,
+    saturation_family_probs={f: float(f == "michaelis_menten") for f in families},
+    mm_scale_prior="log_uniform",
+    treatment_reference_contribution_range=(0.7, 1.3),
+    treatment_reference_multiplier=2.0,
+    covariate_reference_contribution_range=(-0.2, 0.4),
+    covariate_reference_scale=3.0,
+    outcome_std_mode="absolute", rw_outcome_std_sigma=0.01,
+)
+world = sample_scm(cfg, seed=25)
+p = world.params
+reference_response = 2.0 / (2.0 + p["mm_kappa_mult"])
+np.testing.assert_allclose(
+    p["beta"] * reference_response, p["treatment_reference_contribution"],
+)
+np.testing.assert_allclose(
+    p["rho_zy"] * 3.0, p["covariate_reference_contribution"],
+)
+print("Reference contributions:", np.round(p["treatment_reference_contribution"], 6))
+```
+
+Enabled targets and actual reference inputs are recorded as
+`world.params["{treatment,covariate}_reference_{contribution,input}"]`, in
+`world.equation_parameters`, and in `describe_scm` / bundle descriptions.
+The oracle uses the same primitive priors and derives the same coefficients;
+in log-uniform mode its free MM variable is `mm_kappa_mult_log`, while
+`mm_kappa_mult` is deterministic. With target priors enabled, `beta` / `rho_zy`
+are deterministic and the corresponding `*_reference_contribution` variables
+are the primitive priors.
+
+Non-default effective mechanism settings add
+`diagnostics["mechanism_priors"]` to corpora with all configured shapes, MM
+distribution and reference settings. This optional metadata survives
+`save_corpus` / `load_corpus`; it does not add arrays or change the schema
+version. Default arrays and diagnostic inventory are unchanged. Enabling a
+new prior can change PyMC stream assignment at the same seed; stream alignment
+between different configurations is not promised.
+
+### Carryover normalization
+
+Geometric carryover delegates to
+`pymc_marketing.mmm.transformers.geometric_adstock(normalize=True)`.
+Normalization divides the finite kernel weights by their sum, so they sum to
+one; **it does not rescale data into `[0, 1]`**. The output remains in input
+units. Zero-padding at a cold start can reduce a constant input's initial
+response; normalization does not manufacture pre-window history.
+
 ## Covariate texture
 
 `rw_covariate_mean_range` sets the signed covariate drive's walk mean. It does not

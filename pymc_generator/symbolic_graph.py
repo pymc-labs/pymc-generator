@@ -342,6 +342,10 @@ def _saturate_family(
     if name == "linear":
         return cast(TensorVariable, ad_col / saturation_scale)
     family = mechanisms.SATURATION_FAMILIES[name]
+    if params.get("mechanism_priors_enabled", False) and name == "hill":
+        family = mechanisms.stable_hill_kappa_relative
+    elif params.get("mechanism_priors_enabled", False) and name == "logistic":
+        family = mechanisms.stable_logistic_kappa_relative
     if name == "hill":
         return family(
             ad_col,
@@ -423,6 +427,9 @@ def build_symbolic_graph(
         ``params["trajectory"]`` (from
         :func:`pymc_generator.trajectories.trajectory_params`, or the same layout
         with numpy values) adds the composable per-input trajectory components.
+        ``params["mechanism_priors_enabled"]`` selects numerically stable but
+        mathematically identical Hill/logistic evaluation for opt-in mechanism
+        priors. Omit it or leave it False to preserve the legacy graph and math.
     eps : dict
         The caller's noise RVs, each with leading dim
         ``n_time_steps_full = n_time_steps + burn_in``:

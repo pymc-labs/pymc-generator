@@ -90,6 +90,17 @@ def _default_saturation_family_probs() -> dict[str, float]:
     )
 
 
+def _default_saturation_prior_ranges() -> dict[str, dict[str, tuple[float, float]]]:
+    """Legacy shape supports, independently configurable for every prior."""
+    return {
+        "hill": {"slope": (1.0, 3.0), "kappa_mult": (0.7, 1.5)},
+        "logistic": {"lam": (0.5, 3.0)},
+        "michaelis_menten": {"kappa_mult": (0.7, 1.5)},
+        "tanh": {"c": (0.3, 1.5)},
+        "root": {"alpha": (0.3, 0.9)},
+    }
+
+
 #: Maximum draw rounds per cell before giving up (post-filter top-up loop).
 MAX_TOPUPS_PER_CELL = 8
 
@@ -159,6 +170,50 @@ def _reject_unrepresentable_bounds(name: str, value: object, lo: float, hi: floa
             )
 
 
+#: Relative slack for treatment coefficient bounds: the runtime response takes
+#: a few rounding steps (input product, anchor division) this support
+#: calculation does not replay. Hill widens it by its condition number.
+_ROUNDING_MARGIN = 1.0 + 8.0 * float(np.finfo(np.float64).eps)
+
+
+def _smallest_nonzero_uniform_magnitude(lo: float, hi: float) -> float | None:
+    """Smallest nonzero ``|q|`` a float64 ``U(lo, hi)`` draw can produce.
+
+    A draw is ``lo + (hi - lo) * u`` with ``u`` on the ``2**-53`` grid, so a
+    support containing zero yields nonzero values far below either endpoint.
+    Near zero the sum is a multiple of the finer quantum of its two terms;
+    cancellation against ``lo`` needs a grid step within a factor two of it.
+    ``None`` means the support is exactly zero.
+    """
+    magnitudes = [abs(x) for x in (lo, hi) if x != 0.0]
+    if lo < hi and lo <= 0.0 <= hi:
+        step = (hi - lo) * 2.0**-53
+        magnitudes.append(step)
+        if lo != 0.0 and step <= 2.0 * abs(lo):
+            magnitudes.append(float(np.spacing(abs(lo))) / 2.0)
+    if not magnitudes:
+        return None
+    return max(min(magnitudes), float(np.nextafter(0.0, 1.0)))
+
+
+def _prior_cond_storage_resolution(support) -> float:
+    """Narrowest conditioning width float32 ``prior_cond`` labels resolve.
+
+    Storing an endpoint moves it by at most half a float32 spacing at the
+    support's magnitude; wider intervals keep that under 1/16 of their width.
+    """
+    return 8 * float(np.finfo(np.float32).eps) * max(abs(float(x)) for x in support)
+
+
+class _ReferenceRepresentabilityError(ValueError):
+    """A drawn reference input or derived coefficient left its validated domain.
+
+    Configuration validation bounds both on parameter support; this runtime
+    check is the backstop for residual rounding. It is never retried, because
+    resampling would silently truncate the configured target prior.
+    """
+
+
 #: Frame that marks an exception as having escaped a node PyTensor was
 #: evaluating. Every linker funnels its ``except Exception`` through
 #: ``pytensor.link.utils.raise_with_op``, which re-raises the ORIGINAL
@@ -188,6 +243,8 @@ def _is_retryable_draw_failure(exc: BaseException) -> bool:
     predicate latent_unobserved BOTH that the failure is numeric AND that it escaped a
     node PyTensor was evaluating (rather than our own call frames around it).
     """
+    if isinstance(exc, _ReferenceRepresentabilityError):
+        return False
     if not isinstance(exc, _RETRYABLE_DRAW_ERRORS):
         return False
     tb = exc.__traceback__
@@ -254,6 +311,10 @@ class SCMPrior:
     saturation_family_probs: dict[str, float] = field(
         default_factory=_default_saturation_family_probs
     )
+    saturation_prior_ranges: dict[str, dict[str, tuple[float, float]]] = field(
+        default_factory=_default_saturation_prior_ranges
+    )
+    mm_scale_prior: Literal["uniform", "log_uniform"] = "uniform"
     # Weibull carryover prior ranges
     weibull_lam_range: tuple[float, float] = (2.0, 8.0)
     weibull_k_range: tuple[float, float] = (1.5, 4.0)
@@ -273,6 +334,13 @@ class SCMPrior:
     dy_coeff_range: tuple[float, float] = (0.15, 0.45)  # D->Y loadings
     zy_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->Y loadings
     beta_additive_range: tuple[float, float] = (0.5, 2.0)  # treatment effects
+    # Nominal input contributions before edge gates and any absorbing floor.
+    # Treatment references are post-carryover, relative to the parameter-only
+    # saturation anchor; signed covariates use a fixed positive input scale.
+    treatment_reference_contribution_range: tuple[float, float] | None = None
+    treatment_reference_multiplier: float = 1.0
+    covariate_reference_contribution_range: tuple[float, float] | None = None
+    covariate_reference_scale: float = 1.0
     # Random-walk and outcome-noise priors.
     rw_covariate_mean_range: tuple[float, float] = (-1.0, 1.0)  # covariate drive (Z)
     rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # treatments
@@ -558,30 +626,43 @@ class SCMPrior:
     def n_query(self) -> int:
         return _n_query(self.n_time_steps, self.query_frac)
 
+    @property
+    def mechanism_priors_enabled(self) -> bool:
+        """Whether effective mechanism priors depart from the legacy path."""
+        defaults = _default_saturation_prior_ranges()
+        changed_shapes = any(
+            tuple(bounds) != defaults[family][name]
+            for family, parameters in self.saturation_prior_ranges.items()
+            for name, bounds in parameters.items()
+        )
+        return (
+            changed_shapes
+            or self.mm_scale_prior != "uniform"
+            or self.treatment_reference_contribution_range is not None
+            or self.covariate_reference_contribution_range is not None
+        )
+
     def prior_cond_spec(self) -> dict[str, dict[str, tuple[float, float]]]:
         """Effective ``{quantity: {"support": (lo, hi), "width_range": (w_lo, w_hi)}}``.
 
         Quantities iterate in the LOCKED ``PRIOR_COND_QUANTITIES`` order (the
         order both the interval RNG draws and the ``prior_cond`` columns
-        follow). Supports come from the same constants the unconditioned
+        follow). Supports come from the same config ranges the unconditioned
         priors use — ``carryover_alpha_range`` for the geometric carryover decay,
-        ``SATURATION_PRIOR_RANGES["hill"]["slope"]`` for the Hill shape — so
+        ``saturation_prior_ranges["hill"]["slope"]`` for the Hill shape — so
         the conditioned interval is nested in the exact global prior by
         construction. Width ranges default to
         :data:`PRIOR_COND_DEFAULT_WIDTH_RANGES`, overridable per quantity via
         ``prior_cond_width_ranges``.
         """
-        # Deferred: mechanisms pulls the pytensor / pymc-marketing stack.
-        from .mechanisms import SATURATION_PRIOR_RANGES
-
         supports: dict[str, tuple[float, float]] = {
             "carryover_alpha": (
                 float(self.carryover_alpha_range[0]),
                 float(self.carryover_alpha_range[1]),
             ),
             "hill_shape": (
-                float(SATURATION_PRIOR_RANGES["hill"]["slope"][0]),
-                float(SATURATION_PRIOR_RANGES["hill"]["slope"][1]),
+                float(self.saturation_prior_ranges["hill"]["slope"][0]),
+                float(self.saturation_prior_ranges["hill"]["slope"][1]),
             ),
         }
         widths = {**PRIOR_COND_DEFAULT_WIDTH_RANGES, **(self.prior_cond_width_ranges or {})}
@@ -593,6 +674,103 @@ class SCMPrior:
             for q in PRIOR_COND_QUANTITIES
         }
 
+    def _validate_reference_coefficients(self) -> None:
+        """Bound derived coefficients using parameter support, not realized inputs.
+
+        Control bounds replay the runtime ``q * fl(1 / scale)`` exactly; treatment
+        bounds divide by the smallest admitted reference response with a rounding
+        margin. Supports containing zero are checked at their smallest nonzero draw.
+        """
+        if self.covariate_reference_contribution_range is not None:
+            lo, hi = (float(x) for x in self.covariate_reference_contribution_range)
+            # Generation multiplies by this reciprocal, exactly as validated here;
+            # Python float arithmetic overflows to inf without a NumPy warning.
+            inverse_scale = 1.0 / float(self.covariate_reference_scale)
+            smallest = _smallest_nonzero_uniform_magnitude(lo, hi)
+            largest_coefficient = max(abs(lo), abs(hi)) * inverse_scale
+            if not np.isfinite(inverse_scale) or largest_coefficient > CORPUS_STORAGE_MAX:
+                raise ValueError(
+                    "covariate_reference_contribution_range / covariate_reference_scale "
+                    "requires a coefficient exceeding the float32 corpus storage maximum"
+                )
+            if smallest is not None and smallest * inverse_scale == 0.0:
+                raise ValueError(
+                    "covariate_reference_contribution_range / covariate_reference_scale "
+                    "requires a nonzero coefficient that underflows in float64"
+                )
+        if self.treatment_reference_contribution_range is None:
+            return
+        lo, hi = (float(x) for x in self.treatment_reference_contribution_range)
+        smallest = _smallest_nonzero_uniform_magnitude(lo, hi)
+        multiplier = float(self.treatment_reference_multiplier)
+        if multiplier * 1e-8 < np.finfo(np.float64).tiny:
+            raise ValueError(
+                "treatment_reference_multiplier * the minimum saturation_scale=1e-8 "
+                "must produce a normal positive treatment_reference_input in float64"
+            )
+        ranges = self.saturation_prior_ranges
+        hill_kappa_hi = float(ranges["hill"]["kappa_mult"][1])
+        hill_slope = float(ranges["hill"]["slope"][1 if hill_kappa_hi >= multiplier else 0])
+        hill_ratio = multiplier / hill_kappa_hi
+        hill_log_ratio = (
+            np.log(hill_ratio)
+            if np.finfo(float).tiny <= hill_ratio <= np.finfo(float).max
+            else np.log(multiplier) - np.log(hill_kappa_hi)
+        )
+        # The runtime ratio carries a few ulps of rounding; steep slopes and deep
+        # tails amplify it in the response.
+        eps = float(np.finfo(np.float64).eps)
+        with np.errstate(over="ignore"):
+            hill_condition = 4.0 * hill_slope + 2.0 * abs(hill_slope * hill_log_ratio) + 8.0
+            margins = {"hill": float(np.exp(hill_condition * eps))}
+        root_alpha = float(ranges["root"]["alpha"][1 if multiplier < 1.0 else 0])
+        # Saturation can intentionally be almost flat. Underflow means its
+        # requested target cannot be represented by a finite supported beta.
+        with np.errstate(over="ignore", under="ignore"):
+            lower_response = {
+                "linear": multiplier,
+                "hill": float(np.exp(-np.logaddexp(0.0, -hill_slope * hill_log_ratio))),
+                "logistic": float(np.tanh(0.5 * float(ranges["logistic"]["lam"][0]) * multiplier)),
+                "michaelis_menten": multiplier
+                / (multiplier + float(ranges["michaelis_menten"]["kappa_mult"][1])),
+                "tanh": float(np.tanh(multiplier / float(ranges["tanh"]["c"][1]))),
+                "root": multiplier**root_alpha,
+            }
+        root_alpha_max = float(ranges["root"]["alpha"][1 if multiplier >= 1.0 else 0])
+        upper_response = {
+            "linear": multiplier,
+            "root": multiplier**root_alpha_max,
+        }
+        for family, response in lower_response.items():
+            if self.saturation_family_probs[family] <= 0.0:
+                continue
+            # linear has no shape parameters, so name its family probability.
+            source = (
+                "saturation_family_probs['linear']"
+                if family == "linear"
+                else f"saturation_prior_ranges[{family!r}]"
+            )
+            margin = margins.get(family, _ROUNDING_MARGIN)
+            largest_coefficient = np.inf
+            # Subnormal responses carry too few significant bits for any margin.
+            if np.isfinite(response) and response >= np.finfo(np.float64).tiny:
+                with np.errstate(over="ignore"):
+                    largest_coefficient = float(np.float64(hi) / response * margin)
+            if largest_coefficient > CORPUS_STORAGE_MAX:
+                raise ValueError(
+                    "treatment_reference_contribution_range with "
+                    f"treatment_reference_multiplier={multiplier!r} and "
+                    f"{source} requires an unrepresentable reference response or a "
+                    "coefficient exceeding the float32 corpus storage maximum"
+                )
+            largest_response = upper_response.get(family, 1.0) * margin
+            if smallest is not None and np.float64(smallest) / largest_response == 0.0:
+                raise ValueError(
+                    "treatment_reference_contribution_range with "
+                    f"treatment_reference_multiplier={multiplier!r} and "
+                    f"{source} requires a nonzero coefficient that underflows in float64"
+                )
+
     def validate(self) -> None:
         def _integer(name: str, value, *, minimum: int) -> None:
             if (
@@ -603,12 +781,16 @@ class SCMPrior:
                 raise ValueError(f"{name} must be an integer >= {minimum}, got {value!r}")
 
         def _finite_real(name: str, value, *, positive: bool = False, nonnegative: bool = False):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError):
+                numeric = np.nan
             if (
                 isinstance(value, (bool, np.bool_))
                 or not isinstance(value, (int, float, np.integer, np.floating))
-                or not np.isfinite(value)
-                or (positive and value <= 0)
-                or (nonnegative and value < 0)
+                or not np.isfinite(numeric)
+                or (positive and numeric <= 0)
+                or (nonnegative and numeric < 0)
             ):
                 domain = "positive" if positive else "nonnegative" if nonnegative else "finite"
                 raise ValueError(f"{name} must be a {domain} real scalar, got {value!r}")
@@ -683,19 +865,21 @@ class SCMPrior:
 
         def _finite_range(
             name: str,
+            value: Any = ...,
             *,
             minimum: float | None = None,
             maximum: float | None = None,
             minimum_exclusive: bool = False,
             reason: str | None = None,
         ) -> tuple[float, float]:
-            value = getattr(self, name)
+            if value is ...:
+                value = getattr(self, name)
             try:
                 lo, hi = value
                 if isinstance(lo, (bool, np.bool_)) or isinstance(hi, (bool, np.bool_)):
                     raise TypeError
                 lo, hi = float(lo), float(hi)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 raise ValueError(f"{name} must be a finite (lo, hi) pair, got {value!r}")
             valid_min = minimum is None or (lo > minimum if minimum_exclusive else lo >= minimum)
             if not (
@@ -711,6 +895,86 @@ class SCMPrior:
                 raise ValueError(message)
             _reject_unrepresentable_bounds(name, value, lo, hi)
             return lo, hi
+
+        defaults = _default_saturation_prior_ranges()
+        if not isinstance(self.saturation_prior_ranges, dict) or set(
+            self.saturation_prior_ranges
+        ) != set(defaults):
+            raise ValueError(
+                f"saturation_prior_ranges must have exactly families {tuple(defaults)}"
+            )
+        for family, parameters in defaults.items():
+            configured = self.saturation_prior_ranges[family]
+            if not isinstance(configured, dict) or set(configured) != set(parameters):
+                raise ValueError(
+                    f"saturation_prior_ranges[{family!r}] must have exactly parameters "
+                    f"{tuple(parameters)}"
+                )
+            for parameter, bounds in configured.items():
+                name = f"saturation_prior_ranges[{family!r}][{parameter!r}]"
+                try:
+                    lo, hi = bounds
+                except (TypeError, ValueError):
+                    raise ValueError(f"{name} must be a finite (lo, hi) pair, got {bounds!r}")
+                _finite_real(name, lo, positive=True)
+                _finite_real(name, hi, positive=True)
+                _finite_range(
+                    name,
+                    value=bounds,
+                    minimum=0.0,
+                    minimum_exclusive=True,
+                    maximum=1.0 if family == "root" else None,
+                )
+        if not isinstance(self.mm_scale_prior, str) or self.mm_scale_prior not in (
+            "uniform",
+            "log_uniform",
+        ):
+            raise ValueError("mm_scale_prior must be 'uniform' or 'log_uniform'")
+        mm_lo, mm_hi = (
+            float(x) for x in self.saturation_prior_ranges["michaelis_menten"]["kappa_mult"]
+        )
+        if (
+            self.mm_scale_prior == "log_uniform"
+            and mm_lo < mm_hi
+            and (np.log(mm_lo) >= np.log(mm_hi))
+        ):
+            raise ValueError(
+                "saturation_prior_ranges['michaelis_menten']['kappa_mult'] "
+                "bounds collapse in log space under mm_scale_prior='log_uniform'"
+            )
+        if mm_lo * 1e-8 == 0.0:
+            raise ValueError(
+                "saturation_prior_ranges['michaelis_menten']['kappa_mult'] lower bound "
+                "times the minimum saturation_scale=1e-8 must be positive in float64; "
+                "otherwise a zero treatment input evaluates 0/0"
+            )
+        for name in ("treatment_reference_multiplier", "covariate_reference_scale"):
+            _finite_real(name, getattr(self, name), positive=True)
+            _reject_unrepresentable_bounds(
+                name, getattr(self, name), float(getattr(self, name)), float(getattr(self, name))
+            )
+        for name in (
+            "treatment_reference_contribution_range",
+            "covariate_reference_contribution_range",
+        ):
+            bounds = getattr(self, name)
+            if bounds is None:
+                continue
+            try:
+                lo, hi = bounds
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be None or a finite (lo, hi) pair, got {bounds!r}")
+            _finite_real(name, lo)
+            _finite_real(name, hi)
+            if any(float(endpoint) == 0.0 and endpoint != 0.0 for endpoint in (lo, hi)):
+                raise ValueError(f"{name} nonzero bounds must remain nonzero in float64")
+            _finite_range(
+                name,
+                minimum=0.0 if name == "treatment_reference_contribution_range" else None,
+            )
+            if name == "treatment_reference_contribution_range" and float(hi) <= 0.0:
+                raise ValueError(f"{name} must have an upper bound > 0")
+        self._validate_reference_coefficients()
 
         _finite_range("carryover_alpha_range", minimum=0.0, maximum=1.0)
         _finite_range("weibull_lam_range", minimum=0.0, minimum_exclusive=True)
@@ -797,7 +1061,15 @@ class SCMPrior:
                     f"{PRIOR_COND_QUANTITIES}, got {unknown}"
                 )
         if self.prior_conditioning or self.prior_cond_width_ranges is not None:
+            # Disabled conditioning only checks the widths it was given.
+            checked = (
+                PRIOR_COND_QUANTITIES
+                if self.prior_conditioning
+                else tuple(self.prior_cond_width_ranges or ())
+            )
             for q, cond_spec in self.prior_cond_spec().items():
+                if q not in checked:
+                    continue
                 s_lo, s_hi = cond_spec["support"]
                 w_lo, w_hi = cond_spec["width_range"]
                 if not 0.0 < w_lo <= w_hi <= s_hi - s_lo:
@@ -805,6 +1077,14 @@ class SCMPrior:
                         f"prior conditioning for {q!r} needs "
                         f"0 < w_lo <= w_hi <= support width; got width range "
                         f"({w_lo}, {w_hi}) against support ({s_lo}, {s_hi})"
+                    )
+                resolution = _prior_cond_storage_resolution((s_lo, s_hi))
+                # Only enabled conditioning writes float32 prior_cond labels.
+                if self.prior_conditioning and w_lo <= resolution:
+                    raise ValueError(
+                        f"prior conditioning for {q!r} needs prior_cond_width_ranges with "
+                        f"a lower bound above {resolution:.3g}, the narrowest width float32 "
+                        f"prior_cond labels resolve for support ({s_lo}, {s_hi})"
                     )
         # Prior-shift eval: legacy edge-rate overrides
         if self.edge_rate_overrides is not None:
@@ -2254,9 +2534,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             except _RETRYABLE_DRAW_ERRORS as exc:
                 if not _is_retryable_draw_failure(exc):
                     # Not a numeric failure from inside a PyTensor node
-                    # evaluation: a bug here recurs at every seed, so retrying
-                    # only buries it under MAX_TOPUPS_PER_CELL empty rounds and
-                    # then blames the realism filter. Let it out untouched.
+                    # evaluation, or a reference-domain failure that resampling
+                    # would hide by truncating the target prior. Retrying only
+                    # buries it under MAX_TOPUPS_PER_CELL empty rounds and then
+                    # blames the realism filter. Let it out untouched.
                     raise
                 # A sporadic numeric draw failure — a hierarchical draw handed a
                 # downstream distribution an out-of-domain parameter. Retry with
@@ -2501,6 +2782,26 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         # next to it and save_corpus drops the whole block.
         "timing": {"elapsed_s": float(time.perf_counter() - t_start)},
     }
+    if cfg.mechanism_priors_enabled:
+        diagnostics["mechanism_priors"] = {
+            "saturation_prior_ranges": {
+                family: {name: [float(lo), float(hi)] for name, (lo, hi) in parameters.items()}
+                for family, parameters in cfg.saturation_prior_ranges.items()
+            },
+            "mm_scale_prior": cfg.mm_scale_prior,
+            "treatment_reference_contribution_range": (
+                [float(x) for x in cfg.treatment_reference_contribution_range]
+                if cfg.treatment_reference_contribution_range is not None
+                else None
+            ),
+            "treatment_reference_multiplier": float(cfg.treatment_reference_multiplier),
+            "covariate_reference_contribution_range": (
+                [float(x) for x in cfg.covariate_reference_contribution_range]
+                if cfg.covariate_reference_contribution_range is not None
+                else None
+            ),
+            "covariate_reference_scale": float(cfg.covariate_reference_scale),
+        }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
         # the supports, and the width ranges so consumers derive feature
