@@ -43,6 +43,8 @@ from .slots import (
     CORPUS_SCHEMA_VERSION,
     EDGE_BASE_RATES,
     EDGE_TYPES_EXTENDED,
+    MECHANISM_ARRAY_FIELDS,
+    MECHANISM_REFERENCE_FIELDS,
     N_COVARIATES_DEMO,
     N_LATENT_DEMO,
     N_TIME_STEPS_DEMO,
@@ -53,6 +55,8 @@ from .slots import (
     TRAJECTORY_COMPONENTS,
     TRAJECTORY_INPUTS,
     TRAJECTORY_MAX_LOG_SHIFT,
+    TRAJECTORY_PARAM_FIELDS,
+    TRAJECTORY_PARAM_REPORTS,
     SlotLayout,
 )
 from .trajectories import (
@@ -124,9 +128,9 @@ PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
 #: configuration validation unbounded.
 MAX_QUERY_HORIZON_SEARCH_STEPS = 1_000_000
 
-#: Every series and parameter array in the corpus is persisted as float32 (see
-#: the cast block at the end of ``_generate_corpus_additive``), so this is the
-#: largest magnitude the schema can actually hold.
+#: Existing series and base features retain float32 storage. New realised
+#: trajectory/mechanism truth uses float64; this limit applies only to the
+#: historical float32 arrays.
 CORPUS_STORAGE_DTYPE = np.float32
 CORPUS_STORAGE_MAX = float(np.finfo(CORPUS_STORAGE_DTYPE).max)
 
@@ -412,9 +416,9 @@ class SCMPrior:
     # are scale-free like the treatment factors; unlike the treatment pulse, the
     # covariate pulse is CENTRED (``amp * (fire - prob)``), because a covariate is
     # signed and its level is identified by ``rw_z_mean`` alone.
-    # Defaults are inert: no graph term, the magnitudes degenerate to constants
-    # (no parameter RV, no RNG consumed) and corpora stay byte-identical to the
-    # pre-texture format. make_scm_prior enables them.
+    # Defaults are inert: no graph term, magnitude/probability priors are
+    # constants and consume no RNG. Same-environment model arrays are stable,
+    # not archive bytes across schemas. make_scm_prior enables these controls.
     covariate_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     covariate_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
     covariate_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
@@ -472,8 +476,9 @@ class SCMPrior:
     # and stage 2 draws that cell's parameter as pm.Uniform(lo, lo + w)
     # instead of the global support. The draws are recorded in the corpus
     # under the ``prior_cond`` key (see PRIOR_COND_LAYOUT) so consumers can
-    # expose them as conditioning features. False (default) => byte-identical
-    # unconditioned corpora (the interval draws consume no RNG when disabled).
+    # expose them as conditioning features. False retains same-environment
+    # unconditioned numerical arrays; interval draws consume no RNG when
+    # disabled, but archive bytes can change across schemas.
     prior_conditioning: bool = False
     # Per-quantity (w_lo, w_hi) overrides; keys must be in
     # PRIOR_COND_QUANTITIES. None => PRIOR_COND_DEFAULT_WIDTH_RANGES.
@@ -796,7 +801,9 @@ class SCMPrior:
             lower_response = {
                 "linear": multiplier,
                 "hill": float(np.exp(-np.logaddexp(0.0, -hill_slope * hill_log_ratio))),
-                "logistic": float(np.tanh(0.5 * float(ranges["logistic"]["lam"][0]) * multiplier)),
+                "logistic": float(
+                    np.tanh((float(ranges["logistic"]["lam"][0]) * multiplier) / 2.0)
+                ),
                 "michaelis_menten": multiplier
                 / (multiplier + float(ranges["michaelis_menten"]["kappa_mult"][1])),
                 "tanh": float(np.tanh(multiplier / float(ranges["tanh"]["c"][1]))),
@@ -2021,6 +2028,11 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
         diagnostics["trajectory"] = {
             "components": list(TRAJECTORY_COMPONENTS),
             "inclusion_probs": cfg.trajectory_inclusion_probs(),
+            "parameter_fields": list(TRAJECTORY_PARAM_FIELDS),
+            "jump_counts": {
+                input_type: int(getattr(cfg, f"{input_type}_level_jump_count"))
+                for input_type in TRAJECTORY_INPUTS
+            },
             **summarize_component_prevalence(
                 corpus["treatment_components"],
                 corpus["covariate_components"],
@@ -2399,8 +2411,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     The public schema is documented by :func:`sample_prior_predictive`.
     Each cell shares a discrete structure; each task draws fresh continuous
     parameters and innovations. Evaluate at active sizes, then copy accepted
-    values into the preallocated maximum-size arrays. Float32 storage follows
-    the float64 generation and acceptance checks.
+    values into the preallocated maximum-size arrays. Base float32 storage
+    follows float64 acceptance checks; realised rich truth remains float64.
     """
     from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
@@ -2426,6 +2438,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         "shock": cfg.n_treatment_shocks,
         "indirect_source": 3,
         "component": len(TRAJECTORY_COMPONENTS),
+        "treatment_jump": cfg.treatment_level_jump_count,
+        "covariate_jump": cfg.covariate_level_jump_count,
     }
     corpus: dict[str, Any] = {
         key: np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
@@ -2440,6 +2454,19 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     trajectory_schedules = cfg.trajectory_components_enabled
     if trajectory_metadata:
         for key, (axes, dtype) in TRAJECTORY_ARRAY_FIELDS.items():
+            corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
+    mechanism_fields = dict(MECHANISM_ARRAY_FIELDS) if cfg.mechanism_priors_enabled else {}
+    if mechanism_fields:
+        for input_type in TRAJECTORY_INPUTS:
+            if getattr(cfg, f"{input_type}_reference_contribution_range") is not None:
+                mechanism_fields.update(
+                    {
+                        key: spec
+                        for key, spec in MECHANISM_REFERENCE_FIELDS.items()
+                        if key.startswith(f"{input_type}_")
+                    }
+                )
+        for key, (axes, dtype) in mechanism_fields.items():
             corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
     # Treatment normalization retains the original float64 reduction order.
     # Other accepted outputs can be cast directly into their final storage.
@@ -2469,6 +2496,11 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         "weibull_lam": "param_weibull_lam",
         "weibull_k": "param_weibull_k",
     }
+    for key in mechanism_fields:
+        if key != "sat_family":
+            draw_fields[key] = (
+                "saturation_scale" if key == "mechanism_saturation_scale" else f"param_{key}"
+            )
     n_evaluated = 0
     n_rejected = 0
     n_draw_failures = 0
@@ -2521,14 +2553,37 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         # (not per draw) is key; FAST_COMPILE (the draw_worlds default) keeps
         # the one-off compile cheap.
         structural = sample_structure(g_act, cfg, rng)
-        # Prior-conditioning interval draw (per cell — one model build). Returns
-        # None and consumes NO RNG when cfg.prior_conditioning is False, so the
-        # disabled path reproduces unconditioned corpora bit-for-bit.
+        # Prior-conditioning interval draw (per cell — one model build). False
+        # returns None and consumes no RNG, preserving same-environment
+        # unconditioned numerical draws, not cross-schema archive-byte identity.
         prior_cond = sample_prior_cond(cfg, rng)
         if prior_cond is not None:
             corpus["prior_cond"][rows] = _pack_prior_cond(prior_cond)
         model, out_names, _param_names = build_world_model(
             g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
+        )
+        trajectory_reports = (
+            {
+                key: report
+                for key, report in TRAJECTORY_PARAM_REPORTS.items()
+                if report in _param_names
+            }
+            if trajectory_metadata
+            else {}
+        )
+        requested_reports = set(trajectory_reports.values()) | {
+            draw_fields[key] for key in mechanism_fields if key != "sat_family"
+        }
+        # Leading reports join the same accepted draw without displacing the
+        # legacy output traversal that assigns RNG streams.
+        audit_names = (
+            tuple(
+                name
+                for name in _param_names
+                if name in requested_reports and name not in _CORPUS_PARAM_NAMES
+            )
+            if requested_reports
+            else ()
         )
         # Per-input component flags (cell structure, stored per row like the
         # carryover family). Schedule keys exist only when schedules are enabled.
@@ -2555,6 +2610,15 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             schedule_columns = [TRAJECTORY_COMPONENTS.index(c) for c in SCHEDULE_COMPONENTS]
             scheduled_treatment = np.asarray(
                 component_flags["treatment"][:, schedule_columns].any(axis=1), dtype=bool
+            )
+        trajectory_masks = {}
+        for key in trajectory_reports:
+            input_type, component_leaf = key.removeprefix("trajectory_").split("_", 1)
+            component = next(
+                name for name in TRAJECTORY_COMPONENTS if component_leaf.startswith(f"{name}_")
+            )
+            trajectory_masks[key] = (
+                component_flags[input_type][:, TRAJECTORY_COMPONENTS.index(component)] != 0
             )
         accepted = 0
         cell_evaluated = 0
@@ -2598,7 +2662,15 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                     )
                 else:
                     draw_names = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
-                drawn_b = draw_worlds(model, draw_names, draw_seed, draws=n_req)
+                rng_reference_names = draw_names
+                draw_names = audit_names + draw_names
+                drawn_b = draw_worlds(
+                    model,
+                    draw_names,
+                    draw_seed,
+                    draws=n_req,
+                    rng_reference_names=rng_reference_names if audit_names else None,
+                )
             except _RETRYABLE_DRAW_ERRORS as exc:
                 if not _is_retryable_draw_failure(exc):
                     # Not a numeric failure from inside a PyTensor node
@@ -2625,6 +2697,14 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 drawn = {name: drawn_b[name][b] for name in draw_names}
                 n_evaluated += 1
                 cell_evaluated += 1
+                audit_finite = all(np.isfinite(drawn[name]).all() for name in audit_names)
+                if not audit_finite:
+                    n_rejected += 1
+                    cell_rejected += 1
+                    continue
+                realism_arrays = (
+                    {name: drawn[name] for name in rng_reference_names} if audit_names else drawn
+                )
 
                 if trajectory_schedules:
                     # Realism reads the schedule-free natural path; only a
@@ -2642,7 +2722,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                     task_ok = _additive_task_ok(
                         treatment=drawn["treatments"],
                         outcome=drawn["outcome"],
-                        arrays=drawn,
+                        arrays=realism_arrays,
                         g_cy_active=g_act["g_cy"],
                         cv_floor=cfg.treatment_cv_floor,
                         realism_treatment=natural,
@@ -2657,7 +2737,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                     task_ok = _additive_task_ok(
                         treatment=drawn["treatments"],
                         outcome=drawn["outcome"],
-                        arrays=drawn,
+                        arrays=realism_arrays,
                         g_cy_active=g_act["g_cy"],
                         cv_floor=cfg.treatment_cv_floor,
                         realism_treatment=drawn.get("treatments_unshocked"),
@@ -2697,6 +2777,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 corpus["carryover_family"][row, :n_treatments_active] = structural[
                     "carryover_family"
                 ]
+                if mechanism_fields:
+                    corpus["sat_family"][row, :n_treatments_active] = structural["sat_family"]
                 if trajectory_metadata:
                     corpus["treatment_components"][row, :n_treatments_active] = component_flags[
                         "treatment"
@@ -2704,6 +2786,10 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                     corpus["covariate_components"][row, :n_covariates_active] = component_flags[
                         "covariate"
                     ]
+                    for key, report in trajectory_reports.items():
+                        value = np.where(trajectory_masks[key], drawn[report], 0)
+                        prefix = (row, *(slice(size) for size in value.shape))
+                        corpus[key][prefix] = value
                     if trajectory_schedules:
                         for key, n_active in (
                             ("treatment_activity", n_treatments_active),
@@ -2854,6 +2940,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     }
     if cfg.mechanism_priors_enabled:
         diagnostics["mechanism_priors"] = {
+            "parameter_fields": list(mechanism_fields),
             "saturation_prior_ranges": {
                 family: {name: [float(lo), float(hi)] for name, (lo, hi) in parameters.items()}
                 for family, parameters in cfg.saturation_prior_ranges.items()

@@ -33,13 +33,13 @@ float32/uint8/int32):
 | Key | Shape | What |
 | --- | --- | --- |
 | `treatment_raw` | (n_tasks, n_time_steps, n_treatments) | observed treatment input |
-| `controls` | (n_tasks, n_time_steps, n_covariates) | observed covariates |
+| `covariates` | (n_tasks, n_time_steps, n_covariates) | observed covariates |
 | `outcome_raw` | (n_tasks, n_time_steps) | outcome (observed target) |
 | `treatment_contribution_raw` | (n_tasks, n_time_steps, n_treatments) | per-treatment **direct** contributions (truth) |
 | `indirect_effects` | (n_tasks, n_time_steps) | total interaction-routed effect (truth) |
 | `indirect_effects_by_source` | (n_tasks, n_time_steps, 3) | telescoping split, order `(cc, zc, dc)` |
 | `baseline_raw` | (n_tasks, n_time_steps) | full baseline |
-| `demand` | (n_tasks, n_time_steps, n_latent) | latent-unobserved series (truth) |
+| `latent_unobserved` | (n_tasks, n_time_steps, n_latent) | latent-unobserved series (truth) |
 | `g` | (n_tasks, n_slots) | the packed DAG (all 8 edge blocks) |
 | `treatment_active_mask` / `covariate_active_mask` / `latent_active_mask` | (n_tasks, n_treatments / n_covariates / n_latent) | which slots are live |
 | `diagnostics` | dict | edge marginals, decomposition errors, signal block, and `short_horizon_n_query` split metadata |
@@ -213,8 +213,9 @@ pass `validate=False`.
 It also requires `treatment_raw >= 0` in every corpus; every corpus the
 generator has produced satisfies that by construction, so the rule rejects no
 existing shard. When the optional [trajectory block](#composable-input-trajectories) is
-present, `validate_corpus` checks it end to end: its six arrays and
-`diagnostics["trajectory"]` present together, their shapes and dtypes, binary
+present, `validate_corpus` checks it end to end: its flags, envelopes and realised
+parameter arrays must occur together with `diagnostics["trajectory"]`, with
+the prescribed shapes and dtypes, binary
 flags and activity, zero padding, flags constant within a cell, activity `1` on
 active inputs without a gate component and shift `0.0` on active inputs without
 a level component, and the converse for active gated inputs — any gate flag
@@ -227,6 +228,9 @@ of exactly `0.0` requires prevalence `0`, and one of exactly `1.0` prevalence
 `1` wherever that input type has active inputs, both counted from the stored
 flags — and `prevalence` / `n_inputs` equal to their exact recomputation from
 the stored flags.
+It also reconstructs gates and level envelopes from the stored realised parameters,
+checks parameter domains and ordered jump weeks, and rejects missing or unexpected
+parameter fields.
 
 When a corpus carries `diagnostics["active_count_coverage"]`,
 `validate_corpus` recounts it from the stored masks and checks that its cells
@@ -351,13 +355,13 @@ or explicitly call `list(...)` if retaining all batches is intentional.
 
 ### Schema versions
 
-New corpora use `diagnostics["schema_version"] = 3`. Loading a supported v1/v2
-shard migrates its dimension and outcome-edge metadata in memory without
-changing numerical arrays or their packed positions. Saving requires the
-current vocabulary; it never silently writes an old schema.
+New corpora use `diagnostics["schema_version"] = 5`. `save_corpus` and
+`load_corpus` accept only the current version. Every pre-v5 archive is rejected
+with a schema-version error: old archives cannot recover the new realised
+component truth, and changing their stamp would not reconstruct it.
 
-See the [migration reference](../reference/corpus.md#schema-versions-and-migration)
-for historical key mappings and rejected ambiguous formats.
+See the [schema reference](../reference/corpus.md#schema-versions-and-migration)
+for realised field layouts and the breaking persistence contract.
 
 ### Diagnostics that do not go into the file
 
@@ -469,8 +473,9 @@ print("validation errors:", DataGenerator.validate_corpus(c) or "none")
 ```
 
 A stratified corpus records the realised coverage in
-`diagnostics["active_count_coverage"]`; an independent corpus has no such key
-and is byte-identical to one generated before the option existed.
+`diagnostics["active_count_coverage"]`; an independent corpus has no such key.
+Keeping allocation at its default preserves same-environment numerical/model
+arrays, not cross-schema metadata or archive-byte identity.
 
 | Key | Value |
 | --- | --- |
@@ -509,8 +514,11 @@ task outside the grid raises `ValueError`.
 Non-default effective [mechanism priors](../reference/config.md#mechanism-priors)
 add `diagnostics["mechanism_priors"]`: the complete saturation shape supports,
 MM scale distribution, and treatment/control reference-target ranges and scales.
-This block survives corpus save/load and does not change the array schema.
-It is absent for legacy defaults. Targets are nominal responses before edge
+The diagnostics block survives corpus save/load. In schema v5, opting into
+richer mechanism priors also adds the optional
+[realised mechanism arrays](../reference/corpus.md#realised-mechanism-fields)
+and any enabled reference fields. Both blocks are absent for legacy defaults.
+Targets are nominal responses before edge
 gates; treatment references are post-carryover and control references are
 pre-floor. The usual contribution arrays remain the executed, gated truth.
 
@@ -555,8 +563,9 @@ print("echo:", c["diagnostics"]["prior_cond"]["supports"])
 - `prior_cond` `(n_tasks, P)` holds packed `(low, width)` pairs in the **locked,
   append-only** `PRIOR_COND_LAYOUT` order — index columns by name, never by
   position literals.
-- The key is present **iff** `prior_conditioning=True`; an unconditioned corpus
-  is byte-identical to before the feature existed.
+- The key is present **iff** `prior_conditioning=True`. Leaving conditioning
+  disabled preserves same-environment numerical/model arrays, not cross-schema
+  metadata or archive-byte identity.
 - `diagnostics["prior_cond"]` echoes the layout, the supports, and the width
   ranges, so feature standardization can be derived from the corpus instead of
   duplicated in the consumer.
@@ -567,10 +576,9 @@ print("echo:", c["diagnostics"]["prior_cond"]["supports"])
 ## Composable input trajectories
 
 A config that sets any [trajectory knob](trajectories.md) away from its default
-(`SCMPrior.trajectory_metadata_enabled`) adds six arrays and a
-`diagnostics["trajectory"]` block to the corpus. They are present together or not
-at all; a default corpus has none of them and is byte-identical to one
-generated before they existed.
+(`SCMPrior.trajectory_metadata_enabled`) adds the six schedule/flag arrays below,
+float64 realised component parameters, and `diagnostics["trajectory"]`.
+They are present together or not at all; a default corpus omits this block.
 
 | Key | Shape | dtype | Meaning |
 | --- | --- | --- | --- |
@@ -583,8 +591,8 @@ generated before they existed.
 
 The component axis follows `pymc_generator.slots.TRAJECTORY_COMPONENTS`
 (`hf, pulse, onset, offset, flighting, level_jump, seasonal, trend`). Padded
-slots are zero in all six arrays, and a config that only changes `hf` / `pulse`
-probabilities stores activity `1` and shift `0.0` on every active input.
+slots are zero in the schedule and parameter arrays. A config that only changes
+`hf` / `pulse` probabilities stores activity `1` and shift `0.0` on every active input.
 Off-weeks are exact: `treatment_raw == 0.0` there outside shocks, and
 `covariates == 0.0`. `treatment_activity` is the schedule **gate**, not the
 realised on-state — a [treatment shock](../reference/config.md#treatment-shocks)
@@ -617,9 +625,19 @@ print("validation errors:", DataGenerator.validate_corpus(c) or "none")
   `n_inputs[input]` is that denominator; padded slots never count. Both are
   computed from the stored arrays after any `n=` truncation, so they describe
   the corpus you hold, and `validate_corpus` recomputes them exactly.
-- Every value is a plain Python `float` or `int`, so the block round-trips
-  through `save_corpus` / `load_corpus` unchanged.
+- `parameter_fields` names every realised component field in canonical order.
+  `jump_counts` records separate treatment and covariate event counts.
+  Gate/jump week indexes and flighting periods/phases are `int64`; continuous
+  leaves, including seasonal periods/phases, are `float64`. Unselected components
+  and inactive nodes have zero padding.
+- Metadata uses JSON-serializable lists, mappings and scalar values, so the block
+  round-trips through `save_corpus` / `load_corpus` unchanged.
 
-There is no schema-version bump: like `prior_cond`, the block is optional, so
-persisted v4 corpora are unchanged. See the [trajectories guide](trajectories.md)
-for the archetypes these arrays record.
+Schema v5 adds `trajectory_{input}_{component}_{leaf}` arrays for texture
+magnitudes/probabilities, launch/stop weeks, flighting periods/on-weeks/phases,
+jump weeks/factors/log-factors or signed sizes, sinusoid amplitudes/periods/phases,
+and trend changes. Jump arrays have `(task, input_jump, input)` axes;
+other leaves have `(task, input)` axes. The complete layout is in the
+[schema reference](../reference/corpus.md#schema-versions-and-migration).
+The validator reconstructs gates and level envelopes from this realised truth.
+See the [trajectories guide](trajectories.md) for the archetypes it records.

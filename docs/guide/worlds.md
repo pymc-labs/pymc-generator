@@ -28,10 +28,10 @@ candidate worlds until one passes the realism filter — all off a single RNG.
 
 ## What's inside: `.data`
 
-The `.data` dict holds the world's 13 named series at active sizes. Treatments,
+The `.data` dict holds named forward outputs at active sizes. Treatments,
 covariates, and latent-unobserved factors are 2-D — `(n_time_steps, n_treatments)`,
 `(n_time_steps, n_covariates)`, `(n_time_steps, n_latent)` — while
-scalar-per-week series are 1-D `(n_time_steps,)`.
+scalar-per-week series are 1-D `(n_time_steps,)`. Enabled schedules add audit arrays.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import world
@@ -43,11 +43,11 @@ for name, arr in scm.data.items():
 
 | Group | Keys |
 | --- | --- |
-| **Observable** (what a modeller sees) | `channels`, `controls`, `sales` |
+| **Observable** (what a modeller sees) | `treatments`, `covariates`, `outcome` |
 | **Direct truth** | `contributions` (per treatment), `baseline`, `baseline_intrinsic` (the intercept), `outcome_noise` |
 | **Baseline split** | `covariate_contribution` (Z→Y), `latent_unobserved_contribution` (D→Y) |
 | **Indirect truth** | `indirect_effects`, `indirect_effects_by_source` (cc, zc, dc) |
-| **Latent / audit** | `demand`, `treatments_base`, `contributions_observed`; with treatment shocks enabled: `treatments_unshocked`, `outcome_unshocked`, and the `treatment_shock_*` schedule |
+| **Latent / audit** | `latent_unobserved`, `saturation_scale`, `treatments_base`, `contributions_observed`; with shocks: `treatments_unshocked`, `outcome_unshocked`, and `treatment_shock_*`; with trajectories: activity/level-shift arrays and `treatments_natural` / `outcome_natural` |
 
 `treatments_unshocked` and `outcome_unshocked` are single-world audit paths used by
 the realism filter. They are not public top-level arrays in generated corpora.
@@ -66,8 +66,9 @@ for name, block in scm.g.items():
 
 ## What's inside: `.params`
 
-`.params` holds the drawn coefficients, per-treatment mechanism families, random-walk
-parameters, and texture.
+`.params` holds drawn coefficients, mechanism families, random-walk parameters,
+and texture. With composable schedules, `params["trajectory"]` records each
+role's component flags and realised gate, jump, seasonal and trend parameters.
 
 ```python exec="1" source="block" result="text"
 from scm_docs import world
@@ -78,6 +79,40 @@ print("beta (direct C→Y):", scm.params["beta"].round(2))
 print("carryover_family:", scm.params["carryover_family"])
 print("sat_family:    ", scm.params["sat_family"])
 ```
+
+## Exact extraction and replay
+
+`sample_scm` also records `primitive_parameters`: defensive copies of every
+accepted primitive prior draw and raw full-horizon innovation, keyed by model
+RV name. `SCM.replay()` rebuilds and executes the generative model at those
+inputs; it never returns cached `.data` arrays. Reusing the original transform
+algebra avoids constant-folded reciprocal and scale-product changes that can
+materially alter steep response curves.
+
+```python exec="1" source="block" result="text"
+import numpy as np
+import pymc_generator as pg
+
+rich = pg.sample_scm(
+    pg.make_scm_prior(n_treatments=2, n_covariates=1, n_latent=1,
+                      n_time_steps=40, trajectories="composable",
+                      mm_scale_prior="log_uniform"),
+    seed=7,
+)
+replayed = rich.replay()
+for key, expected in rich.data.items():
+    np.testing.assert_array_equal(replayed[key], expected, err_msg=key)
+print("exact forward outputs:", len(replayed))
+print("recorded primitive draws:", len(rich.primitive_parameters))
+```
+
+Replay uses recorded primitive provenance, not edits to derived `.params`.
+The concrete `.params` dictionary remains usable with `build_symbolic_graph`
+for inspection or explicit interventions, but recompiling flattened constants
+does not promise bitwise equality. A manually constructed `SCM` without
+primitive provenance raises a clear error from `replay()`. Bitwise replay is
+an in-environment contract, not a guarantee across numerical stack changes.
+
 
 ## Introspection helpers
 

@@ -27,12 +27,18 @@ between the generative and oracle builders so they cannot drift.
 from __future__ import annotations
 
 from collections.abc import Callable
+from math import frexp
 from typing import Any, Literal, cast
 
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
+from pytensor.compile.builders import OpFromGraph
+from pytensor.gradient import disconnected_grad
+from pytensor.link.numba.dispatch.basic import numba_njit, register_funcify_and_cache_key
 from pytensor.raise_op import CheckAndRaise
+from pytensor.scalar import ScalarOp, upgrade_to_float64
+from pytensor.tensor.elemwise import Elemwise
 from pytensor.tensor.sharedvar import SharedVariable
 
 from .random_walk import _kernel_width, _walk_basis
@@ -339,6 +345,7 @@ def _derive_reference_coefficients(
                 for k in range(n_treatments)
             ]
         )
+        params["treatment_reference_response"] = response
         target = params["treatment_reference_contribution"]
         params["beta"] = pm.Deterministic(
             "beta",
@@ -843,11 +850,10 @@ def _scm_eps(
             p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
             shape=(n_time_steps_full, n_treatments),
         ).astype("float64"),
-        # Covariate texture noise. A disabled config still creates these RVs (the
-        # treatment texture noise behaves identically): the graph then references
-        # neither, so they reach no output, collect no RNG stream, and leave
-        # every seeded draw byte-identical — while keeping the audit schema
-        # (SCM.exogenous) the same shape for every config.
+        # Disabled configs still create these RVs, as for treatment texture.
+        # If pruned from all requested forward outputs, they receive no RNG
+        # stream. Explicit provenance/audit requests can instead sample them.
+        # Their exogenous shapes remain available regardless of configuration.
         "eps_z_hf": pm.Normal("eps_z_hf", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
         "eps_z_pulse": pm.Bernoulli(
             "eps_z_pulse",
@@ -865,11 +871,12 @@ def _register_param_reports(
     *,
     cfg: SCMPrior,
 ) -> tuple[str, ...]:
-    """Register every continuous parameter as a ``param_*`` deterministic.
+    """Register realised numeric parameters as ``param_*`` deterministics.
 
-    A sampled world then carries all the concrete inputs needed to replay its
-    structural graph. Families and smoothness are concrete structure already and
-    are reported with their corresponding groups.
+    Concrete reports expose the graph inputs and derived coefficients for
+    inspection, including every present trajectory leaf except structural
+    flags and fixed jump counts. Exact arithmetic replay additionally retains
+    the joint primitive draw. Families and smoothness are concrete structure.
     """
     report_specs: dict[str, Any] = {
         # linear edge coefficients
@@ -910,6 +917,17 @@ def _register_param_reports(
         report_specs["covariate_reference_input"] = pt.full_like(
             params["rho_zy"], float(cfg.covariate_reference_scale)
         )
+    for input_type, spec in params.get("trajectory", {}).items():
+        for component, values in spec.items():
+            if component == "use":
+                continue
+            for field, tensor in values.items():
+                if field != "count":
+                    report_specs[f"trajectory_{input_type}_{component}_{field}"] = (
+                        pt.as_tensor_variable(tensor)
+                    )
+    if cfg.treatment_reference_contribution_range is not None:
+        report_specs["treatment_reference_response"] = params["treatment_reference_response"]
     for key, tensor in report_specs.items():
         pm.Deterministic(f"param_{key}", tensor)
     return tuple(f"param_{k}" for k in report_specs)
@@ -960,15 +978,164 @@ def _confounded_treatment_eps(cfg: SCMPrior, eps: dict[str, Any]):
     return confounding_strength
 
 
+def _scaled_product_impl(a, b, c):
+    ma, ea = frexp(a)
+    mb, eb = frexp(b)
+    mc, ec = frexp(c)
+    return np.ldexp(ma * mb * mc, ea + eb + ec)
+
+
+class _ScaledProduct(ScalarOp):
+    """Multiply three finite factors without under/overflowing intermediates."""
+
+    nin = 3
+
+    impl = staticmethod(_scaled_product_impl)
+
+    def pullback(self, inputs, outputs, grads):
+        a, b, c = inputs
+        (gz,) = grads
+        return self(gz, b, c), self(gz, a, c), self(gz, a, b)
+
+    def c_headers(self, **kwargs):
+        return ["math.h"]
+
+    def c_code(self, node, name, inputs, outputs, sub):
+        a, b, c = inputs
+        (z,) = outputs
+        return f"""{{
+            int ea, eb, ec;
+            double ma = frexp((double){a}, &ea);
+            double mb = frexp((double){b}, &eb);
+            double mc = frexp((double){c}, &ec);
+            {z} = ldexp(ma * mb * mc, ea + eb + ec);
+        }}"""
+
+    def c_code_cache_version(self):
+        return (*super().c_code_cache_version(), 1)
+
+
+@register_funcify_and_cache_key(_ScaledProduct)
+def _numba_scaled_product(op, node, **kwargs):
+    return numba_njit(_scaled_product_impl, fastmath=False), "pymc_generator.scaled_product.v1"
+
+
+_scaled_product = Elemwise(_ScaledProduct(upgrade_to_float64, name="scaled_product"))
+
+
+def _scaled_product_ratio_impl(a, b, c, d, e):
+    ma, ea = frexp(a)
+    mb, eb = frexp(b)
+    mc, ec = frexp(c)
+    md, ed = frexp(d)
+    me, ee = frexp(e)
+    return np.ldexp((ma * mb * mc) / (md * me), ea + eb + ec - ed - ee)
+
+
+class _ScaledProductRatio(ScalarOp):
+    """Combine a three-factor numerator and positive two-factor denominator."""
+
+    nin = 5
+    impl = staticmethod(_scaled_product_ratio_impl)
+
+    def pullback(self, inputs, outputs, grads):
+        a, b, c, d, e = inputs
+        (z,) = outputs
+        (gz,) = grads
+        return (
+            self(gz, b, c, d, e),
+            self(gz, a, c, d, e),
+            self(gz, a, b, d, e),
+            _scaled_product.scalar_op(-gz, z, 1.0 / d),
+            _scaled_product.scalar_op(-gz, z, 1.0 / e),
+        )
+
+    def c_headers(self, **kwargs):
+        return ["math.h"]
+
+    def c_code(self, node, name, inputs, outputs, sub):
+        a, b, c, d, e = inputs
+        (z,) = outputs
+        return f"""{{
+            int ea, eb, ec, ed, ee;
+            double ma = frexp((double){a}, &ea);
+            double mb = frexp((double){b}, &eb);
+            double mc = frexp((double){c}, &ec);
+            double md = frexp((double){d}, &ed);
+            double me = frexp((double){e}, &ee);
+            {z} = ldexp((ma * mb * mc) / (md * me), ea + eb + ec - ed - ee);
+        }}"""
+
+    def c_code_cache_version(self):
+        return (*super().c_code_cache_version(), 1)
+
+
+@register_funcify_and_cache_key(_ScaledProductRatio)
+def _numba_scaled_product_ratio(op, node, **kwargs):
+    return (
+        numba_njit(_scaled_product_ratio_impl, fastmath=False),
+        "pymc_generator.scaled_product_ratio.v1",
+    )
+
+
+_scaled_product_ratio = Elemwise(
+    _ScaledProductRatio(upgrade_to_float64, name="scaled_product_ratio")
+)
+
+
+def _amplitude_norm_parts(amplitudes):
+    # This arbitrary normalization cancels from both the norm and its direction.
+    scale = disconnected_grad(pt.maximum(pt.max(pt.abs(amplitudes)), np.finfo(np.float64).tiny))
+    scaled = amplitudes / scale
+    return scale, scaled, pt.sqrt(pt.sum(scaled**2))
+
+
+def _relative_std_pullback(inputs, outputs, grads):
+    std, amplitudes = inputs
+    (gz,) = grads
+    scale, _, norm = _amplitude_norm_parts(amplitudes)
+    safe_norm = pt.where(pt.eq(norm, 0.0), 1.0, norm)
+    # Keep the complete coefficient-direction pullback in one scalar operation:
+    # neither the absolute norm nor a tiny direction may round before rescue.
+    return [
+        _scaled_product(gz, scale, norm),
+        pt.sum(
+            _scaled_product_ratio(gz[:, None], std[:, None], amplitudes[None, :], scale, safe_norm),
+            axis=0,
+        ),
+    ]
+
+
+def _build_relative_std_product():
+    std = pt.dvector("relative_std")
+    amplitudes = pt.dvector("amplitudes")
+    scale, _, norm = _amplitude_norm_parts(amplitudes)
+    return OpFromGraph(
+        [std, amplitudes],
+        [pt.as_tensor_variable(_scaled_product(std, scale, norm))],
+        inline=True,
+        pullback=_relative_std_pullback,
+        name="relative_std_product",
+    )
+
+
+_relative_std_product = _build_relative_std_product()
+
+
 def _apply_outcome_std_scale(
     cfg: SCMPrior, rw: dict[str, dict], g_cy: np.ndarray, beta, *, prefix: str = ""
 ) -> None:
     """Convert relative outcome scales to their parameter-only absolute amplitudes.
 
-    ``g_cy`` is concrete per world, so the anchor
-    ``sqrt(sum((g_cy * beta)**2))`` depends only on structural and continuous
-    parameters. It cannot depend on innovations without making the prior
-    undefined independently of the noise it generates.
+    The Euclidean norm of ``g_cy * beta`` depends only on structural and
+    continuous parameters. It cannot depend on innovations without making the
+    prior undefined independently of the noise it generates. Scaling before
+    squaring preserves tiny nonzero amplitudes; the minimum-normal arithmetic
+    scale keeps its reciprocal finite without flooring the resulting norm.
+    Mantissa/exponent multiplication defers subnormal rounding to the final
+    standard deviation rather than an intermediate coefficient norm or product.
+    Its analytic pullback uses the bounded coefficient direction so a tiny
+    intermediate derivative cannot round before the normalization cancels.
     """
     if cfg.outcome_std_mode == "absolute":
         return
@@ -977,11 +1144,11 @@ def _apply_outcome_std_scale(
             f"outcome_std_mode must be 'relative' or 'absolute', got {cfg.outcome_std_mode!r}"
         )
     g_cy_t = pt.as_tensor_variable(g_cy)
-    treatment_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
+    amplitudes = g_cy_t * beta
     for group_name in ("rw_b", "rw_y"):
         rw[group_name]["std"] = pm.Deterministic(
             f"{prefix}{group_name}_std",
-            rw[group_name]["std"] * treatment_amplitude,
+            _relative_std_product(rw[group_name]["std"], amplitudes),
         )
 
 
@@ -1372,8 +1539,11 @@ def build_oracle_model(
        universal upper bound on recovery: it omits input-likelihood information
        that another method may use. Marginalizing over graphs is out of scope.
     2. **Plug-in conditioning on the observed inputs**: ``treatments`` and
-       ``covariates`` enter as data (constants). The information they carry
-       about latent latent_unobserved through ``p(C | D)`` / ``p(Z | D)`` is not modeled
+       ``covariates`` enter as data (constants).
+       Trajectory gates, levels and texture are already baked into those
+       inputs, as are treatment shocks; none is applied a second time.
+       The information they carry about latent latent_unobserved through
+       ``p(C | D)`` / ``p(Z | D)`` is not modeled
        — including baseline information encoded through the treatment–baseline
        correlation (rho, configured here as confounding strength). In sampled
        mode latent_unobserved is inferred from the outcome residual via ``D -> Y`` only; in
@@ -1571,9 +1741,10 @@ def build_oracle_model(
         # convolution indexes by the static time length).
         treatments_t = pt.as_tensor_variable(treatments)
 
-        # Treatment response on the OBSERVED treatment: the same carryover / κ-relative
-        # saturation code as generation. Held-level windows are already baked
-        # into the observed treatment matrix, so no schedule tensors are needed.
+        # Treatment response on the OBSERVED treatment: the same carryover /
+        # κ-relative saturation code as generation. Trajectories and held-level
+        # shocks are already baked into the observed inputs, so no input schedule
+        # parameters or tensors belong in this outcome-side model.
         contrib_cols = []
         for k in range(n_treatments):
             ad_obs = _carryover_col(treatments_t[:, k], mech_params, k)
@@ -1609,8 +1780,8 @@ def build_oracle_model(
                 covariance = covariance + (loading**2) * pt.as_tensor_variable(
                     _walk_gram(structural["smoothness_d"][j])
                 )
-            # The floor only guards the float64 covariance factorization; it
-            # is too small to provide material likelihood information.
+            # This 1e-12 diagonal guard stabilizes covariance factorization.
+            # Its 1e-6 SD can be material when outcome units are small.
             covariance = covariance + 1e-12 * pt.eye(rows.size, dtype="float64")
             pm.MvNormal(
                 "outcome",

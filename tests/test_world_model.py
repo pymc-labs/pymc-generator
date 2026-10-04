@@ -7,8 +7,11 @@ determinism, and batched draws — independently of the high-level wiring.
 
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
+
 import numpy as np
 import pymc as pm
+import pytensor
 import pytensor.tensor as pt
 import pytest
 
@@ -16,6 +19,7 @@ from pymc_generator import make_scm_prior
 from pymc_generator.random_walk import _kernel_width, symbolic_random_walk
 from pymc_generator.sampler import _slice_g_active, sample_g_additive
 from pymc_generator.world_model import (
+    _apply_outcome_std_scale,
     _rw_prior_group,
     build_world_model,
     draw_worlds,
@@ -288,19 +292,43 @@ def test_walk_scale_rejects_ambiguous_range_and_sigma():
         )
 
 
-def test_relative_outcome_scales_follow_the_treatment_amplitude():
+@pytest.mark.parametrize(
+    ("reference_target", "g_cy", "fixed_std"),
+    (
+        pytest.param(None, (1, 1), None, id="raw-coefficients"),
+        pytest.param(1e-180, (1, 1), 0.1, id="tiny-reference"),
+        pytest.param(np.finfo(np.float64).tiny / 2, (1, 1), 0.1, id="subnormal-reference"),
+        pytest.param(1e-180, (1, 0), 0.1, id="inactive-edge"),
+        pytest.param(1e-180, (0, 0), 0.1, id="no-edges"),
+        pytest.param(np.finfo(np.float64).tiny, (1, 1), 1e-16, id="minimum-final-sigma"),
+        pytest.param(np.nextafter(0.0, 1.0), (1, 1), 1e38, id="amplified-minimum-beta"),
+        pytest.param(1e38, (1, 1), np.nextafter(0.0, 1.0), id="amplified-minimum-std"),
+    ),
+)
+def test_relative_outcome_scales_follow_the_treatment_amplitude(reference_target, g_cy, fixed_std):
+    if reference_target is None:
+        coefficient_prior = {}
+    else:
+        coefficient_prior = {
+            "treatment_reference_contribution_range": (reference_target, reference_target)
+        }
     cfg = make_scm_prior(
         n_treatments=2,
         n_covariates=1,
         n_latent=1,
         n_time_steps=16,
-        edge_budget={"cy": (2, 2)},
+        edge_budget={"cy": int(sum(g_cy))},
+        nonlinearity="linear",
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        carryover_burn_in=0,
+        treatment_reference_multiplier=1.0,
         outcome_std_mode="relative",
-        rw_baseline_std_range=(0.04, 0.08),
-        rw_outcome_std_range=(0.01, 0.03),
+        rw_baseline_std_range=(0.04, 0.08) if fixed_std is None else (fixed_std, fixed_std),
+        rw_outcome_std_range=(0.01, 0.03) if fixed_std is None else (fixed_std, fixed_std),
+        **coefficient_prior,
     )
     g = {
-        "g_cy": np.ones(2, dtype=int),
+        "g_cy": np.asarray(g_cy, dtype=int),
         "g_dc": np.zeros((1, 2), dtype=int),
         "g_dz": np.zeros((1, 1), dtype=int),
         "g_dy": np.zeros(1, dtype=int),
@@ -311,24 +339,86 @@ def test_relative_outcome_scales_follow_the_treatment_amplitude():
     }
     structural = sample_structure(g, cfg, np.random.default_rng(13))
     model, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
-    drawn = draw_worlds(
-        model,
-        ("beta", "rw_b_std_rel", "rw_y_std_rel", "rw_b_std", "rw_y_std"),
-        seed=14,
-    )
-    treatment_amplitude = np.sqrt(np.sum(drawn["beta"][0] ** 2))
+    draw_names = ("param_beta", "param_rw_b_std", "param_rw_y_std")
+    if reference_target is None:
+        draw_names += ("rw_b_std_rel", "rw_y_std_rel")
+    drawn = draw_worlds(model, draw_names, seed=14)
+    beta = drawn["param_beta"][0]
+    if reference_target is not None:
+        np.testing.assert_allclose(
+            beta, reference_target, rtol=8 * np.finfo(np.float64).eps, atol=0.0
+        )
 
+    for group in ("rw_b", "rw_y"):
+        relative_std = drawn[f"{group}_std_rel"][0].item() if fixed_std is None else fixed_std
+        with localcontext() as context:
+            context.prec = 100
+            squared = sum(Decimal.from_float(float(v)) ** 2 for v in g["g_cy"] * beta)
+            expected = float(Decimal.from_float(float(relative_std)) * squared.sqrt())
+        np.testing.assert_allclose(
+            drawn[f"param_{group}_std"][0],
+            expected,
+            rtol=32 * np.finfo(np.float64).eps,
+            atol=0.0,
+        )
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+@pytest.mark.parametrize(
+    ("coefficients", "relative_std"),
+    (
+        pytest.param((1.0, 1.5), 0.2, id="regular"),
+        pytest.param((1e-180, 1.5e-180), 1e38, id="tiny-coefficient"),
+        pytest.param(
+            (np.finfo(np.float64).tiny, 1.5 * np.finfo(np.float64).tiny),
+            1e-16,
+            id="minimum-final-sigma",
+        ),
+        pytest.param(
+            (np.nextafter(0.0, 1.0), 2 * np.nextafter(0.0, 1.0)),
+            1e38,
+            id="minimum-coefficient",
+        ),
+        pytest.param((1e38, 1.5e38), np.nextafter(0.0, 1.0), id="minimum-relative-std"),
+        pytest.param((np.nextafter(0.0, 1.0), 1e38), 1e38, id="mixed-extreme-coefficients"),
+    ),
+)
+def test_relative_noise_gradients_preserve_coefficient_direction(coefficients, relative_std, mode):
+    """Noise derivatives remain proportional to beta, not a rounded intermediate."""
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=16,
+        nonlinearity="linear",
+        beta_additive_range=coefficients,
+        rw_baseline_std_range=(relative_std, relative_std),
+        rw_outcome_std_range=(relative_std, relative_std),
+    )
+    cfg.validate()
+    beta = pt.dvector("beta")
+    with pm.Model():
+        rw = {
+            group: {"std": pt.as_tensor_variable(np.array([relative_std]))}
+            for group in ("rw_b", "rw_y")
+        }
+        _apply_outcome_std_scale(cfg, rw, np.ones(2), beta)
+        sigma = rw["rw_y"]["std"].sum()
+        gradient = pt.grad(sigma, beta)
+    evaluate = pytensor.function([beta], [sigma, gradient], mode=mode)
+    actual_sigma, actual_gradient = evaluate(np.asarray(coefficients))
+    with localcontext() as context:
+        context.prec = 100
+        exact_beta = [Decimal.from_float(value) for value in coefficients]
+        norm = sum(value**2 for value in exact_beta).sqrt()
+        scale = Decimal.from_float(relative_std)
+        expected_sigma = float(scale * norm)
+        expected_gradient = [float(scale * value / norm) for value in exact_beta]
     np.testing.assert_allclose(
-        drawn["rw_b_std"][0],
-        drawn["rw_b_std_rel"][0] * treatment_amplitude,
-        rtol=0.0,
-        atol=1e-14,
+        actual_sigma, expected_sigma, rtol=32 * np.finfo(float).eps, atol=0.0
     )
     np.testing.assert_allclose(
-        drawn["rw_y_std"][0],
-        drawn["rw_y_std_rel"][0] * treatment_amplitude,
-        rtol=0.0,
-        atol=1e-14,
+        actual_gradient, expected_gradient, rtol=32 * np.finfo(float).eps, atol=0.0
     )
 
 

@@ -130,10 +130,11 @@ structural equations.
   gates, level jumps, a seasonal sinusoid and a linear trend — additive on
   signed covariates and additive in log-level (multiplicative on the series)
   on non-negative treatments, which are exactly zero on off-weeks outside
-  held-level shocks. Any `*_inclusion_prob` away from its default is
-  corpus-only for now (`sample_scm` rejects it). The baseline process is
-  unchanged (no explicit seasonal term), and no Fourier series are added as
-  covariates. Time is an axis, not a node in the DAG.
+  held-level shocks. Ordinary generation, `sample_scm`, and the reusable
+  template support these components and fractional per-input inclusion.
+  The oracle conditions on the already-scheduled observed inputs. The baseline
+  process is unchanged (no explicit seasonal term), and no Fourier series are
+  added as covariates. Time is an axis, not a node in the DAG.
 
 
 ## Data contracts and interpretation
@@ -147,15 +148,20 @@ structural equations.
   parentless intercept. A treatment without a direct outcome edge can still affect
   outcome through downstream treatments. See the [foundation](docs/guide/foundation.md).
 - **Corpus storage:** arrays use configured maximum dimensions and explicit
-  active counts/masks. Numerical payloads are stored as float32; generation
-  identities are evaluated before that rounding. Readers migrate supported
-  legacy schemas and reject malformed or unsupported metadata. See the
-  [corpus guide](docs/guide/corpus.md) and [schema reference](docs/reference/corpus.md).
+  active counts/masks. Base numerical payloads are float32; schema-v5 realised
+  trajectory and opt-in mechanism parameters are float64 so tiny valid truth
+  is not rounded to zero. Readers reject pre-v5 archives rather than inventing
+  missing truth. See the [corpus guide](docs/guide/corpus.md) and
+  [schema reference](docs/reference/corpus.md).
 - **Reproducibility:** the same configuration and seed reproduce numerical
   outputs in the same locked environment. Runtime diagnostics are not
   deterministic; bitwise equality across dependency, hardware, or BLAS changes
   is not promised. Bundle recipes record the environment rather than embedding
   the software needed to recreate it.
+- **Exact replay:** `sample_scm` records the accepted primitive prior draw and
+  full-horizon innovations. `SCM.replay()` executes the same generative algebra
+  with runtime-bound primitives; it does not return cached outputs.
+  `SCM.primitive_parameters` exposes defensive copies for audit.
 - **Diagnostics:** signal and dependence summaries describe a generated sample.
   Optional gates are screening rules, not certificates of identification or
   successful parameter recovery. The [MMM recovery case study](docs/examples/simple-model.ipynb)

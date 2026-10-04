@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import numpy as np
 import pytest
 from pytensor.graph.traversal import ancestors
 
 import pymc_generator.symbolic_graph as symbolic_graph
+import pymc_generator.worlds as worlds
 from pymc_generator import make_scm_prior, sample_scm
-from pymc_generator.describe import describe_scm
 from pymc_generator.random_walk import _kernel_width
-from pymc_generator.sampler import _additive_task_ok
+from pymc_generator.sampler import SCMPrior, _additive_task_ok
+from pymc_generator.slots import TRAJECTORY_COMPONENTS, TRAJECTORY_INPUTS
 from pymc_generator.symbolic_graph import build_symbolic_graph
+from pymc_generator.trajectories import SCHEDULE_COMPONENTS, structural_key
 from pymc_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
     _walk_basis,
@@ -37,19 +41,30 @@ _RAW_EPS_NAMES = (
     "eps_z_hf",
     "eps_z_pulse",
 )
-_CORE_OUTPUTS = (
+_FORWARD_OUTPUTS = (
     "latent_unobserved",
     "covariates",
     "treatments",
     "treatments_base",
+    "saturation_scale",
     "baseline",
     "baseline_intrinsic",
     "outcome_noise",
+    "covariate_contribution",
+    "latent_unobserved_contribution",
     "contributions",
     "contributions_observed",
     "indirect_effects",
     "indirect_effects_by_source",
     "outcome",
+    "confounding_strength",
+    "treatment_shock_mask",
+    "treatment_shock_mask_full",
+    "treatment_shock_index",
+    "treatment_shock_start",
+    "treatment_shock_length",
+    "treatment_shock_level_multiplier",
+    "treatment_shock_level",
 )
 
 
@@ -98,11 +113,18 @@ def test_equation_audit_identifies_floor_operation(scope):
     )
 
 
-def _fixed_world(g: dict, cfg, *, seed: int = 23) -> SCM:
-    rng = np.random.default_rng(seed)
-    structural = sample_structure(g, cfg, rng)
+def _fixed_world(g: dict, cfg, *, seed: int = 23, structural: dict | None = None) -> SCM:
+    if structural is None:
+        structural = sample_structure(g, cfg, np.random.default_rng(seed))
     model, out_names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
-    drawn = draw_worlds(model, out_names + param_names + _RAW_EPS_NAMES, seed=seed + 1)
+    primitive_names = tuple(rv.name for rv in model.free_RVs)
+    previous_names = out_names + param_names + _RAW_EPS_NAMES
+    drawn = draw_worlds(
+        model,
+        tuple(dict.fromkeys(previous_names + primitive_names)),
+        seed=seed + 1,
+        rng_reference_names=previous_names,
+    )
     return SCM(
         data={name: drawn[name][0] for name in out_names},
         g=g,
@@ -110,6 +132,7 @@ def _fixed_world(g: dict, cfg, *, seed: int = 23) -> SCM:
         cfg=cfg,
         extras={"structural": structural},
         _exogenous={name: np.array(drawn[name][0], copy=True) for name in _RAW_EPS_NAMES},
+        _primitive_parameters={name: drawn[name][0] for name in primitive_names},
     )
 
 
@@ -173,7 +196,11 @@ def test_expanded_audit_preserves_seeded_single_world_outputs():
     structural = sample_structure(g, cfg, np.random.default_rng(730))
     model, out_names, param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
     legacy_names = out_names + _LEGACY_WORLD_PARAM_NAMES
-    expanded_names = out_names + param_names + _RAW_EPS_NAMES
+    expanded_names = tuple(
+        dict.fromkeys(
+            out_names + param_names + _RAW_EPS_NAMES + tuple(rv.name for rv in model.free_RVs)
+        )
+    )
 
     legacy = draw_worlds(model, legacy_names, seed=731, draws=2)
     expanded = draw_worlds(
@@ -267,9 +294,10 @@ def test_combined_confounding_and_shock_world_replays_from_raw_innovations():
 
     rho = float(world.params["confounding_strength"])
     eps_c_eff = np.sqrt(1.0 - rho**2) * exogenous["eps_c"] + rho * exogenous["eps_b"][:, None]
-    replay = _replay(world, eps_c_eff)
-    for name in _CORE_OUTPUTS:
-        np.testing.assert_allclose(replay[name], world.data[name], rtol=0.0, atol=1e-12)
+    replay = world.replay()
+    assert replay.keys() == world.data.keys()
+    for name in world.data:
+        np.testing.assert_array_equal(replay[name], world.data[name], err_msg=name)
 
     raw_replay = _replay(world, exogenous["eps_c"])
     assert not np.allclose(raw_replay["treatments"], world.data["treatments"], rtol=0.0, atol=1e-12)
@@ -294,16 +322,18 @@ def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
         treatment_shock_level_range=(0.5, 0.5),
     )
     world = sample_scm(cfg, seed=47, max_eps_draws=40)
-    rho = float(world.params["confounding_strength"])
     before_eps = world.exogenous
-    eps_c_eff = np.sqrt(1.0 - rho**2) * before_eps["eps_c"] + rho * before_eps["eps_b"][:, None]
-    replay_before = _replay(world, eps_c_eff)
+    before_primitives = world.primitive_parameters
+    replay_before = world.replay()
     signal_before = world.signal()
 
     exposed_eps = world.exogenous
     exposed_eps["eps_c"][:] = 0.0
     exposed_eps["eps_z_hf"][:] = 0.0
     exposed_eps["eps_z_pulse"][:] = 1.0
+    exposed_primitives = world.primitive_parameters
+    exposed_primitives["eps_c"][:] = 0.0
+    exposed_primitives["rw_c_mean"][:] = 1e9
     exposed_params = world.equation_parameters
     exposed_params["C1"]["texture"]["hf_sigma"] = 1e9
     exposed_params["treatment_shocks"]["mask_full"][:] = 0
@@ -313,6 +343,8 @@ def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
     exposed_params["Z1"]["texture"]["covariate_hf_sigma"] = 1e9
 
     assert np.array_equal(world.exogenous["eps_c"], before_eps["eps_c"])
+    for name in before_primitives:
+        np.testing.assert_array_equal(world.primitive_parameters[name], before_primitives[name])
     assert np.array_equal(world.exogenous["eps_z_hf"], before_eps["eps_z_hf"])
     assert np.array_equal(world.exogenous["eps_z_pulse"], before_eps["eps_z_pulse"])
     assert world.equation_parameters["Z1"]["texture"]["covariate_hf_sigma"] != 1e9
@@ -320,8 +352,8 @@ def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
     assert world.equation_parameters["C1"]["random_walk"]["std"] != 1e9
     assert world.equation_parameters["C1"]["response"]["saturation"]["scale"] != 1e9
     assert world.equation_parameters["treatment_shocks"]["mask_full"].any()
-    replay_after = _replay(world, eps_c_eff)
-    for name in _CORE_OUTPUTS:
+    replay_after = world.replay()
+    for name in world.data:
         np.testing.assert_array_equal(replay_after[name], replay_before[name])
     for name, values in signal_before.items():
         if isinstance(values, np.ndarray):
@@ -330,7 +362,7 @@ def test_audit_accessors_are_non_aliasing_and_preserve_replay_and_signal():
             assert world.signal()[name] == values
 
 
-def test_equations_use_only_active_parents_and_keep_walk_only_nodes():
+def test_equation_audit_records_only_active_parents_and_keeps_walk_only_nodes():
     cfg = _config()
     g = {
         "g_cy": np.array([1, 0]),
@@ -343,18 +375,9 @@ def test_equations_use_only_active_parents_and_keep_walk_only_nodes():
         "g_zz": np.array([[0, 1], [0, 0]]),
     }
     world = _fixed_world(g, cfg)
-    equations = world.equations
     parameters = world.equation_parameters
-    assert "D1_full" in equations["Z1"]
-    assert "D1_full" not in equations["Z2"]
-    assert "Z1_full" in equations["Z2"]
-    assert "D1_full" in equations["C1"]
-    assert "Z1_full" in equations["C1"]
-    assert "D1_full" not in equations["C2"]
-    assert "Z1_full" not in equations["C2"]
     assert "parents" not in parameters["C2"]
     assert "parents" not in parameters["B"]
-    assert "C2" in equations and "f2" in equations
     assert parameters["C2"]["response"]["gate"]["g_cy"] == 0
 
 
@@ -406,34 +429,6 @@ def test_response_audit_contains_only_family_specific_shape_parameters():
             assert response["carryover"][key] == float(np.asarray(world.params[source])[0])
         for key, source in saturation_sources[saturation_id].items():
             assert response["saturation"][key] == float(np.asarray(world.params[source])[0])
-
-
-def test_description_surfaces_equations_and_audit_locations():
-    world = sample_scm(_config(), seed=71, max_eps_draws=40)
-    description = describe_scm(world)
-    assert "Structural equations (vector-valued; active parents only):" in description
-    assert "Exact replay audit:" in description
-    assert "world.equation_parameters" in description
-    assert "world.exogenous" in description
-
-
-def test_random_walk_equation_uses_fixed_scale_divisor():
-    """The audit equation must match the injective fixed-scale walk implementation."""
-    equation = sample_scm(_config(), seed=73, max_eps_draws=40).equations["RW"]
-
-    assert "std(q)" not in equation
-    assert "1e-8" not in equation
-    assert "centred_walk_scale(n_time_steps_full, width)" in equation
-    assert "sqrt(tr(A A^T) / n_time_steps_full)" in equation
-    assert "world constants:" in equation
-
-
-def test_description_marks_unestimable_signal_metrics_not_applicable():
-    cfg = _config(n_time_steps=4, l_max=8, carryover_burn_in=0)
-    world = _fixed_world(_edgeless_graph(), cfg)
-
-    assert not world.signal()["spearman_valid"].any()
-    assert "spearman=n/a" in describe_scm(world)
 
 
 def _edgeless_graph(n_treatments: int = 2, n_covariates: int = 2) -> dict:
@@ -517,7 +512,6 @@ def test_rw_y_is_iid_and_cannot_share_a_walk_operator_with_rw_b():
     assert "smoothness" not in world.params["rw_y"]
     assert "rw_smoothness_max_weeks" not in world.params["rw_y"]
     assert "smoothness" not in world.equation_parameters["Y"]["iid_noise"]
-    assert "RW_full(eps_y" not in world.equations["Y"]
 
     replacement_eps_y = np.linspace(-1.0, 1.0, world.n_time_steps + cfg.carryover_burn_in)
     replay = _replay(
@@ -1004,38 +998,6 @@ def test_intercept_and_outcome_noise_are_separate_decomposition_columns():
     )
 
 
-def test_disabled_covariate_texture_renders_the_pre_texture_covariate_equation():
-    """The rendered audit must show the exact executed own drive, or none."""
-    enabled = sample_scm(
-        _config(
-            covariate_hf_sigma_range=(0.3, 0.3),
-            covariate_pulse_prob_range=(0.2, 0.2),
-            covariate_pulse_amp_range=(1.0, 1.0),
-        ),
-        seed=5,
-    )
-    for m in (0, 1):
-        assert f"covariate_hf_sigma[{m}] * eps_z_hf[:, {m}]" in enabled.equations[f"Z{m + 1}"]
-        assert (
-            f"covariate_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - covariate_pulse_prob[{m}])"
-            in enabled.equations[f"Z{m + 1}"]
-        )
-
-    disabled = sample_scm(
-        _config(
-            covariate_hf_sigma_range=(0.0, 0.0),
-            covariate_pulse_prob_range=(0.0, 0.0),
-            covariate_pulse_amp_range=(0.0, 0.0),
-        ),
-        seed=5,
-    )
-    for m in (0, 1):
-        assert "eps_z_hf" not in disabled.equations[f"Z{m + 1}"]
-        assert "eps_z_pulse" not in disabled.equations[f"Z{m + 1}"]
-        assert f"use_covariate_hf[{m}]=False" in disabled.equations[f"Z{m + 1}"]
-        assert f"use_covariate_pulse[{m}]=False" in disabled.equations[f"Z{m + 1}"]
-
-
 def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
     """D carries no scale of its own; the loadings do.
 
@@ -1063,3 +1025,454 @@ def test_latent_factor_is_pinned_to_zero_mean_unit_scale():
     paths = np.random.default_rng(91).normal(size=(128, n_time_steps_full)) @ basis.T
     np.testing.assert_allclose(paths.mean(axis=1), 0.0, atol=1e-12)
     assert np.ptp(paths.std(axis=1)) > 0.1  # Paths scatter; their scale is not pinned.
+
+
+@pytest.mark.parametrize("texture_only", (False, True), ids=("all-components", "mixed-texture"))
+def test_replay_uses_the_full_accepted_joint_draw(monkeypatch, texture_only):
+    """Outputs, concrete reports and primitives share the accepted nonzero candidate."""
+    components = ("hf", "pulse") if texture_only else TRAJECTORY_COMPONENTS
+    inclusion = {
+        f"{role}_{component}_inclusion_prob": 0.5
+        for role in TRAJECTORY_INPUTS
+        for component in components
+    }
+    cfg = _config(
+        n_treatments=6,
+        n_covariates=4,
+        n_time_steps=24,
+        carryover_burn_in=5,
+        treatment_cv_floor=0.0,
+        mm_scale_prior="log_uniform",
+        prior_conditioning=True,
+        treatment_reference_contribution_range=(0.2, 0.4),
+        covariate_reference_contribution_range=(-0.5, 0.5),
+        rw_baseline_mean_range=(20.0, 20.0),
+        confounding_strength_range=(0.2, 0.5),
+        n_treatment_shocks=2,
+        treatment_shock_length_range=(5, 5),
+        treatment_shock_level_range=(0.4, 0.8),
+        treatment_onset_frac_range=(0.1, 0.2),
+        covariate_onset_frac_range=(0.1, 0.2),
+        treatment_flighting_period_weeks_range=(4, 6),
+        covariate_flighting_period_weeks_range=(4, 6),
+        treatment_flighting_duty_range=(0.3, 0.6),
+        treatment_level_jump_count=2,
+        covariate_level_jump_count=3,
+        treatment_seasonal_period_weeks_range=(8.0, 16.0),
+        covariate_seasonal_period_weeks_range=(8.0, 16.0),
+        edge_budget={
+            "cy": (6, 6),
+            "dc": (6, 6),
+            "dz": (4, 4),
+            "dy": (1, 1),
+            "zy": (4, 4),
+            "zc": (4, 4),
+            "cc": (3, 3),
+            "zz": (2, 2),
+        },
+        **inclusion,
+    )
+    original_draw = draw_worlds
+    original_filter = _additive_task_ok
+    batches = []
+    candidates = []
+    controlled_flags = {
+        role: {
+            component: (np.arange(n) + component_index) % 3 != 0
+            for component_index, component in enumerate(components)
+        }
+        for role, n in (("treatment", 6), ("covariate", 4))
+    }
+    if not texture_only:
+        # Every five-week shock overlaps an off-week.
+        controlled_flags["treatment"]["flighting"][:] = True
+
+    def selected_structure(g, config, rng):
+        structural = sample_structure(g, config, rng)
+        structural["sat_family"] = np.arange(6, dtype="int64")
+        structural["carryover_family"] = np.tile(np.arange(3, dtype="int64"), 2)
+        for role, flags_by_component in controlled_flags.items():
+            for component, flags in flags_by_component.items():
+                structural[structural_key(role, component)] = flags.copy()
+        return structural
+
+    def record_draw(*args, **kwargs):
+        drawn = original_draw(*args, **kwargs)
+        batches.append(drawn)
+        return drawn
+
+    def accept_after_two_candidates(**kwargs):
+        candidates.append(kwargs)
+        accepted = original_filter(**kwargs)
+        return accepted and len(candidates) > 2
+
+    monkeypatch.setattr("pymc_generator.world_model.sample_structure", selected_structure)
+    monkeypatch.setattr("pymc_generator.world_model.draw_worlds", record_draw)
+    monkeypatch.setattr(worlds, "_additive_task_ok", accept_after_two_candidates)
+    world = sample_scm(cfg, seed=53, max_param_rounds=1, max_eps_draws=8)
+    assert len(batches) == 1
+    candidate = len(candidates) - 1
+    assert candidate >= 2
+    drawn = batches[0]
+    expected_names = set(_FORWARD_OUTPUTS) | {"treatments_unshocked", "outcome_unshocked"}
+    if not texture_only:
+        expected_names.update(
+            {
+                "treatment_activity",
+                "covariate_activity",
+                "treatment_log_level_shift",
+                "covariate_level_shift",
+                "treatments_natural",
+                "outcome_natural",
+            }
+        )
+    assert world.data.keys() == expected_names
+    replay = world.replay()
+    assert replay.keys() == expected_names
+    for name in expected_names:
+        np.testing.assert_array_equal(world.data[name], drawn[name][candidate], err_msg=name)
+        np.testing.assert_array_equal(replay[name], drawn[name][candidate], err_msg=name)
+    for name, value in world.primitive_parameters.items():
+        np.testing.assert_array_equal(value, drawn[name][candidate], err_msg=name)
+    for name, value in world.exogenous.items():
+        np.testing.assert_array_equal(value, world.primitive_parameters[name], err_msg=name)
+    # Consumer-owned paths: compare realised reports, not primitives, including
+    # conditioned mechanisms, reference-derived coefficients and scaled texture.
+    report_paths = {
+        f"param_{name}": (name,)
+        for name in (
+            "beta",
+            "w_dc",
+            "u_dz",
+            "v_zc",
+            "alpha_cc",
+            "gamma_zz",
+            "delta_dy",
+            "rho_zy",
+            "carryover_alpha",
+            "weibull_lam",
+            "weibull_k",
+            "hill_slope",
+            "hill_kappa_mult",
+            "logistic_lam",
+            "mm_kappa_mult",
+            "tanh_c",
+            "root_alpha",
+            "hf_sigma",
+            "pulse_amp",
+            "pulse_prob",
+            "covariate_hf_sigma",
+            "covariate_pulse_amp",
+            "covariate_pulse_prob",
+            "treatment_level",
+            "confounding_strength",
+        )
+    }
+    report_paths.update(
+        {
+            f"param_rw_{group}_{field}": (f"rw_{group}", field)
+            for group in ("d", "z", "c", "b", "y")
+            for field in ("mean", "std")
+        }
+    )
+    for role, fields in (
+        ("treatment", ("contribution", "input", "response")),
+        ("covariate", ("contribution", "input")),
+    ):
+        if getattr(cfg, f"{role}_reference_contribution_range") is not None:
+            report_paths.update(
+                {
+                    f"param_{role}_reference_{field}": (f"{role}_reference_{field}",)
+                    for field in fields
+                }
+            )
+    leaves_by_component = {
+        "onset": ("start",),
+        "offset": ("stop",),
+        "flighting": ("period", "on_weeks", "phase"),
+        "seasonal": ("amplitude", "period", "phase"),
+        "trend": ("change",),
+    }
+    trajectory_leaves = {
+        role: {
+            **leaves_by_component,
+            "level_jump": (
+                ("week", "factor", "log_factor") if role == "treatment" else ("week", "size")
+            ),
+        }
+        for role in ("treatment", "covariate")
+    }
+    if not texture_only:
+        report_paths.update(
+            {
+                f"param_trajectory_{role}_{component}_{field}": (
+                    "trajectory",
+                    role,
+                    component,
+                    field,
+                )
+                for role, inventory in trajectory_leaves.items()
+                for component, fields in inventory.items()
+                for field in fields
+            }
+        )
+    assert set(report_paths) == {name for name in drawn if name.startswith("param_")}
+    for name, path in report_paths.items():
+        value = world.params
+        for key in path:
+            value = value[key]
+        np.testing.assert_array_equal(value, drawn[name][candidate], err_msg=name)
+    for name, role, component in (
+        ("use_hf", "treatment", "hf"),
+        ("use_pulse", "treatment", "pulse"),
+        ("use_covariate_hf", "covariate", "hf"),
+        ("use_covariate_pulse", "covariate", "pulse"),
+    ):
+        np.testing.assert_array_equal(
+            world.params[name], controlled_flags[role][component], err_msg=name
+        )
+    np.testing.assert_allclose(
+        world.params["beta"] * world.params["treatment_reference_response"],
+        world.params["treatment_reference_contribution"],
+        rtol=4 * np.finfo(np.float64).eps,
+        atol=0.0,
+    )
+    assert (np.abs(world.data["indirect_effects_by_source"]).max(axis=0) > 0.0).all()
+    assert np.any(world.data["latent_unobserved_contribution"] != 0.0)
+    assert np.any(world.data["covariate_contribution"] != 0.0)
+    assert not np.array_equal(world.data["treatments"], world.data["treatments_unshocked"])
+    shock_schedule = world.params["treatment_shock"]
+    assert shock_schedule["n_shocks"] == cfg.n_treatment_shocks
+    for report, field in (
+        ("treatment_shock_index", "treatment"),
+        ("treatment_shock_mask_full", "mask_full"),
+    ):
+        np.testing.assert_array_equal(
+            shock_schedule[field], drawn[report][candidate], err_msg=field
+        )
+    np.testing.assert_array_equal(
+        shock_schedule["start_full"],
+        drawn["treatment_shock_start"][candidate] + cfg.carryover_burn_in,
+    )
+    expected_level_full = np.zeros_like(drawn["treatment_shock_mask_full"][candidate], dtype=float)
+    for treatment, start, length, level in zip(
+        drawn["treatment_shock_index"][candidate],
+        drawn["treatment_shock_start"][candidate],
+        drawn["treatment_shock_length"][candidate],
+        drawn["treatment_shock_level"][candidate],
+    ):
+        start_full = start + cfg.carryover_burn_in
+        expected_level_full[start_full : start_full + length, treatment] = level
+        np.testing.assert_array_equal(
+            world.data["treatments"][start : start + length, treatment], np.full(length, level)
+        )
+    np.testing.assert_array_equal(shock_schedule["level_full"], expected_level_full)
+    if texture_only:
+        assert "trajectory" not in world.params
+        return
+
+    t = np.arange(cfg.n_time_steps)
+    for role, n in (("treatment", world.n_treatments), ("covariate", world.n_covariates)):
+        spec = world.params["trajectory"][role]
+        inventory = trajectory_leaves[role]
+        assert set(spec["use"]) == set(components)
+        for component in components:
+            np.testing.assert_array_equal(
+                spec["use"][component],
+                controlled_flags[role][component],
+                err_msg=f"{role} use_{component}",
+            )
+        for component, fields in inventory.items():
+            expected_fields = set(fields) | ({"count"} if component == "level_jump" else set())
+            assert set(spec[component]) == expected_fields
+        assert spec["level_jump"]["count"] == getattr(cfg, f"{role}_level_jump_count")
+        for i in range(n):
+            label = f"{'C' if role == 'treatment' else 'Z'}{i + 1}"
+            audit = world.equation_parameters[label]["trajectory"]
+            active = np.ones(t.size, dtype=bool)
+            shift = np.zeros(t.size)
+            for component in SCHEDULE_COMPONENTS:
+                if not spec["use"][component][i]:
+                    assert component not in audit
+                    continue
+                values = audit[component]
+                if component == "onset":
+                    active &= t >= values["start"]
+                elif component == "offset":
+                    active &= t < values["stop"]
+                elif component == "flighting":
+                    active &= (t + values["phase"]) % values["period"] < values["on_weeks"]
+                elif component == "seasonal":
+                    shift += values["amplitude"] * np.sin(
+                        2.0 * np.pi * t / values["period"] + values["phase"]
+                    )
+                elif component == "trend":
+                    shift += values["change"] * t / (t.size - 1)
+                else:
+                    sizes = values["log_factor" if role == "treatment" else "size"]
+                    shift += (t[:, None] >= values["week"][None, :]) @ sizes
+            np.testing.assert_array_equal(world.data[f"{role}_activity"][:, i], active)
+            level_name = (
+                "treatment_log_level_shift" if role == "treatment" else "covariate_level_shift"
+            )
+            np.testing.assert_allclose(world.data[level_name][:, i], shift, rtol=2e-14, atol=0.0)
+    off = world.data["treatment_activity"] == 0
+    shocked = world.data["treatment_shock_mask"] == 1
+    assert (off & shocked).any()
+    np.testing.assert_array_equal(world.data["treatments"][off & ~shocked], 0.0)
+    exposed = world.equation_parameters["C1"]["trajectory"]
+    if exposed["use"]["level_jump"]:
+        exposed["level_jump"]["factor"][:] = 0.0
+        assert (world.equation_parameters["C1"]["trajectory"]["level_jump"]["factor"] > 0.0).all()
+
+
+def test_primitive_bound_replay_preserves_the_steep_hill_knee():
+    """Constant-folding a concrete anchor previously moved the response by 0.22725."""
+    ranges = deepcopy(SCMPrior().saturation_prior_ranges)
+    ranges["hill"] = {"slope": (1e16, 1e16), "kappa_mult": (1.0, 1.0)}
+    cfg = make_scm_prior(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=16,
+        n_cells=2,
+        draws_per_cell=2,
+        seed=91,
+        l_max=4,
+        carryover_burn_in=0,
+        treatment_cv_floor=0.0,
+        treatment_hf_sigma_range=(0.0, 0.0),
+        treatment_pulse_prob_range=(0.0, 0.0),
+        covariate_hf_sigma_range=(0.0, 0.0),
+        covariate_pulse_prob_range=(0.0, 0.0),
+        rw_treatment_std_range=(1e-16, 1e-16),
+        saturation_prior_ranges=ranges,
+    )
+    g = _edgeless_graph(2, 1)
+    g["g_zy"][:] = 1
+    structural = sample_structure(g, cfg, np.random.default_rng(17))
+    structural["sat_family"][:] = 1
+    structural["carryover_family"][:] = 0
+    world = _fixed_world(g, cfg, seed=28, structural=structural)
+    assert (world.data["treatments"] == world.data["saturation_scale"][None, :]).any()
+    replay = world.replay()
+    assert replay.keys() == set(_FORWARD_OUTPUTS)
+    for name in replay:
+        np.testing.assert_array_equal(replay[name], world.data[name], err_msg=name)
+
+
+def test_replay_recomputes_outputs_and_rejects_missing_manual_provenance():
+    world = _fixed_world(_edgeless_graph(), _config(), seed=79)
+    expected = {name: value.copy() for name, value in world.data.items()}
+    for name, value in world.data.items():
+        world.data[name] = np.zeros_like(value)
+    replay = world.replay()
+    for name, value in expected.items():
+        np.testing.assert_array_equal(replay[name], value, err_msg=name)
+    manual = SCM(
+        data=expected,
+        g=world.g,
+        params=world.params,
+        cfg=world.cfg,
+        extras=world.extras,
+        _exogenous=world.exogenous,
+    )
+    with pytest.raises(ValueError, match="primitive draw provenance"):
+        manual.replay()
+
+
+def _cv(series):
+    return series.std(axis=0) / series.mean(axis=0)
+
+
+def test_single_world_own_flighting_rescues_a_quiet_natural_treatment():
+    quiet = {
+        "n_time_steps": 24,
+        "treatment_hf_inclusion_prob": 0.0,
+        "treatment_pulse_inclusion_prob": 0.0,
+        "rw_treatment_std_range": (0.01, 0.02),
+    }
+    with pytest.raises(RuntimeError, match="no accepted draw"):
+        sample_scm(_config(**quiet), seed=2, max_param_rounds=1, max_eps_draws=4)
+    world = sample_scm(
+        _config(**quiet, treatment_flighting_inclusion_prob=1.0),
+        seed=2,
+        max_param_rounds=1,
+        max_eps_draws=4,
+    )
+    assert (_cv(world.data["treatments_natural"]) < world.cfg.treatment_cv_floor).all()
+    assert (_cv(world.data["treatments"]) > world.cfg.treatment_cv_floor).all()
+    assert (world.data["treatment_activity"] == 0).any(axis=0).all()
+
+
+def test_single_world_large_envelope_uses_the_natural_spike_reference():
+    cfg = _config(
+        n_treatments=1,
+        n_covariates=1,
+        n_time_steps=32,
+        nonlinearity="linear",
+        beta_additive_range=(2.0, 2.0),
+        rw_baseline_mean_range=(1.0, 1.0),
+        rw_covariate_mean_range=(1.0, 1.0),
+        rw_positive_mean_range=(10.0, 10.0),
+        rw_treatment_std_range=(0.001, 0.001),
+        treatment_hf_sigma_range=(0.0, 0.0),
+        treatment_pulse_prob_range=(0.0, 0.0),
+        treatment_flighting_inclusion_prob=1.0,
+        treatment_flighting_period_weeks_range=(4, 4),
+        treatment_flighting_duty_range=(0.5, 0.5),
+        treatment_seasonal_inclusion_prob=1.0,
+        treatment_seasonal_amplitude_range=(3.0, 3.0),
+        treatment_seasonal_period_weeks_range=(16.0, 16.0),
+    )
+    world = sample_scm(cfg, seed=5, max_eps_draws=8)
+    data = world.data
+    assert np.abs(data["treatment_log_level_shift"]).max() > 2.9
+    median = np.median(data["treatments"], axis=0)
+    safe_median = np.where(median > 0.0, median, 1.0)
+    assert (data["treatments"].max(axis=0) / safe_median).max() >= 50.0
+    assert data["outcome_natural"].max() / np.median(data["outcome_natural"]) < 8.0
+    assert _additive_task_ok(
+        data["treatments"],
+        data["outcome"],
+        data,
+        world.g["g_cy"],
+        cfg.treatment_cv_floor,
+        realism_treatment=data["treatments_natural"],
+        realism_outcome=data["outcome_natural"],
+        cv_alternative_treatment=data["treatment_activity"]
+        * data["treatments_natural"]
+        * np.exp(data["treatment_log_level_shift"]),
+    )
+    assert not _additive_task_ok(
+        data["treatments"], data["outcome"], data, world.g["g_cy"], cfg.treatment_cv_floor
+    )
+
+
+def test_single_world_shock_cannot_rescue_a_negligible_own_schedule():
+    cfg = _config(
+        n_time_steps=24,
+        treatment_hf_inclusion_prob=0.0,
+        treatment_pulse_inclusion_prob=0.0,
+        rw_treatment_std_range=(0.01, 0.02),
+        treatment_trend_inclusion_prob=1.0,
+        treatment_trend_log_change_range=(0.001, 0.002),
+        n_treatment_shocks=2,
+        treatment_shock_length_range=(6, 6),
+        treatment_shock_level_range=(0.2, 0.3),
+    )
+    without_cv = deepcopy(cfg)
+    without_cv.treatment_cv_floor = 0.0
+    accepted_without_cv = sample_scm(without_cv, seed=2, max_param_rounds=1, max_eps_draws=4)
+    data = accepted_without_cv.data
+    alternative = (
+        data["treatment_activity"]
+        * data["treatments_natural"]
+        * np.exp(data["treatment_log_level_shift"])
+    )
+    assert (_cv(alternative) < cfg.treatment_cv_floor).all()
+    shocked = data["treatment_shock_mask"].any(axis=0)
+    assert shocked.any()
+    assert (_cv(data["treatments"])[shocked] > cfg.treatment_cv_floor).all()
+    with pytest.raises(RuntimeError, match="no accepted draw"):
+        sample_scm(cfg, seed=2, max_param_rounds=1, max_eps_draws=4)

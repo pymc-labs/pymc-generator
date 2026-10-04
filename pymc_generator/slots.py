@@ -76,10 +76,11 @@ _SQUARE_TYPES: dict[str, str] = {"cc": "n_treatments", "zz": "n_covariates"}
 # 3: dy/zy outcome-edge names and an explicitly direct-null treatment floor.
 # 4: domain-neutral names — spend/sales/channel/control/demand/adstock become
 #    treatment/outcome/covariate/latent_unobserved/carryover.
-# Packed graph positions and all numeric arrays are unchanged.
-CORPUS_SCHEMA_VERSION: int = 4
+# 5: exact realised trajectory leaves and opt-in mechanism truth. Archives from
+#    earlier versions cannot recover these draws and are rejected, not migrated.
+CORPUS_SCHEMA_VERSION: int = 5
 
-#: v1 corpus key -> v2 canonical key, applied by ``load_corpus``.
+#: Historical symbolic dimension keys, retained only to reject stale vocabulary.
 LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
     "K_active": "n_treatments_active",
     "M_active": "n_covariates_active",
@@ -89,51 +90,8 @@ LEGACY_CORPUS_KEYS_V1: dict[str, str] = {
     "active_j_mask": "latent_active_mask",
 }
 
-#: Historical v2 order and metadata keys; only the disk reader accepts these.
-LEGACY_EDGE_TYPES_V2: tuple[str, ...] = ("cy", "dc", "dz", "db", "zb", "zc", "cc", "zz")
+#: Historical outcome-edge metadata keys, retained only for rejection.
 LEGACY_EDGE_KEYS_V2: dict[str, str] = {"db": "dy", "zb": "zy"}
-
-#: v3 marketing-vocabulary corpus key -> v4 domain-neutral key, applied by
-#: ``load_corpus``. Array contents, dtypes and shapes are untouched: this is a
-#: pure renaming of the persisted vocabulary.
-LEGACY_CORPUS_KEYS_V3: dict[str, str] = {
-    "spend_raw": "treatment_raw",
-    "spend_norm": "treatment_norm",
-    "spend_share": "treatment_share",
-    "spend_means": "treatment_means",
-    "controls": "covariates",
-    "sales_raw": "outcome_raw",
-    "sales_norm": "outcome_norm",
-    "sales_scale": "outcome_scale",
-    "sales_noise": "outcome_noise",
-    "demand": "latent_unobserved",
-    "contributions_raw": "treatment_contribution_raw",
-    "control_contribution": "covariate_contribution",
-    "confounder_contribution": "latent_unobserved_contribution",
-    "channel_active": "treatment_active",
-    "channel_level": "treatment_level",
-    "channel_shock_mask": "treatment_shock_mask",
-    "channel_shock_channel": "treatment_shock_index",
-    "channel_shock_start": "treatment_shock_start",
-    "channel_shock_length": "treatment_shock_length",
-    "channel_shock_level": "treatment_shock_level",
-    "channel_shock_level_multiplier": "treatment_shock_level_multiplier",
-    "adstock_family": "carryover_family",
-    "adstock_alpha": "carryover_alpha",
-}
-
-#: v3 diagnostics metadata key -> v4 key, applied alongside the arrays.
-LEGACY_DIAGNOSTIC_KEYS_V3: dict[str, str] = {
-    "min_no_direct_effect_channels": "min_no_direct_effect_treatments",
-    "adstock_kernel_version": "carryover_kernel_version",
-    "adstock_kernel_semantics": "carryover_kernel_semantics",
-}
-
-#: v3 ``prior_cond`` column name -> v4 column name.
-LEGACY_PRIOR_COND_COLUMNS_V3: dict[str, str] = {
-    "adstock_alpha_low": "carryover_alpha_low",
-    "adstock_alpha_width": "carryover_alpha_width",
-}
 
 # --------------------------------------------------------------------------
 # Prior-conditioning (ACE) layout — design-freeze constants (to-do 01)
@@ -234,6 +192,7 @@ TRAJECTORY_MAX_LOG_SHIFT: float = 3.0
 #: iff the config sets any trajectory inclusion knob. ``*_components`` are the
 #: per-input 0/1 component flags; ``*_activity`` is the gate schedule (1 = on);
 #: ``*_level_shift`` is the summed level component (treatments: log-level).
+#: The pre-v5 schedule-output dtypes remain unchanged.
 TRAJECTORY_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
     "treatment_components": (("task", "treatment", "component"), np.uint8),
     "covariate_components": (("task", "covariate", "component"), np.uint8),
@@ -241,6 +200,85 @@ TRAJECTORY_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
     "covariate_activity": (("task", "time", "covariate"), np.uint8),
     "treatment_log_level_shift": (("task", "time", "treatment"), np.float32),
     "covariate_level_shift": (("task", "time", "covariate"), np.float32),
+}
+
+#: Exact realised component leaves. Unselected components and inactive inputs
+#: have zero padding, not an invented draw. Jump axes are role-specific because
+#: treatment and covariate recipes may configure different event counts.
+TRAJECTORY_PARAM_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {}
+for _input in TRAJECTORY_INPUTS:
+    for _component, _leaves, _dtype in (
+        ("hf", ("sigma",), np.float64),
+        ("pulse", ("amp", "prob"), np.float64),
+        ("onset", ("start",), np.int64),
+        ("offset", ("stop",), np.int64),
+        ("flighting", ("period", "on_weeks", "phase"), np.int64),
+        ("level_jump", ("week",), np.int64),
+        (
+            "level_jump",
+            ("factor", "log_factor") if _input == "treatment" else ("size",),
+            np.float64,
+        ),
+        ("seasonal", ("amplitude", "period", "phase"), np.float64),
+        ("trend", ("change",), np.float64),
+    ):
+        _axes = (
+            ("task", f"{_input}_jump", _input) if _component == "level_jump" else ("task", _input)
+        )
+        for _leaf in _leaves:
+            TRAJECTORY_PARAM_FIELDS[f"trajectory_{_input}_{_component}_{_leaf}"] = (
+                _axes,
+                _dtype,
+            )
+TRAJECTORY_ARRAY_FIELDS.update(TRAJECTORY_PARAM_FIELDS)
+
+#: Shared world-model report for each persisted trajectory leaf. Texture
+#: magnitudes already have reports outside the nested trajectory specification.
+TRAJECTORY_PARAM_REPORTS: dict[str, str] = {}
+for _key in TRAJECTORY_PARAM_FIELDS:
+    _suffix = _key.removeprefix("trajectory_")
+    _input, _component_leaf = _suffix.split("_", 1)
+    if _component_leaf in ("hf_sigma", "pulse_amp", "pulse_prob"):
+        _report = _component_leaf if _input == "treatment" else f"covariate_{_component_leaf}"
+    else:
+        _report = _key
+    TRAJECTORY_PARAM_REPORTS[_key] = f"param_{_report}"
+
+#: Opt-in response-mechanism truth. The exact saturation anchor is retained in
+#: addition to the historical float32 ``saturation_scale`` feature. Shape draws
+#: are reported for every active treatment, including unused response families.
+MECHANISM_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
+    "sat_family": (("task", "treatment"), np.uint8),
+    "mechanism_saturation_scale": (("task", "treatment"), np.float64),
+    "beta": (("task", "treatment"), np.float64),
+    "rho_zy": (("task", "covariate"), np.float64),
+    "hill_slope": (("task", "treatment"), np.float64),
+    "hill_kappa_mult": (("task", "treatment"), np.float64),
+    "logistic_lam": (("task", "treatment"), np.float64),
+    "mm_kappa_mult": (("task", "treatment"), np.float64),
+    "tanh_c": (("task", "treatment"), np.float64),
+    "root_alpha": (("task", "treatment"), np.float64),
+}
+
+#: Recipe support corresponding to each exact saturation-shape field.
+MECHANISM_PRIOR_FIELDS: dict[str, tuple[str, str]] = {
+    "hill_slope": ("hill", "slope"),
+    "hill_kappa_mult": ("hill", "kappa_mult"),
+    "logistic_lam": ("logistic", "lam"),
+    "mm_kappa_mult": ("michaelis_menten", "kappa_mult"),
+    "tanh_c": ("tanh", "c"),
+    "root_alpha": ("root", "alpha"),
+}
+
+#: Targets, actual reference inputs, and the treatment response at its reference
+#: are present only for roles whose contribution prior is enabled. Retaining
+#: the realised response preserves the generator's compiler-sensitive arithmetic.
+MECHANISM_REFERENCE_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
+    "treatment_reference_contribution": (("task", "treatment"), np.float64),
+    "treatment_reference_input": (("task", "treatment"), np.float64),
+    "treatment_reference_response": (("task", "treatment"), np.float64),
+    "covariate_reference_contribution": (("task", "covariate"), np.float64),
+    "covariate_reference_input": (("task", "covariate"), np.float64),
 }
 
 

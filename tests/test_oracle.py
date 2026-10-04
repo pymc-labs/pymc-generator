@@ -9,6 +9,8 @@ parameters within wide posterior bounds (slow-gated).
 
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
+
 import numpy as np
 import pymc as pm
 import pytensor
@@ -24,6 +26,8 @@ from pymc_generator.random_walk import (
 )
 from pymc_generator.sampler import SCMPrior, _slice_g_active, sample_g_additive
 from pymc_generator.signal_diagnostics import _carryover_numpy
+from pymc_generator.slots import TRAJECTORY_COMPONENTS, TRAJECTORY_INPUTS
+from pymc_generator.trajectories import structural_key
 from pymc_generator.world_model import (
     _MECHANISM_PARAM_NAMES,
     CARRYOVER_FAMILY_PARAM_NAMES,
@@ -32,8 +36,11 @@ from pymc_generator.world_model import (
     _walk_basis,
     build_oracle_model,
     build_world_model,
+    draw_worlds,
+    sample_prior_cond,
     sample_structure,
 )
+from pymc_generator.worlds import SCM, _assemble_params
 
 #: Free RVs the two models must define identically (same name, same prior).
 SHARED_RV_NAMES = (
@@ -243,36 +250,128 @@ def test_baseline_walk_override_is_shared_by_generation_and_oracle():
     assert np.allclose(pm.logp(oracle["rw_b_std"], value).eval(), expected)
 
 
-def test_relative_outcome_scale_is_shared_by_generation_and_oracle():
-    """Fixed relative parameters produce one absolute scale in both builders."""
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+@pytest.mark.parametrize(
+    ("reference_target", "relative_stds"),
+    (
+        pytest.param(None, (0.07, 0.02), id="raw-coefficients"),
+        pytest.param(1e-180, (0.1, 0.1), id="tiny-reference"),
+        pytest.param(np.finfo(np.float64).tiny / 2, (0.1, 0.1), id="subnormal-reference"),
+        pytest.param(np.finfo(np.float64).tiny, (1e-16, 1e-16), id="minimum-final-sigma"),
+        pytest.param(np.nextafter(0.0, 1.0), (1e38, 1e38), id="amplified-minimum-beta"),
+        pytest.param(1e38, (np.nextafter(0.0, 1.0),) * 2, id="amplified-minimum-std"),
+    ),
+)
+def test_relative_outcome_scale_is_shared_by_generation_and_oracle(
+    reference_target, relative_stds, latent
+):
+    """Both oracle modes retain the independently computed absolute amplitudes."""
+    coefficient_prior = (
+        {}
+        if reference_target is None
+        else {"treatment_reference_contribution_range": (reference_target, reference_target)}
+    )
     cfg = _small_cfg(
+        n_time_steps=16,
+        carryover_burn_in=0,
+        nonlinearity="linear",
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
         beta_additive_range=(1.2, 1.2),
-        rw_baseline_std_range=(0.07, 0.07),
-        rw_outcome_std_range=(0.02, 0.02),
+        treatment_reference_multiplier=1.0,
+        rw_baseline_std_range=(relative_stds[0], relative_stds[0]),
+        rw_outcome_std_range=(relative_stds[1], relative_stds[1]),
+        **coefficient_prior,
     )
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(16))
-    generative, _out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
+    generative, out_names, _param_names = build_world_model(g, cfg, structural, cfg.n_time_steps)
+    drawn = draw_worlds(
+        generative,
+        (*out_names, "param_beta", "param_rw_b_std", "param_rw_y_std"),
+        seed=17,
+    )
+    world = {name: values[0] for name, values in drawn.items()}
     oracle = build_oracle_model(
         g,
         cfg,
         structural,
-        {
-            "treatments": np.zeros((cfg.n_time_steps, 2)),
-            "covariates": np.zeros((cfg.n_time_steps, 1)),
-            "outcome": np.zeros(cfg.n_time_steps),
-            "saturation_scale": np.ones(2),
-        },
+        {name: world[name] for name in ("treatments", "covariates", "outcome", "saturation_scale")},
+        latent=latent,
     )
-    treatment_amplitude = np.sqrt(2.0 * 1.2**2)
 
-    for group, relative_std in (("rw_b", 0.07), ("rw_y", 0.02)):
-        generated = np.asarray(pm.draw(generative[f"{group}_std"], draws=1, random_seed=17))
+    for group, relative_std in zip(("rw_b", "rw_y"), relative_stds):
+        generated = world[f"param_{group}_std"]
         inferred = np.asarray(pm.draw(oracle[f"{group}_std"], draws=1, random_seed=18))
-        np.testing.assert_allclose(
-            generated, relative_std * treatment_amplitude, rtol=0.0, atol=1e-14
-        )
-        np.testing.assert_allclose(inferred, generated, rtol=0.0, atol=1e-14)
+        with localcontext() as context:
+            context.prec = 100
+            squared = sum(
+                Decimal.from_float(float(v)) ** 2 for v in g["g_cy"] * world["param_beta"]
+            )
+            expected = float(Decimal.from_float(relative_std) * squared.sqrt())
+        for actual in (generated, inferred):
+            np.testing.assert_allclose(
+                actual, expected, rtol=32 * np.finfo(np.float64).eps, atol=0.0
+            )
+
+
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+@pytest.mark.parametrize(
+    ("beta_range", "std_range", "center_observation"),
+    (
+        pytest.param((1.0, 2.0), (0.1, 0.2), False, id="regular"),
+        pytest.param((1e-180, 2e-180), (5e37, 1e38), True, id="tiny-coefficient"),
+    ),
+)
+def test_relative_noise_posterior_gradients_match_finite_differences(
+    latent, beta_range, std_range, center_observation
+):
+    """NUTS derivatives retain the coupling between beta and both noise scales."""
+    cfg = _small_cfg(
+        n_time_steps=16,
+        carryover_burn_in=0,
+        nonlinearity="linear",
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        beta_additive_range=beta_range,
+        rw_baseline_std_range=std_range,
+        rw_outcome_std_range=std_range,
+    )
+    g = _direct_only_graph()
+    structural = sample_structure(g, cfg, np.random.default_rng(19))
+    generative, output_names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
+    drawn = draw_worlds(generative, output_names, seed=20)
+    data = {
+        name: drawn[name][0] for name in ("treatments", "covariates", "outcome", "saturation_scale")
+    }
+    oracle = build_oracle_model(
+        g,
+        cfg,
+        structural,
+        data,
+        latent=latent,
+    )
+    if center_observation:
+        # At vanishing noise, a distant mean overflows Normal's sigma pullback
+        # before any prior transformation. Isolate the finite local noise law.
+        (mean,) = oracle.replace_rvs_by_values([oracle["outcome_mu"]])
+        data["outcome"] = oracle.compile_fn(
+            mean, inputs=oracle.value_vars, on_unused_input="ignore"
+        )(oracle.initial_point())
+        oracle = build_oracle_model(g, cfg, structural, data, latent=latent)
+    variables = [oracle[name] for name in ("beta", "rw_b_std_rel", "rw_y_std_rel")]
+    point = oracle.initial_point()
+    logp = oracle.compile_logp()
+    actual = oracle.compile_dlogp(vars=variables)(point)
+    expected = []
+    step = 1e-5
+    for variable in variables:
+        key = oracle.rvs_to_values[variable].name
+        for index in np.ndindex(point[key].shape):
+            plus = {name: value.copy() for name, value in point.items()}
+            minus = {name: value.copy() for name, value in point.items()}
+            plus[key][index] += step
+            minus[key][index] -= step
+            expected.append((logp(plus) - logp(minus)) / (2 * step))
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
 
 
 def test_oracle_logp_finite_at_truth(world_and_oracle):
@@ -1039,3 +1138,153 @@ def test_nuts_smoke_recovers_params():
     mu = post["outcome_mu"].mean(("chain", "draw")).values
     r = np.corrcoef(mu[warmup:], world.data["outcome"][warmup:])[0, 1]
     assert r > 0.8
+
+
+def _scheduled_truth_world(kernel="all-families", *, floor_scope=None):
+    """One joint generating truth with observed schedules, mediation and signed controls."""
+    burn_in = 0 if kernel == "no-burn-in" or floor_scope is not None else 5
+    overrides = {
+        "n_treatments": 6,
+        "n_covariates": 2,
+        "n_time_steps": 24,
+        "l_max": 4,
+        "carryover_burn_in": burn_in,
+        "treatment_cv_floor": 0.0,
+        "prior_conditioning": kernel != "zero-decay",
+        "mm_scale_prior": "log_uniform",
+        "treatment_reference_contribution_range": (0.4, 0.8),
+        "treatment_reference_multiplier": 0.8,
+        "covariate_reference_contribution_range": (-0.7, 0.7),
+        "covariate_reference_scale": 2.0,
+        "rw_covariate_mean_range": (-0.1, 0.1),
+        "dy_coeff_range": (0.5, 0.5),
+        "treatment_onset_frac_range": (0.05, 0.1),
+        "covariate_onset_frac_range": (0.05, 0.1),
+        "treatment_offset_frac_range": (0.8, 0.95),
+        "covariate_offset_frac_range": (0.8, 0.95),
+        "treatment_flighting_period_weeks_range": (4, 6),
+        "covariate_flighting_period_weeks_range": (4, 6),
+        "treatment_level_jump_count": 2,
+        "covariate_level_jump_count": 3,
+        "treatment_seasonal_period_weeks_range": (8.0, 12.0),
+        "covariate_seasonal_period_weeks_range": (8.0, 12.0),
+        "covariate_seasonal_amplitude_range": (0.8, 1.2),
+        "confounding_strength_range": (0.3, 0.6),
+        "n_treatment_shocks": 2,
+        "treatment_shock_length_range": (3, 4),
+        "treatment_shock_level_range": (0.3, 0.7),
+        **{
+            f"{role}_{component}_inclusion_prob": 0.5
+            for role in TRAJECTORY_INPUTS
+            for component in TRAJECTORY_COMPONENTS
+        },
+    }
+    if kernel == "zero-decay":
+        overrides["carryover_alpha_range"] = (0.0, 0.0)
+    if floor_scope is not None:
+        overrides.update(
+            baseline_floor=0.0,
+            baseline_floor_scope=floor_scope,
+            rw_baseline_mean_range=(0.0, 0.0),
+            outcome_std_mode="absolute",
+            rw_baseline_std_sigma=0.8,
+            rw_outcome_std_sigma=0.05,
+        )
+    cfg = _small_cfg(**overrides)
+    g = _direct_only_graph(6)
+    g["g_dc"][:] = 1
+    g["g_dz"] = np.ones((1, 2), dtype=int)
+    g["g_dy"][:] = 1
+    g["g_zy"] = np.ones(2, dtype=int)
+    g["g_zc"] = np.ones((2, 6), dtype=int)
+    g["g_zz"] = np.array([[0, 1], [0, 0]])
+    g["g_cc"] = np.eye(6, k=1, dtype=int)
+    rng = np.random.default_rng(203)
+    structural = sample_structure(g, cfg, rng)
+    structural["sat_family"] = np.arange(6, dtype="int64")
+    structural["carryover_family"] = (
+        np.zeros(6, dtype="int64")
+        if kernel == "identity"
+        else np.ones(6, dtype="int64")
+        if kernel == "zero-decay"
+        else np.tile(np.arange(3, dtype="int64"), 2)
+    )
+    for role, n in (("treatment", 6), ("covariate", 2)):
+        for component_index, component in enumerate(TRAJECTORY_COMPONENTS):
+            structural[structural_key(role, component)] = (np.arange(n) + component_index) % 2 == 0
+    prior_cond = sample_prior_cond(cfg, rng)
+    model, outputs, reports = build_world_model(
+        g, cfg, structural, cfg.n_time_steps, prior_cond=prior_cond
+    )
+    primitive_names = tuple(rv.name for rv in model.free_RVs)
+    names = tuple(dict.fromkeys(outputs + reports + primitive_names))
+    drawn = draw_worlds(model, names, seed=205)
+    extras = {"structural": structural}
+    if prior_cond is not None:
+        extras["prior_cond"] = prior_cond
+    world = SCM(
+        data={name: drawn[name][0] for name in outputs},
+        g=g,
+        params=_assemble_params(drawn, 0, structural, reports, cfg),
+        cfg=cfg,
+        extras=extras,
+        _primitive_parameters={name: drawn[name][0] for name in primitive_names},
+    )
+    warmup = cfg.l_max - 1 if burn_in and kernel not in ("identity", "zero-decay") else 0
+    return world, warmup
+
+
+@pytest.fixture(scope="module", params=("all-families", "no-burn-in", "identity", "zero-decay"))
+def scheduled_oracle_world(request):
+    return _scheduled_truth_world(request.param)
+
+
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+def test_oracle_uses_scheduled_observed_inputs_once_at_full_truth(scheduled_oracle_world, latent):
+    world, warmup = scheduled_oracle_world
+    oracle = world.oracle_model(latent=latent)
+    primitives = world.primitive_parameters
+    truth = world.data["contributions_observed"]
+    got = _oracle_deterministic_at_truth(oracle, primitives, "contributions")
+    np.testing.assert_allclose(got[warmup:], truth[warmup:], rtol=2e-12, atol=0.0)
+    np.testing.assert_array_equal(got[warmup:][truth[warmup:] == 0.0], 0.0)
+    assert not np.array_equal(truth, world.data["contributions"])
+    assert np.any(world.data["latent_unobserved_contribution"] != 0.0)
+    assert (world.data["covariate_contribution"] < 0.0).any()
+    assert (world.data["covariate_contribution"] > 0.0).any()
+    mu = _oracle_deterministic_at_truth(oracle, primitives, "outcome_mu")
+    sampled_truth = world.data["outcome"] - world.data["outcome_noise"]
+    if latent == "sampled":
+        np.testing.assert_allclose(mu[warmup:], sampled_truth[warmup:], rtol=2e-12, atol=0.0)
+    else:
+        expected = (
+            world.params["rw_b"]["mean"][0]
+            + world.data["covariate_contribution"].sum(axis=1)
+            + truth.sum(axis=1)
+        )
+        np.testing.assert_allclose(mu[warmup:], expected[warmup:], rtol=2e-12, atol=0.0)
+        assert np.max(np.abs(mu[warmup:] - sampled_truth[warmup:])) > 1e-3
+
+
+@pytest.mark.parametrize("scope", ("intercept", "non_treatment"))
+def test_scheduled_sampled_oracle_preserves_a_binding_floor_at_truth(scope):
+    world, warmup = _scheduled_truth_world(floor_scope=scope)
+    assert warmup == 0
+    assert (world.data["baseline_intrinsic"] == 0.0).any()
+    assert (world.data["baseline_intrinsic"] > 0.0).any()
+    oracle = world.oracle_model(latent="sampled")
+    primitives = world.primitive_parameters
+    np.testing.assert_allclose(
+        _oracle_deterministic_at_truth(oracle, primitives, "contributions"),
+        world.data["contributions_observed"],
+        rtol=2e-12,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        _oracle_deterministic_at_truth(oracle, primitives, "outcome_mu"),
+        world.data["outcome"] - world.data["outcome_noise"],
+        rtol=2e-12,
+        atol=0.0,
+    )
+    with pytest.raises(ValueError, match="cannot represent a floored intercept"):
+        world.oracle_model(latent="marginal")

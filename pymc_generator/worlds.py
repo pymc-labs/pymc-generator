@@ -32,6 +32,8 @@ from .sampler import (
     sample_g_additive,
 )
 from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION, per_treatment_signal
+from .slots import TRAJECTORY_COMPONENTS, TRAJECTORY_INPUTS
+from .trajectories import SCHEDULE_COMPONENTS, structural_key
 
 if TYPE_CHECKING:
     import pymc as pm
@@ -136,9 +138,13 @@ class SCM:
     seed: int | None = None
     extras: dict = field(default_factory=dict)
     _exogenous: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
+    _primitive_parameters: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         self.cfg = deepcopy(self.cfg)
+        self._primitive_parameters = cast(
+            dict[str, np.ndarray], _copy_audit_value(self._primitive_parameters)
+        )
 
     @property
     def n_time_steps(self) -> int:
@@ -167,6 +173,70 @@ class SCM:
         equation centres by subtracting ``covariate_pulse_prob``.
         """
         return cast(dict[str, np.ndarray], _copy_audit_value(self._exogenous))
+
+    @property
+    def primitive_parameters(self) -> dict[str, np.ndarray]:
+        """Accepted primitive free-RV values, including raw innovations.
+
+        Keys are the generator's RV names. Unlike ``params``, which also holds
+        derived magnitudes and reference coefficients, these values preserve
+        the original prior-transform arithmetic used by :meth:`replay`.
+        """
+        return cast(dict[str, np.ndarray], _copy_audit_value(self._primitive_parameters))
+
+    def replay(self) -> dict[str, np.ndarray]:
+        """Recompute every forward output from this world's primitive draw.
+
+        Rebuilds the generative model and binds primitives as runtime tensors:
+        neither stored outputs nor constant-folded concrete parameter products
+        substitute for the generator's arithmetic. This requires provenance
+        recorded by :func:`sample_scm`; manual worlds without it fail clearly.
+        """
+        import pytensor.tensor as pt
+        from pymc.pytensorf import compile as compile_pymc
+        from pytensor.graph.replace import clone_replace
+
+        from .world_model import build_world_model
+
+        if not self._primitive_parameters or "structural" not in self.extras:
+            raise ValueError(
+                "this SCM does not carry primitive draw provenance; "
+                "replay() needs a world produced by sample_scm"
+            )
+        model, out_names, param_names = build_world_model(
+            self.g,
+            self.cfg,
+            self.extras["structural"],
+            self.cfg.n_time_steps,
+            prior_cond=self.extras.get("prior_cond"),
+        )
+        missing = {rv.name for rv in model.free_RVs} - self._primitive_parameters.keys()
+        if missing:
+            raise ValueError(f"this SCM is missing primitive draw provenance for {sorted(missing)}")
+        inputs = [
+            pt.tensor(name=f"{rv.name}_replay", dtype=rv.dtype, shape=rv.type.shape)
+            for rv in model.free_RVs
+        ]
+        draw_names = tuple(
+            dict.fromkeys(
+                out_names + param_names + _EXOGENOUS_NAMES + tuple(rv.name for rv in model.free_RVs)
+            )
+        )
+        bound_outputs = clone_replace(
+            [model[name] for name in draw_names], dict(zip(model.free_RVs, inputs))
+        )
+        with model:
+            evaluate = compile_pymc(
+                inputs=inputs,
+                outputs=bound_outputs,
+                mode="FAST_COMPILE",
+                on_unused_input="ignore",
+            )
+        evaluated = evaluate(*[self._primitive_parameters[rv.name] for rv in model.free_RVs])
+        return {
+            name: np.array(value, copy=True)
+            for name, value in zip(out_names, evaluated[: len(out_names)])
+        }
 
     @property
     def equations(self) -> dict[str, str]:
@@ -469,10 +539,34 @@ def _treatment_response_parameters(world: SCM, k: int) -> dict[str, Any]:
         response["reference"] = {
             "contribution": float(np.asarray(params["treatment_reference_contribution"])[k]),
             "input": float(np.asarray(params["treatment_reference_input"])[k]),
+            "response": float(np.asarray(params["treatment_reference_response"])[k]),
             "multiplier": float(world.cfg.treatment_reference_multiplier),
             "stage": "post_carryover_pre_gate",
         }
     return response
+
+
+def _trajectory_parameters(params: dict, input_type: str, index: int) -> dict[str, Any] | None:
+    """Schedule inputs carried by one node, retaining separate jump factors."""
+    if "trajectory" not in params:
+        return None
+    spec = params["trajectory"][input_type]
+    values: dict[str, Any] = {
+        "use": {component: bool(flags[index]) for component, flags in spec["use"].items()}
+    }
+    for component in SCHEDULE_COMPONENTS:
+        if not values["use"][component]:
+            continue
+        leaves: dict[str, Any] = {}
+        for leaf_name, value in spec[component].items():
+            if leaf_name == "count":
+                leaves[leaf_name] = int(value)
+            elif component == "level_jump":
+                leaves[leaf_name] = np.asarray(value)[:, index]
+            else:
+                leaves[leaf_name] = np.asarray(value)[index].item()
+        values[component] = leaves
+    return values
 
 
 def _build_equation_parameters(world: SCM) -> dict[str, Any]:
@@ -487,6 +581,11 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
             "eps_z_pulse": "0/1 Bernoulli fire, centred by covariate_pulse_prob",
         }
     }
+    if "trajectory" in params:
+        values["trajectories"] = {
+            "n_time_steps": world.n_time_steps,
+            "carryover_burn_in": world.cfg.carryover_burn_in,
+        }
     for j in range(n_latent):
         values[f"D{j + 1}"] = {"random_walk": _rw_parameters(params, "rw_d", j)}
     for m in range(n_covariates):
@@ -507,6 +606,9 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
                 "covariate_pulse_prob": float(np.asarray(params["covariate_pulse_prob"])[m]),
             },
         }
+        trajectory = _trajectory_parameters(params, "covariate", m)
+        if trajectory is not None:
+            values[f"Z{m + 1}"]["trajectory"] = trajectory
         if "covariate_reference_contribution" in params:
             values[f"Z{m + 1}"]["outcome_reference"] = {
                 "contribution": float(np.asarray(params["covariate_reference_contribution"])[m]),
@@ -539,6 +641,9 @@ def _build_equation_parameters(world: SCM) -> dict[str, Any]:
             },
             "response": _treatment_response_parameters(world, k),
         }
+        trajectory = _trajectory_parameters(params, "treatment", k)
+        if trajectory is not None:
+            values[f"C{k + 1}"]["trajectory"] = trajectory
         if parents:
             values[f"C{k + 1}"]["parents"] = parents
     # D and Z attach to Y directly, so their loadings are reported on Y; B is
@@ -641,6 +746,70 @@ def _build_equations(world: SCM) -> dict[str, str]:
             "decays across a held window instead of being discarded. C_base, "
             "C_no_cc, and C_no_cc_zc share the same clamp."
         )
+    if "trajectory" in params:
+        equations["trajectories"] = (
+            "t_full = arange(-carryover_burn_in, n_time_steps); "
+            "trajectory_{role}_{component}_{field} denotes "
+            "params['trajectory'][role][component][field]. "
+            "Input gates wrap the entire assembled input, including parents. "
+            "Treatment levels multiply after softplus, with jump factors multiplied "
+            "directly; covariate levels add to the signed own drive. "
+            "Treatment shocks clamp after these schedules, so held levels override off-weeks. "
+            "The treatment natural recursion omits its schedules and shocks."
+        )
+
+    def trajectory_terms(input_type: str, index: int, label: str):
+        if "trajectory" not in params:
+            return None, None, None
+        spec = params["trajectory"][input_type]
+        use = spec["use"]
+
+        def leaf(component: str, field: str, *, jump: bool = False) -> str:
+            column = f":, {index}" if jump else str(index)
+            return f"trajectory_{input_type}_{component}_{field}[{column}]"
+
+        gates: list[str] = []
+        if use["onset"][index]:
+            gates.append(f"(t_full >= {leaf('onset', 'start')})")
+        if use["offset"][index]:
+            gates.append(f"(t_full < {leaf('offset', 'stop')})")
+        if use["flighting"][index]:
+            gates.append(
+                f"((t_full + {leaf('flighting', 'phase')}) % {leaf('flighting', 'period')} "
+                f"< {leaf('flighting', 'on_weeks')})"
+            )
+        smooth: list[str] = []
+        if use["seasonal"][index]:
+            smooth.append(
+                f"{leaf('seasonal', 'amplitude')} * "
+                f"sin(2*pi*t_full / {leaf('seasonal', 'period')} + {leaf('seasonal', 'phase')})"
+            )
+        if use["trend"][index]:
+            smooth.append(f"{leaf('trend', 'change')} * maximum(t_full, 0) / (n_time_steps - 1)")
+        shifts = list(smooth)
+        multipliers = [f"exp({' + '.join(smooth)})"] if smooth else []
+        if use["level_jump"][index]:
+            weeks = leaf("level_jump", "week", jump=True)
+            sizes = leaf(
+                "level_jump", "log_factor" if input_type == "treatment" else "size", jump=True
+            )
+            shifts.append(f"sum_e({sizes}[e] * (t_full >= {weeks}[e]))")
+            if input_type == "treatment":
+                factors = leaf("level_jump", "factor", jump=True)
+                multipliers.append(f"prod_e(where(t_full >= {weeks}[e], {factors}[e], 1.0))")
+        assignments: list[str] = []
+        activity = f"activity_{label}_full" if gates else None
+        level = f"level_{label}_full" if shifts else None
+        multiplier = f"multiplier_{label}_full" if multipliers else None
+        if activity is not None:
+            assignments.append(f"{activity} = {' & '.join(gates)}")
+        if level is not None:
+            assignments.append(f"{level} = {' + '.join(shifts)}")
+        if multiplier is not None:
+            assignments.append(f"{multiplier} = {' * '.join(multipliers)}")
+        if assignments:
+            equations[f"trajectory_{label}"] = "; ".join(assignments)
+        return activity, level, multiplier
 
     for j in range(n_latent):
         equations[f"D{j + 1}"] = (
@@ -663,11 +832,17 @@ def _build_equations(world: SCM) -> dict[str, str]:
             own += (
                 f" + covariate_pulse_amp[{m}] * (eps_z_pulse[:, {m}] - covariate_pulse_prob[{m}])"
             )
+        activity, level, _multiplier = trajectory_terms("covariate", m, f"Z{m + 1}")
+        if level is not None:
+            own += f" + {level}"
+        assembled = _join_terms(f"own_Z{m + 1}_full", terms)
+        if activity is not None:
+            assembled = f"where({activity}, {assembled}, 0.0)"
         equations[f"Z{m + 1}"] = (
             f"use_covariate_hf[{m}]={covariate_hf_on}; "
             f"use_covariate_pulse[{m}]={covariate_pulse_on}; "
             f"own_Z{m + 1}_full = {own}; "
-            f"Z{m + 1}_full = {_join_terms(f'own_Z{m + 1}_full', terms)}; "
+            f"Z{m + 1}_full = {assembled}; "
             f"Z{m + 1} = Z{m + 1}_full[burn_in:]"
         )
 
@@ -696,27 +871,36 @@ def _build_equations(world: SCM) -> dict[str, str]:
             own += f" + hf_sigma[{k}] * eps_c_hf[:, {k}]"
         if pulse_on:
             own += f" + pulse_amp[{k}] * eps_c_pulse[:, {k}]"
+        activity, _level, multiplier = trajectory_terms("treatment", k, f"C{k + 1}")
+
+        def scheduled(expression: str, multiplier=multiplier, activity=activity) -> str:
+            if multiplier is not None:
+                expression = f"({expression}) * {multiplier}"
+            if activity is not None:
+                expression = f"where({activity}, {expression}, 0.0)"
+            return expression
+
         observed_inner = _join_terms(f"own_C{k + 1}_full", [*d_terms, *z_terms, *c_terms])
         natural_inner = _join_terms(f"own_C{k + 1}_full", [*d_terms, *z_terms, *natural_c_terms])
         equations[f"C{k + 1}"] = (
             f"use_hf[{k}]={hf_on}; use_pulse[{k}]={pulse_on}; "
             f"own_C{k + 1}_full = {own}; "
             f"C{k + 1}_unshocked_full = softplus({natural_inner}); "
-            f"C{k + 1}_full = {clamp(f'softplus({observed_inner})', k)}; "
+            f"C{k + 1}_full = {clamp(scheduled(f'softplus({observed_inner})'), k)}; "
             f"C{k + 1} = C{k + 1}_full[burn_in:]"
         )
         equations[f"C_base{k + 1}"] = (
-            f"C_base{k + 1}_full = {clamp(f'softplus(own_C{k + 1}_full)', k)}; "
+            f"C_base{k + 1}_full = {clamp(scheduled(f'softplus(own_C{k + 1}_full)'), k)}; "
             f"C_base{k + 1} = C_base{k + 1}_full[burn_in:]"
         )
         no_cc_inner = _join_terms(f"own_C{k + 1}_full", [*d_terms, *z_terms])
         equations[f"C_no_cc{k + 1}"] = (
-            f"C_no_cc{k + 1}_full = {clamp(f'softplus({no_cc_inner})', k)}; "
+            f"C_no_cc{k + 1}_full = {clamp(scheduled(f'softplus({no_cc_inner})'), k)}; "
             f"C_no_cc{k + 1} = C_no_cc{k + 1}_full[burn_in:]"
         )
         no_cc_zc_inner = _join_terms(f"own_C{k + 1}_full", d_terms)
         equations[f"C_no_cc_zc{k + 1}"] = (
-            f"C_no_cc_zc{k + 1}_full = {clamp(f'softplus({no_cc_zc_inner})', k)}; "
+            f"C_no_cc_zc{k + 1}_full = {clamp(scheduled(f'softplus({no_cc_zc_inner})'), k)}; "
             f"C_no_cc_zc{k + 1} = C_no_cc_zc{k + 1}_full[burn_in:]"
         )
         ad_name = CARRYOVER_NAMES[int(params["carryover_family"][k])]
@@ -894,13 +1078,6 @@ def sample_scm(
     from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
     cfg.validate()
-    if cfg.trajectory_metadata_enabled:
-        raise ValueError(
-            "sample_scm does not support composable trajectory knobs yet (per-input "
-            "inclusion probabilities or onset/offset/flighting/level_jump/seasonal/trend "
-            "components): single-world extraction and replay of those components is not "
-            "implemented. Generate corpora with sample_prior_predictive instead."
-        )
     rng = np.random.default_rng(seed)
     n_time_steps = cfg.n_time_steps
 
@@ -922,6 +1099,12 @@ def sample_scm(
     model, out_names, param_names = build_world_model(
         g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
     )
+    primitive_names = tuple(rv.name for rv in model.free_RVs)
+    draw_names = tuple(dict.fromkeys(out_names + param_names + _EXOGENOUS_NAMES + primitive_names))
+    scheduled_treatment = np.zeros(len(g_act["g_cy"]), dtype=bool)
+    if cfg.trajectory_components_enabled:
+        for component in SCHEDULE_COMPONENTS:
+            scheduled_treatment |= structural[structural_key("treatment", component)]
     # structural is recorded so the world's oracle model (SCM.oracle_model)
     # can be rebuilt from the SCM alone.
     extras: dict = {"structural": structural}
@@ -930,12 +1113,13 @@ def sample_scm(
 
     for _round in range(max_param_rounds):
         draw_seed = int(rng.integers(2**31 - 1))
-        # Keep the raw accepted-candidate innovations in this same draw as the
-        # outputs and parameters. In a confounded world model["eps_c"] remains
-        # the independent pre-mixture Normal RV; the graph receives eps_c_eff.
+        # Capture outputs, reports, raw innovations and every primitive in one
+        # candidate draw. Derived parameter products alone do not preserve all
+        # generator arithmetic. In a confounded model["eps_c"] is still the
+        # independent pre-mixture Normal RV; the graph receives eps_c_eff.
         drawn = draw_worlds(
             model,
-            out_names + param_names + _EXOGENOUS_NAMES,
+            draw_names,
             draw_seed,
             draws=max_eps_draws,
             rng_reference_names=out_names + _LEGACY_WORLD_PARAM_NAMES,
@@ -945,14 +1129,29 @@ def sample_scm(
             check = {
                 k: v for k, v in d.items() if k not in ("treatments_base", "contributions_observed")
             }
+            realism_treatment = d.get("treatments_unshocked")
+            realism_outcome = d.get("outcome_unshocked")
+            cv_alternative = None
+            if cfg.trajectory_components_enabled:
+                realism_treatment = d["treatments_natural"]
+                realism_outcome = d["outcome_natural"]
+                if scheduled_treatment.any():
+                    cv_alternative = np.where(
+                        scheduled_treatment[None, :],
+                        d["treatment_activity"]
+                        * realism_treatment
+                        * np.exp(d["treatment_log_level_shift"]),
+                        realism_treatment,
+                    )
             if _additive_task_ok(
                 treatment=d["treatments"],
                 outcome=d["outcome"],
                 arrays=check,
                 g_cy_active=g_act["g_cy"],
                 cv_floor=cfg.treatment_cv_floor,
-                realism_treatment=d.get("treatments_unshocked"),
-                realism_outcome=d.get("outcome_unshocked"),
+                realism_treatment=realism_treatment,
+                realism_outcome=realism_outcome,
+                cv_alternative_treatment=cv_alternative,
             ):
                 return SCM(
                     data=d,
@@ -966,6 +1165,10 @@ def sample_scm(
                     _exogenous={
                         exogenous_name: np.array(drawn[exogenous_name][b], copy=True)
                         for exogenous_name in _EXOGENOUS_NAMES
+                    },
+                    _primitive_parameters={
+                        primitive_name: drawn[primitive_name][b]
+                        for primitive_name in primitive_names
                     },
                 )
     raise RuntimeError(f"world {name!r}: no accepted draw in {max_param_rounds} rounds")
@@ -1007,7 +1210,7 @@ def _assemble_params(
     param_names: tuple[str, ...],
     cfg: SCMPrior,
 ) -> dict[str, Any]:
-    """Build the exact concrete input dictionary consumed by ``build_symbolic_graph``."""
+    """Build inspectable concrete inputs consumed by ``build_symbolic_graph``."""
     params: dict[str, Any] = {
         param_name.removeprefix("param_"): np.array(drawn[param_name][b], copy=True)
         for param_name in param_names
@@ -1042,4 +1245,28 @@ def _assemble_params(
         params[group] = group_params
     if cfg.n_treatment_shocks:
         params["treatment_shock"] = _assemble_treatment_shock_schedule(drawn, b, cfg)
+    if cfg.trajectory_components_enabled:
+        trajectory: dict[str, dict[str, Any]] = {}
+        for input_type in TRAJECTORY_INPUTS:
+            spec: dict[str, Any] = {
+                "use": {
+                    component: np.array(
+                        structural[structural_key(input_type, component)], copy=True
+                    )
+                    for component in TRAJECTORY_COMPONENTS
+                }
+            }
+            for component in SCHEDULE_COMPONENTS:
+                prefix = f"trajectory_{input_type}_{component}_"
+                leaves = {
+                    name.removeprefix(prefix): params.pop(name)
+                    for name in tuple(params)
+                    if name.startswith(prefix)
+                }
+                if leaves:
+                    if component == "level_jump":
+                        leaves["count"] = int(getattr(cfg, f"{input_type}_level_jump_count"))
+                    spec[component] = leaves
+            trajectory[input_type] = spec
+        params["trajectory"] = trajectory
     return params

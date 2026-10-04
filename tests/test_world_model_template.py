@@ -10,11 +10,14 @@ was being built.
 
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
 from typing import Any
 
 import numpy as np
+import pytensor
 import pytensor.tensor as pt
 import pytest
+from pytensor.graph.replace import clone_replace
 
 import pymc_generator.world_model as world_model
 from pymc_generator import make_scm_prior
@@ -28,12 +31,17 @@ from pymc_generator.sampler import (
     _ADDITIVE_OUT_NAMES,
     _CORPUS_PARAM_NAMES,
     _CORPUS_SHOCK_NAMES,
+    CARRYOVER_FAMILY_KEYS,
+    SATURATION_FAMILY_KEYS,
     _slice_g_active,
     sample_g_additive,
 )
+from pymc_generator.slots import TRAJECTORY_COMPONENTS, TRAJECTORY_INPUTS
 from pymc_generator.symbolic_graph import build_symbolic_graph
+from pymc_generator.trajectories import SCHEDULE_COMPONENTS, structural_key
 from pymc_generator.world_model import build_world_model, draw_worlds, sample_structure
 from pymc_generator.world_model_template import (
+    build_cell_inputs,
     build_world_model_template,
     check_template_supported,
     compile_template_draw_fn,
@@ -589,3 +597,418 @@ def test_build_world_model_is_not_cached_across_differing_configs():
 
     assert np.all(models[0] == 0.0), "a zero level multiplier must produce zero levels"
     assert np.all(models[1] > 0.0), "a nonzero level multiplier must produce nonzero levels"
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+@pytest.mark.parametrize(
+    ("reference_target", "relative_std"),
+    (
+        pytest.param(1e-180, 0.1, id="tiny-reference"),
+        pytest.param(np.finfo(np.float64).tiny / 2, 0.1, id="subnormal-reference"),
+        pytest.param(np.finfo(np.float64).tiny, 1e-16, id="minimum-final-sigma"),
+        pytest.param(np.nextafter(0.0, 1.0), 1e38, id="amplified-minimum-beta"),
+        pytest.param(1e38, np.nextafter(0.0, 1.0), id="amplified-minimum-std"),
+    ),
+)
+def test_reused_template_preserves_tiny_relative_outcome_scales(
+    reference_target, relative_std, mode
+):
+    """Runtime edge changes retain tiny scales and restore exact zero-edge behavior."""
+    cfg = _cfg(
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_time_steps=16,
+        n_cells=2,
+        n_treatments_active_range=(1, 2),
+        n_covariates_active_range=(1, 1),
+        n_latent_active_range=(1, 1),
+        edge_budget={"cy": (0, 2), "cc": 0, "zc": 0, "dc": 0},
+        nonlinearity="linear",
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        carryover_burn_in=0,
+        treatment_reference_contribution_range=(reference_target, reference_target),
+        treatment_reference_multiplier=1.0,
+        rw_baseline_std_range=(relative_std, relative_std),
+        rw_outcome_std_range=(relative_std, relative_std),
+    )
+    rng = np.random.default_rng(13)
+    g = sample_g_additive(
+        rng, cfg, cfg.layout, n_treatments_active=2, n_covariates_active=1, n_latent_active=1
+    )
+    g["g_cy"][:] = 1
+    structural = sample_structure(_slice_g_active(g, 2, 1, 1), cfg, rng)
+    active = {
+        "active_treatment": np.ones(2),
+        "active_covariate": np.ones(1),
+        "active_latent": np.ones(1),
+    }
+    full_cell = build_cell_inputs(cfg, g, active, structural)
+    inactive_cell = {name: value.copy() for name, value in full_cell.items()}
+    inactive_cell["active_treatment"][1] = inactive_cell["g_cy"][1] = 0.0
+    zero_cell = {name: value.copy() for name, value in inactive_cell.items()}
+    zero_cell["g_cy"][:] = 0.0
+    model, _, _ = build_world_model_template(cfg, full_cell, cfg.n_time_steps)
+    names = ("param_beta", "param_rw_b_std", "param_rw_y_std")
+    draw = compile_template_draw_fn(model, names, mode=mode)
+    results = []
+    for cell in (full_cell, inactive_cell, zero_cell, full_cell):
+        result = draw(cell, seed=14)
+        results.append(result)
+        with localcontext() as context:
+            context.prec = 100
+            squared = sum(
+                Decimal.from_float(float(v)) ** 2 for v in cell["g_cy"] * result["param_beta"][0]
+            )
+            expected = float(Decimal.from_float(relative_std) * squared.sqrt())
+        for name in ("param_rw_b_std", "param_rw_y_std"):
+            np.testing.assert_allclose(
+                result[name][0], expected, rtol=32 * np.finfo(np.float64).eps, atol=0.0
+            )
+    for name in names:
+        np.testing.assert_array_equal(results[-1][name], results[0][name])
+
+
+# -- rich trajectories through the actual ordinary and template builders --------
+
+
+def _evaluate_joint_draw(model, names, drawn):
+    """Bind the same primitive draws, not a second seed or concrete folded graph."""
+    replacements = {rv: rv.type(name=f"given_{rv.name}") for rv in model.free_RVs}
+    expressions = clone_replace(
+        [model[name] for name in names], replace=replacements, rebuild_strict=False
+    )
+    evaluate = pytensor.function(
+        list(replacements.values()), expressions, on_unused_input="ignore", mode="FAST_COMPILE"
+    )
+    values = []
+    for rv in replacements:
+        shape = tuple(int(n) for n in rv.shape.eval())
+        raw = np.asarray(drawn[rv.name][0], dtype=rv.dtype)
+        values.append(raw[tuple(slice(0, n) for n in shape)] if shape else raw)
+    return dict(zip(names, evaluate(*values)))
+
+
+def _assert_ordinary_template_parity(cfg, g, structural, drawn, output_names):
+    ordinary, names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
+    expected = _evaluate_joint_draw(ordinary, names, drawn)
+    assert set(names) == set(output_names)
+    n_t, n_c, n_l = len(g["g_cy"]), len(g["g_zy"]), len(g["g_dy"])
+    widths = {
+        "treatments": n_t,
+        "treatments_base": n_t,
+        "treatments_natural": n_t,
+        "contributions": n_t,
+        "contributions_observed": n_t,
+        "saturation_scale": n_t,
+        "treatment_activity": n_t,
+        "treatment_log_level_shift": n_t,
+        "treatment_shock_mask": n_t,
+        "treatment_shock_mask_full": n_t,
+        "covariates": n_c,
+        "covariate_contribution": n_c,
+        "covariate_activity": n_c,
+        "covariate_level_shift": n_c,
+        "latent_unobserved": n_l,
+        "latent_unobserved_contribution": n_l,
+    }
+    for name, value in expected.items():
+        actual = np.asarray(drawn[name][0])
+        if name in widths:
+            actual = actual[..., : widths[name]]
+        if np.issubdtype(value.dtype, np.integer):
+            np.testing.assert_array_equal(actual, value, err_msg=name)
+        else:
+            np.testing.assert_allclose(actual, value, rtol=2e-11, atol=2e-11, err_msg=name)
+
+
+@pytest.fixture(scope="module")
+def rich_template():
+    """One compile reused A -> B -> A, including all families and both input roles."""
+    cfg = _cfg(
+        n_treatments=6,
+        n_covariates=3,
+        n_treatments_active_range=(2, 6),
+        n_covariates_active_range=(1, 3),
+        n_time_steps=32,
+        l_max=4,
+        carryover_burn_in=4,
+        confounding_strength_range=(0.3, 0.3),
+        treatment_hf_sigma_range=(0.05, 0.15),
+        treatment_pulse_prob_range=(0.1, 0.3),
+        covariate_hf_sigma_range=(0.05, 0.15),
+        covariate_pulse_prob_range=(0.1, 0.3),
+        treatment_level_jump_count=3,
+        covariate_level_jump_count=2,
+        treatment_level_jump_factor_range=(2.0, 2.0),
+        treatment_trend_log_change_range=(-0.3, 0.4),
+        treatment_seasonal_amplitude_range=(0.1, 0.25),
+        saturation_prior_ranges={
+            "hill": {"slope": (5.0, 7.0), "kappa_mult": (0.7, 1.5)},
+            "logistic": {"lam": (0.5, 2.0)},
+            "michaelis_menten": {"kappa_mult": (0.2, 1.2)},
+            "tanh": {"c": (0.3, 1.5)},
+            "root": {"alpha": (0.3, 0.9)},
+        },
+        mm_scale_prior="log_uniform",
+        treatment_reference_contribution_range=(0.5, 1.1),
+        treatment_reference_multiplier=1.6,
+        covariate_reference_contribution_range=(-0.2, 0.5),
+        covariate_reference_scale=1.25,
+        **{
+            f"{role}_{component}_inclusion_prob": 0.5
+            for role in TRAJECTORY_INPUTS
+            for component in TRAJECTORY_COMPONENTS
+        },
+        **{f"{role}_onset_frac_range": (0.1, 0.15) for role in TRAJECTORY_INPUTS},
+        **{f"{role}_flighting_period_weeks_range": (2, 4) for role in TRAJECTORY_INPUTS},
+        **{f"{role}_flighting_duty_range": (0.5, 0.8) for role in TRAJECTORY_INPUTS},
+    )
+    g = {
+        "g_cy": np.array([1, 0, 1, 1, 1, 1]),
+        "g_dc": np.array([[1, 0, 1, 0, 0, 1], [0, 1, 0, 1, 0, 0]]),
+        "g_dz": np.array([[1, 0, 1], [0, 1, 0]]),
+        "g_dy": np.ones(2),
+        "g_zy": np.ones(3),
+        "g_zc": np.zeros((3, 6)),
+        "g_cc": np.zeros((6, 6)),
+        "g_zz": np.zeros((3, 3)),
+    }
+    g["g_zc"][0, 1] = g["g_zc"][1, 4] = 1
+    g["g_cc"][0, 1] = g["g_cc"][1, 2] = g["g_cc"][2, 5] = 1
+    g["g_zz"][0, 1] = g["g_zz"][1, 2] = 1
+    cases = []
+    for all_off, counts in ((False, (6, 3, 2)), (True, (3, 1, 1))):
+        n_t, n_c, n_l = counts
+        active = {
+            "active_treatment": (np.arange(6) < n_t).astype(float),
+            "active_covariate": (np.arange(3) < n_c).astype(float),
+            "active_latent": (np.arange(2) < n_l).astype(float),
+        }
+        padded_g = {key: value.copy() for key, value in g.items()}
+        padded_g["g_cy"][n_t:] = padded_g["g_zy"][n_c:] = padded_g["g_dy"][n_l:] = 0
+        for key, rows, cols in (
+            ("g_dc", n_l, n_t),
+            ("g_dz", n_l, n_c),
+            ("g_zc", n_c, n_t),
+            ("g_cc", n_t, n_t),
+            ("g_zz", n_c, n_c),
+        ):
+            padded_g[key][rows:, :] = 0
+            padded_g[key][:, cols:] = 0
+        active_g = _slice_g_active(padded_g, n_t, n_c, n_l)
+        structural = sample_structure(active_g, cfg, np.random.default_rng(17))
+        structural["carryover_family"] = (
+            np.array([2, 0, 1]) if all_off else np.arange(6) % len(CARRYOVER_FAMILY_KEYS)
+        )
+        structural["sat_family"] = (
+            np.array([5, 3, 1]) if all_off else np.arange(len(SATURATION_FAMILY_KEYS))
+        )
+        for key, width in (
+            ("smoothness_c", n_t),
+            ("smoothness_z", n_c),
+            ("smoothness_d", n_l),
+            ("smoothness_b", 1),
+        ):
+            structural[key] = (
+                np.linspace(0.85, 0.2, width) if all_off else np.linspace(0.1, 0.7, width)
+            )
+        for role, width in (("treatment", n_t), ("covariate", n_c)):
+            for j, component in enumerate(TRAJECTORY_COMPONENTS):
+                flags = np.zeros(width, dtype=bool) if all_off else (np.arange(width) + j) % 3 != 0
+                if not all_off:
+                    flags[0] = component == "level_jump" if role == "treatment" else True
+                    flags[1] = True
+                structural[structural_key(role, component)] = flags
+        cell = build_cell_inputs(cfg, padded_g, active, structural)
+        cases.append((active_g, structural, cell))
+    model, outputs, reports = build_world_model_template(cfg, cases[0][2], cfg.n_time_steps)
+    names = tuple(dict.fromkeys((*outputs, *reports, *(rv.name for rv in model.free_RVs))))
+    draw = compile_template_draw_fn(model, names)
+    results = [draw(case[2], seed=61) for case in (cases[0], cases[1], cases[0])]
+    return cfg, cases, outputs, reports, draw, results
+
+
+def test_actual_rich_builders_match_every_forward_output_and_restore_a_cell(rich_template):
+    cfg, cases, outputs, _, _, results = rich_template
+    for (g, structural, _), result in zip(cases, results):
+        _assert_ordinary_template_parity(cfg, g, structural, result, outputs)
+    for name in results[0]:
+        np.testing.assert_array_equal(results[2][name], results[0][name], err_msg=name)
+
+
+def _numpy_schedule(cfg, role, cell, result):
+    """Independent gates/envelopes, quantized from the same joint primitive draws."""
+    n_time_steps = cfg.n_time_steps
+    weeks = np.arange(n_time_steps)
+    active = cell[f"active_{role}"].astype(bool)
+    activity = np.zeros((n_time_steps, len(active)), dtype=np.int8)
+    shift = np.zeros_like(activity, dtype=float)
+    multiplier = np.ones_like(shift)
+    for i in np.flatnonzero(active):
+        gate = np.ones(n_time_steps, dtype=bool)
+        smooth = np.zeros(n_time_steps)
+        carried = {
+            component: bool(cell[structural_key(role, component)][i])
+            for component in TRAJECTORY_COMPONENTS
+        }
+        if carried["onset"]:
+            gate &= weeks >= np.floor(result[f"{role}_onset_frac"][0, i] * n_time_steps)
+        if carried["offset"]:
+            gate &= weeks < np.floor(result[f"{role}_offset_frac"][0, i] * n_time_steps)
+        if carried["flighting"]:
+            period = result[f"{role}_flighting_period"][0, i]
+            duty = result[f"{role}_flighting_duty"][0, i]
+            on_weeks = np.clip(np.floor(duty * period + 0.5), 1, period - 1)
+            phase = min(np.floor(result[f"{role}_flighting_phase_u"][0, i] * period), period - 1)
+            gate &= (weeks + phase) % period < on_weeks
+        if carried["seasonal"]:
+            period = getattr(cfg, f"{role}_seasonal_period_weeks_range")[0]
+            smooth += result[f"{role}_seasonal_amplitude"][0, i] * np.sin(
+                2 * np.pi * weeks / period + result[f"{role}_seasonal_phase"][0, i]
+            )
+        if carried["trend"]:
+            smooth += result[f"{role}_trend_change"][0, i] * weeks / (n_time_steps - 1)
+        activity[:, i] = gate.astype(np.int8)
+        shift[:, i] = smooth
+        multiplier[:, i] = np.exp(smooth)
+        if carried["level_jump"]:
+            count = getattr(cfg, f"{role}_level_jump_count")
+            edges = 1 + np.arange(count + 1) * (n_time_steps - 1) // count
+            jump_weeks = np.minimum(
+                edges[:-1] + np.floor(result[f"{role}_level_jump_u"][0, :, i] * np.diff(edges)),
+                edges[1:] - 1,
+            )
+            steps = weeks[:, None] >= jump_weeks[None, :]
+            if role == "treatment":
+                factors = np.full(count, cfg.treatment_level_jump_factor_range[0])
+                shift[:, i] += (steps * np.log(factors)).sum(axis=1)
+                multiplier[:, i] *= np.where(steps, factors[None, :], 1.0).prod(axis=1)
+            else:
+                shift[:, i] += (steps * result["covariate_level_jump_size"][0, :, i]).sum(axis=1)
+    return activity, shift, multiplier
+
+
+def test_reused_template_schedules_follow_numpy_gates_and_envelopes(rich_template):
+    cfg, cases, _, _, draw, results = rich_template
+    for (_, _, cell), result in zip(cases, results):
+        without_schedules = {name: value.copy() for name, value in cell.items()}
+        for role in TRAJECTORY_INPUTS:
+            for component in SCHEDULE_COMPONENTS:
+                without_schedules[structural_key(role, component)][:] = 0
+        unscheduled = draw(without_schedules, seed=61)
+        for role, shift_key in (
+            ("treatment", "treatment_log_level_shift"),
+            ("covariate", "covariate_level_shift"),
+        ):
+            activity, shift, multiplier = _numpy_schedule(cfg, role, cell, result)
+            np.testing.assert_array_equal(result[f"{role}_activity"][0], activity)
+            np.testing.assert_allclose(result[shift_key][0], shift, rtol=2e-12, atol=1e-12)
+            np.testing.assert_array_equal(result[shift_key][0][shift == 0], 0.0)
+            observed = result["treatments" if role == "treatment" else "covariates"][0]
+            np.testing.assert_array_equal(observed[activity == 0], 0.0)
+            if role == "treatment":
+                expected = unscheduled["treatments_base"][0] * multiplier * activity
+                np.testing.assert_allclose(
+                    result["treatments_base"][0], expected, rtol=2e-12, atol=1e-12
+                )
+            else:
+                expected = (unscheduled["covariates"][0, :, 0] + shift[:, 0]) * activity[:, 0]
+                np.testing.assert_allclose(observed[:, 0], expected, rtol=2e-12, atol=1e-12)
+        # Node 0 carries only held x2 jumps: multiplication must be exact, not exp(sum(log 2)).
+        weeks = result["param_trajectory_treatment_level_jump_week"][0, :, 0]
+        steps = (np.arange(cfg.n_time_steps)[:, None] >= weeks).sum(axis=1)
+        multiplier = 2.0**steps if cell["use_level_jump"][0] else np.ones(cfg.n_time_steps)
+        np.testing.assert_array_equal(
+            result["treatments_base"][0, :, 0],
+            unscheduled["treatments_base"][0, :, 0] * multiplier,
+        )
+
+
+def test_reused_template_zeroes_padded_schedule_outputs_and_reports(rich_template):
+    _, cases, _, reports, _, results = rich_template
+    cell, result = cases[1][2], results[1]
+    for role, shift in (
+        ("treatment", "treatment_log_level_shift"),
+        ("covariate", "covariate_level_shift"),
+    ):
+        inactive = cell[f"active_{role}"] == 0
+        np.testing.assert_array_equal(result[f"{role}_activity"][0, :, inactive], 0)
+        np.testing.assert_array_equal(result[shift], 0.0)
+        active = ~inactive
+        np.testing.assert_array_equal(result[f"{role}_activity"][0, :, active], 1)
+        for name in reports:
+            if name.startswith(f"param_trajectory_{role}_"):
+                np.testing.assert_array_equal(result[name][0, ..., inactive], 0)
+    np.testing.assert_array_equal(result["treatments"], result["treatments_natural"])
+    np.testing.assert_array_equal(result["outcome"], result["outcome_natural"])
+
+
+def test_actual_builders_disable_texture_even_when_its_prior_ranges_are_live():
+    cfg = _cfg(
+        treatment_hf_sigma_range=(0.05, 0.15),
+        treatment_pulse_prob_range=(0.1, 0.3),
+        covariate_hf_sigma_range=(0.05, 0.15),
+        covariate_pulse_prob_range=(0.1, 0.3),
+        **{
+            f"{role}_{component}_inclusion_prob": 0.0
+            for role in TRAJECTORY_INPUTS
+            for component in ("hf", "pulse")
+        },
+    )
+    g, _, _ = _concrete_scm_inputs(3, 2, 2, cfg.n_time_steps + cfg.carryover_burn_in)
+    structural = sample_structure(g, cfg, np.random.default_rng(11))
+    active = {
+        "active_treatment": np.ones(3),
+        "active_covariate": np.ones(2),
+        "active_latent": np.ones(2),
+    }
+    cell = build_cell_inputs(cfg, g, active, structural)
+    model, outputs, reports = build_world_model_template(cfg, cell, cfg.n_time_steps)
+    names = tuple(dict.fromkeys((*outputs, *reports, *(rv.name for rv in model.free_RVs))))
+    result = compile_template_draw_fn(model, names)(cell, seed=73)
+    _assert_ordinary_template_parity(cfg, g, structural, result, outputs)
+
+
+def test_template_handles_more_than_32_candidate_parents_with_sparse_edges_and_padding():
+    cfg = _cfg(
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=40,
+        n_treatments_active_range=(1, 1),
+        n_covariates_active_range=(1, 1),
+        n_latent_active_range=(33, 40),
+        treatment_trend_inclusion_prob=0.5,
+        covariate_trend_inclusion_prob=0.5,
+    )
+    g, _, _ = _concrete_scm_inputs(1, 1, 40, cfg.n_time_steps + cfg.carryover_burn_in)
+    g["g_dc"][:] = 0
+    g["g_dc"][[0, 17, 32], 0] = 1
+    g["g_dy"][:] = 0
+    g["g_dy"][[1, 19, 32]] = 1
+    for key in ("g_dz", "g_zc", "g_zy"):
+        g[key][:] = 0
+    active = {
+        "active_treatment": np.ones(1),
+        "active_covariate": np.ones(1),
+        "active_latent": (np.arange(40) < 33).astype(float),
+    }
+    active_g = _slice_g_active(g, 1, 1, 33)
+    structural = sample_structure(active_g, cfg, np.random.default_rng(11))
+    structural["use_trend"][:] = False
+    cell = build_cell_inputs(cfg, g, active, structural)
+    model, outputs, reports = build_world_model_template(cfg, cell, cfg.n_time_steps)
+    names = tuple(dict.fromkeys((*outputs, *reports, *(rv.name for rv in model.free_RVs))))
+    result = compile_template_draw_fn(model, names, mode="FAST_COMPILE")(cell, seed=79)
+    _assert_ordinary_template_parity(cfg, active_g, structural, result, outputs)
+    latent = result["latent_unobserved"][0]
+    np.testing.assert_array_equal(latent[:, 33:], 0.0)
+    own = np.log(np.expm1(result["treatments_base"][0, :, 0]))
+    expected = np.logaddexp(0.0, own + latent @ (g["g_dc"][:, 0] * result["param_w_dc"][0, :, 0]))
+    np.testing.assert_allclose(result["treatments"][0, :, 0], expected, rtol=2e-12, atol=1e-12)
+    expected_baseline = (
+        result["baseline_intrinsic"][0]
+        + result["outcome_noise"][0]
+        + latent @ (g["g_dy"] * result["param_delta_dy"][0])
+    )
+    np.testing.assert_allclose(result["baseline"][0], expected_baseline, rtol=2e-12, atol=1e-12)

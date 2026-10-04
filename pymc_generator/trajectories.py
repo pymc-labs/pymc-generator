@@ -199,30 +199,49 @@ def _constant(value: float | int, shape, dtype: str) -> TensorVariable:
 
 
 def _input_params(
-    cfg: SCMPrior, structural: dict, input_type: str, n: int, n_time_steps: int
+    cfg: SCMPrior,
+    structural: dict,
+    input_type: str,
+    n: int,
+    n_time_steps: int,
+    *,
+    dynamic_flags: bool,
 ) -> dict[str, Any]:
-    """One input type's trajectory spec; RVs only for components some input carries."""
+    """One input type's trajectory spec, with only admitted components wired."""
     import pymc as pm
 
     from .world_model import _uniform
 
     prefix = input_type
-    use = {
-        component: np.asarray(
-            structural[structural_key(input_type, component)], dtype=bool
-        ).reshape(n)
-        for component in TRAJECTORY_COMPONENTS
-    }
+    if dynamic_flags:
+        import pytensor.tensor as pt
+
+        use: dict[str, Any] = {
+            component: pt.as_tensor_variable(
+                structural[structural_key(input_type, component)]
+            ).reshape((n,))
+            for component in TRAJECTORY_COMPONENTS
+        }
+        probs = cfg.trajectory_inclusion_probs()[input_type]
+        enabled = {component: n > 0 and probs[component] > 0.0 for component in SCHEDULE_COMPONENTS}
+    else:
+        use = {
+            component: np.asarray(
+                structural[structural_key(input_type, component)], dtype=bool
+            ).reshape(n)
+            for component in TRAJECTORY_COMPONENTS
+        }
+        enabled = {component: use[component].any() for component in SCHEDULE_COMPONENTS}
     spec: dict[str, Any] = {"use": use}
     T = int(n_time_steps)
 
-    if use["onset"].any():
+    if enabled["onset"]:
         lo, hi = getattr(cfg, f"{prefix}_onset_frac_range")
         spec["onset"] = {"start": _floor_int(_uniform(f"{prefix}_onset_frac", lo, hi, n) * T)}
-    if use["offset"].any():
+    if enabled["offset"]:
         lo, hi = getattr(cfg, f"{prefix}_offset_frac_range")
         spec["offset"] = {"stop": _floor_int(_uniform(f"{prefix}_offset_frac", lo, hi, n) * T)}
-    if use["flighting"].any():
+    if enabled["flighting"]:
         import pytensor.tensor as pt
 
         p_lo, p_hi = (int(v) for v in getattr(cfg, f"{prefix}_flighting_period_weeks_range"))
@@ -237,7 +256,7 @@ def _input_params(
         phase_u = pm.Uniform(f"{prefix}_flighting_phase_u", 0.0, 1.0, shape=n)
         phase = pt.minimum(_floor_int(phase_u * period), period - 1)
         spec["flighting"] = {"period": period, "on_weeks": on_weeks, "phase": phase}
-    if use["level_jump"].any():
+    if enabled["level_jump"]:
         import pytensor.tensor as pt
 
         count = int(getattr(cfg, f"{prefix}_level_jump_count"))
@@ -272,7 +291,7 @@ def _input_params(
             lo, hi = cfg.covariate_level_jump_size_range
             jump["size"] = _uniform("covariate_level_jump_size", lo, hi, (count, n))
         spec["level_jump"] = jump
-    if use["seasonal"].any():
+    if enabled["seasonal"]:
         a_lo, a_hi = getattr(cfg, f"{prefix}_seasonal_amplitude_range")
         p_lo, p_hi = getattr(cfg, f"{prefix}_seasonal_period_weeks_range")
         spec["seasonal"] = {
@@ -280,7 +299,7 @@ def _input_params(
             "period": _uniform(f"{prefix}_seasonal_period", p_lo, p_hi, n),
             "phase": pm.Uniform(f"{prefix}_seasonal_phase", 0.0, 2.0 * np.pi, shape=n),
         }
-    if use["trend"].any():
+    if enabled["trend"]:
         lo, hi = (
             cfg.treatment_trend_log_change_range
             if input_type == "treatment"
@@ -296,6 +315,8 @@ def trajectory_params(
     n_treatments: int,
     n_covariates: int,
     n_time_steps: int,
+    *,
+    dynamic_flags: bool = False,
 ) -> dict[str, dict[str, Any]] | None:
     """The cell's trajectory specs, or ``None`` when no schedule component is enabled.
 
@@ -312,20 +333,49 @@ def trajectory_params(
     * ``"trend"``: ``{"change"}`` — total change across the reported window
       (treatments: in log-level).
 
+    ``dynamic_flags=True`` admits components from the config rather than one
+    cell's realised flags. The ``"use"`` vectors may then be symbolic inputs,
+    letting a padded template change inclusion without rebuilding its priors.
+
     :func:`pymc_generator.symbolic_graph.build_symbolic_graph` also accepts
     the same layout with concrete numpy values.
     """
     if not cfg.trajectory_components_enabled:
         return None
     return {
-        "treatment": _input_params(cfg, structural, "treatment", n_treatments, n_time_steps),
-        "covariate": _input_params(cfg, structural, "covariate", n_covariates, n_time_steps),
+        "treatment": _input_params(
+            cfg, structural, "treatment", n_treatments, n_time_steps, dynamic_flags=dynamic_flags
+        ),
+        "covariate": _input_params(
+            cfg, structural, "covariate", n_covariates, n_time_steps, dynamic_flags=dynamic_flags
+        ),
     }
 
 
 def time_index(n_time_steps: int, burn_in: int) -> np.ndarray:
     """Week index over the simulated horizon: reported week 0 is 0, burn-in is negative."""
     return np.arange(-int(burn_in), int(n_time_steps), dtype="int64")
+
+
+def _uses_component(spec: dict[str, Any], component: str, i: int) -> bool:
+    """Whether this component must be built for the input, before runtime selection."""
+    from pytensor.tensor import TensorVariable
+
+    flags = spec["use"][component]
+    return component in spec if isinstance(flags, TensorVariable) else bool(flags[i])
+
+
+def _selected_component(spec: dict[str, Any], component: str, i: int, value, neutral):
+    """Select a symbolic component flag without adding switches to static worlds."""
+    import pytensor.tensor as pt
+    from pytensor.tensor import TensorVariable
+
+    flags = spec["use"][component]
+    return (
+        pt.switch(pt.neq(flags[i], 0), value, np.asarray(neutral))
+        if isinstance(flags, TensorVariable)
+        else value
+    )
 
 
 def activity_column(spec: dict[str, Any], i: int, t: np.ndarray) -> TensorVariable | None:
@@ -338,16 +388,18 @@ def activity_column(spec: dict[str, Any], i: int, t: np.ndarray) -> TensorVariab
     """
     import pytensor.tensor as pt
 
-    use = spec["use"]
     factors = []
-    if use["onset"][i]:
-        factors.append(pt.ge(t, spec["onset"]["start"][i]))
-    if use["offset"][i]:
-        factors.append(pt.lt(t, spec["offset"]["stop"][i]))
-    if use["flighting"][i]:
+    if _uses_component(spec, "onset", i):
+        gate = pt.ge(t, spec["onset"]["start"][i])
+        factors.append(_selected_component(spec, "onset", i, gate, True))
+    if _uses_component(spec, "offset", i):
+        gate = pt.lt(t, spec["offset"]["stop"][i])
+        factors.append(_selected_component(spec, "offset", i, gate, True))
+    if _uses_component(spec, "flighting", i):
         flighting = spec["flighting"]
         cycle = pt.mod(t + flighting["phase"][i], flighting["period"][i])
-        factors.append(pt.lt(cycle, flighting["on_weeks"][i]))
+        gate = pt.lt(cycle, flighting["on_weeks"][i])
+        factors.append(_selected_component(spec, "flighting", i, gate, True))
     if not factors:
         return None
     activity = factors[0]
@@ -359,19 +411,19 @@ def activity_column(spec: dict[str, Any], i: int, t: np.ndarray) -> TensorVariab
 def _smooth_terms(spec: dict[str, Any], i: int, t: np.ndarray, n_time_steps: int) -> list:
     import pytensor.tensor as pt
 
-    use = spec["use"]
     weeks = t.astype("float64")
     terms = []
-    if use["seasonal"][i]:
+    if _uses_component(spec, "seasonal", i):
         seasonal = spec["seasonal"]
-        terms.append(
-            seasonal["amplitude"][i]
-            * pt.sin(2.0 * np.pi * weeks / seasonal["period"][i] + seasonal["phase"][i])
+        value = seasonal["amplitude"][i] * pt.sin(
+            2.0 * np.pi * weeks / seasonal["period"][i] + seasonal["phase"][i]
         )
-    if use["trend"][i]:
+        terms.append(_selected_component(spec, "seasonal", i, value, 0.0))
+    if _uses_component(spec, "trend", i):
         # Zero through burn-in and week 0, the full change at the last week.
         ramp = np.maximum(t, 0).astype("float64") / float(n_time_steps - 1)
-        terms.append(spec["trend"]["change"][i] * ramp)
+        value = spec["trend"]["change"][i] * ramp
+        terms.append(_selected_component(spec, "trend", i, value, 0.0))
     return terms
 
 
@@ -410,10 +462,11 @@ def level_shift_column(
     import pytensor.tensor as pt
 
     terms = _smooth_terms(spec, i, t, n_time_steps)
-    if spec["use"]["level_jump"][i]:
+    if _uses_component(spec, "level_jump", i):
         jump = spec["level_jump"]
         size = pt.as_tensor_variable(jump["log_factor"] if log_level else jump["size"])
-        terms.append(pt.dot(pt.cast(_jump_steps(jump, i, t), "float64"), size[:, i]))
+        value = pt.dot(pt.cast(_jump_steps(jump, i, t), "float64"), size[:, i])
+        terms.append(_selected_component(spec, "level_jump", i, value, 0.0))
     return _sum(terms) if terms else None
 
 
@@ -432,10 +485,11 @@ def treatment_multiplier_column(
     smooth = _smooth_terms(spec, i, t, n_time_steps)
     if smooth:
         parts.append(pt.exp(_sum(smooth)))
-    if spec["use"]["level_jump"][i]:
+    if _uses_component(spec, "level_jump", i):
         jump = spec["level_jump"]
         factor = pt.as_tensor_variable(jump["factor"])[:, i]
-        parts.append(pt.prod(pt.switch(_jump_steps(jump, i, t), factor[None, :], 1.0), axis=1))
+        value = pt.prod(pt.switch(_jump_steps(jump, i, t), factor[None, :], 1.0), axis=1)
+        parts.append(_selected_component(spec, "level_jump", i, value, 1.0))
     if not parts:
         return None
     multiplier = parts[0]
