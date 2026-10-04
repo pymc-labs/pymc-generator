@@ -62,8 +62,14 @@ def _cfg(**overrides: Any):
 
 @pytest.fixture(scope="module")
 def template():
-    """One compiled template plus the cells it will be driven with."""
-    cfg = _cfg()
+    """One compiled template plus the cells it will be driven with.
+
+    Four stratified cells cover the 2x2 active treatment × covariate grid once
+    each, so the tests below run every combination through the one compiled
+    function. Latent counts are still drawn per cell: seed 4242 gives one cell a
+    single active latent, which the zero-slot test needs.
+    """
+    cfg = _cfg(n_cells=4, active_count_allocation="stratified")
     cells = sample_cell_structures(cfg, np.random.default_rng(cfg.seed))
     model, _, _ = build_world_model_template(cfg, cells[0], cfg.n_time_steps)
     draw = compile_template_draw_fn(model, CORPUS_NAMES)
@@ -387,6 +393,14 @@ def test_unused_response_priors_do_not_change_concrete_worlds():
 
 
 # -- the template as a whole ----------------------------------------------------
+
+
+def test_template_fixture_drives_every_active_count_combination_once(template):
+    _, cells, _ = template
+    combinations = sorted(
+        (int(cell["active_treatment"].sum()), int(cell["active_covariate"].sum())) for cell in cells
+    )
+    assert combinations == [(2, 1), (2, 2), (3, 1), (3, 2)]
 
 
 def test_template_satisfies_the_additive_identity_on_every_world(template):

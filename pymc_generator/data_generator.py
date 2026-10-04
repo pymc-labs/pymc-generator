@@ -32,6 +32,7 @@ from typing import Any, TypeGuard
 
 import numpy as np
 
+from .active_counts import active_count_coverage_errors
 from .sampler import (
     OUTCOME_NOISE_SEMANTICS,
     OUTCOME_NOISE_VERSION,
@@ -825,6 +826,18 @@ class DataGenerator:
                 mask, (np.arange(width)[None, :] < count[:, None]).astype(np.uint8)
             ):
                 errors.append(f"{key} does not match its active prefix mask")
+        # The optional stratified-coverage block must recount exactly from the
+        # masks just checked, and its cells must round the allocation targets
+        # of its own weights.
+        if isinstance(diagnostics, dict) and "active_count_coverage" in diagnostics:
+            errors.extend(
+                active_count_coverage_errors(
+                    diagnostics["active_count_coverage"],
+                    active_treatment,
+                    active_covariate,
+                    corpus["cell_id"],
+                )
+            )
 
         inactive_c, inactive_m, inactive_j = (
             active_treatment == 0,

@@ -228,6 +228,10 @@ of exactly `0.0` requires prevalence `0`, and one of exactly `1.0` prevalence
 flags — and `prevalence` / `n_inputs` equal to their exact recomputation from
 the stored flags.
 
+When a corpus carries `diagnostics["active_count_coverage"]`,
+`validate_corpus` recounts it from the stored masks and checks that its cells
+round the allocation targets of its weights ([below](#active-count-coverage)).
+
 ```python exec="1" source="block" result="text"
 from scm_docs import corpus
 from pymc_generator.data_generator import DataGenerator
@@ -375,7 +379,7 @@ serves every level.
 
 | Axis | How | Knobs |
 | --- | --- | --- |
-| **Graph size** | how many nodes are live | `n_treatments`, `n_covariates`, `n_latent`, and their `*_active_range`s |
+| **Graph size** | how many nodes are live, and how cells cover the treatment × covariate counts | `n_treatments`, `n_covariates`, `n_latent`, their `*_active_range`s, and [`active_count_allocation` / `active_count_weights`](#active-count-coverage) |
 | **Interactions** | how many arrows of each type | `edge_budget`, `min_no_direct_effect_treatments` |
 | **Nonlinearity** | treatment-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` |
@@ -427,6 +431,78 @@ set `edge_budget["cc"] = 0` as well if it must have no path to `Y`.
 
 See the full configuration surface in the
 [API reference](../reference/config.md).
+
+## Active-count coverage
+
+With active ranges wider than one value, every cell has its own active
+treatment and covariate counts. By default each cell draws both counts
+independently and uniformly, so a finite corpus covers their joint grid only in
+expectation, and a small one can miss combinations entirely.
+`active_count_allocation="stratified"` allocates the cells over the grid
+instead: under uniform weights the cell counts per combination differ by at
+most one, every combination appears once there are at least as many cells as
+combinations, and `active_count_weights` reweights the combinations. The
+[configuration reference](../reference/config.md#active-count-coverage) states
+the exact rule, which cells it covers and what it does to seeds.
+
+```python exec="1" source="block" result="text"
+import pymc_generator as pg
+from pymc_generator.data_generator import DataGenerator
+
+sizes = dict(n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=16,
+             n_treatments_active_range=(2, 3), n_covariates_active_range=(1, 2),
+             n_cells=4, draws_per_cell=1, seed=0)
+independent = pg.make_scm_prior(**sizes)
+stratified = pg.make_scm_prior(**sizes, active_count_allocation="stratified")
+
+coverage = pg.active_count_coverage(pg.sample_prior_predictive(independent),
+                                    prior=independent)
+print("rows: n_treatments_active", coverage["n_treatments_active"],
+      "| columns: n_covariates_active", coverage["n_covariates_active"])
+print("independent n_cells:", coverage["n_cells"])
+
+c = pg.sample_prior_predictive(stratified)
+block = c["diagnostics"]["active_count_coverage"]
+print("stratified  n_cells:", block["n_cells"])
+print("block keys:", list(block))
+print("validation errors:", DataGenerator.validate_corpus(c) or "none")
+```
+
+A stratified corpus records the realised coverage in
+`diagnostics["active_count_coverage"]`; an independent corpus has no such key
+and is byte-identical to one generated before the option existed.
+
+| Key | Value |
+| --- | --- |
+| `allocation` | `"stratified"` |
+| `n_treatments_active` | the grid's rows: every count of the effective treatment range, ascending |
+| `n_covariates_active` | the grid's columns: every count of the effective covariate range, ascending |
+| `weights` | the weights used, as floats; all ones for `active_count_weights=None` |
+| `n_cells` | distinct `cell_id`s per combination |
+| `n_worlds` | tasks per combination |
+
+- The matrices are nested lists indexed `[treatment row][covariate column]`:
+  `n_cells[i][j]` counts the cells with `n_treatments_active[i]` active
+  treatments and `n_covariates_active[j]` active covariates.
+- Both counts come from the stored `treatment_active_mask`,
+  `covariate_active_mask` and `cell_id` after any `n=` truncation, so they
+  describe the corpus you hold: a truncated last cell counts as one cell, and
+  only its retained worlds count.
+- `validate_corpus` recomputes both exactly. It also checks the key set and
+  `allocation`, the axes (consecutive counts within the mask widths), the
+  weights (the grid's shape, finite, non-negative, some positive), that every
+  task lies inside the grid, and that `n_cells` rounds the allocation targets
+  of `weights` for that many cells, so a zero-weight combination holds no cell.
+- Every value is a plain string, number or list, so the block round-trips
+  through `save_corpus` / `load_corpus` unchanged. There is no schema-version
+  bump: like the trajectory block, it is optional.
+
+[`pg.active_count_coverage(corpus, prior=None)`](../reference/corpus.md#pymc_generator.active_counts.active_count_coverage)
+returns the same grid axes and `n_cells` / `n_worlds` matrices for **any**
+corpus, independent ones included; combinations no task reached show up as
+zeros. It reads the grid from `prior` when given, else from the stored block,
+so a corpus without the block needs `prior=`, the config that generated it. A
+task outside the grid raises `ValueError`.
 
 ## Mechanism-prior metadata
 

@@ -179,22 +179,24 @@ def build_cell_inputs(
 def sample_cell_structures(cfg: SCMPrior, rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
     """Draw all structures up front, using active node counts for prior shapes.
 
-    Production instead interleaves each structure with draw-seed and support-mask
-    sampling. After the first cell these RNG schedules differ, so equal initial
-    seeds do not select the same sequence of production DAGs.
+    Active counts follow ``cfg.active_count_allocation`` through the same
+    helpers as production, so a stratified config covers the treatment ×
+    covariate grid here exactly as it does in a corpus. Production instead
+    interleaves each structure with draw-seed and support-mask sampling. After
+    the first cell these RNG schedules differ, so equal initial seeds do not
+    select the same sequence of production DAGs.
     """
+    from .active_counts import draw_active_counts, plan_active_counts
     from .sampler import _slice_g_active, sample_g_additive
     from .world_model import sample_structure
 
     layout = cfg.layout
+    plan = plan_active_counts(cfg, rng)
     cells: list[dict[str, np.ndarray]] = []
-    for _ in range(cfg.n_cells):
-        tr = cfg.n_treatments_active_range_effective
-        cv = cfg.n_covariates_active_range_effective
-        lt = cfg.n_latent_active_range_effective
-        n_treatments_active = int(rng.integers(tr[0], tr[1] + 1))
-        n_covariates_active = int(rng.integers(cv[0], cv[1] + 1))
-        n_latent_active = int(rng.integers(lt[0], lt[1] + 1))
+    for cell in range(cfg.n_cells):
+        n_treatments_active, n_covariates_active, n_latent_active = draw_active_counts(
+            cfg, rng, plan, cell
+        )
         g = sample_g_additive(
             rng,
             cfg,
