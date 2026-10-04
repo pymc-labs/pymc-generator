@@ -282,6 +282,10 @@ then parameters and noise (as a PyMC model). This mirrors the design principle:
     node's walk **smoothness**. `cc` and `zz` are restricted to the strict upper
     triangle (`src < dst`), which guarantees acyclicity.
 
+    In a corpus, each cell's active treatment and covariate counts are drawn
+    independently by default, or allocated over their joint grid with
+    [`active_count_allocation="stratified"`](../reference/config.md#active-count-coverage).
+
     In the single-world path, the DAG is resampled until it satisfies a
     connectivity rule: **dead-end nodes are never allowed**, and fully-isolated
     null nodes are permitted (as deliberate zero-attribution traps) unless

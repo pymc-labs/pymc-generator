@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ._version import __version__
 
 if TYPE_CHECKING:
+    from .active_counts import active_count_coverage
     from .bundles import write_scenario_bundles, write_scm_bundle
     from .data_generator import DataGenerator, load_corpus, save_corpus
     from .describe import describe_scm
@@ -58,6 +59,8 @@ _LAZY_IMPORTS = {
     "DataGenerator": (".data_generator", "DataGenerator"),
     "save_corpus": (".data_generator", "save_corpus"),
     "load_corpus": (".data_generator", "load_corpus"),
+    # realised cells / worlds per (active treatments, active covariates) combination
+    "active_count_coverage": (".active_counts", "active_count_coverage"),
     # single-world API + human-readable bundles
     "sample_scm": (".worlds", "sample_scm"),
     "SCM": (".worlds", "SCM"),
@@ -120,6 +123,7 @@ __all__ = [
     "SIGNAL_METRIC_VERSION",
     "WorldDescriptors",
     "__version__",
+    "active_count_coverage",
     "bin_counts",
     "build_oracle_model",
     "build_world_model",
