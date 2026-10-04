@@ -31,6 +31,10 @@ dependencies = [
     "pytensor>=3.2.3,<4",
     "pymc>=6.2,<7",
     "pymc-marketing>=1.1,<2",
+    "arviz>=1,<2",
+    # Keep ordinary installs compatible with the supported Nutpie range; the
+    # validated environment is recorded separately in uv.lock.
+    "nutpie",
     "scipy",
     "pandas",
     "matplotlib",

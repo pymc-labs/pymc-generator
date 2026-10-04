@@ -192,7 +192,12 @@ class SCM:
         """Max |Σ true components − outcome| (float64; ~1e-15 in practice)."""
         return float(np.abs(self.reconstruction() - self.data["outcome"]).max())
 
-    def oracle_model(self, *, latent: Literal["marginal", "sampled"] = "marginal") -> pm.Model:
+    def oracle_model(
+        self,
+        *,
+        latent: Literal["marginal", "sampled"] = "marginal",
+        observed_indices: np.ndarray | list[int] | list[bool] | None = None,
+    ) -> pm.Model:
         """The observed-data posterior ``pm.Model`` for THIS world.
 
         Rebuilds :func:`pymc_generator.world_model.build_oracle_model` from
@@ -242,6 +247,7 @@ class SCM:
             data=data,
             prior_cond=self.extras.get("prior_cond"),
             latent=latent,
+            observed_indices=observed_indices,
         )
 
     def signal(self) -> dict[str, Any]:
