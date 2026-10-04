@@ -66,13 +66,13 @@ still need measurement.
 
 | | `latent="marginal"` (default) | `latent="sampled"` |
 | --- | --- | --- |
-| likelihood | `pm.MvNormal` on `sales` (exact walk covariance + iid `RW_Y` on the diagonal, plus a `1e-12 I` factorization guard) | `pm.Normal` on `sales`, `sigma=rw_y_std` |
-| deterministics | `contributions`, `outcome_mu`, plus `rw_b_std` / `rw_y_std` in relative outcome-noise mode | the same, **plus** `baseline` and `demand` |
+| likelihood | `pm.MvNormal` on `outcome` (exact walk covariance + iid `RW_Y` on the diagonal, plus a `1e-12 I` factorization guard) | `pm.Normal` on `outcome`, `sigma=rw_y_std` |
+| deterministics | `contributions`, `outcome_mu`, plus `rw_b_std` / `rw_y_std` in relative outcome-noise mode | the same, **plus** `baseline` and `latent_unobserved` |
 | extra free RVs | — | `eps_d`, `eps_b` (the walk innovations) |
 | floored intercept | raises — `max(RW_B, baseline_floor)` is not Gaussian | supported, applies the identical clip |
 
-So the default oracle has **no `baseline` and no `demand` deterministic**: its
-`outcome_mu` is `E[sales | θ]` and excludes every latent walk realization. Ask for
+So the default oracle has **no `baseline` and no `latent_unobserved` deterministic**: its
+`outcome_mu` is `E[outcome | θ]` and excludes every latent walk realization. Ask for
 `latent="sampled"` when you need posterior baseline or latent-unobserved paths. Marginal
 mode trades fewer sampled dimensions for an `O(n³)` Cholesky factorization per
 likelihood evaluation; neither representation is uniformly cheaper.
@@ -85,8 +85,8 @@ free variables. Under `mm_scale_prior="log_uniform"` the free variable is
 `mm_kappa_mult_log`, with `mm_kappa_mult` as its deterministic.
 
 What is comparable, in both modes: `contributions` against
-`world.data["contributions_observed"]` (exactly), and `outcome_mu` against
-`world.data["outcome"]` for total mean fit. Sampled mode's `baseline` is the
+`world.data["contributions_observed"]` on the reproducible likelihood window,
+and `outcome_mu` against `world.data["outcome"]` for total mean fit. Sampled mode's `baseline` is the
 **non-treatment aggregate without observation noise**: intrinsic intercept `B`
 plus attributed `D→Y` and `Z→Y` effects. These edges terminate at `Y`, not `B`.
 Persisted `world.data["baseline"]` also includes `outcome_noise`, so subtract that
@@ -98,6 +98,25 @@ The shared prior definitions make this a useful reference for amortized models
 trained with the same configuration, including [ACE prior-conditioning](corpus.md#prior-conditioning-ace)
 intervals that `SCM.oracle_model()` picks up automatically. Shared priors alone do
 not remove the plug-in conditioning qualification.
+
+### Scheduled fixed inputs
+
+All eight [trajectory components](trajectories.md), fractional texture flags,
+and held-level shocks are already present in `world.data["treatments"]` and
+`world.data["covariates"]`. The oracle conditions on those fixed arrays; it does
+not regenerate or apply their schedules again. At generating parameter truth,
+its contribution response matches `contributions_observed` on every
+reproducible row. In sampled mode, also fixing the generating latent/baseline
+innovations gives `outcome_mu = outcome - outcome_noise` on that window.
+Marginal mode integrates those innovations and must not be compared with the
+realised sampled baseline as if they were the same mean.
+
+Burn-in still requires the existing leading-row discard for kernels whose
+response reaches outside reported treatment history. Identity carryover and
+geometric priors pinned at zero decay keep their existing no-discard exception.
+`SCM.primitive_parameters` provides the same-candidate primitive values for
+truth checks; `SCM.replay()` reproduces the full generator, including burn-in.
+
 
 ## What the oracle is — and is not
 
@@ -132,18 +151,18 @@ The API reference documents these mode-dependent qualifications:
    guard. Its `1e-6` standard-deviation scale should be assessed against the
    chosen outcome units, rather than assumed negligible at every scale.
 
-4. **Posterior-series labels.** Marginal mode has no `demand` and no
-   `baseline` deterministic; its full-length `outcome_mu` is `E[sales | θ]` and
+4. **Posterior-series labels.** Marginal mode has no `latent_unobserved` and no
+   `baseline` deterministic; its full-length `outcome_mu` is `E[outcome | θ]` and
    excludes every latent walk realization. Sampled mode's `baseline` aggregates
    the intrinsic intercept and attributed `D→Y` / `Z→Y` effects without `RW_Y`.
    The persisted `data["baseline"]` additionally includes `RW_Y` — subtract
    `outcome_noise` to compare them. `contributions` is exactly comparable
    with `world.data["contributions_observed"]` in both modes; compare
-   `outcome_mu` with observed `sales` for total fit.
+   `outcome_mu` with observed `outcome` for total fit.
 5. **Reproducible likelihood window.** The carryover convolution sees only the
    reported window (zero-padded start) while generation used
    `carryover_burn_in` weeks of real history. With burn-in enabled the oracle
-   therefore observes `sales[warmup:]`, where `warmup` is the response support
+   therefore observes `outcome[warmup:]`, where `warmup` is the response support
    **admitted by the oracle's own inference priors**: the direct treatments'
    carryover families, `l_max`, and the geometric decay range *after* any ACE
    prior-conditioning narrowing. Weibull's shape box

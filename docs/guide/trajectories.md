@@ -7,13 +7,12 @@ step, cycle and trend. Each treatment and each covariate can carry,
 of its smoothed random walk, so one corpus can hold all of these shapes — and
 record exactly which input carries which.
 
-!!! note "Corpus generation only, for now"
-    Configs that set any `*_inclusion_prob` away from its default
-    (`SCMPrior.trajectory_metadata_enabled`) are supported by
-    [`sample_prior_predictive`](../reference/corpus.md#pymc_generator.sampler.sample_prior_predictive)
-    and `DataGenerator`. `sample_scm` — and with it descriptions, bundles,
-    replay and the posterior oracle — rejects them, as does the experimental
-    template path; see [limits](#limits).
+!!! note "End-to-end support"
+    All eight components and fractional per-input inclusion work in corpus
+    generation, `sample_scm`, and the reusable template. A sampled `SCM` records
+    realised schedule parameters and can replay every forward output through
+    `SCM.replay()`. The oracle uses the already-scheduled observed inputs,
+    without applying the schedules again.
 
 ## Eight components
 
@@ -63,9 +62,15 @@ component. Each cell draws a flag for every input and every component
 independently — concrete structure like the carryover family, shared by all of
 the cell's draws. `1.0` puts the component on every input and `0.0` on none;
 `hf` and `pulse` default to `1.0` and every other component to `0.0`, so the
-default is today's texture. A component an input does not carry is **not
-wired**: it adds exactly nothing, and one that no input of the cell carries
-draws no randomness.
+default is today's texture. A component an input does not carry contributes
+exactly nothing.
+
+Ordinary active-size cell construction omits gate/level component priors when
+no input of the cell carries them. Reusable templates instead keep cfg-admitted
+gate/level priors wired and drawn even for all-off cells; runtime flags
+neutralize their effects, not those prior draws. Legacy `hf` / `pulse` variables
+retain their existing random-draw contract: switching their flags off does not
+promise to eliminate those prior draws.
 
 The realised **prevalence** — the fraction of active inputs carrying each
 component — lands in `diagnostics["trajectory"]` next to the effective inclusion
@@ -311,9 +316,10 @@ therefore the schedule gate, not the realised on-state — read it together with
 
 ## Seeds
 
-With every trajectory knob at its default nothing new is drawn, so same-seed
-corpora and worlds are bit-identical to those generated before these knobs
-existed. Inclusion flags draw from child streams spawned off the corpus's numpy
+With every trajectory knob at its default nothing new is drawn: the controls
+leave same-seed numerical/model arrays and worlds unchanged. This is not a
+cross-version archive-identity guarantee; schema v5 changes the version stamp
+and saved corpus bytes. Inclusion flags draw from child streams spawned off the corpus's numpy
 generator and consume none of its state. But once a cell wires a component, the
 random variables its compiled draw reaches can change, so that cell's *other*
 draws generally change at the same seed too; stream stability under enabling is
@@ -323,12 +329,11 @@ Details: [randomness and seeds](../reference/config.md#randomness-and-seeds).
 
 ## Limits
 
-- **Corpus path only.** `sample_scm` raises for any `*_inclusion_prob` away
-  from its default, so single-world extraction, `describe_scm`, bundles, replay
-  and the posterior oracle are unavailable for those configs; the experimental
-  template path rejects schedule components and any `hf` / `pulse` inclusion
-  other than `1.0` on a live texture range. Both are planned in
-  [#27](https://github.com/pymc-labs/pymc-generator/issues/27).
+- **Template scope.** Trajectory flags are per-cell runtime inputs. Treatment
+  shocks, prior conditioning and non-fixed confounding-strength ranges remain
+  outside the experimental template's supported configurations. Template
+  padding changes RV shapes, so matching seeds alone do not align its draws
+  with ordinary generation; forward parity requires the same realised inputs.
 - **κ anchors exclude the components.** `saturation_scale` stays
   parameter-only, so a doubled treatment runs at twice its κ-relative level.
 - **Exact covariate levels need component-free covariates.** A covariate's

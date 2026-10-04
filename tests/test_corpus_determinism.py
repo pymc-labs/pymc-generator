@@ -25,7 +25,6 @@ from pymc_generator.sampler import (
     MAX_TOPUPS_PER_CELL,
     SCMPrior,
 )
-from pymc_generator.slots import LEGACY_CORPUS_KEYS_V1
 
 
 def _tiny_config(**overrides):
@@ -119,11 +118,14 @@ def test_validate_corpus_rejects_a_malformed_timing_block(tiny_corpus):
     (
         (None, "missing schema_version"),
         (1, "schema_version 1 is not supported"),
+        (2, "schema_version 2 is not supported"),
+        (3, "schema_version 3 is not supported"),
+        (4, "schema_version 4 is not supported"),
         (99, "schema_version 99 is not supported"),
         ("2", "schema_version must be a non-bool integer"),
         (True, "schema_version must be a non-bool integer"),
     ),
-    ids=("missing", "v1", "future", "string", "bool"),
+    ids=("missing", "v1", "v2", "v3", "v4", "future", "string", "bool"),
 )
 def test_unsupported_schema_versions_are_refused_everywhere(
     tmp_path, tiny_corpus, version, expected
@@ -167,23 +169,6 @@ def test_persistence_requires_diagnostics(tmp_path):
     assert not path.exists()
     np.savez(path, **payload)
     with pytest.raises(ValueError, match="diagnostics"):
-        pg.load_corpus(path)
-
-
-@pytest.mark.parametrize("version", [99, True, "2"])
-def test_legacy_keys_cannot_override_an_explicit_version(tmp_path, tiny_corpus, version):
-    path = tmp_path / "explicit-version.npz"
-    payload = {old: tiny_corpus[new] for old, new in LEGACY_CORPUS_KEYS_V1.items()}
-    payload["diagnostics"] = np.array(json.dumps({"schema_version": version}))
-    np.savez(path, **payload)
-    with pytest.raises(ValueError, match="stamped corpora"):
-        pg.load_corpus(path)
-
-
-def test_partial_legacy_vocabulary_is_not_a_migration(tmp_path):
-    path = tmp_path / "partial-legacy.npz"
-    np.savez(path, K_active=np.array([1]), diagnostics=np.array("{}"))
-    with pytest.raises(ValueError, match="incomplete legacy"):
         pg.load_corpus(path)
 
 
@@ -341,7 +326,7 @@ def test_exhaustion_error_separates_filter_rejections_from_draw_failures(monkeyp
     ),
 )
 def test_validate_rejects_ranges_the_float32_storage_cannot_hold(field):
-    """Every persisted array is float32, so an endpoint past its max is unusable."""
+    """Base float32 features cannot hold a prior endpoint past their storage max."""
     with pytest.raises(ValueError, match=f"{field} bound .* exceeds the float32"):
         SCMPrior(**{field: (1e39, 1e39)}).validate()
 

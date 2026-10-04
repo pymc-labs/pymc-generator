@@ -1,6 +1,6 @@
 """Configurable mechanism measures and reference contributions, not graph wiring.
 
-Expected responses below are independent NumPy closed forms. Coefficients and
+Expected responses below are independent NumPy/Decimal closed forms. Coefficients and
 responses are materialized separately: simplifying ``q / f * f`` symbolically
 would hide an infinite intermediate coefficient or a cancelled tiny response.
 """
@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
+from decimal import Decimal, localcontext
 
 import numpy as np
 import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 import pytest
+from pytensor.graph.replace import clone_replace
 
 import pymc_generator as pg
 import pymc_generator.world_model as world_model
@@ -1043,18 +1045,10 @@ def _oracle_data(cfg, scale):
             "treatment_reference_input",
             "treatment_reference_multiplier.*treatment_reference_input",
         ),
-        (
-            # kappa * scale overflows, so the supplied anchor gives a zero response.
-            "michaelis_menten",
-            {"saturation_prior_ranges": _ranges(mm_kappa_mult=(1e30, 1e30))},
-            1e300,
-            "beta",
-            "treatment_reference_contribution_range requires finite float64 coefficients",
-        ),
     ),
-    ids=("input_overflow", "input_underflow", "coefficient_overflow"),
+    ids=("input_overflow", "input_underflow"),
 )
-def test_oracle_rejects_unrepresentable_supplied_reference_inputs_and_coefficients(
+def test_oracle_rejects_unrepresentable_supplied_reference_inputs(
     family, options, scale, variable, match
 ):
     cfg = _cfg(
@@ -1135,6 +1129,722 @@ def test_opt_in_curves_preserve_tiny_responses_and_high_slope_half_points(
         drawn["treatments"][0], drawn["saturation_scale"][0], params, g["g_cy"]
     )
     np.testing.assert_allclose(drawn["contributions_observed"][0], expected, rtol=2e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("shape", ("concrete", "tensor_scalar", "tensor_vector"))
+def test_stable_logistic_preserves_minimum_positive_lambda_with_runtime_inputs(shape):
+    x = pt.dvector("x")
+    lam = np.nextafter(0.0, 1.0)
+    shape_value = lam
+    if shape == "tensor_scalar":
+        shape_value = pt.as_tensor_variable(lam)
+    elif shape == "tensor_vector":
+        shape_value = pt.as_tensor_variable(np.array([lam]))
+    response = mechanisms.stable_logistic_kappa_relative(x, 1.0, lam=shape_value)
+    evaluate = pytensor.function([x], response, mode="FAST_COMPILE")
+    inputs = np.array([-1e300, -1e38, -1e20, -2.0, 0.0, 2.0, 1e20, 1e38, 1e300])
+    expected = np.tanh((lam * inputs) / 2.0)
+    np.testing.assert_allclose(evaluate(inputs), expected, rtol=8.0 * _EPS, atol=0.0)
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_logistic_subnormal_response_and_amplification_match_decimal(mode):
+    x, reference, lam = pt.dvectors("x", "reference", "lambda")
+    response = mechanisms.stable_logistic_kappa_relative(x, reference, lam=lam)
+    evaluate = pytensor.function(
+        [x, reference, lam], [response, CORPUS_STORAGE_MAX * response], mode=mode
+    )
+    minimum, tiny = np.nextafter(0.0, 1.0), np.finfo(np.float64).tiny
+    cases = [
+        (value, 1.0, minimum)
+        for value in (0.75, 1.0, 1.25, 1.5, 2.0, 3.0, np.nextafter(3.0, np.inf))
+    ]
+    cases += [
+        (np.nextafter(4.5, np.inf), np.nextafter(1.5, np.inf), minimum),
+        (1.25e308, 1e308, minimum),
+        (np.nextafter(2.0, 0.0), 1.0, tiny),
+        (2.0, 1.0, tiny),
+    ]
+    cases = [(sign * value, scale, shape) for value, scale, shape in cases for sign in (-1, 1)]
+    expected = []
+    with localcontext() as context:
+        # Resolve the cubic correction below exact half-ULP ties, not only
+        # the first-order term or the already-rounded lambda*input product.
+        context.prec = 1200
+        for value, scale, shape in cases:
+            argument = (
+                Decimal.from_float(value) * Decimal.from_float(shape) / Decimal.from_float(scale)
+            )
+            tail = (-argument).exp()
+            expected.append(float((1 - tail) / (1 + tail)))
+    values, scaled = evaluate(*[np.array(column) for column in zip(*cases)])
+    np.testing.assert_array_equal(values, expected)
+    np.testing.assert_array_equal(scaled, CORPUS_STORAGE_MAX * np.array(expected))
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_stable_logistic_preserves_normal_curve_and_zero_input_gradient(mode):
+    x, r, lam = pt.dvector("x"), pt.dscalar("r"), pt.dscalar("lam")
+    response = mechanisms.stable_logistic_kappa_relative(x, r, lam=lam)
+    derivative = pytensor.grad(response.sum(), x)
+    evaluate = pytensor.function([x, r, lam], [response, derivative], mode=mode)
+    inputs = np.array([-1e20, -7.0, -0.5, 0.0, 0.5, 7.0, 1e20])
+    scale, shape = 3.0, 1.3
+    expected = np.tanh((shape * (inputs / scale)) / 2.0)
+    expected_derivative = (shape / (2.0 * scale)) * (1.0 - expected**2)
+    values, derivatives = evaluate(inputs, scale, shape)
+    np.testing.assert_allclose(values, expected, rtol=8.0 * _EPS, atol=0.0)
+    np.testing.assert_allclose(derivatives, expected_derivative, rtol=32.0 * _EPS, atol=0.0)
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_logistic_weighted_saturated_tail_preserves_complete_derivatives(mode):
+    x, reference, lam = pt.dvector("x"), pt.dscalar("reference"), pt.dscalar("lambda")
+    response = mechanisms.stable_logistic_kappa_relative(x, reference, lam=lam)
+    inputs = np.array([-1e38, 0.0, 1e38])
+    weights = np.array([1e200, 3e200, -2e200])
+    gradients = pytensor.grad((response * weights).sum(), [x, reference, lam])
+    evaluate = pytensor.function([x, reference, lam], [response, *gradients], mode=mode)
+    with localcontext() as context:
+        context.prec = 100
+        scale, shape = (Decimal.from_float(value) for value in (1.0, 8e-36))
+        expected_x, expected_reference, expected_lambda = [], Decimal(0), Decimal(0)
+        for value, weight in zip(inputs, weights):
+            value, weight = Decimal.from_float(float(value)), Decimal.from_float(float(weight))
+            tail = (-(shape * value / scale).copy_abs()).exp()
+            common = 2 * weight * tail / (1 + tail) ** 2
+            expected_x.append(float(common * shape / scale))
+            expected_reference -= common * shape * value / scale**2
+            expected_lambda += common * value / scale
+    values, grad_x, grad_reference, grad_lambda = evaluate(inputs, 1.0, 8e-36)
+    np.testing.assert_array_equal(values, [-1.0, 0.0, 1.0])
+    np.testing.assert_allclose(grad_x, expected_x, rtol=2e-12, atol=0.0)
+    np.testing.assert_allclose(grad_reference, float(expected_reference), rtol=2e-12, atol=0.0)
+    np.testing.assert_allclose(grad_lambda, float(expected_lambda), rtol=2e-12, atol=0.0)
+    assert np.all(np.asarray(expected_x) != 0.0)
+    assert expected_reference > 0 and expected_lambda < 0
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_sampled_logistic_oracle_retains_weighted_tail_posterior_gradient(mode):
+    cfg = _cfg(
+        n_treatments=1,
+        nonlinearity="linear",
+        beta_additive_range=(1.0, 1.0),
+        saturation_family_probs=_one_hot("logistic"),
+        saturation_prior_ranges=_ranges(logistic_lam=(7e-36, 9e-36)),
+        baseline_floor=None,
+        rw_baseline_mean_range=(0.0, 0.0),
+        rw_baseline_std_range=(0.0, 0.0),
+        rw_outcome_std_range=(1e-100, 1e-100),
+    )
+    g = _graph(1, 1)
+    g["g_zy"][:] = 0
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index("logistic")])
+    data = _oracle_data(cfg, 1.0)
+    data["treatments"][:] = 1e38
+    oracle = build_oracle_model(g, cfg, structural, data, latent="sampled")
+    variable = oracle["logistic_lam"]
+    point = oracle.initial_point()
+    point[oracle.rvs_to_values[variable].name] = np.array([0.0])
+    assert np.isfinite(oracle.compile_logp(mode=mode)(point))
+    actual = oracle.compile_dlogp(vars=[variable], mode=mode)(point)
+    # The midpoint prior/Jacobian score is zero. The finite Normal cotangent
+    # rescues the tail before the lambda interval derivative scales it down.
+    with localcontext() as context:
+        context.prec = 100
+        lo, hi = (Decimal.from_float(value) for value in (7e-36, 9e-36))
+        shape = float((lo + hi) / 2)
+        x, shape, sigma = (Decimal.from_float(value) for value in (1e38, shape, 1e-100))
+        tail = (-(x * shape)).exp()
+        raw_score = -Decimal(cfg.n_time_steps) * 2 * x * tail / (1 + tail) ** 2 / sigma**2
+        expected = float(raw_score * (hi - lo) / 4)
+    assert expected < 0.0
+    np.testing.assert_allclose(actual, [expected], rtol=2e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_hill_weighted_saturated_tails_preserve_broadcast_pullbacks(mode):
+    x, reference = pt.dmatrix("x"), pt.dscalar("reference")
+    slope = pt.tensor("slope", dtype="float64", shape=(1, 2))
+    kappa = pt.tensor("kappa", dtype="float64", shape=(2, 1))
+    response = mechanisms.stable_hill_kappa_relative(x, reference, slope=slope, kappa_mult=kappa)
+    inputs = np.array([[np.e, np.exp(-1.0)], [0.0, -1.0]])
+    weights = np.array([[1e200, -3e200], [2e200, -4e200]])
+    gradients = pytensor.grad((response * weights).sum(), [x, reference, slope, kappa])
+    evaluate = pytensor.function([x, reference, slope, kappa], [response, *gradients], mode=mode)
+    with localcontext() as context:
+        context.prec = 100
+        shape = Decimal(800)
+        expected_x = np.zeros_like(inputs)
+        expected_reference = Decimal(0)
+        expected_slope = [Decimal(0), Decimal(0)]
+        expected_kappa = [Decimal(0), Decimal(0)]
+        for row, column in np.ndindex(inputs.shape):
+            value = Decimal.from_float(float(inputs[row, column]))
+            if value <= 0:
+                continue
+            weight = Decimal.from_float(float(weights[row, column]))
+            log_ratio = value.ln()
+            tail = (-(shape * log_ratio).copy_abs()).exp()
+            common = weight * tail / (1 + tail) ** 2
+            expected_x[row, column] = float(common * shape / value)
+            expected_reference -= common * shape
+            expected_slope[column] += common * log_ratio
+            expected_kappa[row] -= common * shape
+    values, grad_x, grad_reference, grad_slope, grad_kappa = evaluate(
+        inputs, 1.0, np.full((1, 2), 800.0), np.ones((2, 1))
+    )
+    np.testing.assert_array_equal(values, [[1.0, 0.0], [0.0, 0.0]])
+    np.testing.assert_allclose(grad_x, expected_x, rtol=2e-12, atol=0.0)
+    np.testing.assert_allclose(grad_reference, float(expected_reference), rtol=2e-12, atol=0.0)
+    np.testing.assert_allclose(
+        grad_slope, [[float(value) for value in expected_slope]], rtol=2e-12, atol=0.0
+    )
+    np.testing.assert_allclose(
+        grad_kappa, [[float(value)] for value in expected_kappa], rtol=2e-12, atol=0.0
+    )
+    assert np.all(expected_x[0] != 0.0)
+    assert expected_reference > 0 and all(value > 0 for value in expected_slope)
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_sampled_hill_oracle_retains_weighted_tail_posterior_gradient(mode):
+    cfg = _cfg(
+        n_treatments=1,
+        nonlinearity="linear",
+        beta_additive_range=(1.0, 1.0),
+        saturation_family_probs=_one_hot("hill"),
+        saturation_prior_ranges=_ranges(hill_slope=(700.0, 900.0), hill_kappa_mult=(1.0, 1.0)),
+        baseline_floor=None,
+        rw_baseline_mean_range=(0.0, 0.0),
+        rw_baseline_std_range=(0.0, 0.0),
+        rw_outcome_std_range=(1e-100, 1e-100),
+    )
+    g = _graph(1, 1)
+    g["g_zy"][:] = 0
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index("hill")])
+    data = _oracle_data(cfg, 1.0)
+    data["treatments"][:] = np.e
+    oracle = build_oracle_model(g, cfg, structural, data, latent="sampled")
+    variable = oracle["hill_slope"]
+    point = oracle.initial_point()
+    point[oracle.rvs_to_values[variable].name] = np.array([0.0])
+    assert np.isfinite(oracle.compile_logp(mode=mode)(point))
+    actual = oracle.compile_dlogp(vars=[variable], mode=mode)(point)
+    # The independently retained exponential tail survives the finite Normal
+    # cotangent and the midpoint slope interval derivative (900 - 700) / 4.
+    with localcontext() as context:
+        context.prec = 100
+        x, sigma = (Decimal.from_float(value) for value in (float(np.e), 1e-100))
+        log_ratio = x.ln()
+        tail = (-Decimal(800) * log_ratio).exp()
+        response = 1 / (1 + tail)
+        raw_score = -Decimal(cfg.n_time_steps) * response * tail * log_ratio / (1 + tail) ** 2
+        expected = float(raw_score / sigma**2 * 50)
+    assert expected < 0.0
+    np.testing.assert_allclose(actual, [expected], rtol=2e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_hill_tiny_relative_factors_rescue_unweighted_saturated_derivatives(mode):
+    x, reference, slope, kappa = (pt.dscalar(name) for name in ("x", "reference", "slope", "kappa"))
+    response = mechanisms.stable_hill_kappa_relative(x, reference, slope=slope, kappa_mult=kappa)
+    gradients = pytensor.grad(response, [x, reference, slope, kappa])
+    evaluate = pytensor.function([x, reference, slope, kappa], [response, *gradients], mode=mode)
+    inputs = (float(np.e * 1e-300), 1.0, 800.0, 1e-300)
+    with localcontext() as context:
+        context.prec = 100
+        value, scale, shape, half = (Decimal.from_float(value) for value in inputs)
+        log_ratio = (value / (half * scale)).ln()
+        tail = (-(shape * log_ratio)).exp()
+        common = tail / (1 + tail) ** 2
+        expected = [
+            float(common * shape / value),
+            float(-common * shape / scale),
+            float(common * log_ratio),
+            float(-common * shape / half),
+        ]
+    value, *actual = evaluate(*inputs)
+    assert value == 1.0
+    np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=0.0)
+    assert expected[0] > 0.0 and expected[3] < 0.0
+
+
+def _decimal_unit_response_and_gradients(family, x, reference, shape, weight=1.0):
+    """Independent closed forms, retaining weighted products and squares outside float64."""
+    with localcontext() as context:
+        context.prec = 100
+        x, r, s, w = (Decimal.from_float(float(value)) for value in (x, reference, shape, weight))
+        if family == "michaelis_menten":
+            # A representable lambda is the library's rounded product, even
+            # when it is subnormal. An overflowing product needs the full law.
+            primitive_lambda = float(reference) * float(shape)
+            lam = Decimal.from_float(primitive_lambda) if 0.0 < primitive_lambda < np.inf else r * s
+            denominator = x + lam
+            return (
+                x / denominator,
+                w * lam / denominator**2,
+                -w * x * s / denominator**2,
+                -w * x * r / denominator**2,
+            )
+        if family == "root":
+            if x <= 0:
+                return Decimal(0), Decimal(0), Decimal(0), Decimal(0)
+            log_ratio = (x / r).ln()
+            response = (s * log_ratio).exp()
+            return (
+                response,
+                w * s * response / x,
+                -w * s * response / r,
+                w * response * log_ratio,
+            )
+        assert family == "tanh"
+        z = x / (r * s)
+        if abs(z) > 2000:
+            # Even finite float64 weights and the smallest admitted shape
+            # cannot rescue this tail into a nonzero float64 derivative.
+            return Decimal(1 if z > 0 else -1), Decimal(0), Decimal(0), Decimal(0)
+        e = (-2 * z).exp()
+        response = (1 - e) / (1 + e)
+        sech_squared = 4 * e / (1 + e) ** 2
+        return (
+            response,
+            w * sech_squared / (r * s),
+            -w * x * sech_squared / (r**2 * s),
+            -w * x * sech_squared / (r * s**2),
+        )
+
+
+@pytest.mark.parametrize("family", ("michaelis_menten", "tanh"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_tiny_shape_responses_and_gradients_match_decimal(family, mode):
+    x, r, shape = pt.dvectors("x", "reference", "shape")
+    parameter = "kappa_mult" if family == "michaelis_menten" else "c"
+    response = mechanisms.SATURATION_FAMILIES[family](x, r, **{parameter: shape})
+    gradients = pytensor.grad(response.sum(), [x, r, shape])
+    evaluate = pytensor.function([x, r, shape], [response, *gradients], mode=mode)
+
+    scale, shape_value = 3.0, 1.5e-180
+    inputs = np.array(
+        [
+            0.0,
+            0.25 * scale * shape_value,
+            scale * shape_value,
+            4 * scale * shape_value,
+            400 * scale * shape_value,
+            1.0,
+            1e308,
+        ]
+    )
+    references = np.full(inputs.size, scale)
+    shapes = np.full(inputs.size, shape_value)
+    expected = np.array(
+        [
+            [
+                float(value)
+                for value in _decimal_unit_response_and_gradients(
+                    family, input_value, scale, shape_value
+                )
+            ]
+            for input_value in inputs
+        ]
+    ).T
+    actual = evaluate(inputs, references, shapes)
+    for observed, independent in zip(actual, expected):
+        np.testing.assert_allclose(observed, independent, rtol=2e-12, atol=0.0)
+    assert actual[0][0] == 0.0
+    assert actual[2][0] == actual[3][0] == 0.0
+    if family == "michaelis_menten":
+        # A rounded unit response still has a nonzero shape derivative.
+        assert actual[0][-1] == 1.0 and actual[3][-1] < 0.0
+    else:
+        # At z=400, sech²(z) itself underflows but its scale derivative does not.
+        assert actual[0][4] == 1.0 and actual[3][4] < 0.0
+        np.testing.assert_array_equal(actual[1][-2:], 0.0)
+        np.testing.assert_array_equal(actual[3][-2:], 0.0)
+
+
+@pytest.mark.parametrize("family", ("michaelis_menten", "tanh", "root"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_relative_curves_preserve_complete_values_and_weighted_gradients(family, mode):
+    small = float(np.nextafter(0.0, 1.0))
+    cases = {
+        "tanh": (
+            (0.0, 1e24, small, 1e-30),
+            (1e-300, 1e24, small, 1e-30),
+            (-1e-300, 1e24, small, 1e-30),
+            (small, 1e38, small, 1e-30),
+            (1e-300, 1e38, small, 1e-30),
+        ),
+        "michaelis_menten": (
+            (0.0, 1e308, 1.0, 1.0),
+            (1e308, 1e308, 1.0, 1.0),
+            (1e308, 1e300, 1e8, 1.0),
+            (1e308, 1e308, 1e8, 1.0),
+            (3 * small, 1e-8, 1.5e-315, 1e-20),
+            (1e-300, 1e308, 1e8, 1e308),
+        ),
+        "root": (
+            (-small, 1e38, 0.5, 1.0),
+            (0.0, 1e38, 0.5, 1.0),
+            (1e-300, 1e24, 0.5, 1.0),
+            (small, 1e38, small, 1.0),
+            (1e308, 1e-8, 0.5, 1.0),
+            (1e-280, 1e38, 0.5, 1.0),
+            (small, 1e38, 1.0, 1e38),
+        ),
+    }[family]
+    x, r, shape, weight = pt.dvectors("x", "reference", "shape", "weight")
+    parameter = {"michaelis_menten": "kappa_mult", "tanh": "c", "root": "alpha"}[family]
+    response = mechanisms.SATURATION_FAMILIES[family](x, r, **{parameter: shape})
+    gradients = pytensor.grad((weight * response).sum(), [x, r, shape])
+    evaluate = pytensor.function([x, r, shape, weight], [response, *gradients], mode=mode)
+    expected = np.array(
+        [
+            [float(value) for value in _decimal_unit_response_and_gradients(family, *case)]
+            for case in cases
+        ]
+    ).T
+    actual = evaluate(*np.array(cases).T)
+    for observed, independent in zip(actual, expected):
+        assert np.isfinite(observed).all()
+        np.testing.assert_allclose(observed, independent, rtol=2e-12, atol=2 * small)
+        assert np.all(observed[independent != 0.0] != 0.0)
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_root_clipping_preserves_unrepresentable_and_weight_rescued_positive_derivatives(mode):
+    small = float(np.nextafter(0.0, 1.0))
+    x = pt.dvector("x")
+    r, alpha, weight = pt.dscalars("reference", "alpha", "weight")
+    response = mechanisms.root_kappa_relative(x, r, alpha=alpha)
+    unit_derivative = pytensor.grad(response.sum(), x)
+    weighted_derivative = pytensor.grad(weight * response.sum(), x)
+    evaluate = pytensor.function(
+        [x, r, alpha, weight], [response, unit_derivative, weighted_derivative], mode=mode
+    )
+    expected = _decimal_unit_response_and_gradients("root", small, 1e-8, 0.001)
+    weighted = _decimal_unit_response_and_gradients("root", small, 1e-8, 0.001, 1e-20)
+    assert expected[1] > Decimal.from_float(np.finfo("float64").max)
+    values, unit_gradient, weighted_gradient = evaluate(
+        np.array([-small, 0.0, small]), 1e-8, 0.001, 1e-20
+    )
+    np.testing.assert_allclose(values, [0.0, 0.0, float(expected[0])], rtol=2e-12, atol=0.0)
+    np.testing.assert_array_equal(unit_gradient[:2], 0.0)
+    assert np.isposinf(unit_gradient[-1])
+    assert np.isfinite(weighted_gradient).all()
+    np.testing.assert_allclose(
+        weighted_gradient, [0.0, 0.0, float(weighted[1])], rtol=2e-12, atol=0.0
+    )
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_weighted_mm_relative_pullback_retains_finite_shape_and_reference_derivatives(mode):
+    small = float(np.nextafter(0.0, 1.0))
+    x, r, kappa = pt.dvector("x"), pt.dscalar("reference"), pt.dscalar("kappa")
+    response = mechanisms.michaelis_menten_kappa_relative(x, r, kappa_mult=kappa)
+    gradients = pytensor.grad(1e-10 * response.sum(), [r, kappa])
+    evaluate = pytensor.function([x, r, kappa], [response, *gradients], mode=mode)
+    expected = _decimal_unit_response_and_gradients(
+        "michaelis_menten", 3 * small, 1e-8, 1.5e-315, 1e-10
+    )
+    # d/dx is genuinely unrepresentable at this weight. The complete shape
+    # and reference derivatives are finite; no absolute-lambda derivative is.
+    actual = evaluate(np.array([3 * small]), 1e-8, 1.5e-315)
+    for observed, independent in zip(actual, (expected[0], expected[2], expected[3])):
+        assert np.isfinite(observed).all()
+        np.testing.assert_allclose(observed, float(independent), rtol=2e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("family", ("michaelis_menten", "tanh", "root"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_relative_curves_keep_regular_library_values_exact(family, mode):
+    x, r, shape = pt.dvector("x"), pt.dscalar("reference"), pt.dscalar("shape")
+    parameter = {"michaelis_menten": "kappa_mult", "tanh": "c", "root": "alpha"}[family]
+    response = mechanisms.SATURATION_FAMILIES[family](x, r, **{parameter: shape})
+    if family == "michaelis_menten":
+        library = mechanisms.michaelis_menten(x, 1.0, shape * r)
+    elif family == "tanh":
+        library = mechanisms.tanh_saturation(x / r, 1.0, shape)
+    else:
+        library = mechanisms.root_saturation(pt.maximum(x / r, 0.0), shape)
+    evaluate = pytensor.function([x, r, shape], [response, library], mode=mode)
+    observed, expected = evaluate(np.array([0.0, 0.25, 1.0, 2.0, 10.0]), 3.0, 0.6)
+    np.testing.assert_array_equal(observed, expected)
+
+
+@pytest.mark.parametrize(
+    ("family", "field", "input_value", "scale", "shape_value"),
+    (
+        ("tanh", "tanh_c", 1e-300, 1e24, float(np.nextafter(0.0, 1.0))),
+        ("tanh", "tanh_c", float(np.nextafter(0.0, 1.0)), 1e38, float(np.nextafter(0.0, 1.0))),
+        ("michaelis_menten", "mm_kappa_mult", 1e308, 1e300, 1e8),
+        ("michaelis_menten", "mm_kappa_mult", 1e308, 1e308, 1e8),
+        ("root", "root_alpha", 1e-300, 1e24, 0.5),
+        ("root", "root_alpha", float(np.nextafter(0.0, 1.0)), 1e38, float(np.nextafter(0.0, 1.0))),
+        ("root", "root_alpha", 1e308, 1e-8, 0.5),
+    ),
+)
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_fixed_input_relative_oracles_preserve_complete_curves(
+    family, field, input_value, scale, shape_value, latent, mode
+):
+    cfg = _cfg(
+        n_treatments=1,
+        nonlinearity="linear",
+        beta_additive_range=(1.0, 1.0),
+        saturation_family_probs=_one_hot(family),
+        saturation_prior_ranges=_ranges(**{field: (shape_value, 2 * shape_value)}),
+        mm_scale_prior="uniform",
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        baseline_floor=None,
+    )
+    g = _graph(1, 1)
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index(family)])
+    data = _oracle_data(cfg, scale)
+    data["treatments"][:] = input_value
+    oracle = build_oracle_model(g, cfg, structural, data, latent=latent)
+    shape = oracle[field].type(name="runtime_shape")
+    contributions = clone_replace(
+        oracle["contributions"], replace={oracle[field]: shape}, rebuild_strict=False
+    )
+    evaluate = pytensor.function([shape], contributions, mode=mode)
+    expected = float(
+        _decimal_unit_response_and_gradients(family, input_value, scale, shape_value)[0]
+    )
+    np.testing.assert_allclose(
+        evaluate(np.array([shape_value])),
+        np.full((cfg.n_time_steps, 1), expected),
+        rtol=2e-12,
+        atol=0.0,
+    )
+
+
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_supported_weighted_mm_oracle_shape_pullback_matches_decimal(latent, mode):
+    cfg = _cfg(
+        n_treatments=1,
+        nonlinearity="linear",
+        beta_additive_range=(1.0, 1.0),
+        saturation_family_probs=_one_hot("michaelis_menten"),
+        saturation_prior_ranges=_ranges(mm_kappa_mult=(1e-315, 2e-315)),
+        mm_scale_prior="uniform",
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        baseline_floor=None,
+    )
+    small = float(np.nextafter(0.0, 1.0))
+    g = _graph(1, 1)
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index("michaelis_menten")])
+    data = _oracle_data(cfg, 1e-8)
+    data["treatments"][:] = 3 * small
+    oracle = build_oracle_model(g, cfg, structural, data, latent=latent)
+    kappa = oracle["mm_kappa_mult"].type(name="runtime_kappa")
+    contributions = clone_replace(
+        oracle["contributions"], replace={oracle["mm_kappa_mult"]: kappa}, rebuild_strict=False
+    )
+    derivative = pytensor.grad(1e-10 * contributions[0, 0], kappa)
+    evaluate = pytensor.function([kappa], [contributions, derivative], mode=mode)
+    expected = _decimal_unit_response_and_gradients(
+        "michaelis_menten", 3 * small, 1e-8, 1.5e-315, 1e-10
+    )
+    response, observed = evaluate(np.array([1.5e-315]))
+    np.testing.assert_array_equal(response, np.full((cfg.n_time_steps, 1), float(expected[0])))
+    assert np.isfinite(observed).all()
+    np.testing.assert_allclose(observed, [float(expected[3])], rtol=2e-12, atol=0.0)
+
+
+@pytest.fixture(scope="module", params=("michaelis_menten", "tanh"))
+def tiny_shape_world(request):
+    family = request.param
+    field = "mm_kappa_mult" if family == "michaelis_menten" else "tanh_c"
+    cfg = _cfg(
+        n_treatments=1,
+        n_time_steps=32,
+        nonlinearity="linear",
+        saturation_family_probs=_one_hot(family),
+        saturation_prior_ranges=_ranges(**{field: (1e-180, 2e-180)}),
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        treatment_onset_inclusion_prob=1.0,
+        treatment_onset_frac_range=(0.125, 0.125),
+        beta_additive_range=(1.0, 1.0),
+        outcome_std_mode="relative",
+        rw_baseline_mean_range=(0.0, 0.0),
+        rw_baseline_std_range=(0.0, 0.0),
+        rw_outcome_std_range=(1.0, 1.0),
+        baseline_floor=None,
+    )
+    g = _graph(1, 1)
+    g["g_zy"][:] = 0
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index(family)])
+    generative, _, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
+    names = ("treatments", "covariates", "outcome", "saturation_scale")
+    drawn = draw_worlds(generative, names, seed=17)
+    data = {name: drawn[name][0] for name in names}
+    np.testing.assert_array_equal(data["treatments"][:4, 0], 0.0)
+    assert np.all(data["treatments"][4:, 0] > 0.0)
+    return family, field, cfg, g, structural, data
+
+
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_tiny_shape_oracle_posterior_gradients_include_onset_zeros(tiny_shape_world, latent, mode):
+    family, field, cfg, g, structural, data = tiny_shape_world
+    oracle = build_oracle_model(g, cfg, structural, data, latent=latent)
+    shape = oracle[field]
+    point = oracle.initial_point()
+    point[oracle.rvs_to_values[shape].name] = np.array([0.0])
+    assert np.isfinite(oracle.compile_logp(mode=mode)(point))
+    actual = oracle.compile_dlogp(vars=[shape], mode=mode)(point)
+
+    # At this interval midpoint the prior/Jacobian derivative is zero. With
+    # fixed beta=1, baseline=0 and outcome sigma=1, the likelihood pullback is
+    # sum((y - f) * df/dshape), followed by the interval derivative (hi-lo)/4.
+    with localcontext() as context:
+        context.prec = 100
+        lo, hi = (Decimal.from_float(value) for value in (1e-180, 2e-180))
+        shape_value = float((lo + hi) / 2)
+        likelihood_gradient = Decimal(0)
+        for x, y in zip(data["treatments"][:, 0], data["outcome"]):
+            response, _, _, derivative = _decimal_unit_response_and_gradients(
+                family, x, data["saturation_scale"][0], shape_value
+            )
+            likelihood_gradient += (Decimal.from_float(float(y)) - response) * derivative
+        expected = float(likelihood_gradient * (hi - lo) / 4)
+    # The marginal factorization's negligible covariance guard changes this
+    # sigma=1 likelihood by ~1e-12, not the mechanism's analytic derivative.
+    np.testing.assert_allclose(actual, [expected], rtol=2e-10, atol=0.0)
+    if family == "tanh":
+        np.testing.assert_array_equal(actual, 0.0)
+    else:
+        assert expected != 0.0
+
+
+def _decimal_logistic_response_and_input_derivative(x, reference, lam):
+    with localcontext() as context:
+        context.prec = 100
+        x, r, lam = (Decimal.from_float(float(value)) for value in (x, reference, lam))
+        e = (-(lam * x / r)).exp()
+        return float((1 - e) / (1 + e)), float(2 * lam * e / (r * (1 + e) ** 2))
+
+
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_stable_logistic_overflowing_input_ratio_matches_decimal(mode):
+    x, r, lam = pt.dvector("x"), pt.dscalar("reference"), pt.dscalar("lambda")
+    response = mechanisms.stable_logistic_kappa_relative(x, r, lam=lam)
+    derivative = pytensor.grad(response.sum(), x)
+    evaluate = pytensor.function([x, r, lam], [response, derivative], mode=mode)
+    inputs = np.array([-1e308, 0.0, 1e308])
+    scale, shape = 1e-8, np.nextafter(0.0, 1.0)
+    expected = np.array(
+        [_decimal_logistic_response_and_input_derivative(value, scale, shape) for value in inputs]
+    ).T
+    values, derivatives = evaluate(inputs, scale, shape)
+    np.testing.assert_allclose(values, expected[0], rtol=32 * _EPS, atol=0.0)
+    np.testing.assert_allclose(derivatives, expected[1], rtol=32 * _EPS, atol=2 * shape)
+
+
+@pytest.mark.parametrize("latent", ("marginal", "sampled"))
+@pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
+def test_logistic_oracle_retains_finite_response_when_input_ratio_overflows(latent, mode):
+    small = np.nextafter(0.0, 1.0)
+    cfg = _cfg(
+        n_treatments=1,
+        nonlinearity="linear",
+        beta_additive_range=(1.0, 1.0),
+        saturation_family_probs=_one_hot("logistic"),
+        saturation_prior_ranges=_ranges(logistic_lam=(small, 2 * small)),
+        baseline_floor=None,
+    )
+    g = _graph(1, 1)
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index("logistic")])
+    data = _oracle_data(cfg, 1e-8)
+    data["treatments"][:] = 1e308
+    oracle = build_oracle_model(g, cfg, structural, data, latent=latent)
+    lam = oracle["logistic_lam"].type(name="lambda_value")
+    contributions = clone_replace(
+        oracle["contributions"], replace={oracle["logistic_lam"]: lam}, rebuild_strict=False
+    )
+    evaluate = pytensor.function([lam], contributions, mode=mode)
+    expected, _ = _decimal_logistic_response_and_input_derivative(1e308, 1e-8, small)
+    np.testing.assert_allclose(
+        evaluate(np.array([small])),
+        np.full((cfg.n_time_steps, 1), expected),
+        rtol=32 * _EPS,
+        atol=0.0,
+    )
+
+
+def test_minimum_positive_logistic_lambda_reference_target_survives_all_shared_paths():
+    lam, multiplier, target = np.nextafter(0.0, 1.0), 1e38, 1e-290
+    cfg = _cfg(
+        n_treatments=1,
+        saturation_prior_ranges=_ranges(logistic_lam=(lam, lam)),
+        saturation_family_probs=_one_hot("logistic"),
+        treatment_reference_contribution_range=(target, target),
+        treatment_reference_multiplier=multiplier,
+    )
+    g = _graph(1, 1)
+    structural = _structure(g, cfg, [SATURATION_FAMILY_KEYS.index("logistic")])
+    names = (
+        "param_beta",
+        "param_logistic_lam",
+        "param_treatment_reference_contribution",
+        "param_treatment_reference_input",
+        "param_treatment_reference_response",
+        "saturation_scale",
+    )
+    model, _, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
+    generated = draw_worlds(model, names, seed=11, draws=2)
+    active = {
+        "active_treatment": np.ones(1),
+        "active_covariate": np.ones(1),
+        "active_latent": np.ones(1),
+    }
+    cell = build_cell_inputs(cfg, g, active, structural)
+    template, _, _ = build_world_model_template(cfg, cell, cfg.n_time_steps)
+    templated = compile_template_draw_fn(template, names)(cell, seed=11, draws=2)
+    for drawn in (generated, templated):
+        np.testing.assert_array_equal(drawn["param_logistic_lam"], lam)
+        np.testing.assert_array_equal(drawn["param_treatment_reference_contribution"], target)
+        np.testing.assert_array_equal(
+            drawn["param_treatment_reference_input"], multiplier * drawn["saturation_scale"]
+        )
+        ratio = drawn["param_treatment_reference_input"] / drawn["saturation_scale"]
+        expected_response = np.tanh((lam * ratio) / 2.0)
+        beta = drawn["param_beta"]
+        assert np.all(np.isfinite(beta) & (beta > 0.0) & (beta <= CORPUS_STORAGE_MAX))
+        np.testing.assert_allclose(
+            drawn["param_treatment_reference_response"],
+            expected_response,
+            rtol=8.0 * _EPS,
+            atol=0.0,
+        )
+        np.testing.assert_allclose(beta, target / expected_response, rtol=8.0 * _EPS, atol=0.0)
+        np.testing.assert_allclose(
+            beta * drawn["param_treatment_reference_response"], target, rtol=8.0 * _EPS, atol=0.0
+        )
+    reference = generated["param_treatment_reference_input"][0]
+    factors = np.tile([0.0, 0.25, 1.0, 2.0], cfg.n_time_steps // 4)
+    data = {
+        "treatments": factors[:, None] * reference,
+        "covariates": np.zeros((cfg.n_time_steps, 1)),
+        "outcome": np.zeros(cfg.n_time_steps),
+        "saturation_scale": generated["saturation_scale"][0],
+    }
+    oracle = build_oracle_model(g, cfg, structural, data)
+    with oracle:
+        beta, contributions = pm.draw(
+            [oracle["beta"], oracle["contributions"]], random_seed=29, mode="FAST_COMPILE"
+        )
+    np.testing.assert_allclose(beta, generated["param_beta"][0], rtol=8.0 * _EPS, atol=0.0)
+    expected = generated["param_beta"][0] * np.tanh(
+        (lam * (data["treatments"] / data["saturation_scale"])) / 2.0
+    )
+    np.testing.assert_allclose(contributions, expected, rtol=16.0 * _EPS, atol=0.0)
+    np.testing.assert_allclose(contributions[2::4, 0], target, rtol=8.0 * _EPS, atol=0.0)
 
 
 @pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
@@ -1675,23 +2385,11 @@ def test_opt_in_corpus_metadata_and_additive_truth_survive_save_load(tmp_path, s
         **options,
     )
     corpus = pg.sample_prior_predictive(cfg)
-    expected_metadata = {
-        "saturation_prior_ranges": {
-            family: {name: list(bounds) for name, bounds in shape.items()}
-            for family, shape in cfg.saturation_prior_ranges.items()
-        },
-        "mm_scale_prior": "log_uniform",
-        "treatment_reference_contribution_range": [0.7, 1.1],
-        "treatment_reference_multiplier": 1.6,
-        "covariate_reference_contribution_range": [-0.4, 0.6],
-        "covariate_reference_scale": 1.75,
-    }
-    assert corpus["diagnostics"]["mechanism_priors"] == expected_metadata
     assert pg.DataGenerator.validate_corpus(corpus) == []
     path = tmp_path / "mechanism-priors.npz"
     pg.save_corpus(corpus, path)
     loaded = pg.load_corpus(path)
-    assert loaded["diagnostics"]["mechanism_priors"] == expected_metadata
+    assert loaded["diagnostics"]["mechanism_priors"] == corpus["diagnostics"]["mechanism_priors"]
     assert pg.DataGenerator.validate_corpus(loaded) == []
     for name, value in corpus.items():
         if isinstance(value, np.ndarray):

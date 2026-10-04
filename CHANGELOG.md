@@ -8,6 +8,57 @@ read the migration notes before upgrading.
 
 ### Added
 
+- **Richer worlds end-to-end (#27).** Ordinary generation, `sample_scm`, and
+  reusable templates support all eight trajectory components and fractional
+  per-input inclusion alongside richer mechanism priors. Template flags are
+  per-cell inputs; padded schedule outputs are zero. Natural-path response
+  evaluation uses the same dynamic families, and dynamic parent sums avoid
+  the Python backend's wide-elementwise operand limit.
+- **Exact SCM replay.** `SCM.primitive_parameters` exposes defensive copies of
+  the accepted primitive prior draw and raw full-horizon innovations.
+  `SCM.replay()` rebuilds and executes the generator at those runtime-bound
+  values, preserving its transform arithmetic even at steep Hill knees.
+  Nested trajectory parameters and schedule-aware equation audits are retained
+  in each sampled world. Fixed-input oracles consume already-scheduled inputs
+  without applying schedules again; their existing latent-mode and burn-in
+  qualifications remain unchanged.
+  Generated descriptions point to primitive-bound replay rather than derived
+  inspection/intervention parameters.
+- **Corpus schema v5 (breaking).** New continuous trajectory leaves and opt-in
+  mechanism shapes, coefficients, reference targets/inputs/responses and exact
+  saturation anchors are float64; integer event metadata is int64. Existing
+  feature/schedule dtypes remain unchanged. Optional blocks declare their field
+  inventories and role-specific jump counts; validation checks domains,
+  zero padding, schedule reconstruction and reference consistency.
+  Reference checks preserve correctly rounded nonzero subnormal coefficients
+  instead of requiring their rounded products to recover targets exactly.
+  `load_corpus` now rejects every pre-v5 or versionless archive with a clear
+  version error, rather than migrating or zero-filling missing truth.
+- **Richer-prior numerical domains.** Rescaled relative-noise norms and final
+  mantissa/exponent products retain representable tiny and subnormal amplitudes
+  without floors or premature rounding. Their analytic pullbacks avoid tiny-scale
+  denominator squares and gradient-product rounding. Bounded logistic evaluation and support
+  bounds preserve subnormal lambda products even when an input/reference ratio
+  overflows. Relative tanh and root responses rescue underflowed/overflowed ratios
+  before bounded/concave evaluation; MM retains representable responses and complete
+  weighted shape derivatives across denominator overflow and subnormal products.
+  Hill and logistic pullbacks combine the incoming cotangent, relative factors
+  and exponential tail before exponentiation, retaining finite complete
+  posterior derivatives without changing the forward curves.
+  Hill's stabilized log-sum denominator is explicit at the declared PyTensor
+  minimum while preserving the locked-runtime forward rounding.
+  Subnormal logistic responses retain the complete half-argument and exact binary
+  midpoint comparisons, preventing double rounding from erasing a response that
+  admitted coefficients can amplify. Outside that smallest-response boundary,
+  the existing `expm1` law and rounding are unchanged.
+  Persisted primitive shapes, seasonal periods/amplitudes, signed trend changes,
+  covariate jump sizes, raw coefficients and reference recipes retain their
+  admitted domains without capping larger derived anchors. Reference
+  validation rejects nonzero target erasure. Default-array stability is not a
+  cross-schema metadata or archive-byte identity promise.
+  Corpus and oracle guides use the current `covariates`, `latent_unobserved`
+  and `outcome` API identifiers.
+
 - **Controllable coverage of active treatment × covariate counts (#26).**
   `SCMPrior.active_count_allocation` keeps independent per-cell draws
   (`"independent"`, the default) or, with `"stratified"`, allocates a corpus's
@@ -55,9 +106,9 @@ read the migration notes before upgrading.
   bump — the block is optional. Stratified allocation seeds its own stream
   with one draw from the corpus RNG and skips the per-cell treatment and
   covariate draws, so at the same seed it changes every later structure draw
-  (documented per #28). With the
-  defaults, same-seed corpora, diagnostics, saved shards, `sample_scm` worlds
-  and template payloads and draws are bit-identical to before;
+  (documented per #28). For #26 in isolation before this end-to-end v5 cutover,
+  default same-seed corpora, diagnostics, saved shards, `sample_scm` worlds and
+  template payloads and draws were bit-identical to before;
   `write_scenario_bundles`' `recipe.json` lists the two new `SCMPrior` fields
   at their defaults.
 - Richer mechanism priors (#25): validated per-family
@@ -69,9 +120,10 @@ read the migration notes before upgrading.
   template, oracle, replay and world audits share these semantics. Optional
   corpus diagnostics preserve the effective prior settings; world and bundle
   descriptions record drawn targets and inputs. Numerical validation rejects
-  overflowing or underflowing derived coefficients (including interior draws
-  of zero-inclusive targets), subnormal or zero reference inputs and
-  responses, zero MM denominators and conditioning widths that float32
+  overflowing or erased nonzero derived coefficients (including interior draws
+  of zero-inclusive targets), nonpositive reference inputs/responses, subnormal
+  treatment reference inputs, nonnormal ideal treatment-response support, zero
+  MM denominators and conditioning widths that float32
   `prior_cond` labels cannot resolve; runtime reference-domain failures raise
   the same named error in single worlds and corpora, never a silent redraw.
   Treatment coefficients use the shared response at the actual reference
@@ -147,20 +199,18 @@ read the migration notes before upgrading.
   an exact prevalence recomputation. It also gains one
   global rule, `treatment_raw >= 0`, which every corpus the generator produced
   before already satisfies, so no existing corpus is newly rejected.
-  **Schema and RNG impact:** no schema-version bump — the block is optional,
-  and v4 corpora without it are unchanged. With every new knob at its default,
-  same-seed corpora, `sample_scm` worlds, bundle data and template draws are
-  bit-identical to before (`write_scenario_bundles`' `recipe.json` lists the new
-  `SCMPrior` fields at their defaults). Fractional inclusion flags draw from
+  **Schema and RNG impact:** the block initially used optional v4 arrays;
+  #27 now adds realised component truth under schema v5 (see above).
+  Default trajectory knobs introduce no schedule priors or per-cell switches.
+  Fractional inclusion flags draw from
   child streams spawned off the corpus RNG and consume none of its state, but a
   cell that wires a component generally reaches different PyMC random streams,
   so its other draws change at the same seed (stream stability on enabling is
   tracked in #28), and corpora of two configs stay aligned only while their
   acceptance counts match.
-  `sample_scm` (and with it single-world extraction, descriptions, bundles,
-  replay and the oracle) rejects every `*_inclusion_prob` away from its default
-  for now, and the experimental template path rejects schedule components and
-  per-input `hf` / `pulse` inclusion (#27).
+  #27 extends this support to `sample_scm`, descriptions, bundles, exact replay,
+  fixed-input oracles and the experimental template, including fractional
+  per-input `hf` / `pulse` inclusion.
 - Compare worlds with each other. `world_descriptors` turns a corpus, a list of
   `SCM` worlds or observed datasets (`ObservedWorlds`) into one row of named,
   mask-aware statistics per world — level-to-variation, CV, zero fraction,
@@ -271,11 +321,9 @@ read the migration notes before upgrading.
   node family. Upstream `pymc_marketing` function names (`geometric_adstock`,
   `weibull_adstock`) are theirs and keep their spelling.
 
-  **Corpus schema is now version 4.** `load_corpus` migrates v1, v2 and v3
-  archives automatically, renaming arrays, diagnostics keys and `prior_cond`
-  columns while leaving contents, dtypes and shapes byte-identical. A corpus
-  that mixes v3 and v4 names is rejected rather than guessed at. Corpora written
-  by this version cannot be read by older releases.
+  These vocabulary changes used corpus schema v4. Current schema v5 rejects
+  older archives because their realised rich-world truth cannot be recovered;
+  the #27 persistence notes above supersede the earlier lossless key migrations.
 
 - **Released stack / Python floor (0.0.2 candidate):** require Python 3.13+ and
   test Python 3.13/3.14 in CI. Replace Git development dependencies with registry

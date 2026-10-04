@@ -30,14 +30,11 @@ import numpy as np
 import pymc as pm
 import pytensor
 import pytest
-from pymc.pytensorf import collect_default_updates
 
 import pymc_generator as pg
-import pymc_generator.world_model as world_model
 from pymc_generator import make_scm_prior
 from pymc_generator.presets import TRAJECTORY_ARCHETYPES, TRAJECTORY_PRESETS
 from pymc_generator.sampler import (
-    _CORPUS_NATURAL_NAMES,
     _CORPUS_TRAJECTORY_NAMES,
     CARRYOVER_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
@@ -67,7 +64,6 @@ from pymc_generator.trajectories import (
     treatment_multiplier_column,
 )
 from pymc_generator.world_model import build_world_model, draw_worlds, sample_structure
-from pymc_generator.world_model_template import check_template_supported
 
 # -- shared helpers -------------------------------------------------------------
 
@@ -121,65 +117,12 @@ _SHORT_GATES: dict[str, Any] = {
 _SCHEDULE_COLUMNS = [TRAJECTORY_COMPONENTS.index(c) for c in SCHEDULE_COMPONENTS]
 
 
-def _generate(cfg: SCMPrior) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """``sample_prior_predictive`` plus the draw-name tuple its corpus loop requested."""
-    requested: set[tuple[str, ...]] = set()
-    real_draw_worlds = world_model.draw_worlds
-
-    def recording(model, out_names, *args, **kwargs):
-        requested.add(tuple(out_names))
-        return real_draw_worlds(model, out_names, *args, **kwargs)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(world_model, "draw_worlds", recording)
-        corpus = pg.sample_prior_predictive(cfg)
-    assert len(requested) == 1, f"cells requested different outputs: {requested}"
-    return corpus, requested.pop()
-
-
 def _on_run(duty: float, period: int) -> int:
     """Flighting on-run restated: round half up, at least 1, at most ``period - 1``."""
     return min(max(math.floor(duty * period + 0.5), 1), period - 1)
 
 
 # -- 1. seed contract -----------------------------------------------------------
-
-#: Ordered RNG owners of the hand-built probe cell below, recorded on the base
-#: commit (before issue #24) with the default config and the legacy draw names.
-_BASE_RNG_OWNERS = (
-    "eps_y",
-    "beta",
-    "rw_y_std_rel",
-    "hill_slope",
-    "weibull_lam",
-    "weibull_k",
-    "pulse_prob",
-    "eps_c_pulse",
-    "rw_c_mean",
-    "pulse_amp",
-    "eps_c_hf",
-    "hf_sigma",
-    "rw_c_std",
-    "eps_c",
-    "covariate_pulse_prob",
-    "eps_z_pulse",
-    "rw_z_std",
-    "covariate_pulse_amp",
-    "eps_z_hf",
-    "covariate_hf_sigma",
-    "rw_z_mean",
-    "eps_z",
-    "v_zc",
-    "alpha_cc",
-    "hill_kappa_mult",
-    "rho_zy",
-    "eps_d",
-    "delta_dy",
-    "rw_b_mean",
-    "rw_b_std_rel",
-    "eps_b",
-    "carryover_alpha",
-)
 
 _PROBE = {"n_treatments": 2, "n_covariates": 1, "n_latent": 1, "n_time_steps": 16}
 
@@ -209,64 +152,19 @@ def _probe_cell() -> dict[str, np.ndarray]:
     }
 
 
-def _rng_owners(cfg: SCMPrior, names: tuple[str, ...]) -> tuple[str, ...]:
-    """RV names in the order PyTensor reseeds them when ``names`` are drawn."""
-    g = _probe_cell()
-    structural = sample_structure(g, cfg, np.random.default_rng(0))
-    schedule_keys = [structural_key(x, c) for x in TRAJECTORY_INPUTS for c in SCHEDULE_COMPONENTS]
-    assert not any(structural.get(key, np.zeros(0, dtype=bool)).any() for key in schedule_keys)
-    structural["carryover_family"][:] = 2
-    structural["sat_family"][:] = 1
-    model, _, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)
-    with model:
-        outputs = [model[name] for name in names]
-    updates = collect_default_updates(inputs=[], outputs=outputs)
-    return tuple(update.owner.outputs[1].name for update in updates.values())
-
-
 @pytest.fixture(scope="module")
 def default_corpus():
-    return _generate(make_scm_prior(**_TWIN))
+    return pg.sample_prior_predictive(make_scm_prior(**_TWIN))
 
 
 @pytest.fixture(scope="module")
 def shock_twins():
     """Shocks only, and shocks plus every schedule component at probability ~0."""
-    base = _generate(make_scm_prior(**_TWIN, n_treatment_shocks=1))
-    inert = _generate(
+    base = pg.sample_prior_predictive(make_scm_prior(**_TWIN, n_treatment_shocks=1))
+    inert = pg.sample_prior_predictive(
         make_scm_prior(**_TWIN, n_treatment_shocks=1, **_schedule_probs(1e-9), **_SHORT_GATES)
     )
     return base, inert
-
-
-def test_rng_owner_order_is_the_base_order_whenever_nothing_is_wired(
-    default_corpus, composable_corpus, shock_twins
-):
-    """The draw-name slot rule keeps every seeded stream where the base put it.
-
-    The names are the tuples the corpus loop actually requested. Without shocks
-    the trajectory and natural names lead; with shocks the natural pair takes the
-    unshocked pair's trailing slot. In a cell where no input carries a schedule
-    component, either way must traverse the RNGs exactly as the base did.
-    """
-    _, legacy_names = default_corpus
-    _, _, schedule_names = composable_corpus
-    (_, shock_names), (_, shock_schedule_names) = shock_twins
-    trajectory_outputs = set(_CORPUS_TRAJECTORY_NAMES + _CORPUS_NATURAL_NAMES)
-    assert not trajectory_outputs & set(legacy_names + shock_names)
-    assert trajectory_outputs <= set(schedule_names)
-    assert trajectory_outputs <= set(shock_schedule_names)
-
-    inert = {**_schedule_probs(1e-9), **_SHORT_GATES}
-    assert _rng_owners(make_scm_prior(**_PROBE), legacy_names) == _BASE_RNG_OWNERS
-    assert _rng_owners(make_scm_prior(**_PROBE, **inert), schedule_names) == _BASE_RNG_OWNERS
-
-    shocked = _rng_owners(make_scm_prior(**_PROBE, n_treatment_shocks=1), shock_names)
-    assert shocked != _BASE_RNG_OWNERS  # the shock schedule draws its own streams
-    assert (
-        _rng_owners(make_scm_prior(**_PROBE, n_treatment_shocks=1, **inert), shock_schedule_names)
-        == shocked
-    )
 
 
 _LEGACY_STRUCTURE_KEYS = {
@@ -462,20 +360,14 @@ def test_zero_texture_inclusion_reproduces_the_zero_range_corpus():
 
 
 def test_default_corpus_carries_no_trajectory_block(default_corpus, shock_twins):
-    for corpus, _ in (default_corpus, shock_twins[0]):
+    for corpus in (default_corpus, shock_twins[0]):
         assert not set(TRAJECTORY_ARRAY_FIELDS) & set(corpus)
         assert "trajectory" not in corpus["diagnostics"]
 
 
 def test_unwired_schedules_reproduce_the_shocks_only_corpus(shock_twins):
-    """Every schedule component enabled at ~0 probability wires nothing and moves nothing.
-
-    The realism filter then sees the natural pair as an alias of the unshocked
-    pair and no CV alternative, so even its rejections must coincide.
-    """
-    (base, _), (inert, inert_names) = shock_twins
-    assert base["diagnostics"]["rejection_rate"] > 0.0
-    assert set(_CORPUS_TRAJECTORY_NAMES) <= set(inert_names)  # the scheduled loop ran
+    """Unselected schedules leave seeded series and realism filtering unchanged."""
+    base, inert = shock_twins
     assert not inert["treatment_components"][..., _SCHEDULE_COLUMNS].any()
     assert not inert["covariate_components"][..., _SCHEDULE_COLUMNS].any()
 
@@ -1529,8 +1421,7 @@ _TRUNCATED_N = 3
 def composable_corpus():
     """Every component at a fractional probability, with padded input slots."""
     cfg = make_scm_prior(**_COMPOSABLE)
-    corpus, names = _generate(cfg)
-    return cfg, corpus, names
+    return cfg, pg.sample_prior_predictive(cfg)
 
 
 @pytest.fixture(scope="module")
@@ -1555,7 +1446,7 @@ def _prevalence(corpus: dict) -> tuple[dict, dict]:
 
 
 def test_prevalence_counts_active_input_slots_only(composable_corpus):
-    _, corpus, _ = composable_corpus
+    _, corpus = composable_corpus
     for x in TRAJECTORY_INPUTS:
         active = corpus[f"{x}_active_mask"] == 1
         assert (~active).any(), f"the fixture needs padded {x} slots"
@@ -1585,7 +1476,7 @@ def _expected_inclusion(cfg: SCMPrior) -> dict[str, dict[str, float]]:
 
 def test_trajectory_diagnostics_echo_effective_probabilities_as_plain_numbers(composable_corpus):
     """Key order is not pinned here; same-seed byte identity covers its determinism."""
-    cfg, corpus, _ = composable_corpus
+    cfg, corpus = composable_corpus
     block = corpus["diagnostics"]["trajectory"]
     # The layout list names the stored component axis.
     assert block["components"] == list(TRAJECTORY_COMPONENTS)
@@ -1623,7 +1514,7 @@ def test_raw_prior_echoes_effective_texture_inclusion():
 def test_truncation_recomputes_prevalence_from_the_retained_rows(
     composable_corpus, truncated_twins
 ):
-    _, full, _ = composable_corpus
+    _, full = composable_corpus
     truncated = truncated_twins[0]
     assert truncated["treatment_raw"].shape[0] == _TRUNCATED_N
     full_block, block = full["diagnostics"]["trajectory"], truncated["diagnostics"]["trajectory"]
@@ -1635,7 +1526,7 @@ def test_truncation_recomputes_prevalence_from_the_retained_rows(
 
 
 def test_trajectory_block_round_trips_through_save_and_load(tmp_path, composable_corpus):
-    _, corpus, _ = composable_corpus
+    _, corpus = composable_corpus
     path = tmp_path / "composable.npz"
     pg.save_corpus(corpus, path)
     loaded = pg.load_corpus(path)
@@ -1656,7 +1547,7 @@ def test_same_seed_shards_with_the_trajectory_block_are_byte_identical(tmp_path,
 
 
 def test_every_gated_input_keeps_two_on_weeks_in_its_support_window(composable_corpus):
-    _, corpus, _ = composable_corpus
+    _, corpus = composable_corpus
     gates = [TRAJECTORY_COMPONENTS.index(c) for c in GATE_COMPONENTS]
     support = corpus["support_mask"] == 1
     checked = 0
@@ -1671,7 +1562,7 @@ def test_every_gated_input_keeps_two_on_weeks_in_its_support_window(composable_c
 
 
 def test_level_components_leave_a_stored_shift_on_exactly_their_inputs(composable_corpus):
-    _, corpus, _ = composable_corpus
+    _, corpus = composable_corpus
     levels = [TRAJECTORY_COMPONENTS.index(c) for c in LEVEL_COMPONENTS]
     for x, shift_key in (
         ("treatment", "treatment_log_level_shift"),
@@ -1686,7 +1577,7 @@ def test_level_components_leave_a_stored_shift_on_exactly_their_inputs(composabl
 
 def test_onset_flag_closes_week_zero_for_inputs_without_flighting(composable_corpus):
     """A carried onset always delays by >= 1 week; offsets stop late, so week 0 reads the onset."""
-    _, corpus, _ = composable_corpus
+    _, corpus = composable_corpus
     onset = TRAJECTORY_COMPONENTS.index("onset")
     flighting = TRAJECTORY_COMPONENTS.index("flighting")
     seen = set()
@@ -1720,13 +1611,11 @@ _METADATA_ONLY: dict[str, Any] = {
 @pytest.fixture(scope="module")
 def metadata_corpus():
     """Fractional texture inclusion and no schedule component, with padded input slots."""
-    return _generate(make_scm_prior(**_METADATA_ONLY))
+    return pg.sample_prior_predictive(make_scm_prior(**_METADATA_ONLY))
 
 
 def test_metadata_only_block_keeps_active_inputs_on_and_unshifted(metadata_corpus):
-    corpus, names = metadata_corpus
-    # No schedule component: the cells draw exactly the legacy outputs.
-    assert not set(_CORPUS_TRAJECTORY_NAMES + _CORPUS_NATURAL_NAMES) & set(names)
+    corpus = metadata_corpus
     for x, shift_key, varied in (
         ("treatment", "treatment_log_level_shift", "hf"),
         ("covariate", "covariate_level_shift", "pulse"),
@@ -1747,11 +1636,11 @@ def test_metadata_only_block_keeps_active_inputs_on_and_unshifted(metadata_corpu
 
 #: Every corpus a module fixture generates, as a list of corpora.
 _FIXTURE_CORPORA = {
-    "default": lambda request: [request.getfixturevalue("default_corpus")[0]],
-    "shock_twins": lambda request: [arm[0] for arm in request.getfixturevalue("shock_twins")],
+    "default": lambda request: [request.getfixturevalue("default_corpus")],
+    "shock_twins": lambda request: request.getfixturevalue("shock_twins"),
     "composable": lambda request: [request.getfixturevalue("composable_corpus")[1]],
     "truncated": lambda request: request.getfixturevalue("truncated_twins"),
-    "metadata_only": lambda request: [request.getfixturevalue("metadata_corpus")[0]],
+    "metadata_only": lambda request: [request.getfixturevalue("metadata_corpus")],
 }
 
 
@@ -2329,46 +2218,6 @@ def test_min_on_weeks_matches_phase_enumeration():
                         p_hi,
                         duty,
                     )
-
-
-def _template_cfg(**overrides):
-    return make_scm_prior(n_treatments=3, n_covariates=2, n_latent=2, n_time_steps=32, **overrides)
-
-
-@pytest.mark.parametrize(
-    "overrides, match",
-    (
-        ({"treatment_trend_inclusion_prob": 0.2}, "composable trajectory components"),
-        ({"covariate_onset_inclusion_prob": 1.0}, "composable trajectory components"),
-        ({"treatment_hf_inclusion_prob": 0.5}, "all-or-none texture"),
-        # A live range with inclusion 0 is per-input texture the template cannot express.
-        ({"covariate_pulse_inclusion_prob": 0.0}, "all-or-none texture"),
-    ),
-)
-def test_template_rejects_trajectory_structure(overrides, match):
-    with pytest.raises(ValueError, match=match):
-        check_template_supported(_template_cfg(**overrides))
-
-
-def test_template_accepts_zero_inclusion_for_a_disabled_texture_term():
-    check_template_supported(_template_cfg())
-    check_template_supported(
-        _template_cfg(treatment_hf_inclusion_prob=0.0, treatment_hf_sigma_range=(0.0, 0.0))
-    )
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    (
-        {"treatment_seasonal_inclusion_prob": 1.0},
-        {"covariate_hf_inclusion_prob": 0.5},
-        {"treatment_pulse_inclusion_prob": 0.0, "treatment_pulse_prob_range": (0.0, 0.0)},
-    ),
-)
-def test_sample_scm_rejects_every_trajectory_knob(overrides):
-    cfg = make_scm_prior(**{**_PROBE, "n_time_steps": 32}, **overrides)
-    with pytest.raises(ValueError, match="sample_scm does not support composable trajectory"):
-        pg.sample_scm(cfg, seed=1)
 
 
 @pytest.mark.parametrize(
