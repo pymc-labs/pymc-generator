@@ -32,6 +32,17 @@ def test_active_conda_recipes_declare_nutpie_runtime_dependency(recipe_path: Pat
     assert "nutpie" in _recipe_runtime_requirements(recipe_path)
 
 
+def test_nutpie_policy_keeps_public_dependency_unpinned_and_lock_exact():
+    with PYPROJECT.open("rb") as pyproject:
+        dependencies = tomllib.load(pyproject)["project"]["dependencies"]
+    nutpie = next(Requirement(item) for item in dependencies if Requirement(item).name == "nutpie")
+    assert not nutpie.specifier
+    lock = PYPROJECT.with_name("uv.lock").read_text()
+    package_start = lock.index('name = "nutpie"')
+    package_end = lock.index("[[package]]", package_start + 1)
+    assert 'version = "0.16.11"' in lock[package_start:package_end]
+
+
 def test_conda_recipe_contract_keeps_native_and_submission_roles_distinct():
     native = RECIPE.read_text()
     conda_forge = CONDA_FORGE_RECIPE.read_text()

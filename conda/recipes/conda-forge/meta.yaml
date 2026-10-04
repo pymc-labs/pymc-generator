@@ -47,7 +47,9 @@ requirements:
   run:
     # Mirrors pyproject.toml. Transitive packages (arviz, numba, pydantic,
     # scikit-learn, preliz, pymc-extras) are resolved through pymc and
-    # pymc-marketing and are deliberately not re-declared.
+    # pymc-marketing and are deliberately not re-declared. The frozen
+    # seven-world Oracle harness separately requires Nutpie 0.16.11; this is
+    # a publication-environment contract, not a package run pin.
     - python >={{ python_min }}
     - numpy
     - scipy

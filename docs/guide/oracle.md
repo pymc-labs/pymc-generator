@@ -55,7 +55,8 @@ The five original public objects are:
 - `OracleSamplingResult`: the pair `result.idata` and `result.receipt`.
   `result.idata` is the unmodified PyMC 6 `xarray.DataTree`.
 - `sample_oracle(world, config=None, *, criteria=None, world_identity=None,
-  source_identity=None, configuration_identity=None)`: a one-shot convenience
+  source_identity=None, configuration_identity=None, observed_indices=None)`:
+  a one-shot convenience
   wrapper. It builds through `world.oracle_model(latent=config.latent)`, samples
   once, and returns an `OracleSamplingResult`; it does not cache compilation.
 - `build_oracle_template(world, *, latent="marginal", observed_indices=None)`:
@@ -68,6 +69,44 @@ The five original public objects are:
   fresh data view with `with_data`; values are never copied into the receipt.
   Topology, rank, or unsupported-shape changes fail closed with a signature or
   shape error. A compiled owner is process-local and serialized for safe use.
+
+#### `observed_indices` and reported-row coordinates
+
+`SCM.oracle_model`, `build_oracle_template`, and `CompiledOracle.fit` accept
+`observed_indices` as a one-dimensional sequence of unique non-negative integer
+positions, or as a boolean mask. The mask length is the number of **reported
+rows**; an integer selector must be in `[0, reported_rows)`. In
+`SCM.oracle_model`, `sample_oracle`, and `build_oracle_template`, omitting
+`observed_indices` defaults to all reported rows. In contrast,
+`CompiledOracle.fit` reuses the selector bound to the compiled template when
+`observed_indices` is omitted. For example, `observed_indices=[0, 2, 5]`
+selects the first, third, and sixth reported rows, in that order.
+
+Reported-row coordinates are positions in the caller-supplied reported
+window, not absolute latent-horizon indices and not MCMC tuning draws. Let
+`warmup` be the model-history response prefix discarded by the Oracle, and let
+`burn_in` be the generator's carryover history used to extend the latent
+horizon. Then `observed_indices=i` selects caller-supplied row
+`warmup + i`; in particular, selector row `0` maps to caller row `warmup`.
+The corresponding row in the internally extended latent horizon is
+`burn_in + warmup + i`, so selector row `0` maps to latent-horizon row
+`burn_in + warmup`. (`burn_in` is zero when the horizon is not internally
+extended.) This offset is separate from sampler tuning/warmup controlled by
+`config.tune`.
+
+The oracle builds the full-horizon graph. The selector is placed in
+`observed_indices_data` and the likelihood reads the selected reported outcome
+rows, while full-window deterministic outputs retain their full reported-window
+shape. A selected subset must contain at least one row. A reusable compiled
+Oracle may change selector values between fits only without changing the
+selected-row count; topology, rank, shape, duplicate, and out-of-range changes
+fail closed. Selector order is meaningful. Compiled receipts include selector
+identity separately from the bound `observed_indices_data` payload identity.
+The one-shot `sample_oracle` receipt currently does not record selector
+identity; record the selector itself (and this reported-row coordinate
+convention) in any external comparison ledger rather than inferring it from a
+one-shot receipt or reinterpreting it as a context/query mask over raw
+full-horizon arrays.
 
 #### Reusable data/configuration contract
 
@@ -101,6 +140,22 @@ The receipt records schema and package/environment versions, caller identities,
 the oracle builder and latent mode, requested/effective sampling metadata,
 elapsed timing, posterior presence (without posterior contents), diagnostics,
 health, and limitation codes. `to_json()` uses canonical JSON without NaN values.
+
+#### Nutpie version policy
+
+Ordinary `pymc-generator` package and Conda installs intentionally declare
+`nutpie` without an exact version pin. This is the supported compatibility
+contract for the public API: the installed PyMC/Nutpie stack is reported in
+each receipt, and unsupported behavior must not be inferred from a requested
+sampler. The reproducibility lock (`uv.lock`) currently resolves Nutpie to
+`0.16.11`.
+
+The frozen seven-world cohort harness is a narrower publication contract. An
+`OracleRunSpec` for that cohort fails closed unless Nutpie is exactly `0.16.11`
+and the compiled backend is Numba. This exact check is for matched historical
+comparison and repeatability evidence; it does not turn `0.16.11` into the
+runtime dependency pin for ordinary package or Conda installs. Use the lockfile
+(or an equivalent explicit environment export) when reproducing that cohort.
 
 For example, an experiment can explicitly override the maintained sampler
 request with `pg.OracleSamplingConfig(nuts_sampler="pymc")`; the default remains
@@ -187,6 +242,37 @@ effective backend, step, mass matrix, or effective adaptation behavior.
 There are no undocumented backend fallbacks, retries, or successful results after
 an exception.
 
+### Matched seven-world validation
+
+A matched validation compares the maintained Generator API with the recovered
+historical or ad-hoc reference under the same seven case identities, world
+sources, reported-row selectors, `sampled` latent mode, `1000/900/5/5`,
+`target_accept=0.95`, `draw_diag`, `random_seed=world_seed + 2`, Nutpie
+`0.16.11`, and Numba. It must compare posterior and sample-stat numerical
+hashes plus compact receipt fields; container bytes and posterior artifacts are
+not validation criteria.
+
+Generator owns `SCM.oracle_model()`, the maintained sampling API, and the
+compact receipts. PFN owns selecting evaluation worlds, supplying the historical
+reference, running this comparison at scale, and storing the owner-only
+validation evidence/report. The available PFN `scripts/modal/oracle_launcher.py`
+is **not** a seven-world maintained-versus-historical comparison driver: it
+dispatches the 700-world archive and requires an `--evidence-dir` argument.
+This repository has no tracked maintained-versus-historical seven-world
+comparison mode or report. Therefore this branch makes no historical parity
+claim, and a generic one-world smoke fit, the maintained API's `run_pair`
+runs, or the 700-world launcher is not a substitute.
+
+That validation is blocked until PFN supplies all of the following external
+prerequisites: (1) a tracked PFN seven-world maintained-versus-historical
+comparison mode and its report schema, (2) the canonical seven-world world
+archive and the recoverable historical producer/reference for those same case
+identities, (3) a clean checkout or exact commit of this Generator branch,
+(4) an explicitly exported matched environment with Nutpie `0.16.11` and the
+Numba backend, and (5) an owner-controlled writable `--evidence-dir` for
+posterior/sample-stat hashes, receipts, ledgers, and the comparison report.
+Those PFN-owned inputs and generated evidence must remain outside this
+repository; no PFN code or artifacts are added here.
 ### Receipt limits
 
 The receipt contains no posterior draws, posterior values, coordinates, model
