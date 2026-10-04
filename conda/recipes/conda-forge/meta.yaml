@@ -1,9 +1,9 @@
 # conda-forge submission recipe.
 #
-# This is NOT the recipe used by `scripts/build_conda.py`. That one lives in
-# `conda/recipes/pymc-generator/meta.yaml`, builds the local channel from a
-# freshly verified source archive, and takes its version and checksum from the
-# environment.
+# The `scripts/build_conda.py` build uses
+# `conda/recipes/pymc-generator/meta.yaml`. That recipe builds the local channel
+# from a freshly verified source archive and takes its version and checksum from
+# the environment.
 #
 # This file is the copy that goes to conda-forge/staged-recipes as
 # `recipes/pymc-generator/meta.yaml`. It can only be submitted once the matching
@@ -47,9 +47,8 @@ requirements:
   run:
     # Mirrors pyproject.toml. Transitive packages (arviz, numba, pydantic,
     # scikit-learn, preliz, pymc-extras) are resolved through pymc and
-    # pymc-marketing and are deliberately not re-declared. The frozen
-    # seven-world Oracle harness separately requires Nutpie 0.16.11; this is
-    # a publication-environment contract, not a package run pin.
+    # pymc-marketing and are deliberately not re-declared. The package runtime
+    # requirement remains the unpinned `nutpie` entry below.
     - python >={{ python_min }}
     - numpy
     - scipy

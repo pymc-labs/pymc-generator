@@ -17,9 +17,7 @@ because of missing upstream gradients.
 
 The maintained public objects include the sampling types below and the explicit
 reusable lifecycle `OracleTemplate`, `CompiledOracle`, `build_oracle_template`,
-and `compile_oracle`.
-
-The five original public objects are:
+and `compile_oracle`:
 
 - `OracleSamplingConfig`: frozen sampling options. The forward-looking
   maintained API defaults are `draws=800`, `tune=500`, `chains=4`, `cores=4`,
@@ -36,15 +34,6 @@ The five original public objects are:
   rather than silently ignored. These defaults are not retrospective provenance
   for any earlier experiment.
 
-  In particular, the historical fixed-configuration 700-world PFN Oracle
-  experiment did not use this maintained API/default set. A matched forward
-  request is explicit, for example
-  `pg.OracleSamplingConfig(draws=1000, tune=900, chains=5, cores=5,
-  target_accept=0.95, nuts_sampler="nutpie", adaptation="draw_diag")`.
-  That records a request only; it does not establish the historical effective
-  backend, mass matrix, or adaptation behavior. Its separately recorded
-  selected records used `draws=1000`, `tune=900`, `chains=5`, `cores=5`,
-  `target_accept=0.95`, `draw_diag`, and no retained warmup.
 - `OracleHealthCriteria`: thresholds and whether each diagnostic is required.
   Its defaults are zero divergences, maximum rank R-hat `1.01`, minimum bulk
   and tail ESS `400` (all required), maximum tree-depth saturation `0` and
@@ -150,13 +139,6 @@ each receipt, and unsupported behavior must not be inferred from a requested
 sampler. The reproducibility lock (`uv.lock`) currently resolves Nutpie to
 `0.16.11`.
 
-The frozen seven-world cohort harness is a narrower publication contract. An
-`OracleRunSpec` for that cohort fails closed unless Nutpie is exactly `0.16.11`
-and the compiled backend is Numba. This exact check is for matched historical
-comparison and repeatability evidence; it does not turn `0.16.11` into the
-runtime dependency pin for ordinary package or Conda installs. Use the lockfile
-(or an equivalent explicit environment export) when reproducing that cohort.
-
 For example, an experiment can explicitly override the maintained sampler
 request with `pg.OracleSamplingConfig(nuts_sampler="pymc")`; the default remains
 `"nutpie"`. For repeated compatible fits, prefer the explicit lifecycle:
@@ -242,37 +224,6 @@ effective backend, step, mass matrix, or effective adaptation behavior.
 There are no undocumented backend fallbacks, retries, or successful results after
 an exception.
 
-### Matched seven-world validation
-
-A matched validation compares the maintained Generator API with the recovered
-historical or ad-hoc reference under the same seven case identities, world
-sources, reported-row selectors, `sampled` latent mode, `1000/900/5/5`,
-`target_accept=0.95`, `draw_diag`, `random_seed=world_seed + 2`, Nutpie
-`0.16.11`, and Numba. It must compare posterior and sample-stat numerical
-hashes plus compact receipt fields; container bytes and posterior artifacts are
-not validation criteria.
-
-Generator owns `SCM.oracle_model()`, the maintained sampling API, and the
-compact receipts. PFN owns selecting evaluation worlds, supplying the historical
-reference, running this comparison at scale, and storing the owner-only
-validation evidence/report. The available PFN `scripts/modal/oracle_launcher.py`
-is **not** a seven-world maintained-versus-historical comparison driver: it
-dispatches the 700-world archive and requires an `--evidence-dir` argument.
-This repository has no tracked maintained-versus-historical seven-world
-comparison mode or report. Therefore this branch makes no historical parity
-claim, and a generic one-world smoke fit, the maintained API's `run_pair`
-runs, or the 700-world launcher is not a substitute.
-
-That validation is blocked until PFN supplies all of the following external
-prerequisites: (1) a tracked PFN seven-world maintained-versus-historical
-comparison mode and its report schema, (2) the canonical seven-world world
-archive and the recoverable historical producer/reference for those same case
-identities, (3) a clean checkout or exact commit of this Generator branch,
-(4) an explicitly exported matched environment with Nutpie `0.16.11` and the
-Numba backend, and (5) an owner-controlled writable `--evidence-dir` for
-posterior/sample-stat hashes, receipts, ledgers, and the comparison report.
-Those PFN-owned inputs and generated evidence must remain outside this
-repository; no PFN code or artifacts are added here.
 ### Receipt limits
 
 The receipt contains no posterior draws, posterior values, coordinates, model
@@ -321,12 +272,6 @@ truth = world.data["contributions_observed"]
 covered = (bands.sel(quantile=0.05) <= truth) & (truth <= bands.sel(quantile=0.95))
 print("90% band coverage:", float(covered.mean()))
 ```
-
-Compare the oracle's `contributions` against the world's
-**`contributions_observed`** (the response evaluated on the observed treatment) —
-that is the quantity an MMM fit on observables estimates. The do()-style
-`contributions` truth additionally removes upstream influence from treatment.
-Recovering that causal target requires assumptions beyond an observational fit.
 
 ### Two latent representations
 

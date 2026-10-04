@@ -21,7 +21,6 @@ import pytest
 import xarray as xr
 
 import pymc_generator as pg
-import pymc_generator.oracle_harness as harness
 import pymc_generator.oracle_sampling as oracle
 import pymc_generator.world_model as world_model
 
@@ -1022,32 +1021,6 @@ def test_generated_compiled_receipt_binds_canonical_78_observed_indices(monkeypa
     assert identities["data"]["observed_indices_data"] == expected_data
     assert identities["observed_indices"] != identities["data"]["observed_indices_data"]
 
-    world_spec = harness.OracleWorldSpec(
-        "constant_intercept",
-        "w0000",
-        "fixture:constant_intercept",
-        3,
-        tuple(int(index) for index in canonical),
-        source_identity=source_identity,
-    )
-    validation_spec = SimpleNamespace(
-        package_identity={"version": receipt["package_version"]},
-        environment_identity={"python": receipt["environment"]["python"]},
-        nutpie_version=receipt["environment"]["nutpie"],
-    )
-    compile_identity = identities["compile"]
-    assert (
-        harness._validate_receipt(
-            result.receipt,
-            spec=validation_spec,
-            world_spec=world_spec,
-            config=config,
-            template_signature=template.signature,
-            compile_identity=compile_identity,
-        )
-        is result.receipt
-    )
-
     assert len(fake.payloads) == 1
     with pytest.raises(ValueError, match="out-of-range"):
         compiled.fit(world, config, observed_indices=np.append(canonical[:-1], 78))
@@ -1061,15 +1034,7 @@ def test_generated_compiled_receipt_binds_canonical_78_observed_indices(monkeypa
         reordered_identities["data"]["observed_indices_data"]
         != identities["data"]["observed_indices_data"]
     )
-    with pytest.raises(ValueError, match="selector identity"):
-        harness._validate_receipt(
-            result.receipt,
-            spec=validation_spec,
-            world_spec=replace(world_spec, observed_indices=tuple(int(i) for i in reordered)),
-            config=config,
-            template_signature=template.signature,
-            compile_identity=compile_identity,
-        )
+    assert reordered_identities["observed_indices"]["shape"] == [78]
 
 
 def test_compiled_fit_reuses_one_connected_graph_without_stale_data():
