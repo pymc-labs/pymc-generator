@@ -2051,3 +2051,171 @@ def test_c2_compact_summary_rejects_wrong_settings_and_malformed_rows(tmp_path):
     broken.write_text("schema_version,row_type\nwrong,metadata\n", encoding="utf-8")
     with pytest.raises(ValueError, match="header/schema"):
         runner.validate_compact_summary(broken)
+
+
+def _write_compact_mutation(source, destination, mutate):
+    import csv
+
+    with open(source, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        fields = list(reader.fieldnames or [])
+    mutate(rows)
+    with open(destination, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+@pytest.mark.parametrize(
+    "name,mutate",
+    [
+        (
+            "invented metric",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                metric="invented"
+            ),
+        ),
+        (
+            "wrong view",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(view="unknown"),
+        ),
+        (
+            "wrong estimand",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                estimand="pooled"
+            ),
+        ),
+        (
+            "wrong status",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                status="unavailable"
+            ),
+        ),
+        (
+            "wrong n_cells",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(n_cells="31"),
+        ),
+        (
+            "wrong config",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                config_name="other"
+            ),
+        ),
+        (
+            "wrong seed",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(seed="7"),
+        ),
+        (
+            "fabricated Wilson",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(ci_upper="1.0"),
+        ),
+        (
+            "wrong occupancy band",
+            lambda rows: next(r for r in rows if r["row_type"] == "occupancy").update(
+                control_band="[9,10]"
+            ),
+        ),
+        (
+            "wrong occupancy total",
+            lambda rows: next(r for r in rows if r["row_type"] == "occupancy").update(n_cells="2"),
+        ),
+        (
+            "zero cell available",
+            lambda rows: next(
+                r for r in rows if r["row_type"] == "occupancy" and r["n_cells"] == "0"
+            ).update(status="available"),
+        ),
+        (
+            "nonzero cell unavailable",
+            lambda rows: next(
+                r for r in rows if r["row_type"] == "occupancy" and r["n_cells"] != "0"
+            ).update(status="unavailable"),
+        ),
+    ],
+)
+def test_c2_compact_summary_rejects_each_publication_matrix_mutation(tmp_path, name, mutate):
+    from scripts import linear_recovery_prevalence as runner
+
+    mutated = tmp_path / f"{name.replace(' ', '-')}.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, mutate)
+    with pytest.raises(ValueError):
+        runner.validate_compact_summary(mutated)
+
+
+def test_c2_compact_summary_rejects_duplicate_and_missing_matrix_keys(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    def duplicate(rows):
+        metrics = [r for r in rows if r["row_type"] == "metric"]
+        metrics[1]["metric"] = metrics[0]["metric"]
+
+    mutated = tmp_path / "duplicate.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, duplicate)
+    with pytest.raises(ValueError):
+        runner.validate_compact_summary(mutated)
+
+
+def test_c2_compact_export_binds_supplied_source_bytes(tmp_path):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    prefix = Path(
+        "/home/teemu/pymc-labs/prior-generator-artifacts/issue-30-c2/linear-recovery-c2-b2a7fb98d69cc8ed"
+    )
+    report_path = Path(f"{prefix}.json")
+    manifest_path = Path(f"{prefix}.manifest.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    paths = {
+        "report": report_path,
+        "checkpoint": Path(report["checkpoint_path"]),
+        "manifest": manifest_path,
+        "run_log": manifest_path.with_name("pilot-run.log"),
+    }
+    metadata = runner.export_compact_summary(
+        report, manifest, tmp_path / "valid.csv", artifact_paths=paths
+    )
+    assert metadata["artifact_sha256"] == runner.COMPACT_ARTIFACT_SHA256
+
+    modified_report_path = tmp_path / "modified-report.json"
+    modified_report_path.write_bytes(report_path.read_bytes() + b"\\n")
+    modified_report = dict(report, report_path=str(modified_report_path))
+    with pytest.raises(ValueError, match="artifact bytes"):
+        runner.export_compact_summary(
+            modified_report,
+            manifest,
+            tmp_path / "modified.csv",
+            artifact_paths={**paths, "report": modified_report_path},
+        )
+
+    alternate_manifest = tmp_path / "alternate.manifest.json"
+    changed = dict(manifest)
+    changed["source_provenance"] = dict(changed["source_provenance"], source_commit="bogus")
+    alternate_manifest.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(ValueError):
+        runner.export_compact_summary(
+            report,
+            changed,
+            tmp_path / "alternate.csv",
+            artifact_paths={**paths, "manifest": alternate_manifest},
+        )
+
+
+def test_c2_notebook_is_qualified_and_cleared():
+    import json
+
+    notebook = json.loads(Path("docs/examples/linear-recovery.ipynb").read_text(encoding="utf-8"))
+    text = "\\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
+    assert "paired representations" in text
+    assert "not proof of identification or conditioning improvement" in text
+    assert "inclusive `>=`" in text
+    assert "unscaled, uncentered" in text
+    assert "intercept geometry" in text
+    assert all(
+        cell.get("execution_count") is None and cell.get("outputs") == []
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "widgets" not in notebook.get("metadata", {})

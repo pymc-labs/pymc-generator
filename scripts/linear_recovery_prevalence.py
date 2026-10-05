@@ -44,7 +44,9 @@ PILOT_SCHEMA_VERSION = "linear-recovery-c2/v1"
 COMPACT_SCHEMA_VERSION = "linear-recovery-c2-compact/v1"
 CI_METHOD = "wilson"
 COMPACT_SOURCE_COMMIT = "2472add1bbe93e27df2c2c53a4d191d3293f7ae4"
+COMPACT_CONFIG_HASH = "b2a7fb98d69cc8ed1463492f803f10baf3a33013f226ab136cfd28278634a014"
 COMPACT_MANIFEST_HASH = "d597b07290e40c4d3c21f7744a507b3d2680e525c1dfd1a318545b60affcc334"
+COMPACT_PACKAGE_VERSION = "0.0.2"
 COMPACT_ARTIFACT_SHA256 = {
     "report": "49db994f3420e4b11616deaeb304f61b8d4dedb5e97acb35527e8506c4569b8c",
     "checkpoint": "18f18c7e3f87632b3d048420716bd2d89337b571c2ce3140a25f5d087b2dc3b0",
@@ -1576,7 +1578,64 @@ def _compact_row(**values: Any) -> dict[str, str]:
     return row
 
 
-def _compact_metadata(report: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict[str, Any]:
+def _expected_compact_schedule() -> list[dict[str, Any]]:
+    generator = {**DEFAULT_GENERATOR, "active_count_allocation": "independent"}
+    return pilot_seed_schedule(generator, DEFAULT_STUDY["seed"])
+
+
+def _sha256_file(path: str | os.PathLike[str]) -> str:
+    digest = hashlib.sha256()
+    try:
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as exc:
+        raise ValueError(f"compact source artifact cannot be read: {path}") from exc
+    return digest.hexdigest()
+
+
+def _validated_artifact_hashes(
+    report: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    artifact_paths: Mapping[str, str | os.PathLike[str]] | None,
+) -> dict[str, str]:
+    if artifact_paths is None or set(artifact_paths) != set(COMPACT_ARTIFACT_SHA256):
+        raise ValueError(
+            "compact export requires supplied report, checkpoint, manifest, and run-log bytes"
+        )
+    expected_paths = {
+        "report": report.get("report_path"),
+        "checkpoint": report.get("checkpoint_path"),
+        "manifest": report.get("manifest_path"),
+    }
+    for name, expected_path in expected_paths.items():
+        supplied = artifact_paths[name]
+        if (
+            not isinstance(expected_path, str)
+            or Path(supplied).resolve() != Path(expected_path).resolve()
+        ):
+            raise ValueError(f"compact {name} bytes are not bound to the report identity")
+    hashes = {name: _sha256_file(artifact_paths[name]) for name in COMPACT_ARTIFACT_SHA256}
+    if hashes != COMPACT_ARTIFACT_SHA256:
+        raise ValueError("compact source artifact bytes do not match accepted hashes")
+    try:
+        if load_json(artifact_paths["report"]) != report:
+            raise ValueError("compact report mapping does not match supplied report bytes")
+        if load_json(artifact_paths["manifest"]) != manifest:
+            raise ValueError("compact manifest mapping does not match supplied manifest bytes")
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, ValueError) and "compact" in str(exc):
+            raise
+        raise ValueError("compact source artifact JSON cannot be loaded") from exc
+    return hashes
+
+
+def _compact_metadata(
+    report: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    *,
+    artifact_paths: Mapping[str, str | os.PathLike[str]] | None = None,
+) -> dict[str, Any]:
     accounting = report.get("accounting")
     if report.get("status") != "complete":
         raise ValueError("only a complete pilot report can be published")
@@ -1598,6 +1657,8 @@ def _compact_metadata(report: Mapping[str, Any], manifest: Mapping[str, Any]) ->
             raise ValueError(f"pilot accounting {key} is not {expected}")
     if len(report.get("configs", [])) != 10:
         raise ValueError("compact C2 publication requires exactly ten configurations")
+    if report.get("config_hash") != COMPACT_CONFIG_HASH:
+        raise ValueError("compact C2 publication requires the accepted configuration hash")
     if manifest.get("config_hash") != report.get("config_hash"):
         raise ValueError("pilot manifest and report configuration hashes differ")
     manifest_hash = config_hash(manifest)
@@ -1608,6 +1669,16 @@ def _compact_metadata(report: Mapping[str, Any], manifest: Mapping[str, Any]) ->
         manifest.get("source_provenance"), label="manifest"
     ):
         raise ValueError("pilot report and manifest provenance differ")
+    if (
+        report.get("manifest_hash") != COMPACT_MANIFEST_HASH
+        or provenance["source_commit"] != COMPACT_SOURCE_COMMIT
+        or provenance["package_version"] != COMPACT_PACKAGE_VERSION
+        or provenance["source_dirty"] is not False
+    ):
+        raise ValueError("compact C2 source provenance is not the accepted run")
+    if report.get("schedule") != _expected_compact_schedule():
+        raise ValueError("compact C2 seed/configuration schedule is not the accepted schedule")
+    artifact_hashes = _validated_artifact_hashes(report, manifest, artifact_paths)
     checkpoint_elapsed = None
     checkpoint_completed = None
     checkpoint_path = report.get("checkpoint_path")
@@ -1628,12 +1699,8 @@ def _compact_metadata(report: Mapping[str, Any], manifest: Mapping[str, Any]) ->
         for key, value in report.get("resolved_config", {}).items()
         if key != "config_hash"
     }
-    artifact_hashes = (
-        COMPACT_ARTIFACT_SHA256
-        if report.get("config_hash") == config_hash(resolved_without_hash)
-        and provenance.get("source_commit") == COMPACT_SOURCE_COMMIT
-        else dict.fromkeys(COMPACT_ARTIFACT_SHA256, "not-applicable")
-    )
+    if report.get("config_hash") != config_hash(resolved_without_hash):
+        raise ValueError("compact report configuration hash is not self-consistent")
     return {
         "status": report["status"],
         "config_hash": report["config_hash"],
@@ -1647,8 +1714,9 @@ def _compact_metadata(report: Mapping[str, Any], manifest: Mapping[str, Any]) ->
         "artifact_storage": "local-only external audit storage; no raw time series retained",
         "metric_definitions": (
             "Correlation and VIF comparators are inclusive >=; condition is np.linalg.cond "
-            "on unscaled, uncentered active predictors plus an intercept. VIF excludes the "
-            "intercept. Levels and differences are paired representations, not proof of improvement."
+            "on unscaled, uncentered active predictors plus an intercept and is therefore "
+            "intercept- and scale-dependent. VIF excludes the intercept. Levels and differences "
+            "are paired representations, not proof of identification or conditioning improvement."
         ),
         "scientific_limits": (
             "Raw observed-input conditioning is not true-feature identifiability or causal "
@@ -1670,7 +1738,11 @@ def _compact_metadata(report: Mapping[str, Any], manifest: Mapping[str, Any]) ->
 
 
 def export_compact_summary(
-    report: Mapping[str, Any], manifest: Mapping[str, Any], output_path: str | os.PathLike[str]
+    report: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    output_path: str | os.PathLike[str],
+    *,
+    artifact_paths: Mapping[str, str | os.PathLike[str]] | None = None,
 ) -> dict[str, Any]:
     """Export accepted report summaries to a deterministic, portable CSV.
 
@@ -1678,7 +1750,7 @@ def export_compact_summary(
     report/checkpoint remain external audit evidence and no absolute path is
     serialized into the compact artifact.
     """
-    metadata = _compact_metadata(report, manifest)
+    metadata = _compact_metadata(report, manifest, artifact_paths=artifact_paths)
     rows: list[dict[str, str]] = []
     for key, value in metadata.items():
         rows.append(_compact_row(row_type="metadata", key=key, value=canonical_json(value)))
@@ -1743,6 +1815,16 @@ def _compact_number(value: str, field: str) -> float:
     return number
 
 
+def _compact_int(value: str, field: str) -> int:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(f"compact CSV {field} is not an integer")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"compact CSV {field} is not an integer") from exc
+    return number
+
+
 def validate_compact_summary(
     path: str | os.PathLike[str],
     *,
@@ -1794,6 +1876,13 @@ def validate_compact_summary(
             raise ValueError(f"compact CSV {key} does not match expected provenance")
     if metadata["source_dirty"] is not False:
         raise ValueError("compact CSV source provenance is dirty")
+    if (
+        metadata["config_hash"] != COMPACT_CONFIG_HASH
+        or metadata["manifest_hash"] != COMPACT_MANIFEST_HASH
+        or metadata["source_commit"] != COMPACT_SOURCE_COMMIT
+        or metadata["package_version"] != COMPACT_PACKAGE_VERSION
+    ):
+        raise ValueError("compact CSV source provenance is not the accepted run")
     accounting = metadata["accounting"]
     if (
         not isinstance(accounting, Mapping)
@@ -1812,64 +1901,137 @@ def validate_compact_summary(
         COMPACT_ARTIFACT_SHA256
     ):
         raise ValueError("compact CSV source artifact hashes are malformed")
-    if (
-        metadata["config_hash"]
-        == "b2a7fb98d69cc8ed1463492f803f10baf3a33013f226ab136cfd28278634a014"
-        and dict(artifact_hashes) != COMPACT_ARTIFACT_SHA256
-    ):
+    if dict(artifact_hashes) != COMPACT_ARTIFACT_SHA256:
         raise ValueError("compact CSV accepted artifact hashes do not match review evidence")
     schedule = metadata["seed_schedule"]
-    if (
-        not isinstance(schedule, list)
-        or len(schedule) != 10
-        or len({item.get("name") for item in schedule}) != 10
+    expected_schedule = _expected_compact_schedule()
+    if schedule != expected_schedule:
+        raise ValueError("compact CSV seed/configuration schedule is not the accepted schedule")
+    expected_configs = {
+        str(item["index"]): (
+            item["name"],
+            "selected_primary_recipe" if item["index"] == 0 else "runtime_stress_variant",
+            str(item["seed"]),
+        )
+        for item in expected_schedule
+    }
+    expected_metric_keys = {
+        (str(index), estimand, view, metric)
+        for index in range(10)
+        for estimand in ("first_world", "any_sibling")
+        for view in ("levels", "differences")
+        for metric in (
+            "rank_deficient",
+            "condition_ge_30p0",
+            "condition_ge_100p0",
+            "absolute_correlation_ge_0p9",
+            "absolute_correlation_ge_0p95",
+            "vif_ge_5p0",
+            "vif_ge_10p0",
+        )
+    }
+    expected_occupancy_keys = {
+        (str(index), f"treatments_{t[0]}_{t[1]}__controls_{c[0]}_{c[1]}")
+        for index in range(10)
+        for t in DEFAULT_STUDY["treatment_count_bands"]
+        for c in DEFAULT_STUDY["control_count_bands"]
+    }
+    if len(metric_rows) != len(expected_metric_keys) or len(occupancy_rows) != len(
+        expected_occupancy_keys
     ):
-        raise ValueError("compact CSV seed schedule is incomplete")
-    configs = {(row["config_index"], row["config_name"]) for row in metric_rows + occupancy_rows}
-    if len(configs) != 10 or {int(index) for index, _ in configs} != set(range(10)):
-        raise ValueError("compact CSV does not contain ten configuration strata")
-    for index, name in configs:
-        if (
-            sum(row["config_index"] == index and row["config_name"] == name for row in metric_rows)
-            != 28
-        ):
-            raise ValueError(f"compact CSV metrics are incomplete for {name}")
-        if (
-            sum(
-                row["config_index"] == index and row["config_name"] == name
-                for row in occupancy_rows
-            )
-            != 16
-        ):
-            raise ValueError(f"compact CSV occupancy is incomplete for {name}")
+        raise ValueError("compact CSV row counts do not match the exact publication matrix")
     metric_keys = set()
+    occupancy_keys = set()
+    cells_by_config: dict[str, int] = {str(index): 0 for index in range(10)}
     for row in metric_rows:
+        index = row["config_index"]
+        identity = expected_configs.get(index)
         key = tuple(row[field] for field in ("config_index", "estimand", "view", "metric"))
-        if key in metric_keys:
-            raise ValueError("compact CSV contains duplicate metric rows")
+        if identity is None or key not in expected_metric_keys or key in metric_keys:
+            raise ValueError("compact CSV metric matrix contains an unknown or duplicate key")
+        if (row["config_name"], row["config_label"], row["seed"]) != identity:
+            raise ValueError("compact CSV metric configuration/seed identity is invalid")
+        if row["status"] != "available" or row["n_cells"] != "32":
+            raise ValueError("compact CSV metrics must be available with n_cells=32")
+        if any(
+            row[field] for field in ("key", "value", "threshold", "treatment_band", "control_band")
+        ):
+            raise ValueError("compact CSV metric row contains invalid fields")
         metric_keys.add(key)
-        n_cells = int(row["n_cells"])
-        successes = int(row["n_successes"])
+        n_cells = _compact_int(row["n_cells"], "n_cells")
+        successes = _compact_int(row["n_successes"], "n_successes")
         rate = _compact_number(row["rate"], "rate")
-        if n_cells <= 0 or not 0 <= successes <= n_cells or not 0 <= rate <= 1:
+        if n_cells != 32 or not 0 <= successes <= n_cells or not 0 <= rate <= 1:
             raise ValueError("compact CSV metric counts/rate are inconsistent")
         if abs(rate - successes / n_cells) > 1e-12:
             raise ValueError("compact CSV rate is not derived from accepted counts")
         lower = _compact_number(row["ci_lower"], "ci_lower")
         upper = _compact_number(row["ci_upper"], "ci_upper")
-        if not 0 <= lower <= upper <= 1:
-            raise ValueError("compact CSV Wilson interval is invalid")
-    occupancy_keys = set()
+        expected_lower, expected_upper = wilson_interval(successes, n_cells, 0.95)
+        if (
+            not 0 <= lower <= upper <= 1
+            or abs(lower - expected_lower) > 1e-12
+            or abs(upper - expected_upper) > 1e-12
+        ):
+            raise ValueError("compact CSV Wilson interval is not independently recomputed")
+    if metric_keys != expected_metric_keys:
+        raise ValueError("compact CSV metric matrix is missing or contains unknown keys")
     for row in occupancy_rows:
-        key = tuple(row[field] for field in ("config_index", "treatment_band", "control_band"))
-        if key in occupancy_keys:
-            raise ValueError("compact CSV contains duplicate occupancy rows")
-        occupancy_keys.add(key)
-        n_cells = int(row["n_cells"])
-        if n_cells < 0 or row["status"] not in {"available", "unavailable"}:
+        index = row["config_index"]
+        identity = expected_configs.get(index)
+        key_name = row["key"]
+        key = (index, key_name)
+        if identity is None or key in occupancy_keys or key not in expected_occupancy_keys:
+            raise ValueError("compact CSV occupancy matrix contains an unknown or duplicate key")
+        if (row["config_name"], row["config_label"], row["seed"]) != identity:
+            raise ValueError("compact CSV occupancy configuration/seed identity is invalid")
+        try:
+            treatment_band = json.loads(row["treatment_band"])
+            control_band = json.loads(row["control_band"])
+        except json.JSONDecodeError as exc:
+            raise ValueError("compact CSV occupancy bands are malformed") from exc
+        valid_bands = {
+            tuple(t): {tuple(c) for c in DEFAULT_STUDY["control_count_bands"]}
+            for t in DEFAULT_STUDY["treatment_count_bands"]
+        }
+        if (
+            not isinstance(treatment_band, list)
+            or not isinstance(control_band, list)
+            or len(treatment_band) != 2
+            or len(control_band) != 2
+            or tuple(treatment_band) not in valid_bands
+            or tuple(control_band) not in valid_bands[tuple(treatment_band)]
+        ):
+            raise ValueError("compact CSV occupancy bands are malformed")
+        expected_key = f"treatments_{treatment_band[0]}_{treatment_band[1]}__controls_{control_band[0]}_{control_band[1]}"
+        if key_name != expected_key:
+            raise ValueError("compact CSV occupancy band identity is invalid")
+        if any(
+            row[field]
+            for field in (
+                "value",
+                "estimand",
+                "view",
+                "metric",
+                "threshold",
+                "n_successes",
+                "rate",
+                "ci_lower",
+                "ci_upper",
+            )
+        ):
+            raise ValueError("compact CSV occupancy row contains invalid fields")
+        n_cells = _compact_int(row["n_cells"], "n_cells")
+        if n_cells < 0 or n_cells > 32 or row["status"] not in {"available", "unavailable"}:
             raise ValueError("compact CSV occupancy is malformed")
-        if row["status"] == "unavailable" and n_cells != 0:
-            raise ValueError("unavailable occupancy must have zero cells")
+        if row["status"] != ("available" if n_cells > 0 else "unavailable"):
+            raise ValueError("compact CSV occupancy availability does not match n_cells")
+        occupancy_keys.add(key)
+        cells_by_config[index] += n_cells
+    if occupancy_keys != expected_occupancy_keys:
+        raise ValueError("compact CSV occupancy matrix is missing or contains unknown keys")
+    if any(total != 32 for total in cells_by_config.values()):
+        raise ValueError("compact CSV occupancy totals must equal 32 per configuration")
     return {"metadata": metadata, "metrics": metric_rows, "occupancy": occupancy_rows}
 
 
@@ -2741,6 +2903,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", help="accepted pilot report for compact export")
     parser.add_argument("--manifest", help="accepted pilot manifest for compact export")
     parser.add_argument("--summary-output", help="portable CSV destination for compact export")
+    parser.add_argument("--run-log", help="accepted pilot run log for compact provenance binding")
     parser.add_argument(
         "--no-resume", action="store_true", help="do not read an existing pilot checkpoint"
     )
@@ -2752,7 +2915,18 @@ def main(argv: list[str] | None = None) -> int:
         manifest = load_json(args.manifest)
         resolved = resolve_config(load_json(args.config))
         validate_pilot_report(report, resolved, manifest=manifest)
-        metadata = export_compact_summary(report, manifest, args.summary_output)
+        run_log = args.run_log or str(Path(args.manifest).with_name("pilot-run.log"))
+        metadata = export_compact_summary(
+            report,
+            manifest,
+            args.summary_output,
+            artifact_paths={
+                "report": args.report,
+                "checkpoint": report["checkpoint_path"],
+                "manifest": args.manifest,
+                "run_log": run_log,
+            },
+        )
         print(
             json.dumps(
                 {"summary": args.summary_output, "config_hash": metadata["config_hash"]},
