@@ -1151,25 +1151,9 @@ def _compact_world_metric(
     covariates = np.asarray(corpus["covariates"][row], dtype=float)
     columns = [treatment[:, treatment_mask], covariates[:, covariate_mask]]
     predictors = np.column_stack([item for item in columns if item.shape[1]])
-    raw_design = np.column_stack([predictors, np.ones(predictors.shape[0])])
-    raw_metric = design_rank_condition(raw_design, rank_tolerance=rank_tolerance)
-    scales = np.std(predictors, axis=0)
-    standardized = np.zeros_like(predictors)
-    nonconstant = scales > rank_tolerance
-    if np.any(nonconstant):
-        standardized[:, nonconstant] = (
-            predictors[:, nonconstant] - predictors[:, nonconstant].mean(axis=0)
-        ) / scales[nonconstant]
-    standardized_metric = design_rank_condition(
-        np.column_stack([standardized, np.ones(standardized.shape[0])]),
-        rank_tolerance=rank_tolerance,
-    )
     constants = [
         *(f"C{index + 1}" for index, active in enumerate(treatment_mask) if active),
         *(f"Z{index + 1}" for index, active in enumerate(covariate_mask) if active),
-    ]
-    constant_names = [
-        name for name, scale in zip(constants, scales, strict=True) if scale <= rank_tolerance
     ]
 
     views: dict[str, dict[str, Any]] = {}
@@ -1239,11 +1223,17 @@ def _compact_world_metric(
         },
         "components": components,
         "raw_input_diagnostics": {
-            "scope": "observed raw inputs; not true mechanism features",
+            "scope": "observed raw inputs; configured views only; not true mechanism features",
             "views": views,
-            "rank": raw_metric,
-            "standardized": standardized_metric,
-            "constant_active_inputs": constant_names,
+            "constant_active_inputs": [
+                name
+                for name, scale in zip(
+                    constants,
+                    np.std(predictors, axis=0),
+                    strict=True,
+                )
+                if scale <= rank_tolerance
+            ],
         },
         "graph_flags": graph_flags,
     }
@@ -1275,15 +1265,8 @@ def _world_indicators(
 ) -> dict[str, dict[str, bool]]:
     raw = record["raw_input_diagnostics"]
     result: dict[str, dict[str, bool]] = {}
-    available_views = list(raw.get("views", {}))
-    # Older compact hand-built records had only the top-level rank and no
-    # views.  Keep that fixture compatibility, but never invent a diagnostic
-    # view when the runner has explicitly omitted it.
-    if not available_views:
-        available_views = ["levels"]
-    for view_name in available_views:
-        view = raw.get("views", {}).get(view_name, {})
-        rank = view.get("rank", raw.get("rank", {}))
+    for view_name, view in raw.get("views", {}).items():
+        rank = view.get("rank", {})
         condition = rank.get("condition")
         indicators = {
             "rank_deficient": bool(rank.get("rank_deficient", False)),
@@ -1347,8 +1330,7 @@ def _pilot_cell_records(
                 "first_world": {
                     "world_index": first.get("world_index"),
                     "sibling_index": first["sibling_index"],
-                    "rank": first["raw_input_diagnostics"]["rank"],
-                    "standardized": first["raw_input_diagnostics"].get("standardized"),
+                    "views": first["raw_input_diagnostics"].get("views", {}),
                 },
                 "binary": first_indicators,
                 "any_sibling": any_indicators,
@@ -1362,20 +1344,10 @@ def _summarize_indicator_set(
 ) -> dict[str, Any]:
     values = []
     for cell in cells:
-        source = cell[estimand]
-        if view not in source:
-            # ``first_world`` stores raw rank metadata, while its indicators
-            # live in the cell's view map.  Use that map when it has the
-            # requested view; never synthesize an omitted view.
-            binary = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
-            if view in binary:
-                values.append(bool(binary[view][metric]))
-            elif "levels" not in binary and metric in source:
-                values.append(bool(source[metric]))
-            else:
-                raise ValueError(f"diagnostic view {view!r} is unavailable")
-        else:
-            values.append(bool(source[view][metric]))
+        binary = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
+        if view not in binary or metric not in binary[view]:
+            raise ValueError(f"diagnostic view {view!r} is unavailable")
+        values.append(bool(binary[view][metric]))
     return cell_binary_summary(
         [cell["cell_id"] for cell in cells],
         values,
@@ -1412,9 +1384,6 @@ def _pilot_summaries(
             }
             for view in views
         }
-        # Compatibility aliases retain the original C2 keys while levels are explicit above.
-        if "levels" in summary["estimands"][estimand]:
-            summary["estimands"][estimand].update(summary["estimands"][estimand]["levels"])
     if treatment_bands is not None and control_bands is not None:
         summary["count_band_wilson"] = {}
         for i, treatment_band in enumerate(treatment_bands):
@@ -1541,10 +1510,21 @@ class _PilotInterruptedError(RuntimeError):
     pass
 
 
+# These are deliberately finite: a phase that ignores TERM must not hold the
+# parent in cleanup indefinitely.  The child is owned by this invocation only.
+_PHASE_TERM_GRACE_SECONDS = 0.25
+_PHASE_KILL_JOIN_SECONDS = 0.25
+
+
 def _run_phase_child(function: Any, result_path: str) -> None:
     """Execute one inherited callable and serialize its result out of band."""
     import pickle
+    import signal
 
+    # The parent installs a TERM handler while running the pilot.  Inheriting
+    # it across fork would run parent cleanup code in the child and can leave
+    # blocking C work alive; a phase child has the normal default semantics.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
         result = ("ok", function())
     except BaseException as exc:  # transfer the phase exception exactly once
@@ -1558,9 +1538,15 @@ def _bounded_phase(function: Any, deadline: float, clock: Any) -> Any:
     if float(clock()) >= deadline:
         raise _PilotDeadlineExceededError("pilot wall deadline reached before phase")
     import multiprocessing
+    import threading
 
     if "fork" not in multiprocessing.get_all_start_methods():
         raise RuntimeError("bounded pilot phases require fork process isolation on this host")
+    if threading.active_count() != 1:
+        raise RuntimeError(
+            "bounded pilot phases require a single-threaded parent before fork; "
+            "multithreaded fork is unsupported"
+        )
     import os
     import pickle
     import tempfile
@@ -1577,15 +1563,27 @@ def _bounded_phase(function: Any, deadline: float, clock: Any) -> Any:
         except FileNotFoundError:
             pass
         raise
+
+    def stop_owned_child() -> None:
+        if not process.is_alive():
+            process.join(_PHASE_KILL_JOIN_SECONDS)
+            return
+        process.terminate()
+        process.join(_PHASE_TERM_GRACE_SECONDS)
+        if process.is_alive():
+            process.kill()
+            process.join(_PHASE_KILL_JOIN_SECONDS)
+        if process.is_alive():
+            raise RuntimeError("owned pilot phase child did not exit after SIGKILL")
+
     try:
         while process.is_alive():
             remaining = float(deadline) - float(clock())
             if remaining <= 0:
-                process.terminate()
-                process.join()
+                stop_owned_child()
                 raise _PilotDeadlineExceededError("pilot wall deadline reached during phase")
             process.join(min(remaining, 0.05))
-        process.join()
+        process.join(_PHASE_KILL_JOIN_SECONDS)
         try:
             with open(result_path, "rb") as handle:
                 result = pickle.load(handle)
@@ -1599,14 +1597,158 @@ def _bounded_phase(function: Any, deadline: float, clock: Any) -> Any:
         raise RuntimeError(f"pilot phase {name}: {message}")
     except BaseException:
         if process.is_alive():
-            process.terminate()
-            process.join()
+            stop_owned_child()
         raise
     finally:
         try:
             os.unlink(result_path)
         except FileNotFoundError:
             pass
+        if not process.is_alive():
+            process.close()
+
+
+def _build_pilot_report(
+    checkpoint: Mapping[str, Any],
+    configs: list[Mapping[str, Any]],
+    study: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    schedule: list[Mapping[str, Any]],
+    manifest_path: Path,
+    checkpoint_path: Path,
+    report_path: Path,
+    partial: bool,
+    interrupted: bool,
+    stop_reason: str | None,
+    elapsed: Any,
+    finalization_overdue: Any,
+    wall_budget_seconds: float,
+) -> dict[str, Any]:
+    """Build the report from checkpoint state without hiding partial work."""
+    world_records = checkpoint.get("worlds", [])
+    cell_records = checkpoint.get("cells", [])
+    summaries = []
+    for config_index, item in enumerate(configs):
+        if finalization_overdue():
+            partial = True
+            stop_reason = "wall deadline reached during finalization"
+            break
+        worlds = [row for row in world_records if int(row["config_index"]) == config_index]
+        cells = _pilot_cell_records(
+            worlds,
+            thresholds=study["thresholds"],
+            treatment_bands=study["treatment_count_bands"],
+            control_bands=study["control_count_bands"],
+        )
+        complete_cells = [
+            cell for cell in cells if cell["n_siblings"] == int(study["pilot_siblings_per_cell"])
+        ]
+        summaries.append(
+            {
+                "config_index": config_index,
+                "name": item["name"],
+                "label": item.get("label", "runtime_stress_variant"),
+                "generator": item["generator"],
+                "seed": item["seed"],
+                "worlds": worlds,
+                "cells": cells,
+                "summary": _pilot_summaries(
+                    complete_cells,
+                    float(study["confidence_level"]),
+                    thresholds=study["thresholds"],
+                    treatment_bands=study["treatment_count_bands"],
+                    control_bands=study["control_count_bands"],
+                ),
+                "accounting": next(
+                    (
+                        row
+                        for row in checkpoint.get("config_accounting", [])
+                        if int(row["config_index"]) == config_index
+                    ),
+                    {"status": "unavailable", "reason": "configuration was not completed"},
+                ),
+            }
+        )
+    if finalization_overdue():
+        partial = True
+        stop_reason = "wall deadline reached during finalization"
+    requested_cells = len(configs) * int(study["pilot_cells_per_config"])
+    complete = sum(1 for row in cell_records if row.get("status") == "complete") == requested_cells
+    status = "complete" if complete and not partial else "partial"
+    views = list(study["diagnostic_views"])
+    scope = ", ".join(views)
+    report = {
+        "schema_version": PILOT_SCHEMA_VERSION,
+        "status": status,
+        "config_hash": resolved["config_hash"],
+        "resolved_config": resolved,
+        "source_provenance": manifest["source_provenance"],
+        "manifest_hash": config_hash(manifest),
+        "manifest_path": str(manifest_path),
+        "checkpoint_path": str(checkpoint_path),
+        "report_path": str(report_path),
+        "schedule": schedule,
+        "stop_reason": stop_reason,
+        "interrupted": interrupted,
+        "configs": summaries,
+        "accounting": {
+            "evaluated_world_metrics": len(world_records),
+            "accepted_world_metrics": len(world_records),
+            "evaluated_candidates": sum(
+                int(item.get("evaluated_candidates", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "accepted_candidates": sum(
+                int(item.get("accepted_worlds", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "realized_cells": len(cell_records),
+            "complete_cells": sum(1 for item in cell_records if item.get("status") == "complete"),
+            "partial_cells": sum(1 for item in cell_records if item.get("status") != "complete"),
+            "requested_cells": requested_cells,
+            "requested_worlds": len(configs)
+            * int(study["pilot_cells_per_config"])
+            * int(study["pilot_siblings_per_cell"]),
+            "rejected_candidates": sum(
+                int(item.get("rejected_candidates", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "generation_failures": sum(
+                int(item.get("generation_failures", 0))
+                for item in checkpoint.get("config_accounting", [])
+            )
+            + len(checkpoint.get("config_failures", [])),
+            "failures": sum(
+                int(item.get("generation_failures", 0))
+                for item in checkpoint.get("config_accounting", [])
+            )
+            + len(checkpoint.get("config_failures", [])),
+            "wall_elapsed_seconds": elapsed(),
+            "wall_budget_seconds": wall_budget_seconds,
+            "empty_band_policy": "zero-denominator bands are unavailable/missing, never zero",
+        },
+        "analyses": {
+            "raw_input_conditioning": {
+                "status": "available",
+                "scope": f"{scope} only; not true-mechanism identifiability",
+                "views": views,
+            },
+            "true_feature_recovery": unsupported_status(
+                "true_feature_recovery",
+                "C2 corpus does not persist every truth field required for exact reconstruction",
+            ),
+            "causal_confounding": {
+                "status": "available",
+                "scope": "graph flags are reported separately from raw-input dependence",
+            },
+        },
+        "pilot_claim": "partial pilot; no prevalence estimate until all preregistered cells complete"
+        if status == "partial"
+        else "bounded pilot summaries by configuration and realized count band; not a training-prior prevalence claim",
+        "ci_note": "Wilson intervals use one first-world indicator per complete cell; any_sibling is sensitivity only and siblings are not pooled",
+    }
+    return report
 
 
 def run_pilot(
@@ -1898,126 +2040,70 @@ def run_pilot(
     if cells_since_checkpoint:
         persist()
 
-    world_records = checkpoint.get("worlds", [])
-    cell_records = checkpoint.get("cells", [])
-    summaries = []
-    for config_index, item in enumerate(configs):
-        worlds = [row for row in world_records if int(row["config_index"]) == config_index]
-        cells = _pilot_cell_records(
-            worlds,
-            thresholds=study["thresholds"],
-            treatment_bands=study["treatment_count_bands"],
-            control_bands=study["control_count_bands"],
+    # Finalization has its own guarded region: TERM during summaries or an
+    # atomic write is converted into an honest partial artifact, then the
+    # original handler is restored on every exit path.
+    try:
+        report = _build_pilot_report(
+            checkpoint,
+            configs,
+            study,
+            resolved,
+            manifest,
+            schedule,
+            manifest_path,
+            checkpoint_path,
+            report_path,
+            partial,
+            interrupted,
+            stop_reason,
+            elapsed,
+            finalization_overdue,
+            limit,
         )
-        complete_cells = [
-            cell for cell in cells if cell["n_siblings"] == int(study["pilot_siblings_per_cell"])
-        ]
-        summaries.append(
-            {
-                "config_index": config_index,
-                "name": item["name"],
-                "label": item.get("label", "runtime_stress_variant"),
-                "generator": item["generator"],
-                "seed": item["seed"],
-                "worlds": worlds,
-                "cells": cells,
-                "summary": _pilot_summaries(
-                    complete_cells,
-                    float(study["confidence_level"]),
-                    thresholds=study["thresholds"],
-                    treatment_bands=study["treatment_count_bands"],
-                    control_bands=study["control_count_bands"],
-                ),
-                "accounting": next(
-                    (
-                        row
-                        for row in checkpoint.get("config_accounting", [])
-                        if int(row["config_index"]) == config_index
-                    ),
-                    {"status": "unavailable", "reason": "configuration was not completed"},
-                ),
-            }
-        )
-    if finalization_overdue():
+        if finalization_overdue():
+            raise _PilotDeadlineExceededError("wall deadline reached during finalization")
+        _write_json(report_path, report)
+        # Account for the first final write, then persist the checkpoint.  The
+        # second report write ensures the report does not expose a stale value.
+        report["accounting"]["wall_elapsed_seconds"] = elapsed()
+        if finalization_overdue():
+            raise _PilotDeadlineExceededError("wall deadline reached during finalization")
+        _write_json(report_path, report)
+        checkpoint["status"] = report["status"]
+        if finalization_overdue():
+            raise _PilotDeadlineExceededError("wall deadline reached during finalization")
+        persist()
+        report["accounting"]["wall_elapsed_seconds"] = elapsed()
+        if finalization_overdue():
+            raise _PilotDeadlineExceededError("wall deadline reached during finalization")
+        _write_json(report_path, report)
+    except (_PilotInterruptedError, _PilotDeadlineExceededError) as exc:
         partial = True
-        stop_reason = "wall deadline reached during finalization"
-    requested_cells = len(configs) * int(study["pilot_cells_per_config"])
-    complete = sum(1 for row in cell_records if row.get("status") == "complete") == requested_cells
-    status = "complete" if complete and not partial else "partial"
-    report = {
-        "schema_version": PILOT_SCHEMA_VERSION,
-        "status": status,
-        "config_hash": resolved["config_hash"],
-        "resolved_config": resolved,
-        "source_provenance": manifest["source_provenance"],
-        "manifest_hash": config_hash(manifest),
-        "manifest_path": str(manifest_path),
-        "checkpoint_path": str(checkpoint_path),
-        "report_path": str(report_path),
-        "schedule": schedule,
-        "stop_reason": stop_reason,
-        "interrupted": interrupted,
-        "configs": summaries,
-        "accounting": {
-            "evaluated_world_metrics": len(world_records),
-            "accepted_world_metrics": len(world_records),
-            "evaluated_candidates": sum(
-                int(item.get("evaluated_candidates", 0))
-                for item in checkpoint.get("config_accounting", [])
-            ),
-            "accepted_candidates": sum(
-                int(item.get("accepted_worlds", 0))
-                for item in checkpoint.get("config_accounting", [])
-            ),
-            "realized_cells": len(cell_records),
-            "complete_cells": sum(1 for item in cell_records if item.get("status") == "complete"),
-            "partial_cells": sum(1 for item in cell_records if item.get("status") != "complete"),
-            "requested_cells": requested_cells,
-            "requested_worlds": len(configs)
-            * int(study["pilot_cells_per_config"])
-            * int(study["pilot_siblings_per_cell"]),
-            "rejected_candidates": sum(
-                int(item.get("rejected_candidates", 0))
-                for item in checkpoint.get("config_accounting", [])
-            ),
-            "generation_failures": sum(
-                int(item.get("generation_failures", 0))
-                for item in checkpoint.get("config_accounting", [])
-            )
-            + len(checkpoint.get("config_failures", [])),
-            "failures": sum(
-                int(item.get("generation_failures", 0))
-                for item in checkpoint.get("config_accounting", [])
-            )
-            + len(checkpoint.get("config_failures", [])),
-            "wall_elapsed_seconds": elapsed(),
-            "wall_budget_seconds": limit,
-            "empty_band_policy": "zero-denominator bands are unavailable/missing, never zero",
-        },
-        "analyses": {
-            "raw_input_conditioning": {
-                "status": "available",
-                "scope": "levels and differences; not true-mechanism identifiability",
-            },
-            "true_feature_recovery": unsupported_status(
-                "true_feature_recovery",
-                "C2 corpus does not persist every truth field required for exact reconstruction",
-            ),
-            "causal_confounding": {
-                "status": "available",
-                "scope": "graph flags are reported separately from raw-input dependence",
-            },
-        },
-        "pilot_claim": "partial pilot; no prevalence estimate until all preregistered cells complete"
-        if status == "partial"
-        else "bounded pilot summaries by configuration and realized count band; not a training-prior prevalence claim",
-        "ci_note": "Wilson intervals use one first-world indicator per complete cell; any_sibling is sensitivity only and siblings are not pooled",
-    }
-    _write_json(report_path, report)
-    checkpoint["status"] = status
-    persist()
-    # TERM remains handled through report construction and both atomic writes.
-    restore_term_handler()
+        interrupted = interrupted or isinstance(exc, _PilotInterruptedError)
+        stop_reason = str(exc)
+        report = _build_pilot_report(
+            checkpoint,
+            configs,
+            study,
+            resolved,
+            manifest,
+            schedule,
+            manifest_path,
+            checkpoint_path,
+            report_path,
+            True,
+            interrupted,
+            stop_reason,
+            elapsed,
+            lambda: False,
+            limit,
+        )
+        _write_json(report_path, report)
+        checkpoint["status"] = "partial"
+        persist()
+    finally:
+        restore_term_handler()
     return report
 
 

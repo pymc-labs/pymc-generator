@@ -10,6 +10,7 @@ saturation mechanism.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytensor
@@ -640,18 +641,22 @@ def test_c2_any_sibling_summary_is_distinct_from_first_world_estimand():
         "cell_id": 0,
         "sibling_index": 0,
         "raw_input_diagnostics": {
-            "rank": {"rank_deficient": False, "condition": 1.0},
+            "views": {"levels": {"rank": {"rank_deficient": False, "condition": 1.0}}},
         },
     }
     sibling = {
         **world,
         "sibling_index": 1,
-        "raw_input_diagnostics": {"rank": {"rank_deficient": True, "condition": 1000.0}},
+        "raw_input_diagnostics": {
+            "views": {"levels": {"rank": {"rank_deficient": True, "condition": 1000.0}}}
+        },
     }
     summary = _pilot_summaries(_pilot_cell_records([world, sibling]), 0.95)
-    assert summary["estimands"]["first_world"]["rank_deficient"]["n_successes"] == 0
-    assert summary["estimands"]["any_sibling"]["rank_deficient"]["n_successes"] == 1
-    assert summary["estimands"]["any_sibling"]["rank_deficient"]["estimand"] == "any_sibling"
+    assert summary["estimands"]["first_world"]["levels"]["rank_deficient"]["n_successes"] == 0
+    assert summary["estimands"]["any_sibling"]["levels"]["rank_deficient"]["n_successes"] == 1
+    assert (
+        summary["estimands"]["any_sibling"]["levels"]["rank_deficient"]["estimand"] == "any_sibling"
+    )
     assert "not pooled" in summary["sensitivity_note"]
 
 
@@ -750,14 +755,15 @@ def _c2_mock_record(config_index, cell_id, sibling_index):
         "world_index": sibling_index,
         "active_counts": {"treatments": 1, "covariates": 1},
         "raw_input_diagnostics": {
-            "rank": {"rank_deficient": sibling_index == 1, "condition": 40.0},
             "views": {
                 "levels": {
+                    "rank": {"rank_deficient": sibling_index == 1, "condition": 40.0},
                     "max_abs_pearson_correlation": 0.92,
                     "max_vif": 6.0,
                     "vif_infinite": False,
                 },
                 "differences": {
+                    "rank": {"rank_deficient": sibling_index == 1, "condition": 40.0},
                     "max_abs_pearson_correlation": 0.92,
                     "max_vif": 6.0,
                     "vif_infinite": False,
@@ -808,6 +814,75 @@ def test_c2_diagnostic_views_keep_view_specific_rank_condition_and_subset():
     assert list(_world_indicators(subset, thresholds)) == ["levels"]
 
 
+def test_c2_compaction_uses_actual_predictors_and_only_configured_views():
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    levels = np.array([[0.0, 1.0, 3.0, 6.0, 10.0], [0.0, 2.0, 5.0, 9.0, 14.0]])
+    descriptors = [SimpleNamespace(key="C1"), SimpleNamespace(key="C2")]
+
+    def diagnostic_view():
+        dependence = SimpleNamespace(
+            descriptors=descriptors,
+            matrices={"pearson": np.zeros((1, 2, 2))},
+            valid={"pearson": np.ones((1, 2, 2), dtype=bool)},
+        )
+        vif = SimpleNamespace(
+            vif=np.ones((1, 2)),
+            valid=np.ones((1, 2), dtype=bool),
+        )
+        return SimpleNamespace(dependence=dependence, vif={"observed": vif})
+
+    graph = {
+        "g_dc": np.zeros((1, 2), dtype=int),
+        "g_dz": np.zeros((1, 0), dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((0, 2), dtype=int),
+        "g_zy": np.zeros(0, dtype=int),
+        "g_cc": np.zeros((2, 2), dtype=int),
+        "g_zz": np.zeros((0, 0), dtype=int),
+        "g_cy": np.zeros(2, dtype=int),
+    }
+    prior = SimpleNamespace(layout=SimpleNamespace(unpack=lambda _value: graph))
+    corpus = {
+        "treatment_active_mask": np.array([[True, True]]),
+        "covariate_active_mask": np.zeros((1, 0), dtype=bool),
+        "latent_active_mask": np.array([[True]]),
+        "treatment_raw": levels.T[None, :, :],
+        "covariates": np.zeros((1, levels.shape[1], 0)),
+        "cell_id": np.array([3]),
+        "g": np.zeros((1, 1)),
+    }
+    both = SimpleNamespace(views={"levels": diagnostic_view(), "differences": diagnostic_view()})
+    record = runner._compact_world_metric(
+        corpus, prior, both, 0, config_index=0, cell_index=3, sibling_index=0, rank_tolerance=1e-10
+    )
+    views = record["raw_input_diagnostics"]["views"]
+    assert set(views) == {"levels", "differences"}
+    assert views["levels"]["rank"]["exact_rank"] == 3
+    assert views["differences"]["rank"]["exact_rank"] == 2
+    assert "rank" not in record["raw_input_diagnostics"]
+    assert "standardized" not in record["raw_input_diagnostics"]
+
+    differences_only = SimpleNamespace(views={"differences": diagnostic_view()})
+    subset = runner._compact_world_metric(
+        corpus,
+        prior,
+        differences_only,
+        0,
+        config_index=0,
+        cell_index=3,
+        sibling_index=0,
+        rank_tolerance=1e-10,
+    )
+    assert set(subset["raw_input_diagnostics"]["views"]) == {"differences"}
+    assert "rank" not in subset["raw_input_diagnostics"]
+    assert list(runner._world_indicators(subset, runner.DEFAULT_STUDY["thresholds"])) == [
+        "differences"
+    ]
+
+
 def test_c2_configured_indicators_and_realized_band_wilson_tables():
     from scripts.linear_recovery_prevalence import _pilot_cell_records, _pilot_summaries
 
@@ -841,6 +916,168 @@ def test_c2_configured_indicators_and_realized_band_wilson_tables():
     assert indicator["vif_ge_5p0"]["n_successes"] == 2
     assert summary["count_band_wilson"]["treatments_1_1__controls_1_1"]["status"] == "available"
     assert summary["count_band_wilson"]["treatments_2_2__controls_2_2"]["status"] == "unavailable"
+
+
+def test_c2_phase_kills_term_ignoring_child_and_reaps_it(tmp_path):
+    import os
+    import signal
+    import time
+
+    from scripts import linear_recovery_prevalence as runner
+
+    child_pid_path = tmp_path / "child.pid"
+
+    def ignores_term():
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        child_pid_path.write_text(str(os.getpid()))
+        time.sleep(10)
+
+    with pytest.raises(runner._PilotDeadlineExceededError):
+        runner._bounded_phase(ignores_term, time.monotonic() + 0.1, time.monotonic)
+    child_pid = int(child_pid_path.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_c2_runner_executes_real_generation_and_diagnostic_phases_once(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    generation_marker = tmp_path / "generation.calls"
+    diagnostic_marker = tmp_path / "diagnostics.calls"
+
+    def failing_generation(_prior):
+        generation_marker.write_text(
+            generation_marker.read_text() + "x" if generation_marker.exists() else "x"
+        )
+        raise ValueError("phase value error")
+
+    monkeypatch.setattr(runner, "sample_prior_predictive", failing_generation)
+    report = runner.run_pilot(config, output_dir=tmp_path / "generation", wall_time_seconds=60)
+    assert generation_marker.read_text() == "x"
+    assert report["status"] == "partial"
+    assert report["accounting"]["failures"] == 1
+
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+
+    def failing_diagnostics(*args, **kwargs):
+        diagnostic_marker.write_text(
+            diagnostic_marker.read_text() + "x" if diagnostic_marker.exists() else "x"
+        )
+        raise ValueError("phase value error")
+
+    monkeypatch.setattr(runner, "data_diagnostics", failing_diagnostics)
+    with pytest.raises(ValueError, match="phase value error"):
+        runner.run_pilot(config, output_dir=tmp_path / "diagnostics", wall_time_seconds=60)
+    assert diagnostic_marker.read_text() == "x"
+
+
+def test_c2_notebook_renders_runner_complete_partial_and_rejects_wrong_manifest(
+    tmp_path, monkeypatch
+):
+    import copy
+    import json
+    import os
+    from types import SimpleNamespace
+
+    import nbformat
+    from nbclient import NotebookClient
+    from nbclient.exceptions import CellExecutionError
+
+    from scripts import linear_recovery_prevalence as runner
+
+    notebook = nbformat.read("docs/examples/linear-recovery.ipynb", as_version=4)
+    render_source = notebook.cells[11].source
+    monkeypatch.setattr(
+        runner,
+        "_pilot_configurations",
+        lambda generator, seed: [
+            {"name": "primary_composable", "label": "primary", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner,
+        "pilot_seed_schedule",
+        lambda generator, seed: [
+            {"index": 0, "name": "primary_composable", "seed": seed, "generator": generator}
+        ],
+    )
+    n_rows = 64
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: {"cell_id": np.repeat(np.arange(32), 2)},
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": n_rows,
+            "accepted_worlds": n_rows,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    protocol = runner.load_json("docs/examples/data/linear-recovery-prevalence-config.json")
+    complete_dir = tmp_path / "complete"
+    complete = runner.run_pilot(protocol, output_dir=complete_dir, wall_time_seconds=60)
+    partial = runner.run_pilot(protocol, output_dir=tmp_path / "partial", wall_time_seconds=0.001)
+    assert complete["status"] == "complete"
+    assert partial["status"] == "partial"
+
+    def execute(report_path):
+        os.environ["LINEAR_RECOVERY_C2_REPORT"] = str(report_path)
+        source = f"from pathlib import Path\nrepo_root = Path({str(Path.cwd())!r})\n"
+        source += render_source
+        test_notebook = nbformat.v4.new_notebook(
+            cells=[nbformat.v4.new_code_cell(source)], metadata=notebook.metadata
+        )
+        NotebookClient(test_notebook, timeout=120, kernel_name="python").execute(
+            cwd=str(Path.cwd())
+        )
+
+    execute(Path(complete["report_path"]))
+    execute(Path(partial["report_path"]))
+    manifest_path = Path(complete["manifest_path"])
+    original = runner.load_json(manifest_path)
+    broken = copy.deepcopy(original)
+    broken["schedule"] = []
+    runner._write_json(manifest_path, broken)
+    with pytest.raises(CellExecutionError):
+        execute(Path(complete["report_path"]))
+    runner._write_json(manifest_path, original)
+    assert "_threshold_key" in render_source
+    assert json.loads(Path(complete["report_path"]).read_text())["source_provenance"]
 
 
 def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp_path, monkeypatch):
@@ -901,6 +1138,22 @@ def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp
         mutated["source_provenance"][provenance_field] = "mutated"
         with pytest.raises(ValueError):
             runner.validate_pilot_report(mutated, resolved)
+
+    manifest_path = Path(report["manifest_path"])
+    original_manifest = runner.load_json(manifest_path)
+    for field, value in (
+        ("schema_version", "wrong-schema"),
+        ("config_hash", "wrong-config"),
+        ("resolved_config", {**original_manifest["resolved_config"], "config_hash": "wrong"}),
+        ("source_provenance", {**original_manifest["source_provenance"], "source_commit": "wrong"}),
+        ("schedule", []),
+    ):
+        mutated_manifest = copy.deepcopy(original_manifest)
+        mutated_manifest[field] = value
+        runner._write_json(manifest_path, mutated_manifest)
+        with pytest.raises(ValueError):
+            runner.validate_pilot_report(report, resolved)
+    runner._write_json(manifest_path, original_manifest)
 
 
 def test_c2_bounded_phase_isolates_sleep_and_transfers_value_error_once(tmp_path):
@@ -974,10 +1227,129 @@ def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeyp
     assert second["accounting"]["failures"] == 0
 
 
-def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path, monkeypatch):
+def test_c2_resume_accumulates_budget_and_replaces_stale_failure_metadata(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    checkpoint["wall_elapsed_seconds"] = 59.5
+    runner._write_json(Path(report["checkpoint_path"]), checkpoint)
+    resumed = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert resumed["status"] == "partial"
+    assert resumed["accounting"]["wall_elapsed_seconds"] >= 59.5
+    assert resumed["accounting"]["wall_budget_seconds"] == 60.0
+
+
+def test_c2_runner_handles_term_during_finalization_after_completed_checkpoint(
+    tmp_path, monkeypatch
+):
+    import json
     import os
     import signal
-    import threading
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "_pilot_configurations",
+        lambda generator, seed: [
+            {"name": "primary_composable", "label": "primary", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner,
+        "pilot_seed_schedule",
+        lambda generator, seed: [
+            {"index": 0, "name": "primary_composable", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    original_cells = runner._pilot_cell_records
+
+    def slow_finalization(*args, **kwargs):
+        time.sleep(2)
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", slow_finalization)
+    resolved = runner.resolve_config(config)
+    prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
+    output = tmp_path / "finalization"
+    pid = os.fork()
+    if pid == 0:
+        try:
+            runner.run_pilot(config, output_dir=output, wall_time_seconds=60)
+        finally:
+            os._exit(0)
+    checkpoint_path = output / f"{prefix}.checkpoint.json"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if checkpoint_path.is_file():
+            try:
+                checkpoint = json.loads(checkpoint_path.read_text())
+            except json.JSONDecodeError:
+                checkpoint = {}
+            if any(row.get("status") == "complete" for row in checkpoint.get("cells", [])):
+                break
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGTERM)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    report = runner.load_json(output / f"{prefix}.json")
+    assert report["status"] == "partial"
+    assert report["interrupted"]
+
+
+def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path, monkeypatch):
+    """Exercise TERM in a single-threaded runner process, not a forked pytest parent."""
+    import os
+    import signal
     import time
     from types import SimpleNamespace
 
@@ -990,12 +1362,19 @@ def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path
         lambda _prior: (time.sleep(2), {"cell_id": np.array([0, 0, 1, 1])})[1],
     )
     monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
-    timer = threading.Timer(0.2, lambda: os.kill(os.getpid(), signal.SIGTERM))
-    timer.start()
-    try:
-        report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=10)
-    finally:
-        timer.cancel()
+    resolved = runner.resolve_config(config)
+    prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
+    pid = os.fork()
+    if pid == 0:
+        try:
+            runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=10)
+        finally:
+            os._exit(0)
+    time.sleep(0.2)
+    os.kill(pid, signal.SIGTERM)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    report = runner.load_json(tmp_path / f"{prefix}.json")
     assert report["status"] == "partial"
     assert report["interrupted"]
     checkpoint = runner.load_json(report["checkpoint_path"])
