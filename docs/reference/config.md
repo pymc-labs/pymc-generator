@@ -656,7 +656,11 @@ at `76`.
 - **Ordinary-cell wiring changes other draws.** When changing only inclusion
   probabilities, an ordinary active-size cell whose realised wiring matches
   the default — no schedule component on any input, and `hf` / `pulse` on every
-  input whose range is live — retains the default legacy draws. Once its wiring
+  input whose range is live — retains the default legacy draws. A `sample_scm`
+  world whose inputs carry no schedule component likewise keeps the default
+  world's draws: its random-stream reference leaves out the schedule audit
+  outputs (corpus generation gets the same effect by requesting them ahead of the
+  legacy names). Once its wiring
   differs, the random variables its outputs reach, and the order a compiled
   draw visits them (which assigns random streams), can change: at the same
   seed, legacy parameters, innovations and other components generally change

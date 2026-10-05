@@ -409,6 +409,16 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- **`sample_scm` keeps default streams while admitted schedule components are
+  carried by no input (#28).** The world's stream reference listed the schedule
+  audit outputs (`treatment_activity` … `outcome_natural`) among the legacy
+  outputs. Without treatment shocks, admitting a schedule component that no
+  input carries therefore reassigned many random streams (7–19 of 39 in
+  measured worlds). Those outputs are now left out of the reference, so
+  variables only they reach are appended — the effect corpus generation gets by
+  requesting them first. Nothing changes with every feature off; feature-enabled
+  worlds that admit a schedule component can differ from the #27 pre-release
+  (see the migration note).
 - **Template parent sums reproduce main again (#28).** #27 replaced the
   template's n-ary parent sums with `pt.dot`. PyMC's draw walk then reached
   coefficients before parents and reassigned 9 of 39 random streams in the

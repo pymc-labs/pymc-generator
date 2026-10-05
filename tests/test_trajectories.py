@@ -381,6 +381,42 @@ def test_unwired_schedules_reproduce_the_shocks_only_corpus(shock_twins):
     }
 
 
+@pytest.mark.parametrize("n_treatment_shocks", (0, 1), ids=("no_shocks", "shocks"))
+def test_unwired_schedules_reproduce_the_default_single_world(n_treatment_shocks):
+    """A world whose inputs carry no schedule component keeps the default world's draws.
+
+    Its schedule audit outputs are extra outputs, not a different stream layout:
+    every shared array, primitive draw and innovation is the default world's.
+    Without shocks this needs the audit outputs out of the stream reference; with
+    shocks the natural pair aliases the unshocked pair, which precedes them.
+    """
+    default = make_scm_prior(**_PROBE, n_treatment_shocks=n_treatment_shocks)
+    inert = make_scm_prior(
+        **_PROBE, n_treatment_shocks=n_treatment_shocks, **_schedule_probs(1e-9), **_SHORT_GATES
+    )
+    base, world = pg.sample_scm(default, seed=3), pg.sample_scm(inert, seed=3)
+    structural = world.extras["structural"]
+    for x in TRAJECTORY_INPUTS:
+        for component in SCHEDULE_COMPONENTS:
+            assert not structural[structural_key(x, component)].any(), (x, component)
+    assert set(world.data) - set(base.data) == set(_CORPUS_TRAJECTORY_NAMES) | {
+        "treatments_natural",
+        "outcome_natural",
+    }
+    assert set(base.primitive_parameters) == set(world.primitive_parameters)
+    for name, values in (
+        ("data", (base.data, world.data)),
+        ("primitive", (base.primitive_parameters, world.primitive_parameters)),
+        ("exogenous", (base.exogenous, world.exogenous)),
+        ("g", (base.g, world.g)),
+    ):
+        expected, actual = values
+        assert set(expected) <= set(actual), name
+        for key, value in expected.items():
+            assert actual[key].dtype == value.dtype, (name, key)
+            assert actual[key].tobytes() == value.tobytes(), (name, key)
+
+
 # -- 2. concrete graph ----------------------------------------------------------
 
 _N_T, _N_C, _N_L, _T, _BURN = 2, 2, 1, 24, 8
