@@ -107,6 +107,21 @@ differing from `ce068d5`'s pinned blob ids. Unset, the test writes `ce068d5`'s
 commit, or outside a git checkout such as an sdist, it skips. Run it with
 `uv run --no-sync pytest tests/test_main_reproduction.py --runslow -m slow`.
 
+The fast `tests/test_rng_owner_contract.py` requires this tree to reseed random
+variables in main's order — PyMC assigns streams by discovery order, so this is
+the platform-independent part of the contract — for every carryover × saturation
+pair of a probe cell (corpus cell and `sample_scm` world), a shock corpus and
+three template layouts. The orders live in the generated
+`tests/_rng_owner_baseline.py`. Regenerate it only from a checkout of main at
+`$MAIN`, from a neutral directory, then confirm this tree still reproduces it
+(the diff must be empty):
+
+```bash
+cd /tmp && OUT="$REPO/tests/_rng_owner_baseline.py"
+PYTHONPATH="$MAIN" "$REPO/.venv/bin/python" "$REPO/tests/_rng_owners.py" > "$OUT"
+PYTHONPATH="$REPO" "$REPO/.venv/bin/python" "$REPO/tests/_rng_owners.py" | diff - "$OUT"
+```
+
 For scientific or numerical changes, compare representative generated arrays
 before and after, record dependency versions and seeds, and explain any intended
 differences. Recovery examples must report divergences, effective sample sizes,

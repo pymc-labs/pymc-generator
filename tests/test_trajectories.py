@@ -19,11 +19,14 @@ columns; otherwise ``rtol=1e-12`` with ``atol=1e-12·max|operand|``.
 
 from __future__ import annotations
 
+import importlib.util
 import itertools
 import math
 import re
 import warnings
 from dataclasses import replace
+from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import numpy as np
@@ -35,6 +38,7 @@ import pymc_generator as pg
 from pymc_generator import make_scm_prior
 from pymc_generator.presets import TRAJECTORY_ARCHETYPES, TRAJECTORY_PRESETS
 from pymc_generator.sampler import (
+    _CORPUS_NATURAL_NAMES,
     _CORPUS_TRAJECTORY_NAMES,
     CARRYOVER_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
@@ -124,6 +128,20 @@ def _on_run(duty: float, period: int) -> int:
 
 # -- 1. seed contract -----------------------------------------------------------
 
+
+def _load(name: str) -> ModuleType:
+    """A helper module of this directory, loaded by path: it is not a test module."""
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: Random-stream owner orders: their measurement, and main's recorded values.
+_owners = _load("_rng_owners")
+_main = _load("_rng_owner_baseline")
+
 _PROBE = {"n_treatments": 2, "n_covariates": 1, "n_latent": 1, "n_time_steps": 16}
 
 #: Shared by the corpus twins: rejections at this CV floor exercise the realism path.
@@ -152,19 +170,37 @@ def _probe_cell() -> dict[str, np.ndarray]:
     }
 
 
+def _generate(cfg: SCMPrior) -> tuple[dict[str, Any], list]:
+    """``sample_prior_predictive`` plus the ``(names, reference)`` of every draw call, in order."""
+    with _owners.capture_requests() as requests:
+        corpus = pg.sample_prior_predictive(cfg)
+    return corpus, requests
+
+
 @pytest.fixture(scope="module")
 def default_corpus():
     return pg.sample_prior_predictive(make_scm_prior(**_TWIN))
 
 
 @pytest.fixture(scope="module")
-def shock_twins():
-    """Shocks only, and shocks plus every schedule component at probability ~0."""
-    base = pg.sample_prior_predictive(make_scm_prior(**_TWIN, n_treatment_shocks=1))
-    inert = pg.sample_prior_predictive(
+def inert_schedule_generation():
+    """Every schedule component at probability ~0, without shocks."""
+    return _generate(make_scm_prior(**_TWIN, **_schedule_probs(1e-9), **_SHORT_GATES))
+
+
+@pytest.fixture(scope="module")
+def inert_shock_generation():
+    """Shocks plus every schedule component at probability ~0."""
+    return _generate(
         make_scm_prior(**_TWIN, n_treatment_shocks=1, **_schedule_probs(1e-9), **_SHORT_GATES)
     )
-    return base, inert
+
+
+@pytest.fixture(scope="module")
+def shock_twins(inert_shock_generation):
+    """Shocks only, and shocks plus every schedule component at probability ~0."""
+    base = pg.sample_prior_predictive(make_scm_prior(**_TWIN, n_treatment_shocks=1))
+    return base, inert_shock_generation[0]
 
 
 _LEGACY_STRUCTURE_KEYS = {
@@ -365,20 +401,52 @@ def test_default_corpus_carries_no_trajectory_block(default_corpus, shock_twins)
         assert "trajectory" not in corpus["diagnostics"]
 
 
-def test_unwired_schedules_reproduce_the_shocks_only_corpus(shock_twins):
-    """Unselected schedules leave seeded series and realism filtering unchanged."""
-    base, inert = shock_twins
+@pytest.mark.parametrize("twins", ("no_shocks", "shocks"), ids=("no_shocks", "shocks"))
+def test_unwired_schedules_reproduce_the_default_corpus(request, twins):
+    """Unselected schedules leave seeded series and realism filtering unchanged, byte for byte."""
+    if twins == "shocks":
+        base, inert = request.getfixturevalue("shock_twins")
+    else:
+        base = request.getfixturevalue("default_corpus")
+        inert = request.getfixturevalue("inert_schedule_generation")[0]
     assert not inert["treatment_components"][..., _SCHEDULE_COLUMNS].any()
     assert not inert["covariate_components"][..., _SCHEDULE_COLUMNS].any()
 
     assert set(inert) - set(base) == set(TRAJECTORY_ARRAY_FIELDS)
     for key, value in base.items():
         if isinstance(value, np.ndarray):
-            np.testing.assert_array_equal(inert[key], value, err_msg=key)
+            assert inert[key].dtype == value.dtype, key
+            assert inert[key].tobytes() == value.tobytes(), key
     strip = {"timing", "trajectory"}
     assert {k: v for k, v in inert["diagnostics"].items() if k not in strip} == {
         k: v for k, v in base["diagnostics"].items() if k not in strip
     }
+
+
+def test_rng_owner_order_is_the_base_order_whenever_nothing_is_wired(
+    inert_schedule_generation, inert_shock_generation
+):
+    """The draw-name slot rule keeps every seeded stream where main put it.
+
+    The names are the requests the corpus loop actually made. Without shocks the
+    trajectory and natural names lead; with shocks the natural pair takes the
+    unshocked pair's trailing slot. In a cell where no input carries a schedule
+    component, either way must reseed the RNGs exactly as main did.
+    """
+    inert, shock_inert = (
+        _owners.single_request(requests)
+        for _, requests in (inert_schedule_generation, inert_shock_generation)
+    )
+    trajectory_outputs = set(_CORPUS_TRAJECTORY_NAMES + _CORPUS_NATURAL_NAMES)
+    assert trajectory_outputs <= set(inert[0])
+    assert trajectory_outputs <= set(shock_inert[0])
+
+    def owners(request, **overrides):
+        return _owners.probe_order(make_scm_prior(**_PROBE, **overrides), "weibull/hill", request)
+
+    unwired = {**_schedule_probs(1e-9), **_SHORT_GATES}
+    assert owners(inert, **unwired) == _main.ORDINARY["weibull/hill"]
+    assert owners(shock_inert, n_treatment_shocks=1, **unwired) == _main.SHOCKS["weibull/hill"]
 
 
 @pytest.mark.parametrize("n_treatment_shocks", (0, 1), ids=("no_shocks", "shocks"))
