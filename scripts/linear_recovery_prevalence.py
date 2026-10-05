@@ -110,6 +110,21 @@ DEFAULT_STUDY: dict[str, Any] = {
     "pilot_wall_time_seconds": PILOT_WALL_LIMIT_SECONDS,
     "pilot_checkpoint_every_cells": 1,
 }
+# Accepted C2 report occupancy, ordered by the configured treatment/control
+# bands.  This is deliberately pinned independently of the checked-in CSV so
+# preserving only per-config totals cannot make a different distribution pass.
+COMPACT_OCCUPANCY_COUNTS: tuple[tuple[int, ...], ...] = (
+    (1, 2, 2, 1, 3, 3, 5, 1, 2, 3, 3, 2, 0, 1, 3, 0),
+    (1, 2, 0, 0, 4, 7, 3, 2, 0, 4, 2, 0, 1, 3, 1, 2),
+    (2, 4, 2, 0, 0, 1, 1, 1, 5, 4, 0, 4, 1, 2, 5, 0),
+    (0, 2, 2, 1, 2, 4, 3, 2, 2, 2, 3, 0, 2, 0, 4, 3),
+    (1, 2, 0, 2, 2, 5, 4, 2, 3, 3, 1, 1, 2, 0, 3, 1),
+    (2, 1, 2, 2, 1, 4, 2, 1, 1, 2, 3, 3, 1, 3, 1, 3),
+    (1, 1, 3, 0, 3, 1, 2, 2, 2, 3, 5, 2, 0, 1, 1, 5),
+    (1, 6, 3, 0, 1, 1, 2, 0, 0, 6, 4, 0, 2, 2, 3, 1),
+    (3, 0, 4, 1, 2, 0, 0, 2, 3, 2, 4, 2, 2, 1, 3, 3),
+    (2, 2, 3, 0, 0, 3, 3, 0, 1, 4, 5, 1, 4, 2, 1, 1),
+)
 STUDY_KEYS = frozenset(DEFAULT_STUDY)
 _FACTORY_KEYS = frozenset(("edge_budget", "nonlinearity", "trajectories"))
 _STUDY_ONLY_GENERATOR_KEYS = frozenset(("seed", "n_cells", "draws_per_cell"))
@@ -1884,18 +1899,19 @@ def validate_compact_summary(
     ):
         raise ValueError("compact CSV source provenance is not the accepted run")
     accounting = metadata["accounting"]
-    if (
-        not isinstance(accounting, Mapping)
-        or accounting.get("requested_cells") != 320
-        or accounting.get("requested_worlds") != 640
-    ):
+    expected_accounting = {
+        "requested_cells": 320,
+        "complete_cells": 320,
+        "realized_cells": 320,
+        "requested_worlds": 640,
+        "accepted_world_metrics": 640,
+        "evaluated_world_metrics": 640,
+        "failures": 0,
+        "generation_failures": 0,
+        "rejected_candidates": 0,
+    }
+    if accounting != expected_accounting:
         raise ValueError("compact CSV accounting is not the accepted 320-cell/640-world pilot")
-    if (
-        accounting.get("complete_cells") != 320
-        or accounting.get("accepted_world_metrics") != 640
-        or accounting.get("failures") != 0
-    ):
-        raise ValueError("compact CSV accounting is incomplete or records failures")
     artifact_hashes = metadata["artifact_sha256"]
     if not isinstance(artifact_hashes, Mapping) or set(artifact_hashes) != set(
         COMPACT_ARTIFACT_SHA256
@@ -2026,6 +2042,11 @@ def validate_compact_summary(
             raise ValueError("compact CSV occupancy is malformed")
         if row["status"] != ("available" if n_cells > 0 else "unavailable"):
             raise ValueError("compact CSV occupancy availability does not match n_cells")
+        treatment_index = DEFAULT_STUDY["treatment_count_bands"].index(treatment_band)
+        control_index = DEFAULT_STUDY["control_count_bands"].index(control_band)
+        expected_count = COMPACT_OCCUPANCY_COUNTS[int(index)][4 * treatment_index + control_index]
+        if n_cells != expected_count:
+            raise ValueError("compact CSV occupancy count does not match the accepted matrix")
         occupancy_keys.add(key)
         cells_by_config[index] += n_cells
     if occupancy_keys != expected_occupancy_keys:

@@ -2062,7 +2062,7 @@ def _write_compact_mutation(source, destination, mutate):
         fields = list(reader.fieldnames or [])
     mutate(rows)
     with open(destination, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\\n")
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -2156,6 +2156,79 @@ def test_c2_compact_summary_rejects_duplicate_and_missing_matrix_keys(tmp_path):
         runner.validate_compact_summary(mutated)
 
 
+def test_c2_compact_summary_rejects_total_preserving_occupancy_redistribution(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    def redistribute(rows):
+        occupancy = [
+            row for row in rows if row["row_type"] == "occupancy" and row["config_index"] == "0"
+        ]
+        source = next(row for row in occupancy if row["key"].endswith("controls_3_5"))
+        destination = next(row for row in occupancy if row["key"].endswith("controls_1_2"))
+        assert int(source["n_cells"]) > 0
+        source["n_cells"] = str(int(source["n_cells"]) - 1)
+        destination["n_cells"] = str(int(destination["n_cells"]) + 1)
+
+    mutated = tmp_path / "redistributed-occupancy.csv"
+    _write_compact_mutation(
+        "docs/examples/data/linear-recovery-prevalence.csv", mutated, redistribute
+    )
+    with pytest.raises(ValueError, match="accepted matrix"):
+        runner.validate_compact_summary(mutated)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("realized_cells", 0),
+        ("evaluated_world_metrics", 0),
+        ("generation_failures", 99),
+        ("rejected_candidates", 99),
+    ],
+)
+def test_c2_compact_summary_rejects_each_omitted_accounting_mutation(tmp_path, field, value):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    def mutate(rows):
+        metadata = next(
+            row for row in rows if row["row_type"] == "metadata" and row["key"] == "accounting"
+        )
+        accounting = json.loads(metadata["value"])
+        accounting[field] = value
+        metadata["value"] = json.dumps(accounting, separators=(",", ":"))
+
+    mutated = tmp_path / f"accounting-{field}.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, mutate)
+    with pytest.raises(ValueError, match="accounting"):
+        runner.validate_compact_summary(mutated)
+
+
+def test_c2_compact_summary_rejects_grouped_omitted_accounting_mutation(tmp_path):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    def mutate(rows):
+        metadata = next(
+            row for row in rows if row["row_type"] == "metadata" and row["key"] == "accounting"
+        )
+        accounting = json.loads(metadata["value"])
+        accounting.update(
+            realized_cells=0,
+            evaluated_world_metrics=0,
+            generation_failures=99,
+            rejected_candidates=99,
+        )
+        metadata["value"] = json.dumps(accounting, separators=(",", ":"))
+
+    mutated = tmp_path / "accounting-grouped.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, mutate)
+    with pytest.raises(ValueError, match="accounting"):
+        runner.validate_compact_summary(mutated)
+
+
 def test_c2_compact_export_binds_supplied_source_bytes(tmp_path):
     import json
 
@@ -2201,6 +2274,39 @@ def test_c2_compact_export_binds_supplied_source_bytes(tmp_path):
             tmp_path / "alternate.csv",
             artifact_paths={**paths, "manifest": alternate_manifest},
         )
+
+
+def test_c2_compact_export_rejects_same_config_commit_alternate_manifest_bytes(tmp_path):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    prefix = Path(
+        "/home/teemu/pymc-labs/prior-generator-artifacts/issue-30-c2/linear-recovery-c2-b2a7fb98d69cc8ed"
+    )
+    report_path = Path(f"{prefix}.json")
+    manifest_path = Path(f"{prefix}.manifest.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    changed = dict(manifest, budget=dict(manifest["budget"], wall_time_seconds=5401.0))
+    alternate_manifest = tmp_path / "alternate-manifest.json"
+    alternate_manifest.write_text(json.dumps(changed), encoding="utf-8")
+    assert runner.load_json(alternate_manifest) == changed
+    assert changed["config_hash"] == manifest["config_hash"]
+    assert (
+        changed["source_provenance"]["source_commit"]
+        == manifest["source_provenance"]["source_commit"]
+    )
+
+    alternate_report = dict(report, manifest_path=str(alternate_manifest))
+    paths = {
+        "report": report_path,
+        "checkpoint": Path(report["checkpoint_path"]),
+        "manifest": alternate_manifest,
+        "run_log": manifest_path.with_name("pilot-run.log"),
+    }
+    with pytest.raises(ValueError, match="artifact bytes"):
+        runner._validated_artifact_hashes(alternate_report, changed, paths)
 
 
 def test_c2_notebook_is_qualified_and_cleared():
