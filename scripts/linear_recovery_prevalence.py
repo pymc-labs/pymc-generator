@@ -2003,15 +2003,40 @@ def run_pilot(
         # Never clamp an overrun: artifacts expose actual elapsed accounting.
         return consumed + float(clock()) - started
 
-    def persist() -> None:
+    def persist() -> bool:
+        if remaining_hard_budget() <= 0.0:
+            return False
         checkpoint["wall_elapsed_seconds"] = elapsed()
         _write_json(checkpoint_path, checkpoint)
+        return True
 
     def finalization_overdue() -> bool:
         return float(clock()) >= finalization_deadline
 
     def remaining_hard_budget() -> float:
         return hard_deadline - float(clock())
+
+    def incomplete_result(reason: str, interrupted_value: bool) -> dict[str, Any]:
+        """Return recoverable state when no report write may safely begin."""
+        existing_evidence = [
+            str(path) for path in (manifest_path, checkpoint_path) if path.exists()
+        ]
+        return {
+            "status": "partial",
+            "finalization_status": "incomplete",
+            "incomplete": True,
+            "config_hash": resolved["config_hash"],
+            # An existing path may belong to an earlier resume attempt; this
+            # invocation did not safely finalize a report after the deadline.
+            "report_available": False,
+            "report_path": str(report_path),
+            "checkpoint_path": str(checkpoint_path),
+            "manifest_path": str(manifest_path),
+            "existing_evidence": existing_evidence,
+            "last_atomic_checkpoint": (str(checkpoint_path) if checkpoint_path.exists() else None),
+            "stop_reason": reason,
+            "interrupted": interrupted_value,
+        }
 
     def upsert_failure(config_index: int, item: Mapping[str, Any], reason: str) -> None:
         failures = [
@@ -2036,8 +2061,15 @@ def run_pilot(
             if int(row.get("config_index", -1)) != config_index
         ]
 
+    # Persist an initial checkpoint before the first bounded generation phase.
+    # If the budget is already gone, do not claim a checkpoint that was never
+    # safely written.
+    if not checkpoint_path.exists() and remaining_hard_budget() > 0.0:
+        persist()
+
     interrupted = False
     old_term = None
+    fallback_report: dict[str, Any] | None = None
 
     def restore_term_handler() -> None:
         if old_term is None:
@@ -2204,9 +2236,11 @@ def run_pilot(
         if cells_since_checkpoint:
             persist()
 
-        # Build the checkpoint-only candidate before normal aggregation.  This
-        # keeps fallback construction inside the reserved interval even if a
-        # slow summary overruns the soft deadline; it uses refs/counts only.
+        # Build the checkpoint-only candidate before normal aggregation.  The
+        # positive-budget check is deliberately before construction: after the
+        # hard deadline only the last atomic checkpoint is recoverable evidence.
+        if remaining_hard_budget() <= 0.0:
+            raise _PilotDeadlineExceededError("wall deadline reached before finalization")
         fallback_report = _minimal_partial_report(
             checkpoint,
             configs,
@@ -2222,6 +2256,10 @@ def run_pilot(
             elapsed,
             limit,
         )
+        if remaining_hard_budget() <= 0.0:
+            raise _PilotDeadlineExceededError("wall deadline reached during fallback preparation")
+        if finalization_overdue():
+            raise _PilotDeadlineExceededError("wall deadline reached during finalization")
         report = _build_pilot_report(
             checkpoint,
             configs,
@@ -2239,29 +2277,32 @@ def run_pilot(
             finalization_overdue,
             limit,
         )
-        if finalization_overdue():
+        if finalization_overdue() or remaining_hard_budget() <= 0.0:
             raise _PilotDeadlineExceededError("wall deadline reached during finalization")
         _write_json(report_path, report)
         # Account for persistence work explicitly; elapsed() is never clamped.
         report["accounting"]["wall_elapsed_seconds"] = elapsed()
         checkpoint["status"] = report["status"]
-        if finalization_overdue():
+        if finalization_overdue() or remaining_hard_budget() <= 0.0:
             raise _PilotDeadlineExceededError("wall deadline reached during finalization")
         persist()
         report["accounting"]["wall_elapsed_seconds"] = elapsed()
-        if finalization_overdue():
+        if finalization_overdue() or remaining_hard_budget() <= 0.0:
             raise _PilotDeadlineExceededError("wall deadline reached during finalization")
         _write_json(report_path, report)
     except (_PilotInterruptedError, _PilotDeadlineExceededError) as exc:
         partial = True
         interrupted = interrupted or isinstance(exc, _PilotInterruptedError)
         stop_reason = str(exc)
-        # The fallback candidate was built from checkpointed refs/counts before
-        # normal aggregation.  If interruption occurred earlier, build it now.
-        try:
-            report = fallback_report
-        except UnboundLocalError:
-            report = _minimal_partial_report(
+        # Once the hard deadline is gone, do not construct a fallback, aggregate,
+        # or begin another write sequence.  The last atomic checkpoint is the
+        # truthful recoverable partial result.
+        if remaining_hard_budget() <= 0.0:
+            return incomplete_result(stop_reason, interrupted)
+        if fallback_report is None:
+            if remaining_hard_budget() <= 0.0:
+                return incomplete_result(stop_reason, interrupted)
+            fallback_report = _minimal_partial_report(
                 checkpoint,
                 configs,
                 study,
@@ -2276,39 +2317,47 @@ def run_pilot(
                 elapsed,
                 limit,
             )
+        report = fallback_report
         report["stop_reason"] = stop_reason
         report["interrupted"] = interrupted
         checkpoint["status"] = "partial"
         # The finite reserve cannot make arbitrary filesystem/OS stalls
-        # impossible.  Check remaining hard budget before writing; once an
-        # atomic write has begun, its filesystem latency is inherent.  The
-        # candidate was prepared before this check, so no fallback scan starts
-        # after the hard deadline.
-        hard_budget_remaining = remaining_hard_budget()
-        if hard_budget_remaining <= 0.0:
-            report["stop_reason"] = stop_reason
+        # impossible.  Check before each new operation; an already-started
+        # atomic write is the only unavoidable I/O after a clock overrun.
+        if remaining_hard_budget() <= 0.0:
+            return incomplete_result(stop_reason, interrupted)
         try:
             _write_json(report_path, report)
         except _PilotInterruptedError:
             interrupted = True
             report["interrupted"] = True
+            if remaining_hard_budget() <= 0.0:
+                return incomplete_result(stop_reason, interrupted)
             _write_json(report_path, report)
+        if remaining_hard_budget() <= 0.0:
+            return incomplete_result(stop_reason, interrupted)
         try:
             persist()
         except _PilotInterruptedError:
             interrupted = True
             report["interrupted"] = True
             # Keep TERM handling installed; the outer finally restores it.
+            if remaining_hard_budget() <= 0.0:
+                return incomplete_result(stop_reason, interrupted)
             persist()
         report["accounting"]["wall_elapsed_seconds"] = elapsed()
+        if remaining_hard_budget() <= 0.0:
+            return incomplete_result(stop_reason, interrupted)
         try:
             _write_json(report_path, report)
         except _PilotInterruptedError:
             interrupted = True
             report["interrupted"] = True
+            if remaining_hard_budget() <= 0.0:
+                return incomplete_result(stop_reason, interrupted)
             _write_json(report_path, report)
     except BaseException:
-        if cells_since_checkpoint:
+        if cells_since_checkpoint and remaining_hard_budget() > 0.0:
             persist()
         raise
     finally:
@@ -2337,7 +2386,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         json.dumps(
             {
-                "report": report["report_path"],
+                "report": (report["report_path"] if report.get("report_available", True) else None),
                 "status": report.get("status", "calibration"),
                 "config_hash": report["config_hash"],
             },

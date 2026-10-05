@@ -1271,6 +1271,7 @@ def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeyp
 def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplication(
     tmp_path, monkeypatch
 ):
+    import copy
     from types import SimpleNamespace
 
     from scripts import linear_recovery_prevalence as runner
@@ -1313,6 +1314,23 @@ def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplicat
     checkpoint["worlds"] = [row for row in checkpoint["worlds"] if row["cell_id"] == 0]
     checkpoint["wall_elapsed_seconds"] = 3.0
     runner._write_json(Path(seeded["checkpoint_path"]), checkpoint)
+    previous_cells = copy.deepcopy(checkpoint["cells"])
+    previous_worlds = copy.deepcopy(checkpoint["worlds"])
+
+    def assert_previous_records_preserved(current):
+        def world_key(row):
+            return row["config_index"], row["cell_id"], row["sibling_index"]
+
+        def cell_key(row):
+            return row["config_index"], row["cell_id"]
+
+        worlds = {world_key(row): row for row in current["worlds"]}
+        cells = {cell_key(row): row for row in current["cells"]}
+        assert len(worlds) == len(current["worlds"])
+        assert len(cells) == len(current["cells"])
+        assert all(worlds[world_key(row)] == row for row in previous_worlds)
+        assert all(cells[cell_key(row)] == row for row in previous_cells)
+
     marker.write_text("0")
 
     second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
@@ -1321,6 +1339,7 @@ def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplicat
     assert len(checkpoint["config_failures"]) == 1
     assert second_persisted["accounting"]["failures"] == 1
     assert len(checkpoint["worlds"]) == 20
+    assert_previous_records_preserved(checkpoint)
     assert second_persisted["accounting"]["wall_elapsed_seconds"] >= 3.0
     checkpoint["wall_elapsed_seconds"] = 7.0
     runner._write_json(Path(second["checkpoint_path"]), checkpoint)
@@ -1331,6 +1350,7 @@ def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplicat
     assert len(checkpoint["config_failures"]) == 1
     assert third_persisted["accounting"]["failures"] == 1
     assert len(checkpoint["worlds"]) == 20
+    assert_previous_records_preserved(checkpoint)
     checkpoint["wall_elapsed_seconds"] = 11.0
     runner._write_json(Path(third["checkpoint_path"]), checkpoint)
 
@@ -1343,6 +1363,7 @@ def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplicat
     assert persisted["accounting"]["failures"] == 0
     assert persisted_checkpoint["config_failures"] == []
     assert len(persisted_checkpoint["worlds"]) == 40
+    assert_previous_records_preserved(persisted_checkpoint)
     assert len(success["configs"]) == 10
     assert success["accounting"]["accepted_world_metrics"] == 40
 
@@ -1426,13 +1447,39 @@ def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, 
         ),
     )
     clock_state = {"value": 0.0}
+    resolved = runner.resolve_config(config)
+    checkpoint_path = (
+        tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.checkpoint.json"
+    )
     original_cells = runner._pilot_cell_records
 
     def overrun(*args, **kwargs):
+        # The initial checkpoint is persisted before the first blocking phase.
+        assert checkpoint_path.exists()
         clock_state["value"] = 100.0
         return original_cells(*args, **kwargs)
 
     monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
+    calls = []
+    original_minimal = runner._minimal_partial_report
+    original_full = runner._build_pilot_report
+    original_write = runner._write_json
+
+    def track_minimal(*args, **kwargs):
+        calls.append(("minimal", clock_state["value"]))
+        return original_minimal(*args, **kwargs)
+
+    def track_full(*args, **kwargs):
+        calls.append(("full", clock_state["value"]))
+        return original_full(*args, **kwargs)
+
+    def track_write(path, value):
+        calls.append(("write", clock_state["value"], path))
+        return original_write(path, value)
+
+    monkeypatch.setattr(runner, "_minimal_partial_report", track_minimal)
+    monkeypatch.setattr(runner, "_build_pilot_report", track_full)
+    monkeypatch.setattr(runner, "_write_json", track_write)
     import signal
 
     old_handler = signal.getsignal(signal.SIGTERM)
@@ -1442,15 +1489,164 @@ def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, 
         wall_time_seconds=60,
         clock=lambda: clock_state["value"],
     )
+    assert Path(report["checkpoint_path"]) == checkpoint_path
+    assert report["status"] == "partial"
+    assert report["finalization_status"] == "incomplete"
+    assert report["incomplete"]
+    assert report["config_hash"] == resolved["config_hash"]
+    assert not Path(report["report_path"]).exists()
+    assert set(report["existing_evidence"]) == {
+        str(Path(report["manifest_path"])),
+        str(checkpoint_path),
+    }
+    assert report["last_atomic_checkpoint"] == str(checkpoint_path)
+    assert runner.load_json(checkpoint_path)["cells"]
+    assert report["report_available"] is False
+    assert all(call[1] < 60.0 for call in calls)
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+
+
+def test_c2_early_expiry_without_checkpoint_reports_only_existing_manifest(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    resolved = runner.resolve_config(config)
+    calls = {"count": 0}
+
+    def clock():
+        calls["count"] += 1
+        return 0.0 if calls["count"] == 1 else 60.0
+
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=clock)
+    manifest_path = Path(report["manifest_path"])
+    checkpoint_path = Path(report["checkpoint_path"])
+    report_path = Path(report["report_path"])
+    assert report["status"] == "partial"
+    assert report["finalization_status"] == "incomplete"
+    assert report["incomplete"] is True
+    assert report["config_hash"] == resolved["config_hash"]
+    assert manifest_path.exists()
+    assert not checkpoint_path.exists()
+    assert not report_path.exists()
+    assert report["existing_evidence"] == [str(manifest_path)]
+    assert report["last_atomic_checkpoint"] is None
+
+
+def test_c2_main_reports_incomplete_without_claiming_report_file(tmp_path, monkeypatch, capsys):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_c2_mock_config()), encoding="utf-8")
+    config_hash = runner.resolve_config(_c2_mock_config())["config_hash"]
+    calls = {"count": 0}
+
+    def clock():
+        calls["count"] += 1
+        return 0.0 if calls["count"] == 1 else 60.0
+
+    original_run = runner.run_pilot
+
+    def early_expiry_run(*args, **kwargs):
+        kwargs["clock"] = clock
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "run_pilot", early_expiry_run)
+
+    assert (
+        runner.main(
+            [
+                "--mode",
+                "pilot",
+                "--config",
+                str(config_path),
+                "--output-dir",
+                str(tmp_path),
+                "--wall-time-seconds",
+                "60",
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "config_hash": config_hash,
+        "report": None,
+        "status": "partial",
+    }
+    report_path = tmp_path / f"linear-recovery-c2-{config_hash[:16]}.json"
+    assert not report_path.exists()
+
+
+def test_c2_nonterm_soft_deadline_persists_checkpoint_only_fallback(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: {"cell_id": np.array([0, 0, 1, 1])},
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    clock_state = {"value": 0.0}
+    original_cells = runner._pilot_cell_records
+
+    def overrun(*args, **kwargs):
+        clock_state["value"] = 55.0
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
+    limit = 60.0
+    reserve = min(
+        30.0,
+        max(
+            runner._PHASE_TERM_GRACE_SECONDS
+            + runner._PHASE_KILL_JOIN_SECONDS
+            + runner._MINIMAL_FINALIZATION_ALLOWANCE_SECONDS,
+            limit * 0.10,
+        ),
+    )
+    soft_deadline = limit - reserve
+    report = runner.run_pilot(
+        config, output_dir=tmp_path, wall_time_seconds=limit, clock=lambda: clock_state["value"]
+    )
     persisted = runner.load_json(report["report_path"])
-    persisted_checkpoint = runner.load_json(report["checkpoint_path"])
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    assert soft_deadline <= clock_state["value"] < limit
+    assert limit - clock_state["value"] > 0.0
     assert report["status"] == "partial"
     assert persisted["status"] == "partial"
-    assert persisted["configs"][0]["summary"]["status"] == "unavailable"
-    assert persisted_checkpoint["cells"]
-    assert report["accounting"]["wall_elapsed_seconds"] >= 100.0
-    assert persisted["accounting"]["wall_elapsed_seconds"] >= 100.0
-    assert signal.getsignal(signal.SIGTERM) == old_handler
+    assert persisted["accounting"]["wall_elapsed_seconds"] == clock_state["value"]
+    persisted_worlds = [row for item in persisted["configs"] for row in item["world_refs"]]
+    persisted_cells = [row for item in persisted["configs"] for row in item["cell_refs"]]
+    assert persisted_worlds == checkpoint["worlds"]
+    assert persisted_cells == checkpoint["cells"]
+    assert len(
+        {(row["config_index"], row["cell_id"], row["sibling_index"]) for row in persisted_worlds}
+    ) == len(persisted_worlds)
+    assert len({(row["config_index"], row["cell_id"]) for row in persisted_cells}) == len(
+        persisted_cells
+    )
 
 
 def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_path, monkeypatch):
@@ -1489,7 +1685,7 @@ def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_
     original_cells = runner._pilot_cell_records
 
     def overrun(*args, **kwargs):
-        clock_state["value"] = 100.0
+        clock_state["value"] = 50.0
         return original_cells(*args, **kwargs)
 
     monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
@@ -1521,10 +1717,14 @@ def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_
     assert persisted["interrupted"]
     assert checkpoint["cells"]
     assert len(checkpoint["worlds"]) == 40
+    # This is an ordinary overrun inside the finalization reserve, not an
+    # already-expired hard deadline: fallback may write an honest partial.
+    assert 0.0 < clock_state["value"] < 60.0
     assert signal.getsignal(signal.SIGTERM) == old_handler
 
 
 def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp_path, monkeypatch):
+    import copy
     import os
     import signal
     import time
@@ -1533,15 +1733,57 @@ def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp
     from scripts import linear_recovery_prevalence as runner
 
     config = _c2_mock_config()
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: {"cell_id": np.array([0, 0, 1, 1])},
+    )
+    seeded = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60)
+    checkpoint_path = Path(seeded["checkpoint_path"])
+    seeded_checkpoint = runner.load_json(checkpoint_path)
+    # Leave one completed cell persisted while the next cell fails.  Capture
+    # complete records, not just counts, so TERM cannot hide replacement data.
+    seeded_checkpoint["cells"] = [
+        row
+        for row in seeded_checkpoint["cells"]
+        if row["config_index"] == 0 and row["cell_id"] == 0
+    ]
+    seeded_checkpoint["worlds"] = [
+        row
+        for row in seeded_checkpoint["worlds"]
+        if row["config_index"] == 0 and row["cell_id"] == 0
+    ]
+    previous_cells = copy.deepcopy(seeded_checkpoint["cells"])
+    previous_worlds = copy.deepcopy(seeded_checkpoint["worlds"])
+
+    def world_keys(rows):
+        return [(row["config_index"], row["cell_id"], row["sibling_index"]) for row in rows]
+
+    assert len(world_keys(previous_worlds)) == len(set(world_keys(previous_worlds)))
+    runner._write_json(checkpoint_path, seeded_checkpoint)
+
     monkeypatch.setattr(
         runner,
         "sample_prior_predictive",
         lambda _prior: (_ for _ in ()).throw(RuntimeError("planned failure")),
-    )
-    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
-    resolved = runner.resolve_config(config)
-    checkpoint_path = (
-        tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.checkpoint.json"
     )
     original_write = runner._write_json
     injected = False
@@ -1564,6 +1806,9 @@ def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp
     assert report["status"] == "partial"
     assert persisted["interrupted"]
     assert len(checkpoint["config_failures"]) == 1
+    assert checkpoint["cells"][:1] == previous_cells
+    assert all(row in checkpoint["worlds"] for row in previous_worlds)
+    assert world_keys(checkpoint["worlds"]) == list(dict.fromkeys(world_keys(checkpoint["worlds"])))
     assert signal.getsignal(signal.SIGTERM) == old_handler
 
 
