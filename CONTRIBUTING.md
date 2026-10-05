@@ -91,6 +91,22 @@ RNG draw order is deliberate: disabled features consume no RNG. Changes to
 draw order, numerical dependencies, or generation semantics require explicit
 evidence and migration notes; cross-platform bitwise equality is not promised.
 
+With every opt-in feature off, generation must reproduce main at `ce068d5` byte
+for byte. The slow test `tests/test_main_reproduction.py` runs
+`tests/_golden_probe.py` once against main's package tree and once against the
+checkout, with the same interpreter and dependencies, and compares the dtype,
+shape and bytes of every array its features-off matrix records: seeded corpora
+(with their raw candidate batches), `sample_scm` worlds, fixed-point oracle
+evaluations, `DataGenerator` batches and template draws. Main's tree comes from
+`PYMC_GENERATOR_BASELINE_TREE`, a checkout
+of `ce068d598fc0438b511c265ef09d7ba33354cb48` (CI makes one). A value that is set
+but unusable fails the test: no `pymc_generator/`, this checkout, or any file
+differing from `ce068d5`'s pinned blob ids. Unset, the test writes `ce068d5`'s
+`pymc_generator/` blobs from the clone's git objects; a shallow clone needs
+`git fetch origin ce068d598fc0438b511c265ef09d7ba33354cb48` first. Without the
+commit, or outside a git checkout such as an sdist, it skips. Run it with
+`uv run --no-sync pytest tests/test_main_reproduction.py --runslow -m slow`.
+
 For scientific or numerical changes, compare representative generated arrays
 before and after, record dependency versions and seeds, and explain any intended
 differences. Recovery examples must report divergences, effective sample sizes,
