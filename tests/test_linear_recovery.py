@@ -351,11 +351,17 @@ def test_c1_config_roundtrip_hash_and_two_valid_configurations():
             "trajectories": "texture",
             "nonlinearity": "diverse",
         },
-        "study": {**DEFAULT_STUDY, "n_cells": 2, "draws_per_cell": 1},
+        "study": {
+            **DEFAULT_STUDY,
+            "n_cells": 2,
+            "draws_per_cell": 1,
+            "treatment_count_bands": [[1, 2]],
+            "control_count_bands": [[1, 2]],
+        },
     }
     second = {
         **first,
-        "generator": {**first["generator"], "n_treatments": 3},
+        "generator": {**first["generator"], "n_time_steps": 17},
     }
     resolved_first = resolve_config(first)
     resolved_again = resolve_config(first)
@@ -431,7 +437,7 @@ def test_c1_design_semantics_keep_constant_active_inputs_and_separate_causal_pat
     )
     assert result["rank_deficient"]
     assert result["constant_active_inputs_retained"]
-    assert result["padded_columns_excluded_by_mask"]
+    assert not result["padded_columns_excluded_by_mask"]
     assert result["causal_path_present"]
     assert "not a multicollinearity" in result["causal_path_interpretation"]
     paths = classify_graph_paths(
@@ -440,6 +446,113 @@ def test_c1_design_semantics_keep_constant_active_inputs_and_separate_causal_pat
     assert paths["direct_treatment_outcome_reachability"]
     assert paths["shared_latent_confounding"]
     assert paths["mediated_or_observed_path"]
+
+    disjoint = classify_graph_paths(
+        {
+            "g_cy": [1],
+            "g_dc": [[1], [0]],
+            "g_dy": [0, 1],
+            "g_dz": [[0], [0]],
+            "g_zc": [[1]],
+            "g_zy": [1],
+        },
+        focal_treatment=0,
+    )
+    assert not disjoint["shared_latent_confounding"]
+    mediated = classify_graph_paths(
+        {"g_cy": [1], "g_dc": [[0]], "g_dy": [0], "g_dz": [[1]], "g_zc": [[1]], "g_zy": [1]},
+        focal_treatment=0,
+    )
+    assert mediated["potential_unobserved_confounding"]
+    treatment_only = classify_graph_paths(
+        {"g_cy": [1], "g_dc": [[1]], "g_dy": [0]}, focal_treatment=0
+    )
+    assert not treatment_only["potential_unobserved_confounding"]
+
+
+def test_c1_rejections_exclude_failures_from_evaluated_candidates():
+    from types import SimpleNamespace
+
+    from scripts.linear_recovery_prevalence import count_accounting
+
+    prior = SimpleNamespace(
+        n_cells=3,
+        draws_per_cell=1,
+        n_treatments=1,
+        n_covariates=1,
+        n_treatments_active_range=(1, 1),
+        n_covariates_active_range=(1, 1),
+    )
+    corpus = {
+        "treatment_active_mask": np.ones((3, 1), dtype=bool),
+        "covariate_active_mask": np.ones((3, 1), dtype=bool),
+        "cell_id": np.arange(3),
+        "diagnostics": {"n_draws_evaluated": 7, "n_draw_failures": 2},
+    }
+    study = {
+        "treatment_count_bands": [[1, 1]],
+        "control_count_bands": [[1, 1]],
+    }
+    accounting = count_accounting(corpus, prior, study)
+    assert accounting["rejected_candidates"] == 4
+    assert accounting["generation_failures"] == 2
+    prior_with_two_counts = SimpleNamespace(
+        n_cells=3,
+        draws_per_cell=1,
+        n_treatments=2,
+        n_covariates=2,
+        n_treatments_active_range=(1, 2),
+        n_covariates_active_range=(1, 2),
+    )
+    zero_band = count_accounting(
+        {
+            **corpus,
+            "treatment_active_mask": np.ones((3, 2), dtype=bool),
+            "covariate_active_mask": np.ones((3, 2), dtype=bool),
+        },
+        prior_with_two_counts,
+        {"treatment_count_bands": [[1, 1], [2, 2]], "control_count_bands": [[1, 1], [2, 2]]},
+    )
+    assert zero_band["count_band_accounting"]["n_empty_cell_band_strata"] == 3
+
+
+def test_c1_band_validation_rejects_gaps_and_incomplete_ranges():
+    import pytest
+
+    from scripts.linear_recovery_prevalence import resolve_config
+
+    config = {
+        "generator": {"n_treatments": 3, "n_covariates": 3, "n_latent": 1},
+        "study": {
+            "treatment_count_bands": [[1, 1], [3, 3]],
+            "control_count_bands": [[1, 3]],
+        },
+    }
+    with pytest.raises(ValueError, match="non-overlapping|gap|cover"):
+        resolve_config(config)
+    overlap = {
+        **config,
+        "study": {
+            "treatment_count_bands": [[1, 2], [2, 3]],
+            "control_count_bands": [[1, 3]],
+        },
+    }
+    with pytest.raises(ValueError, match="non-overlapping"):
+        resolve_config(overlap)
+    eleven = {
+        "generator": {
+            "n_treatments": 11,
+            "n_covariates": 11,
+            "n_latent": 1,
+            "n_treatments_active_range": [1, 11],
+            "n_covariates_active_range": [1, 11],
+        },
+        "study": {
+            "treatment_count_bands": [[1, 10], [11, 11]],
+            "control_count_bands": [[1, 10], [11, 11]],
+        },
+    }
+    assert resolve_config(eleven)["generator_factory"]["n_treatments"] == 11
 
 
 __all__ = [

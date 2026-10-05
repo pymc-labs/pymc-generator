@@ -7,6 +7,7 @@
     "n_treatments_active_range": [1, 10],
     "n_covariates_active_range": [1, 10],
     "n_latent_active_range": [1, 1],
+    "active_count_allocation": "independent",
     "n_time_steps": 104,
     "trajectories": "composable",
     "nonlinearity": "diverse"

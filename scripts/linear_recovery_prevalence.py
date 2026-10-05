@@ -61,6 +61,22 @@ DEFAULT_STUDY: dict[str, Any] = {
 STUDY_KEYS = frozenset(DEFAULT_STUDY)
 _FACTORY_KEYS = frozenset(("edge_budget", "nonlinearity", "trajectories"))
 _STUDY_ONLY_GENERATOR_KEYS = frozenset(("seed", "n_cells", "draws_per_cell"))
+TRAJECTORY_STRESS_CONFIGS = (
+    "texture",
+    "always_on_spikes",
+    "periodic_on_off",
+    "delayed_start",
+    "ramp_up",
+    "decay_to_zero",
+    "level_doubling",
+    "seasonal",
+    "trend",
+)
+CALIBRATION_SEED_OFFSETS = {
+    "primary_low_active": 1,
+    "primary_high_active": 2,
+    **{f"stress_{name}": 10 + index for index, name in enumerate(TRAJECTORY_STRESS_CONFIGS)},
+}
 
 
 def _plain(value: Any) -> Any:
@@ -95,6 +111,29 @@ def _git_revision() -> str | None:
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def _git_dirty() -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return bool(result.stdout.strip())
+
+
+def _source_provenance() -> dict[str, Any]:
+    """Record source identity separately from the content-addressed config."""
+    return {
+        "package": "pymc-generator",
+        "package_version": __version__,
+        "source_commit": _git_revision(),
+        "source_dirty": _git_dirty(),
+    }
 
 
 def _as_range(value: Any, name: str) -> list[int] | None:
@@ -150,7 +189,7 @@ def validate_generator_config(config: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_bands(value: Any, name: str) -> list[list[int]]:
     if (
         not isinstance(value, list)
-        or len(value) != 4
+        or not value
         or any(
             not isinstance(band, list)
             or len(band) != 2
@@ -159,8 +198,31 @@ def _validate_bands(value: Any, name: str) -> list[list[int]]:
             for band in value
         )
     ):
-        raise ValueError(f"{name} must contain four ascending integer bands")
-    return [[int(band[0]), int(band[1])] for band in value]
+        raise ValueError(f"{name} must contain ascending integer bands")
+    bands = [[int(band[0]), int(band[1])] for band in value]
+    if any(left[1] >= right[0] for left, right in zip(bands, bands[1:])):
+        raise ValueError(f"{name} must be sorted and non-overlapping")
+    return bands
+
+
+def _validate_band_coverage(generator: Mapping[str, Any], study: Mapping[str, Any]) -> None:
+    """Require count bands to partition each effective active-count range."""
+    for dimension, bands in (
+        ("treatments", study["treatment_count_bands"]),
+        ("covariates", study["control_count_bands"]),
+    ):
+        field = f"n_{dimension}_active_range"
+        n_field = f"n_{dimension}"
+        active_range = generator.get(field, [1, generator[n_field]])
+        expected = [int(active_range[0]), int(active_range[1])]
+        if bands[0][0] != expected[0] or bands[-1][1] != expected[1]:
+            raise ValueError(
+                f"{dimension} count bands must completely cover effective active range "
+                f"{expected}, got {bands}"
+            )
+        for left, right in zip(bands, bands[1:]):
+            if right[0] != left[1] + 1:
+                raise ValueError(f"{dimension} count bands contain a gap: {bands}")
 
 
 def validate_study_settings(settings: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -257,20 +319,16 @@ def resolve_config(
         study = validate_study_settings(merged)
     else:
         study = embedded_study
+    _validate_band_coverage(generator, study)
     resolved = {
         "schema_version": SCHEMA_VERSION,
         "generator_factory": generator,
         "generator_resolved": None,
         "study": study,
-        "provenance": {
-            "package": "pymc-generator",
-            "package_version": __version__,
-            "git_revision": _git_revision(),
-        },
     }
     prior = make_prior(generator, study)
     resolved["generator_resolved"] = _plain(dataclasses.asdict(prior))
-    # Hash excludes the hash field itself and includes package/git provenance.
+    # The digest is content-addressed configuration only; source identity is separate.
     resolved["config_hash"] = config_hash(resolved)
     return resolved
 
@@ -369,23 +427,158 @@ def design_rank_condition(
         condition,
         rank_tolerance=rank_tolerance,
         constant_active_columns=int(np.count_nonzero(constant)),
+        padded_columns_excluded_by_mask=bool(np.any(~active)),
     )
 
 
-def classify_graph_paths(graph: Mapping[str, Any]) -> dict[str, bool]:
-    """Separate direct outcome reachability from a graph-confounding indicator."""
+def classify_graph_paths(
+    graph: Mapping[str, Any], focal_treatment: int | None = None
+) -> dict[str, Any]:
+    """Classify backdoor paths per latent and focal treatment.
+
+    A latent is a potential unobserved confounder only when it reaches both the
+    focal treatment and the outcome along a path that bypasses that treatment.
+    This avoids treating unrelated latent variables, or ``D -> C -> Y`` alone,
+    as confounding. Observed backdoor paths are reported separately because
+    their causal identification depends on adjustment.
+    """
+
+    def array(name: str, ndim: int) -> np.ndarray:
+        value = np.asarray(graph.get(name, []), dtype=bool)
+        if value.size == 0:
+            return np.zeros((0,) * ndim, dtype=bool)
+        if value.ndim != ndim:
+            raise ValueError(f"{name} must have {ndim} dimensions")
+        return value
+
+    g_dc = array("g_dc", 2)
+    g_dz = array("g_dz", 2)
+    g_dy = array("g_dy", 1)
+    g_zc = array("g_zc", 2)
+    g_zy = array("g_zy", 1)
+    g_cc = array("g_cc", 2)
+    g_zz = array("g_zz", 2)
+    g_cy = array("g_cy", 1)
+    n_latents = max(g_dc.shape[0], g_dz.shape[0], g_dy.size)
+    n_covariates = max(g_dz.shape[1] if g_dz.ndim == 2 else 0, g_zc.shape[0], g_zy.size)
+    n_treatments = max(
+        g_dc.shape[1] if g_dc.ndim == 2 else 0, g_zc.shape[1], g_cc.shape[0], g_cy.size
+    )
+    if focal_treatment is not None and not 0 <= focal_treatment < n_treatments:
+        raise ValueError("focal_treatment is outside the graph treatment range")
+
+    adjacency: dict[int, set[int]] = {}
+    n_nodes = n_latents + n_covariates + n_treatments + 1
+    outcome = n_nodes - 1
+    latent_offset = 0
+    covariate_offset = n_latents
+    treatment_offset = n_latents + n_covariates
+
+    def add_edges(source_offset: int, target_offset: int, matrix: np.ndarray) -> None:
+        for source, target in zip(*np.nonzero(matrix)):
+            adjacency.setdefault(source_offset + int(source), set()).add(
+                target_offset + int(target)
+            )
+
+    add_edges(latent_offset, treatment_offset, g_dc)
+    add_edges(latent_offset, covariate_offset, g_dz)
+    add_edges(covariate_offset, treatment_offset, g_zc)
+    add_edges(covariate_offset, covariate_offset, g_zz)
+    add_edges(treatment_offset, treatment_offset, g_cc)
+    for latent in np.flatnonzero(g_dy):
+        adjacency.setdefault(latent_offset + int(latent), set()).add(outcome)
+    for covariate in np.flatnonzero(g_zy):
+        adjacency.setdefault(covariate_offset + int(covariate), set()).add(outcome)
+    for treatment in np.flatnonzero(g_cy):
+        adjacency.setdefault(treatment_offset + int(treatment), set()).add(outcome)
+
+    def reachable(start: int, target: int, blocked: set[int] | None = None) -> bool:
+        blocked = blocked or set()
+        if start in blocked or target in blocked:
+            return False
+        pending = [start]
+        seen = {start}
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            for child in adjacency.get(current, ()):
+                if child not in blocked and child not in seen:
+                    seen.add(child)
+                    pending.append(child)
+        return False
+
+    focal = range(n_treatments) if focal_treatment is None else (focal_treatment,)
+    focal_results: dict[str, Any] = {}
+    for treatment in focal:
+        treatment_node = treatment_offset + treatment
+        latent_results = []
+        for latent in range(n_latents):
+            treatment_path = reachable(latent_offset + latent, treatment_node)
+            outcome_path = reachable(latent_offset + latent, outcome, blocked={treatment_node})
+            latent_results.append(
+                {
+                    "latent": latent,
+                    "reaches_focal_treatment": treatment_path,
+                    "reaches_outcome_bypassing_focal_treatment": outcome_path,
+                    "potential_unobserved_confounding": treatment_path and outcome_path,
+                }
+            )
+        observed_results = []
+        for covariate in range(n_covariates):
+            covariate_node = covariate_offset + covariate
+            treatment_path = reachable(covariate_node, treatment_node)
+            outcome_path = reachable(covariate_node, outcome, blocked={treatment_node})
+            observed_results.append(
+                {
+                    "covariate": covariate,
+                    "reaches_focal_treatment": treatment_path,
+                    "reaches_outcome_bypassing_focal_treatment": outcome_path,
+                    "adjustment_dependent_causal_identification": treatment_path and outcome_path,
+                }
+            )
+        focal_results[str(treatment)] = {
+            "latent_paths": latent_results,
+            "observed_backdoor_paths": observed_results,
+            "potential_unobserved_confounding": any(
+                item["potential_unobserved_confounding"] for item in latent_results
+            ),
+            "adjustment_dependent_causal_identification": any(
+                item["adjustment_dependent_causal_identification"] for item in observed_results
+            ),
+        }
 
     def any_edge(name: str) -> bool:
         return bool(np.asarray(graph.get(name, []), dtype=bool).any())
 
-    latent_to_treatment = any_edge("g_dc")
-    latent_to_outcome = any_edge("g_dy")
     return {
         "direct_treatment_outcome_reachability": any_edge("g_cy"),
-        "latent_to_treatment": latent_to_treatment,
-        "latent_to_outcome": latent_to_outcome,
-        "shared_latent_confounding": latent_to_treatment and latent_to_outcome,
-        "mediated_or_observed_path": any_edge("g_zc") and any_edge("g_zy"),
+        "raw_reachability": {
+            "latent_to_treatment": any_edge("g_dc"),
+            "latent_to_outcome": any_edge("g_dy"),
+            "mediated_latent_to_treatment": bool(g_dz.any() and g_zc.any()),
+            "mediated_latent_to_outcome": bool(g_dz.any() and g_zy.any()),
+        },
+        "focal_treatments": focal_results,
+        "potential_unobserved_confounding": any(
+            item["potential_unobserved_confounding"]
+            for result in focal_results.values()
+            for item in result["latent_paths"]
+        ),
+        "adjustment_dependent_causal_identification": any(
+            result["adjustment_dependent_causal_identification"]
+            for result in focal_results.values()
+        ),
+        # Compatibility labels retained with corrected semantics.
+        "latent_to_treatment": any_edge("g_dc"),
+        "latent_to_outcome": any_edge("g_dy"),
+        "shared_latent_confounding": any(
+            result["potential_unobserved_confounding"] for result in focal_results.values()
+        ),
+        "mediated_or_observed_path": any(
+            result["adjustment_dependent_causal_identification"]
+            for result in focal_results.values()
+        ),
     }
 
 
@@ -397,6 +590,7 @@ def classify_design(
     rank_tolerance: float,
     constant_active_columns: int = 0,
     causal_path: bool = False,
+    padded_columns_excluded_by_mask: bool = False,
 ) -> dict[str, Any]:
     """Classify rank/conditioning while keeping causal reachability separate."""
     if rank < 0 or n_columns < 1 or rank > n_columns:
@@ -417,7 +611,7 @@ def classify_design(
         "condition": float(condition) if np.isfinite(condition) else None,
         "constant_active_columns": int(constant_active_columns),
         "constant_active_inputs_retained": True,
-        "padded_columns_excluded_by_mask": True,
+        "padded_columns_excluded_by_mask": bool(padded_columns_excluded_by_mask),
         "causal_path_present": bool(causal_path),
         "causal_path_interpretation": "graph reachability/confounding flag; not a multicollinearity result",
     }
@@ -450,21 +644,50 @@ def _band_accounting(
     cell_controls = control_counts[cell_rows]
     cell_matrix = np.zeros((len(treatment_bands), len(control_bands)), dtype=int)
     world_matrix = np.zeros_like(cell_matrix)
+
+    def locate(row: int, column: int) -> tuple[int, int] | None:
+        treatment = next(
+            (i for i, (low, high) in enumerate(treatment_bands) if low <= row <= high), None
+        )
+        control = next(
+            (j for j, (low, high) in enumerate(control_bands) if low <= column <= high), None
+        )
+        return None if treatment is None or control is None else (treatment, control)
+
+    unmatched_worlds = 0
     for row, column in zip(treatment_counts, control_counts, strict=True):
-        for i, (t_low, t_high) in enumerate(treatment_bands):
-            for j, (c_low, c_high) in enumerate(control_bands):
-                if t_low <= row <= t_high and c_low <= column <= c_high:
-                    world_matrix[i, j] += 1
+        location = locate(int(row), int(column))
+        if location is None:
+            unmatched_worlds += 1
+        else:
+            world_matrix[location] += 1
+    unmatched_cells = 0
     for row, column in zip(cell_treatments, cell_controls, strict=True):
-        for i, (t_low, t_high) in enumerate(treatment_bands):
-            for j, (c_low, c_high) in enumerate(control_bands):
-                if t_low <= row <= t_high and c_low <= column <= c_high:
-                    cell_matrix[i, j] += 1
+        location = locate(int(row), int(column))
+        if location is None:
+            unmatched_cells += 1
+        else:
+            cell_matrix[location] += 1
+    if unmatched_worlds or unmatched_cells:
+        raise ValueError(
+            "count bands do not cover realized active counts: "
+            f"{unmatched_cells} cells and {unmatched_worlds} worlds"
+        )
+    empty_strata = [
+        [i, j]
+        for i in range(cell_matrix.shape[0])
+        for j in range(cell_matrix.shape[1])
+        if cell_matrix[i, j] == 0
+    ]
     return {
         "treatment_bands": treatment_bands,
         "control_bands": control_bands,
         "n_cells": cell_matrix.tolist(),
         "n_worlds": world_matrix.tolist(),
+        "empty_cell_band_strata": empty_strata,
+        "n_empty_cell_band_strata": len(empty_strata),
+        "unmatched_cells": unmatched_cells,
+        "unmatched_worlds": unmatched_worlds,
     }
 
 
@@ -472,6 +695,15 @@ def count_accounting(
     corpus: Mapping[str, Any], prior: SCMPrior, study: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Return realized cell/world counts, including rejected/failure placeholders."""
+    _validate_band_coverage(
+        {
+            "n_treatments": prior.n_treatments,
+            "n_covariates": prior.n_covariates,
+            "n_treatments_active_range": list(prior.n_treatments_active_range),
+            "n_covariates_active_range": list(prior.n_covariates_active_range),
+        },
+        study,
+    )
     summary = summarize_active_count_coverage(
         corpus["treatment_active_mask"],
         corpus["covariate_active_mask"],
@@ -484,7 +716,9 @@ def count_accounting(
     generation_diagnostics = corpus.get("diagnostics", {})
     evaluated = int(generation_diagnostics.get("n_draws_evaluated", n_worlds))
     failures = int(generation_diagnostics.get("n_draw_failures", 0))
-    rejected = max(0, evaluated - n_worlds - failures)
+    rejected = evaluated - n_worlds
+    if rejected < 0:
+        raise ValueError("evaluated candidates cannot be fewer than accepted worlds")
     return {
         "requested_cells": int(prior.n_cells),
         "realized_cells": n_cells,
@@ -505,21 +739,108 @@ def count_accounting(
     }
 
 
+def _active_dimension_generator(
+    generator: Mapping[str, Any], level: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build deterministic low/high active-count runtime stress variants."""
+    if level not in {"low", "high"}:
+        raise ValueError("active-dimension level must be low or high")
+    variant = dict(generator)
+    treatment_range = _as_range(
+        variant.get("n_treatments_active_range", [1, variant["n_treatments"]]),
+        "n_treatments_active_range",
+    )
+    covariate_range = _as_range(
+        variant.get("n_covariates_active_range", [1, variant["n_covariates"]]),
+        "n_covariates_active_range",
+    )
+    latent_range = _as_range(
+        variant.get("n_latent_active_range", [1, variant["n_latent"]]),
+        "n_latent_active_range",
+    )
+    assert treatment_range is not None and covariate_range is not None and latent_range is not None
+    if level == "low":
+        variant["n_treatments"] = max(2, treatment_range[0])
+        variant["n_covariates"] = max(2, covariate_range[0])
+        variant["n_latent"] = max(1, latent_range[0])
+        variant["n_time_steps"] = min(int(variant.get("n_time_steps", 104)), 32)
+        active = (treatment_range[0], covariate_range[0], latent_range[0])
+        variant["trajectories"] = "texture"
+    else:
+        active = (treatment_range[1], covariate_range[1], latent_range[1])
+    variant["n_treatments_active_range"] = [active[0], active[0]]
+    variant["n_covariates_active_range"] = [active[1], active[1]]
+    variant["n_latent_active_range"] = [active[2], active[2]]
+    return variant, {
+        "active_dimensions": {
+            "treatments": active[0],
+            "covariates": active[1],
+            "latent": active[2],
+        },
+        "overrides": {
+            "n_treatments_active_range": variant["n_treatments_active_range"],
+            "n_covariates_active_range": variant["n_covariates_active_range"],
+            "n_latent_active_range": variant["n_latent_active_range"],
+        },
+        "label": "runtime_stress_variant",
+    }
+
+
 def _low_dimension_generator(generator: Mapping[str, Any]) -> dict[str, Any]:
-    """Construct the bounded low-dimensional calibration variant."""
-    low = dict(generator)
-    low["n_treatments"] = min(int(low["n_treatments"]), 2)
-    low["n_covariates"] = min(int(low["n_covariates"]), 2)
-    low["n_latent"] = min(int(low["n_latent"]), 1)
-    low["n_treatments_active_range"] = [1, low["n_treatments"]]
-    low["n_covariates_active_range"] = [1, low["n_covariates"]]
-    low["n_latent_active_range"] = [1, low["n_latent"]]
-    low["n_time_steps"] = min(int(low.get("n_time_steps", 104)), 32)
-    low["trajectories"] = "texture"
-    return low
+    """Compatibility wrapper for the deterministic low-active variant."""
+    return _active_dimension_generator(generator, "low")[0]
+
+
+def _high_dimension_generator(generator: Mapping[str, Any]) -> dict[str, Any]:
+    return _active_dimension_generator(generator, "high")[0]
+
+
+def _calibration_study(study: Mapping[str, Any], seed: int) -> dict[str, Any]:
+    resolved = dict(study)
+    resolved["seed"] = int(seed)
+    return resolved
+
+
+def _stress_configurations(generator: Mapping[str, Any], base_seed: int) -> list[dict[str, Any]]:
+    """Serialize the primary recipe and every named trajectory stress variant."""
+    configurations = [
+        {
+            "name": "primary_composable",
+            "label": "selected_primary_recipe",
+            "generator": dict(generator),
+            "seed": int(base_seed),
+        }
+    ]
+    for name in TRAJECTORY_STRESS_CONFIGS:
+        configurations.append(
+            {
+                "name": name,
+                "label": "runtime_stress_variant",
+                "base_recipe": "primary_composable",
+                "override": {"trajectories": name},
+                "generator": {**generator, "trajectories": name},
+                "seed": int(base_seed + CALIBRATION_SEED_OFFSETS[f"stress_{name}"]),
+            }
+        )
+    return configurations
+
+
+def _study_for_generator(generator: Mapping[str, Any], study: Mapping[str, Any]) -> dict[str, Any]:
+    """Use complete one-band coverage for fixed active-dimension stress variants."""
+    resolved = dict(study)
+    for dimension, field in (
+        ("treatments", "treatment_count_bands"),
+        ("covariates", "control_count_bands"),
+    ):
+        active_range = generator.get(
+            f"n_{dimension}_active_range", [1, generator[f"n_{dimension}"]]
+        )
+        resolved[field] = [[int(active_range[0]), int(active_range[1])]]
+    return resolved
 
 
 def _measure_calibration(generator: Mapping[str, Any], study: Mapping[str, Any]) -> dict[str, Any]:
+    study = _study_for_generator(generator, study)
     prior = make_prior(generator, study)
     generation_start = time.perf_counter()
     corpus = sample_prior_predictive(prior)
@@ -566,24 +887,83 @@ def run_calibration(
     resolved = resolve_config(raw, sidecar)
     generator = resolved["generator_factory"]
     study = resolved["study"]
-    low_measurement = _measure_calibration(_low_dimension_generator(generator), study)
-    selected_measurement = _measure_calibration(generator, study)
+    low_generator, low_variant = _active_dimension_generator(generator, "low")
+    high_generator, high_variant = _active_dimension_generator(generator, "high")
+    low_seed = study["seed"] + CALIBRATION_SEED_OFFSETS["primary_low_active"]
+    high_seed = study["seed"] + CALIBRATION_SEED_OFFSETS["primary_high_active"]
+    low_measurement = _measure_calibration(low_generator, _calibration_study(study, low_seed))
+    high_measurement = _measure_calibration(high_generator, _calibration_study(study, high_seed))
+    stress_configs = _stress_configurations(generator, study["seed"])
+    stress_seed_schedule = {
+        item["name"]: item["seed"]
+        for item in stress_configs
+        if item["name"] != "primary_composable"
+    }
+    proposed = {
+        "unit": "cell",
+        "configs": len(stress_configs),
+        "independent_cells_per_config": 32,
+        "siblings_per_cell": 2,
+        "cells_total": len(stress_configs) * 32,
+        "worlds_total": len(stress_configs) * 32 * 2,
+        "allocation": "independent active counts; band occupancy is realized, not fixed",
+        "count_band_strata_per_config": len(study["treatment_count_bands"])
+        * len(study["control_count_bands"]),
+        "balanced_stratification": "not proposed; requires separate approval",
+        "uncertainty": "Wilson intervals use 32 independent cell indicators; empty or sparsely realized bands have wide or unavailable intervals",
+        "budget_status": "proposal_only_pending_human_approval",
+        "stop_rule": "stop before the sweep if any config exceeds 2x the measured high-active runtime, generation failures exceed 10%, or projected wall time exceeds 30 minutes; seek human review before scaling",
+    }
+    high_seconds = (
+        high_measurement["timing"]["generation_seconds"]
+        + high_measurement["timing"]["diagnostics_seconds"]
+    )
+    high_worlds = max(high_measurement["accounting"]["realized_worlds"], 1)
+    projected_seconds = high_seconds / high_worlds * proposed["worlds_total"]
+    representative_bytes = len(canonical_json(high_measurement).encode("utf-8"))
     report = {
         "schema_version": SCHEMA_VERSION,
         "config_hash": resolved["config_hash"],
         "resolved_config": resolved,
-        "seed_schedule": {"generator_seed": study["seed"]},
-        "timing": selected_measurement["timing"],
-        "accounting": selected_measurement["accounting"],
-        "diagnostics": selected_measurement["diagnostics"],
+        "source_provenance": _source_provenance(),
+        "seed_schedule": {
+            "primary_composable": study["seed"],
+            "primary_low_active": low_seed,
+            "primary_high_active": high_seed,
+            "stress_variants": stress_seed_schedule,
+        },
+        "timing": high_measurement["timing"],
+        "accounting": high_measurement["accounting"],
+        "diagnostics": high_measurement["diagnostics"],
         "calibration": [
-            {"label": "bounded_low", **low_measurement},
-            {"label": "selected_configuration", **selected_measurement},
+            {
+                "label": "low_active_runtime_stress_variant",
+                "variant": low_variant,
+                "seed": low_seed,
+                **low_measurement,
+            },
+            {
+                "label": "high_active_runtime_stress_variant",
+                "variant": high_variant,
+                "seed": high_seed,
+                **high_measurement,
+            },
         ],
+        "stress_configurations": stress_configs,
+        "projected_runtime": {
+            "method": "scale measured high-active primary wall time per realized world to 10 configurations x 32 cells x 2 siblings; this is a budget estimate, not a promise",
+            "seconds": projected_seconds,
+            "minutes": projected_seconds / 60.0,
+        },
+        "expected_artifact_size": {
+            "method": "canonical UTF-8 JSON summary size from the high-active calibration, scaled across ten configuration summaries; raw series/corpora are not persisted",
+            "representative_summary_bytes": representative_bytes,
+            "projected_summary_bytes": representative_bytes * proposed["configs"],
+        },
         "analyses": {
             "raw_input_conditioning": {
                 "status": "available",
-                "scope": "observed raw levels/differences",
+                "scope": "observed raw levels/differences; raw reachability is not causal confounding",
             },
             "true_feature_recovery": unsupported_status(
                 "true_feature_recovery",
@@ -591,21 +971,11 @@ def run_calibration(
             ),
             "causal_confounding": {
                 "status": "available",
-                "scope": "graph/path flags; D->Y reachability is not itself confounding",
+                "scope": "per-latent/per-focal-treatment graph backdoor classification; potential unobserved confounding is separate from adjustment-dependent identification",
             },
         },
         "pilot_claim": "calibration only; no prevalence estimate",
-        "proposed_pilot": {
-            "unit": "cell",
-            "configs": 10,
-            "count_band_strata_per_config": 16,
-            "cells_per_count_band_stratum": 2,
-            "draws_per_cell": 2,
-            "cells_total": 320,
-            "worlds_total": 640,
-            "budget_status": "proposal_only_pending_human_approval",
-            "stop_rule": "stop before the sweep if any named stratum exceeds 2x the measured selected-configuration runtime, generation failures exceed 10%, or projected wall time exceeds 30 minutes; seek human review before scaling",
-        },
+        "proposed_pilot": proposed,
     }
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
