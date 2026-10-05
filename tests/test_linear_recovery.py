@@ -864,6 +864,8 @@ def test_c2_compaction_uses_actual_predictors_and_only_configured_views():
     assert views["differences"]["rank"]["exact_rank"] == 2
     assert "rank" not in record["raw_input_diagnostics"]
     assert "standardized" not in record["raw_input_diagnostics"]
+    assert all("constant_active_inputs" in value for value in views.values())
+    assert "constant_active_inputs" not in record["raw_input_diagnostics"]
 
     differences_only = SimpleNamespace(views={"differences": diagnostic_view()})
     subset = runner._compact_world_metric(
@@ -878,6 +880,7 @@ def test_c2_compaction_uses_actual_predictors_and_only_configured_views():
     )
     assert set(subset["raw_input_diagnostics"]["views"]) == {"differences"}
     assert "rank" not in subset["raw_input_diagnostics"]
+    assert "constant_active_inputs" not in subset["raw_input_diagnostics"]
     assert list(runner._world_indicators(subset, runner.DEFAULT_STUDY["thresholds"])) == [
         "differences"
     ]
@@ -916,6 +919,44 @@ def test_c2_configured_indicators_and_realized_band_wilson_tables():
     assert indicator["vif_ge_5p0"]["n_successes"] == 2
     assert summary["count_band_wilson"]["treatments_1_1__controls_1_1"]["status"] == "available"
     assert summary["count_band_wilson"]["treatments_2_2__controls_2_2"]["status"] == "unavailable"
+
+
+def test_c2_fork_guard_fails_closed_on_native_threads(monkeypatch):
+    import threading
+    import time
+
+    from scripts import linear_recovery_prevalence as runner
+
+    monkeypatch.setattr(runner, "_actual_os_thread_count", lambda: 2)
+    monkeypatch.setattr(threading, "active_count", lambda: 1)
+    with pytest.raises(RuntimeError, match="exactly one OS thread"):
+        runner._bounded_phase(lambda: None, time.monotonic() + 1, time.monotonic)
+
+
+def test_c2_supported_subprocess_reports_one_actual_os_thread():
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+    }
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            "import os, threading, numpy; print(len(os.listdir('/proc/self/task')), threading.active_count())",
+        ],
+        env=env,
+        text=True,
+    ).strip()
+    os_threads, python_threads = (int(item) for item in output.split())
+    assert os_threads == 1
+    assert python_threads == 1
 
 
 def test_c2_phase_kills_term_ignoring_child_and_reaps_it(tmp_path):
@@ -1227,6 +1268,62 @@ def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeyp
     assert second["accounting"]["failures"] == 0
 
 
+def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplication(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    marker = tmp_path / "planned-repeated-failures"
+
+    def sample(_prior):
+        count = int(marker.read_text()) if marker.exists() else 0
+        marker.write_text(str(count + 1))
+        if count < 2:
+            raise RuntimeError("planned repeated failure")
+        return {"cell_id": np.array([0, 0, 1, 1])}
+
+    monkeypatch.setattr(runner, "sample_prior_predictive", sample)
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    first = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(first["checkpoint_path"])
+    assert len(checkpoint["config_failures"]) == 1
+    checkpoint["wall_elapsed_seconds"] = 7.0
+    runner._write_json(Path(first["checkpoint_path"]), checkpoint)
+    second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(second["checkpoint_path"])
+    assert len(checkpoint["config_failures"]) == 1
+    assert checkpoint["config_failures"][0]["name"] == "primary_composable"
+    checkpoint["wall_elapsed_seconds"] = 11.0
+    runner._write_json(Path(second["checkpoint_path"]), checkpoint)
+    success = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert success["status"] == "complete"
+    assert success["accounting"]["wall_elapsed_seconds"] >= 11.0
+    assert success["accounting"]["failures"] == 0
+    assert runner.load_json(success["checkpoint_path"])["config_failures"] == []
+    assert len(success["configs"]) == 10
+    assert success["accounting"]["accepted_world_metrics"] == 40
+
+
 def test_c2_resume_accumulates_budget_and_replaces_stale_failure_metadata(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1262,6 +1359,120 @@ def test_c2_resume_accumulates_budget_and_replaces_stale_failure_metadata(tmp_pa
     assert resumed["status"] == "partial"
     assert resumed["accounting"]["wall_elapsed_seconds"] >= 59.5
     assert resumed["accounting"]["wall_budget_seconds"] == 60.0
+
+
+def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "_pilot_configurations",
+        lambda generator, seed: [
+            {"name": "primary_composable", "label": "primary", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner,
+        "pilot_seed_schedule",
+        lambda generator, seed: [
+            {"index": 0, "name": "primary_composable", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    clock_state = {"value": 0.0}
+    original_cells = runner._pilot_cell_records
+
+    def overrun(*args, **kwargs):
+        clock_state["value"] = 100.0
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
+    import signal
+
+    old_handler = signal.getsignal(signal.SIGTERM)
+    report = runner.run_pilot(
+        config,
+        output_dir=tmp_path,
+        wall_time_seconds=60,
+        clock=lambda: clock_state["value"],
+    )
+    assert report["status"] == "partial"
+    assert report["configs"][0]["summary"]["status"] == "unavailable"
+    assert report["accounting"]["wall_elapsed_seconds"] >= 100.0
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+
+
+def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_path, monkeypatch):
+    import os
+    import signal
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    resolved = runner.resolve_config(config)
+    report_path = tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.json"
+    original_write = runner._write_json
+    injected = False
+
+    def interrupt_report_write(path, value):
+        nonlocal injected
+        if path == report_path and not injected:
+            injected = True
+            os.kill(os.getpid(), signal.SIGTERM)
+        return original_write(path, value)
+
+    monkeypatch.setattr(runner, "_write_json", interrupt_report_write)
+    old_handler = signal.getsignal(signal.SIGTERM)
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60)
+    assert injected
+    assert report["status"] == "partial"
+    assert report["interrupted"]
+    assert signal.getsignal(signal.SIGTERM) == old_handler
 
 
 def test_c2_runner_handles_term_during_finalization_after_completed_checkpoint(

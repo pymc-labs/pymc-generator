@@ -5,6 +5,18 @@ records the resolved configuration before sampling, and treats a cell (not a
 sibling world) as the independent unit for binary summaries. C1 calibration and
 C2 pilot artifacts are compact JSON; no raw corpus or final prevalence CSV is
 written by this runner.
+
+The supported Linux pilot launch sets thread limits before Python starts::
+
+    OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \\
+    PYTHONPATH=. uv run --no-sync python scripts/linear_recovery_prevalence.py \\
+      --mode pilot --config docs/examples/data/linear-recovery-prevalence-config.json \\
+      --output-dir /home/teemu/pymc-labs/prior-generator-artifacts/issue-30-c2 \\
+      --wall-time-seconds 5400
+
+These environment variables are not proof of safety. Before every fork the runner
+verifies the Linux ``/proc/self/task`` count, including after imports and prior
+construction, and fails closed if that count cannot be verified or is not one.
 """
 
 from __future__ import annotations
@@ -1165,6 +1177,11 @@ def _compact_world_metric(
         view_design = np.column_stack([view_predictors, np.ones(view_predictors.shape[0])])
         view_rank = design_rank_condition(view_design, rank_tolerance=rank_tolerance)
         view_scales = np.std(view_predictors, axis=0)
+        view_constant_inputs = [
+            name
+            for name, scale in zip(constants, view_scales, strict=True)
+            if scale <= rank_tolerance
+        ]
         view_standardized = np.zeros_like(view_predictors)
         view_nonconstant = view_scales > rank_tolerance
         if np.any(view_nonconstant):
@@ -1190,6 +1207,7 @@ def _compact_world_metric(
             "vif_infinite": bool(np.isposinf(vif.vif[row]).any()),
             "rank": view_rank,
             "standardized": view_standardized_metric,
+            "constant_active_inputs": view_constant_inputs,
         }
     graph = prior.layout.unpack(np.asarray(corpus["g"][row]))
     graph_flags = classify_graph_paths(graph)
@@ -1225,15 +1243,6 @@ def _compact_world_metric(
         "raw_input_diagnostics": {
             "scope": "observed raw inputs; configured views only; not true mechanism features",
             "views": views,
-            "constant_active_inputs": [
-                name
-                for name, scale in zip(
-                    constants,
-                    np.std(predictors, axis=0),
-                    strict=True,
-                )
-                if scale <= rank_tolerance
-            ],
         },
         "graph_flags": graph_flags,
     }
@@ -1514,6 +1523,30 @@ class _PilotInterruptedError(RuntimeError):
 # parent in cleanup indefinitely.  The child is owned by this invocation only.
 _PHASE_TERM_GRACE_SECONDS = 0.25
 _PHASE_KILL_JOIN_SECONDS = 0.25
+_MINIMAL_FINALIZATION_ALLOWANCE_SECONDS = 0.5
+
+
+def _actual_os_thread_count() -> int:
+    """Return the Linux thread count, failing closed when it is unavailable."""
+    if os.name != "posix":
+        raise RuntimeError("bounded pilot phases require Linux /proc thread accounting")
+    task_path = Path("/proc/self/task")
+    try:
+        count = sum(1 for entry in task_path.iterdir() if entry.is_dir())
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("cannot verify Linux OS thread count before fork") from exc
+    if count < 1:
+        raise RuntimeError("cannot verify Linux OS thread count before fork")
+    return count
+
+
+def _require_single_os_thread() -> None:
+    """Reject native or Python multithreading before an inherited fork."""
+    count = _actual_os_thread_count()
+    if count != 1:
+        raise RuntimeError(
+            f"bounded pilot phases require exactly one OS thread before fork; found {count}"
+        )
 
 
 def _run_phase_child(function: Any, result_path: str) -> None:
@@ -1538,16 +1571,12 @@ def _bounded_phase(function: Any, deadline: float, clock: Any) -> Any:
     if float(clock()) >= deadline:
         raise _PilotDeadlineExceededError("pilot wall deadline reached before phase")
     import multiprocessing
-    import threading
 
     if "fork" not in multiprocessing.get_all_start_methods():
         raise RuntimeError("bounded pilot phases require fork process isolation on this host")
-    if threading.active_count() != 1:
-        raise RuntimeError(
-            "bounded pilot phases require a single-threaded parent before fork; "
-            "multithreaded fork is unsupported"
-        )
-    import os
+    # Python's threading.active_count() misses native BLAS/OpenMP workers.  This
+    # check is deliberately immediately before every fork.
+    _require_single_os_thread()
     import pickle
     import tempfile
 
@@ -1751,6 +1780,122 @@ def _build_pilot_report(
     return report
 
 
+def _minimal_partial_report(
+    checkpoint: Mapping[str, Any],
+    configs: list[Mapping[str, Any]],
+    study: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    schedule: list[Mapping[str, Any]],
+    manifest_path: Path,
+    checkpoint_path: Path,
+    report_path: Path,
+    interrupted: bool,
+    stop_reason: str | None,
+    elapsed: Any,
+    wall_budget_seconds: float,
+) -> dict[str, Any]:
+    """Build a deadline-safe report from checkpointed records only.
+
+    This path intentionally does not call cell compaction or summary helpers:
+    finalization must remain bounded even when a normal summary is slow.
+    """
+    worlds = list(checkpoint.get("worlds", []))
+    cells = list(checkpoint.get("cells", []))
+    summaries = []
+    for config_index, item in enumerate(configs):
+        config_worlds = [row for row in worlds if int(row.get("config_index", -1)) == config_index]
+        config_cells = [row for row in cells if int(row.get("config_index", -1)) == config_index]
+        summaries.append(
+            {
+                "config_index": config_index,
+                "name": item["name"],
+                "label": item.get("label", "runtime_stress_variant"),
+                "generator": item["generator"],
+                "seed": item["seed"],
+                "world_count": len(config_worlds),
+                "cell_count": len(config_cells),
+                "complete_cell_count": sum(row.get("status") == "complete" for row in config_cells),
+                "world_refs": config_worlds,
+                "cell_refs": config_cells,
+                "summary": {
+                    "status": "unavailable",
+                    "reason": "finalization deadline reached before aggregate summaries",
+                },
+                "accounting": next(
+                    (
+                        row
+                        for row in checkpoint.get("config_accounting", [])
+                        if int(row.get("config_index", -1)) == config_index
+                    ),
+                    {"status": "unavailable", "reason": "configuration was not completed"},
+                ),
+            }
+        )
+    requested_cells = len(configs) * int(study["pilot_cells_per_config"])
+    failures = sum(
+        int(item.get("generation_failures", 0)) for item in checkpoint.get("config_accounting", [])
+    ) + len(checkpoint.get("config_failures", []))
+    return {
+        "schema_version": PILOT_SCHEMA_VERSION,
+        "status": "partial",
+        "config_hash": resolved["config_hash"],
+        "resolved_config": resolved,
+        "source_provenance": manifest["source_provenance"],
+        "manifest_hash": config_hash(manifest),
+        "manifest_path": str(manifest_path),
+        "checkpoint_path": str(checkpoint_path),
+        "report_path": str(report_path),
+        "schedule": schedule,
+        "stop_reason": stop_reason,
+        "interrupted": interrupted,
+        "configs": summaries,
+        "accounting": {
+            "evaluated_world_metrics": len(worlds),
+            "accepted_world_metrics": len(worlds),
+            "realized_cells": len(cells),
+            "complete_cells": sum(row.get("status") == "complete" for row in cells),
+            "partial_cells": sum(row.get("status") != "complete" for row in cells),
+            "requested_cells": requested_cells,
+            "requested_worlds": requested_cells * int(study["pilot_siblings_per_cell"]),
+            "evaluated_candidates": sum(
+                int(item.get("evaluated_candidates", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "accepted_candidates": sum(
+                int(item.get("accepted_worlds", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "rejected_candidates": sum(
+                int(item.get("rejected_candidates", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "generation_failures": failures,
+            "failures": failures,
+            "wall_elapsed_seconds": elapsed(),
+            "wall_budget_seconds": wall_budget_seconds,
+            "empty_band_policy": "zero-denominator bands are unavailable/missing, never zero",
+        },
+        "analyses": {
+            "raw_input_conditioning": {
+                "status": "available",
+                "scope": "checkpointed views only; aggregate summaries unavailable",
+                "views": list(study["diagnostic_views"]),
+            },
+            "true_feature_recovery": unsupported_status(
+                "true_feature_recovery",
+                "C2 corpus does not persist every truth field required for exact reconstruction",
+            ),
+            "causal_confounding": {
+                "status": "available",
+                "scope": "checkpointed graph flags only; aggregate summaries unavailable",
+            },
+        },
+        "pilot_claim": "partial pilot; no prevalence estimate until all preregistered cells complete",
+        "ci_note": "Aggregate summaries were not recomputed after the finalization deadline.",
+    }
+
+
 def run_pilot(
     config_path: str | os.PathLike[str] | Mapping[str, Any],
     *,
@@ -1830,7 +1975,18 @@ def run_pilot(
                 "existing pilot checkpoint differs; refusing a seed/config change on resume"
             )
     consumed = float(checkpoint.get("wall_elapsed_seconds", 0.0))
-    finalization_reserve = min(30.0, limit * 0.10)
+    # Reserve room for bounded TERM cleanup plus one minimal partial report.  A
+    # finite allowance is explicit; it cannot make arbitrary filesystem stalls
+    # impossible.
+    finalization_reserve = min(
+        30.0,
+        max(
+            _PHASE_TERM_GRACE_SECONDS
+            + _PHASE_KILL_JOIN_SECONDS
+            + _MINIMAL_FINALIZATION_ALLOWANCE_SECONDS,
+            limit * 0.10,
+        ),
+    )
     phase_budget = max(0.0, limit - consumed - finalization_reserve)
     deadline = started + phase_budget
     finalization_deadline = started + max(0.0, limit - consumed)
@@ -1923,6 +2079,9 @@ def run_pilot(
                 },
             )
             prior = make_prior(config_generator, config_study)
+            # Prior construction/imports may initialize native BLAS workers;
+            # verify again before entering the forked phase boundary.
+            _require_single_os_thread()
             try:
                 corpus = _bounded_phase(
                     lambda prior=prior: sample_prior_predictive(prior), deadline, clock
@@ -2037,13 +2196,12 @@ def run_pilot(
             persist()
         restore_term_handler()
         raise
-    if cells_since_checkpoint:
-        persist()
-
-    # Finalization has its own guarded region: TERM during summaries or an
-    # atomic write is converted into an honest partial artifact, then the
-    # original handler is restored on every exit path.
+    # Finalization has one bounded region: TERM or deadline overrun becomes an
+    # honest checkpoint-only report.  In particular, never disable deadline
+    # checks by rebuilding a full report after the budget has expired.
     try:
+        if cells_since_checkpoint:
+            persist()
         report = _build_pilot_report(
             checkpoint,
             configs,
@@ -2064,12 +2222,8 @@ def run_pilot(
         if finalization_overdue():
             raise _PilotDeadlineExceededError("wall deadline reached during finalization")
         _write_json(report_path, report)
-        # Account for the first final write, then persist the checkpoint.  The
-        # second report write ensures the report does not expose a stale value.
+        # Account for persistence work explicitly; elapsed() is never clamped.
         report["accounting"]["wall_elapsed_seconds"] = elapsed()
-        if finalization_overdue():
-            raise _PilotDeadlineExceededError("wall deadline reached during finalization")
-        _write_json(report_path, report)
         checkpoint["status"] = report["status"]
         if finalization_overdue():
             raise _PilotDeadlineExceededError("wall deadline reached during finalization")
@@ -2082,7 +2236,7 @@ def run_pilot(
         partial = True
         interrupted = interrupted or isinstance(exc, _PilotInterruptedError)
         stop_reason = str(exc)
-        report = _build_pilot_report(
+        report = _minimal_partial_report(
             checkpoint,
             configs,
             study,
@@ -2092,16 +2246,41 @@ def run_pilot(
             manifest_path,
             checkpoint_path,
             report_path,
-            True,
             interrupted,
             stop_reason,
             elapsed,
-            lambda: False,
             limit,
         )
-        _write_json(report_path, report)
         checkpoint["status"] = "partial"
-        persist()
+        # The minimal report and checkpoint are the only bounded finalization
+        # writes.  The allowance is finite; an OS/filesystem stall is not
+        # represented as impossible by this code.  If TERM arrives at the
+        # first atomic write, restore the original handler before retrying the
+        # already-built checkpoint-only artifact.
+        try:
+            _write_json(report_path, report)
+        except _PilotInterruptedError:
+            interrupted = True
+            report["interrupted"] = True
+            restore_term_handler()
+            _write_json(report_path, report)
+        try:
+            persist()
+        except _PilotInterruptedError:
+            interrupted = True
+            report["interrupted"] = True
+            restore_term_handler()
+            persist()
+        # Persist the final measured elapsed value in the report itself; do not
+        # claim the timestamp sampled before checkpoint persistence.
+        report["accounting"]["wall_elapsed_seconds"] = elapsed()
+        try:
+            _write_json(report_path, report)
+        except _PilotInterruptedError:
+            interrupted = True
+            report["interrupted"] = True
+            restore_term_handler()
+            _write_json(report_path, report)
     finally:
         restore_term_handler()
     return report
