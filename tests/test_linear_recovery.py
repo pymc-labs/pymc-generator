@@ -1117,7 +1117,8 @@ def test_c2_notebook_renders_runner_complete_partial_and_rejects_wrong_manifest(
     with pytest.raises(CellExecutionError):
         execute(Path(complete["report_path"]))
     runner._write_json(manifest_path, original)
-    assert "_threshold_key" in render_source
+    assert "validate_compact_summary" in render_source
+    assert "data/linear-recovery-prevalence.csv" in render_source
     assert json.loads(Path(complete["report_path"]).read_text())["source_provenance"]
 
 
@@ -2019,3 +2020,34 @@ __all__ = [
     "_fit",
     "_mechanism_features",
 ]
+
+
+def test_c2_compact_summary_is_portable_complete_and_provenance_bound():
+    from scripts import linear_recovery_prevalence as runner
+
+    summary = runner.validate_compact_summary(
+        "docs/examples/data/linear-recovery-prevalence.csv",
+        expected_config_hash="b2a7fb98d69cc8ed1463492f803f10baf3a33013f226ab136cfd28278634a014",
+        expected_manifest_hash=runner.COMPACT_MANIFEST_HASH,
+        expected_source_commit=runner.COMPACT_SOURCE_COMMIT,
+    )
+    assert summary["metadata"]["accounting"]["requested_cells"] == 320
+    assert summary["metadata"]["accounting"]["requested_worlds"] == 640
+    assert len(summary["metrics"]) == 280
+    assert len(summary["occupancy"]) == 160
+    assert {row["estimand"] for row in summary["metrics"]} == {"first_world", "any_sibling"}
+    assert any(row["status"] == "unavailable" for row in summary["occupancy"])
+
+
+def test_c2_compact_summary_rejects_wrong_settings_and_malformed_rows(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    with pytest.raises(ValueError, match="provenance"):
+        runner.validate_compact_summary(
+            "docs/examples/data/linear-recovery-prevalence.csv",
+            expected_config_hash="wrong",
+        )
+    broken = tmp_path / "broken.csv"
+    broken.write_text("schema_version,row_type\nwrong,metadata\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="header/schema"):
+        runner.validate_compact_summary(broken)
