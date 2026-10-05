@@ -1304,22 +1304,45 @@ def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplicat
             kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
         ),
     )
-    first = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
-    checkpoint = runner.load_json(first["checkpoint_path"])
-    assert len(checkpoint["config_failures"]) == 1
-    checkpoint["wall_elapsed_seconds"] = 7.0
-    runner._write_json(Path(first["checkpoint_path"]), checkpoint)
+    # Establish a persisted completed cell first, then leave the other cell
+    # pending so later failures must not discard or duplicate the earlier data.
+    marker.write_text("2")
+    seeded = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(seeded["checkpoint_path"])
+    checkpoint["cells"] = [row for row in checkpoint["cells"] if row["cell_id"] == 0]
+    checkpoint["worlds"] = [row for row in checkpoint["worlds"] if row["cell_id"] == 0]
+    checkpoint["wall_elapsed_seconds"] = 3.0
+    runner._write_json(Path(seeded["checkpoint_path"]), checkpoint)
+    marker.write_text("0")
+
     second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
     checkpoint = runner.load_json(second["checkpoint_path"])
+    second_persisted = runner.load_json(second["report_path"])
     assert len(checkpoint["config_failures"]) == 1
-    assert checkpoint["config_failures"][0]["name"] == "primary_composable"
-    checkpoint["wall_elapsed_seconds"] = 11.0
+    assert second_persisted["accounting"]["failures"] == 1
+    assert len(checkpoint["worlds"]) == 20
+    assert second_persisted["accounting"]["wall_elapsed_seconds"] >= 3.0
+    checkpoint["wall_elapsed_seconds"] = 7.0
     runner._write_json(Path(second["checkpoint_path"]), checkpoint)
+
+    third = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(third["checkpoint_path"])
+    third_persisted = runner.load_json(third["report_path"])
+    assert len(checkpoint["config_failures"]) == 1
+    assert third_persisted["accounting"]["failures"] == 1
+    assert len(checkpoint["worlds"]) == 20
+    checkpoint["wall_elapsed_seconds"] = 11.0
+    runner._write_json(Path(third["checkpoint_path"]), checkpoint)
+
     success = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    persisted = runner.load_json(success["report_path"])
+    persisted_checkpoint = runner.load_json(success["checkpoint_path"])
     assert success["status"] == "complete"
+    assert persisted["status"] == "complete"
     assert success["accounting"]["wall_elapsed_seconds"] >= 11.0
-    assert success["accounting"]["failures"] == 0
-    assert runner.load_json(success["checkpoint_path"])["config_failures"] == []
+    assert persisted["accounting"]["failures"] == 0
+    assert persisted_checkpoint["config_failures"] == []
+    assert len(persisted_checkpoint["worlds"]) == 40
     assert len(success["configs"]) == 10
     assert success["accounting"]["accepted_world_metrics"] == 40
 
@@ -1419,15 +1442,21 @@ def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, 
         wall_time_seconds=60,
         clock=lambda: clock_state["value"],
     )
+    persisted = runner.load_json(report["report_path"])
+    persisted_checkpoint = runner.load_json(report["checkpoint_path"])
     assert report["status"] == "partial"
-    assert report["configs"][0]["summary"]["status"] == "unavailable"
+    assert persisted["status"] == "partial"
+    assert persisted["configs"][0]["summary"]["status"] == "unavailable"
+    assert persisted_checkpoint["cells"]
     assert report["accounting"]["wall_elapsed_seconds"] >= 100.0
+    assert persisted["accounting"]["wall_elapsed_seconds"] >= 100.0
     assert signal.getsignal(signal.SIGTERM) == old_handler
 
 
 def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_path, monkeypatch):
     import os
     import signal
+    import time
     from types import SimpleNamespace
 
     from scripts import linear_recovery_prevalence as runner
@@ -1454,6 +1483,16 @@ def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_
             kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
         ),
     )
+    # Force summary overrun before the report-write TERM boundary.  The
+    # checkpoint-only candidate must already exist when the TERM arrives.
+    clock_state = {"value": 0.0}
+    original_cells = runner._pilot_cell_records
+
+    def overrun(*args, **kwargs):
+        clock_state["value"] = 100.0
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
     resolved = runner.resolve_config(config)
     report_path = tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.json"
     original_write = runner._write_json
@@ -1468,10 +1507,63 @@ def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_
 
     monkeypatch.setattr(runner, "_write_json", interrupt_report_write)
     old_handler = signal.getsignal(signal.SIGTERM)
+    started = time.monotonic()
+    report = runner.run_pilot(
+        config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: clock_state["value"]
+    )
+    assert time.monotonic() - started < 5.0
+    assert injected
+    persisted = runner.load_json(report["report_path"])
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    assert report["status"] == "partial"
+    assert persisted["status"] == "partial"
+    assert report["interrupted"]
+    assert persisted["interrupted"]
+    assert checkpoint["cells"]
+    assert len(checkpoint["worlds"]) == 40
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+
+
+def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp_path, monkeypatch):
+    import os
+    import signal
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: (_ for _ in ()).throw(RuntimeError("planned failure")),
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    resolved = runner.resolve_config(config)
+    checkpoint_path = (
+        tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.checkpoint.json"
+    )
+    original_write = runner._write_json
+    injected = False
+
+    def interrupt_checkpoint_write(path, value):
+        nonlocal injected
+        if path == checkpoint_path and not injected:
+            injected = True
+            os.kill(os.getpid(), signal.SIGTERM)
+        return original_write(path, value)
+
+    monkeypatch.setattr(runner, "_write_json", interrupt_checkpoint_write)
+    old_handler = signal.getsignal(signal.SIGTERM)
+    started = time.monotonic()
     report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60)
+    assert time.monotonic() - started < 5.0
+    persisted = runner.load_json(report["report_path"])
+    checkpoint = runner.load_json(report["checkpoint_path"])
     assert injected
     assert report["status"] == "partial"
-    assert report["interrupted"]
+    assert persisted["interrupted"]
+    assert len(checkpoint["config_failures"]) == 1
     assert signal.getsignal(signal.SIGTERM) == old_handler
 
 

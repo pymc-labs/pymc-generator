@@ -1987,9 +1987,14 @@ def run_pilot(
             limit * 0.10,
         ),
     )
-    phase_budget = max(0.0, limit - consumed - finalization_reserve)
-    deadline = started + phase_budget
-    finalization_deadline = started + max(0.0, limit - consumed)
+    hard_deadline = started + max(0.0, limit - consumed)
+    # Normal aggregation gets a soft deadline, leaving the explicit finite
+    # reserve for checkpoint-only fallback finalization.  End work phases one
+    # reserve earlier still; filesystem stalls cannot be bounded by arithmetic.
+    finalization_deadline = max(started, hard_deadline - finalization_reserve)
+    phase_deadline = max(started, finalization_deadline - finalization_reserve)
+    phase_budget = max(0.0, phase_deadline - started)
+    deadline = phase_deadline
     partial = consumed >= limit or phase_budget <= 0.0
     stop_reason = "resumed wall budget already exhausted" if partial else None
     cells_since_checkpoint = 0
@@ -2003,7 +2008,10 @@ def run_pilot(
         _write_json(checkpoint_path, checkpoint)
 
     def finalization_overdue() -> bool:
-        return float(clock()) > finalization_deadline
+        return float(clock()) >= finalization_deadline
+
+    def remaining_hard_budget() -> float:
+        return hard_deadline - float(clock())
 
     def upsert_failure(config_index: int, item: Mapping[str, Any], reason: str) -> None:
         failures = [
@@ -2038,20 +2046,24 @@ def run_pilot(
 
         signal.signal(signal.SIGTERM, old_term)
 
+    # Install TERM handling before entering the one protected region.  The
+    # outer finally below owns restoration for every exit, including writes in
+    # exception and fallback handling.
     try:
-        try:
-            import signal
+        import signal
 
-            old_term = signal.getsignal(signal.SIGTERM)
+        old_term = signal.getsignal(signal.SIGTERM)
 
-            def on_term(_signum: int, _frame: Any) -> None:
-                raise _PilotInterruptedError("pilot received SIGTERM")
+        def on_term(_signum: int, _frame: Any) -> None:
+            raise _PilotInterruptedError("pilot received SIGTERM")
 
-            signal.signal(signal.SIGTERM, on_term)
-        except (ImportError, ValueError) as exc:
-            raise RuntimeError(
-                "pilot SIGTERM handling requires execution in the main thread on this host"
-            ) from exc
+        signal.signal(signal.SIGTERM, on_term)
+    except (ImportError, ValueError) as exc:
+        raise RuntimeError(
+            "pilot SIGTERM handling requires execution in the main thread on this host"
+        ) from exc
+
+    try:
         completed = {
             (int(row["config_index"]), int(row["cell_id"]))
             for row in checkpoint.get("cells", [])
@@ -2186,22 +2198,30 @@ def run_pilot(
             persist()
             if partial:
                 break
-    except (_PilotDeadlineExceededError, _PilotInterruptedError) as exc:
-        partial, stop_reason = True, str(exc)
-        interrupted = isinstance(exc, _PilotInterruptedError)
-        persist()
-    except BaseException:
-        # Keep TERM handling active while checkpointing an interrupted phase.
+
+        # Persist pending cell changes before finalization.  A TERM raised by
+        # this write is caught by the single outer handler below.
         if cells_since_checkpoint:
             persist()
-        restore_term_handler()
-        raise
-    # Finalization has one bounded region: TERM or deadline overrun becomes an
-    # honest checkpoint-only report.  In particular, never disable deadline
-    # checks by rebuilding a full report after the budget has expired.
-    try:
-        if cells_since_checkpoint:
-            persist()
+
+        # Build the checkpoint-only candidate before normal aggregation.  This
+        # keeps fallback construction inside the reserved interval even if a
+        # slow summary overruns the soft deadline; it uses refs/counts only.
+        fallback_report = _minimal_partial_report(
+            checkpoint,
+            configs,
+            study,
+            resolved,
+            manifest,
+            schedule,
+            manifest_path,
+            checkpoint_path,
+            report_path,
+            interrupted,
+            stop_reason,
+            elapsed,
+            limit,
+        )
         report = _build_pilot_report(
             checkpoint,
             configs,
@@ -2236,51 +2256,61 @@ def run_pilot(
         partial = True
         interrupted = interrupted or isinstance(exc, _PilotInterruptedError)
         stop_reason = str(exc)
-        report = _minimal_partial_report(
-            checkpoint,
-            configs,
-            study,
-            resolved,
-            manifest,
-            schedule,
-            manifest_path,
-            checkpoint_path,
-            report_path,
-            interrupted,
-            stop_reason,
-            elapsed,
-            limit,
-        )
+        # The fallback candidate was built from checkpointed refs/counts before
+        # normal aggregation.  If interruption occurred earlier, build it now.
+        try:
+            report = fallback_report
+        except UnboundLocalError:
+            report = _minimal_partial_report(
+                checkpoint,
+                configs,
+                study,
+                resolved,
+                manifest,
+                schedule,
+                manifest_path,
+                checkpoint_path,
+                report_path,
+                interrupted,
+                stop_reason,
+                elapsed,
+                limit,
+            )
+        report["stop_reason"] = stop_reason
+        report["interrupted"] = interrupted
         checkpoint["status"] = "partial"
-        # The minimal report and checkpoint are the only bounded finalization
-        # writes.  The allowance is finite; an OS/filesystem stall is not
-        # represented as impossible by this code.  If TERM arrives at the
-        # first atomic write, restore the original handler before retrying the
-        # already-built checkpoint-only artifact.
+        # The finite reserve cannot make arbitrary filesystem/OS stalls
+        # impossible.  Check remaining hard budget before writing; once an
+        # atomic write has begun, its filesystem latency is inherent.  The
+        # candidate was prepared before this check, so no fallback scan starts
+        # after the hard deadline.
+        hard_budget_remaining = remaining_hard_budget()
+        if hard_budget_remaining <= 0.0:
+            report["stop_reason"] = stop_reason
         try:
             _write_json(report_path, report)
         except _PilotInterruptedError:
             interrupted = True
             report["interrupted"] = True
-            restore_term_handler()
             _write_json(report_path, report)
         try:
             persist()
         except _PilotInterruptedError:
             interrupted = True
             report["interrupted"] = True
-            restore_term_handler()
+            # Keep TERM handling installed; the outer finally restores it.
             persist()
-        # Persist the final measured elapsed value in the report itself; do not
-        # claim the timestamp sampled before checkpoint persistence.
         report["accounting"]["wall_elapsed_seconds"] = elapsed()
         try:
             _write_json(report_path, report)
         except _PilotInterruptedError:
             interrupted = True
             report["interrupted"] = True
-            restore_term_handler()
             _write_json(report_path, report)
+    except BaseException:
+        if cells_since_checkpoint:
+            persist()
+        raise
     finally:
         restore_term_handler()
     return report
