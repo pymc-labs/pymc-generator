@@ -2288,25 +2288,50 @@ def test_c2_compact_export_rejects_same_config_commit_alternate_manifest_bytes(t
     manifest_path = Path(f"{prefix}.manifest.json")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    changed = dict(manifest, budget=dict(manifest["budget"], wall_time_seconds=5401.0))
-    alternate_manifest = tmp_path / "alternate-manifest.json"
-    alternate_manifest.write_text(json.dumps(changed), encoding="utf-8")
-    assert runner.load_json(alternate_manifest) == changed
+    original_policy = "report realized and empty bands instead of treating them as balanced"
+    alternate_policy = (
+        "report realized and empty bands; do not treat count strata as balanced quotas"
+    )
+    assert manifest["budget"]["stop_rules"]["count_stratum_overrun"] == original_policy
+    changed = dict(
+        manifest,
+        budget=dict(
+            manifest["budget"],
+            stop_rules=dict(
+                manifest["budget"]["stop_rules"],
+                count_stratum_overrun=alternate_policy,
+            ),
+        ),
+    )
+    assert changed["resolved_config"] == manifest["resolved_config"]
     assert changed["config_hash"] == manifest["config_hash"]
     assert (
         changed["source_provenance"]["source_commit"]
         == manifest["source_provenance"]["source_commit"]
     )
+    assert (
+        changed["budget"]["wall_time_seconds"]
+        == changed["resolved_config"]["study"]["pilot_wall_time_seconds"]
+        == manifest["budget"]["wall_time_seconds"]
+    )
+    assert changed["budget"]["stop_rules"]["count_stratum_overrun"] == alternate_policy
 
+    alternate_manifest = tmp_path / "alternate-manifest.json"
+    alternate_manifest.write_text(json.dumps(changed), encoding="utf-8")
+    assert runner.load_json(alternate_manifest) == changed
     alternate_report = dict(report, manifest_path=str(alternate_manifest))
+    assert alternate_report["manifest_path"] == str(alternate_manifest)
     paths = {
         "report": report_path,
         "checkpoint": Path(report["checkpoint_path"]),
         "manifest": alternate_manifest,
         "run_log": manifest_path.with_name("pilot-run.log"),
     }
-    with pytest.raises(ValueError, match="artifact bytes"):
+    assert runner._sha256_file(manifest_path) == runner.COMPACT_ARTIFACT_SHA256["manifest"]
+    assert runner._sha256_file(alternate_manifest) != runner.COMPACT_ARTIFACT_SHA256["manifest"]
+    with pytest.raises(ValueError) as exc_info:
         runner._validated_artifact_hashes(alternate_report, changed, paths)
+    assert str(exc_info.value) == "compact source artifact bytes do not match accepted hashes"
 
 
 def test_c2_notebook_is_qualified_and_cleared():
