@@ -1,10 +1,14 @@
 """Treatment-response mechanism families (carryover + saturation).
 
 κ-relative wrappers over ``pymc_marketing.mmm.transformers``. Carryover and the
-legacy saturation transformers are bridged from plain ``(n_time_steps,)`` time
+saturation transformers are bridged from plain ``(n_time_steps,)`` time
 columns through ``as_xtensor(dims=("time",))``, then returned through ``.values``.
-The reference-relative unit curves use equivalent scalar arithmetic where the
-library's intermediate products or automatic derivatives lose finite values.
+The default :data:`SATURATION_FAMILIES` evaluate those library graphs exactly:
+their rounding and the order in which PyMC's draw walk reaches each curve's
+inputs are part of the seeded-corpus contract. :data:`STABLE_SATURATION_FAMILIES`,
+selected only by opt-in mechanism priors, evaluates the same unit curves with
+scalar arithmetic that keeps finite values where the library's intermediate
+products or automatic derivatives lose them.
 Parameters may be concrete floats or symbolic (pytensor / PyMC RV) scalars —
 both compose into the graph.
 
@@ -770,6 +774,34 @@ def logistic_kappa_relative(x, reference_level, *, lam) -> TensorVariable:
     return logistic_saturation(x / safe_reference_level, lam)
 
 
+def michaelis_menten_kappa_relative(x, reference_level, *, kappa_mult) -> TensorVariable:
+    """Michaelis-Menten curve with λ = kappa_mult · reference_level.
+
+    The library asymptote is pinned to 1 rather than exposed as a parameter:
+    the structural ``beta`` gate is this treatment's only amplitude.
+    """
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    return michaelis_menten(x, 1.0, kappa_mult * safe_reference_level)
+
+
+def tanh_kappa_relative(x, reference_level, *, c) -> TensorVariable:
+    """Unit-asymptote tanh(x / (reference_level · c)).
+
+    The library asymptote ``b`` is pinned to 1 for the same reason as
+    ``michaelis_menten``: ``(b, c) -> (λb, c/λ)`` scales the response by ``λ``
+    without changing its shape, so a free ``b`` only duplicates ``beta``.
+    """
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    return tanh_saturation(x / safe_reference_level, 1.0, c)
+
+
+def root_kappa_relative(x, reference_level, *, alpha) -> TensorVariable:
+    """Root curve (x / reference_level)^alpha; f(reference_level) = 1."""
+    safe_reference_level = pt.maximum(reference_level, 1e-8)
+    ratio = pt.maximum(x / safe_reference_level, 0.0)
+    return root_saturation(ratio, alpha)
+
+
 def _hill_relative_parts(x, reference, slope, kappa):
     positive = pt.gt(x, 0.0)
     safe_x = pt.switch(positive, x, 1.0)
@@ -871,26 +903,22 @@ def stable_logistic_kappa_relative(x, reference_level, *, lam) -> TensorVariable
     return pt.as_tensor_variable(_logistic_relative(x, lam, safe_reference_level))
 
 
-def michaelis_menten_kappa_relative(x, reference_level, *, kappa_mult) -> TensorVariable:
-    """Michaelis-Menten curve with λ = kappa_mult · reference_level.
+def stable_michaelis_menten_kappa_relative(x, reference_level, *, kappa_mult) -> TensorVariable:
+    """The same unit-asymptote Michaelis-Menten curve with extended-range arithmetic.
 
-    The library asymptote is pinned to 1 rather than exposed as a parameter:
-    the structural ``beta`` gate is this treatment's only amplitude.
-    Ordinary inputs keep the library's rounded λ and forward arithmetic. An
-    extended-range denominator and complete weighted pullbacks preserve finite
+    An extended-range denominator and complete weighted pullbacks preserve finite
     results when λ + x or an intermediate absolute-λ derivative is out of range.
     """
     safe_reference_level = pt.maximum(reference_level, 1e-8)
-    # Visit kappa before the anchor, as in the library's kappa * reference node.
+    # Input order (x, kappa, reference) is part of the opt-in stream layout: PyMC's
+    # right-first walk reaches reference and kappa before x through this node,
+    # whereas the default library graph reaches x first.
     return pt.as_tensor_variable(_michaelis_menten_relative(x, kappa_mult, safe_reference_level))
 
 
-def tanh_kappa_relative(x, reference_level, *, c) -> TensorVariable:
-    """Unit-asymptote tanh(x / (reference_level · c)).
+def stable_tanh_kappa_relative(x, reference_level, *, c) -> TensorVariable:
+    """The same unit-asymptote tanh(x / (reference_level · c)) with a complete quotient.
 
-    The library asymptote ``b`` is pinned to 1 for the same reason as
-    ``michaelis_menten``: ``(b, c) -> (λb, c/λ)`` scales the response by ``λ``
-    without changing its shape, so a free ``b`` only duplicates ``beta``.
     A complete quotient retains inputs whose intermediate x / reference ratio
     is out of range before the shape rescales it.
     Its analytic pullback combines the exponential tail and scale factors in
@@ -900,10 +928,10 @@ def tanh_kappa_relative(x, reference_level, *, c) -> TensorVariable:
     return pt.as_tensor_variable(_tanh_relative(x, safe_reference_level, c))
 
 
-def root_kappa_relative(x, reference_level, *, alpha) -> TensorVariable:
-    """Root curve (x / reference_level)^alpha; f(reference_level) = 1.
+def stable_root_kappa_relative(x, reference_level, *, alpha) -> TensorVariable:
+    """The same root curve (x / reference_level)^alpha with log-space extended range.
 
-    Ordinary ratios keep the library power. Positive out-of-range or subnormal
+    Ordinary ratios use a scalar power. Positive out-of-range or subnormal
     ratios stay in log space through the power and its complete weighted
     pullback; clipped nonpositive inputs retain an exact zero response.
     """
@@ -911,13 +939,28 @@ def root_kappa_relative(x, reference_level, *, alpha) -> TensorVariable:
     return pt.as_tensor_variable(_root_relative(x, safe_reference_level, alpha))
 
 
-#: Name -> wrapper with signature ``f(x, reference_level, **shape_params)``.
+#: Default name -> wrapper table, with signature ``f(x, reference_level, **shape_params)``.
+#: These are the library graphs whose rounding and random-stream order seeded
+#: corpora reproduce.
 SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
     "hill": hill_kappa_relative,
     "logistic": logistic_kappa_relative,
     "michaelis_menten": michaelis_menten_kappa_relative,
     "tanh": tanh_kappa_relative,
     "root": root_kappa_relative,
+}
+
+
+#: Opt-in replacements, selected by ``params["mechanism_priors_enabled"]`` in
+#: :func:`pymc_generator.symbolic_graph._saturate_family`. They compute the same
+#: unit curves with complete-range arithmetic and analytic pullbacks, so they have
+#: their own graph, rounding and random-variable traversal.
+STABLE_SATURATION_FAMILIES: dict[str, Callable[..., TensorVariable]] = {
+    "hill": stable_hill_kappa_relative,
+    "logistic": stable_logistic_kappa_relative,
+    "michaelis_menten": stable_michaelis_menten_kappa_relative,
+    "tanh": stable_tanh_kappa_relative,
+    "root": stable_root_kappa_relative,
 }
 
 

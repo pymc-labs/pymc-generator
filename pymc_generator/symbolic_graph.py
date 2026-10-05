@@ -54,7 +54,11 @@ from typing import Any, cast
 
 import numpy as np
 import pytensor.tensor as pt
+from pytensor.compile.mode import optdb
+from pytensor.graph.rewriting.basic import copy_stack_trace, node_rewriter
+from pytensor.scalar import Add
 from pytensor.tensor import TensorVariable
+from pytensor.tensor.elemwise import Elemwise
 
 from . import mechanisms, trajectories
 from .random_walk import symbolic_random_walk, symbolic_random_walk_by_width
@@ -142,24 +146,24 @@ def _dot_terms(
     old ``Σ (g·coeff)·cols`` exactly.
 
     A single ``Dot((n_time_steps, n), (n,))`` over the ``n`` wired parents is used
-    rather than a python ``sum()`` of scaled columns: the latter builds nested
-    Adds the canonicalizer flattens into one wide Add, and past ~32 inputs the
-    py-backend crashes building the ufunc. Dot is one BLAS op the rewriter never
-    flattens (and is faster).
+    rather than a python ``sum()`` of scaled columns: Dot is one BLAS op the
+    rewriter never flattens, and is faster.
 
     Under ``dynamic_g`` the mask is a tensor whose value is not known while the
     graph is built, so the sparsity shortcut is unavailable: every candidate
     parent is wired as ``g_mask[i]·coeff[i]·cols[i]`` and absent edges are
     zeroed numerically instead of structurally. That is the cost of swapping
-    DAGs without recompiling.
+    DAGs without recompiling. The sum stays an n-ary addition, whose operand
+    order fixes both its rounding and the order in which PyMC's draw walk reaches
+    the parents' random variables; additions wider than the Python backend's
+    operand limit are split for that backend by :func:`_split_wide_py_add`.
     """
     if dynamic_g:
         g_dyn = pt.as_tensor_variable(g_mask).reshape((-1,))
         if not cols:
             return pt.zeros(n_time_steps)
-        mat = pt.stack(cols, axis=1)
-        w = g_dyn[: len(cols)] * pt.as_tensor_variable(coeff).reshape((-1,))[: len(cols)]
-        return cast(TensorVariable, pt.dot(mat, w))
+        terms = [g_dyn[i] * coeff[i] * cols[i] for i in range(len(cols))]
+        return cast(TensorVariable, pt.add(*terms))
 
     g_mask = np.asarray(g_mask, dtype="float64").ravel()
     nz = [i for i in range(len(cols)) if g_mask[i] != 0.0]
@@ -170,6 +174,44 @@ def _dot_terms(
     mat = pt.stack([cols[i] for i in nz], axis=1)  # (n_time_steps, n)
     w = pt.stack([coeff[i] for i in nz])  # (n,) — numpy scalars or symbolic
     return cast(TensorVariable, pt.dot(mat, w))
+
+
+#: ``Elemwise.perform`` (the Python backend) rejects nodes whose inputs plus
+#: outputs exceed this many operands.
+_PY_ELEMWISE_MAX_OPERANDS = 32
+_SPLIT_WIDE_ADD = "pymc_generator_split_wide_add"
+
+
+@node_rewriter([Elemwise])
+def _split_wide_py_add(fgraph, node):
+    """Split an addition the Python backend cannot evaluate as one ufunc.
+
+    Canonicalization flattens a template equation's dynamic parent sums together
+    with the rest of the equation into one n-ary addition; past the Python
+    backend's operand limit that node raises at run time. Only such nodes are
+    rebuilt, as nested additions of at most 31 inputs, so every graph that could
+    already run is unchanged. It carries only the ``py_only`` tag of PyTensor's
+    ``py_only`` database, which FAST_COMPILE and Python-thunk linkers request, so
+    C and Numba compilations never see it, whatever their optimizer. It runs after
+    canonicalization; random-stream order is collected on the unrewritten graph.
+    """
+    if not isinstance(node.op.scalar_op, Add):
+        return None
+    if len(node.inputs) + len(node.outputs) <= _PY_ELEMWISE_MAX_OPERANDS:
+        return None
+    (output,) = node.outputs
+    # Cast first: an all-bool chunk would add as logical OR, a narrow integer one overflow.
+    inputs = [x if x.dtype == output.dtype else pt.cast(x, output.dtype) for x in node.inputs]
+    width = _PY_ELEMWISE_MAX_OPERANDS - 1
+    total = pt.add(*inputs[:width])
+    for start in range(width, len(inputs), width - 1):
+        total = pt.add(total, *inputs[start : start + width - 1])
+    total = output.type.filter_variable(total, allow_convert=True)
+    copy_stack_trace(output, total)
+    return [total]
+
+
+optdb["py_only"].register(_SPLIT_WIDE_ADD, _split_wide_py_add, overwrite_existing=True)
 
 
 def _walk_column(eps_col, rw_group: dict, i: int, n_time_steps: int) -> TensorVariable:
@@ -348,15 +390,18 @@ def _saturate_family(
 
     ``linear`` is the only family without a κ-relative wrapper. The
     name-to-wrapper dispatch lives in mechanisms; these branches only bind each
-    wrapper's distinct shape parameters.
+    wrapper's distinct shape parameters. Opt-in mechanism priors select
+    ``mechanisms.STABLE_SATURATION_FAMILIES``; otherwise
+    ``mechanisms.SATURATION_FAMILIES`` keeps the legacy library graphs.
     """
     if name == "linear":
         return cast(TensorVariable, ad_col / saturation_scale)
-    family = mechanisms.SATURATION_FAMILIES[name]
-    if params.get("mechanism_priors_enabled", False) and name == "hill":
-        family = mechanisms.stable_hill_kappa_relative
-    elif params.get("mechanism_priors_enabled", False) and name == "logistic":
-        family = mechanisms.stable_logistic_kappa_relative
+    table = (
+        mechanisms.STABLE_SATURATION_FAMILIES
+        if params.get("mechanism_priors_enabled", False)
+        else mechanisms.SATURATION_FAMILIES
+    )
+    family = table[name]
     if name == "hill":
         return family(
             ad_col,
@@ -438,9 +483,11 @@ def build_symbolic_graph(
         ``params["trajectory"]`` (from
         :func:`pymc_generator.trajectories.trajectory_params`, or the same layout
         with numpy values) adds the composable per-input trajectory components.
-        ``params["mechanism_priors_enabled"]`` selects numerically stable but
-        mathematically identical Hill/logistic evaluation for opt-in mechanism
-        priors. Omit it or leave it False to preserve the legacy graph and math.
+        ``params["mechanism_priors_enabled"]`` selects numerically stable,
+        mathematically identical evaluation of every saturation family
+        (``mechanisms.STABLE_SATURATION_FAMILIES``) for opt-in mechanism priors.
+        Omit it or leave it False to keep the legacy graph, its rounding and its
+        random-stream order.
     eps : dict
         The caller's noise RVs, each with leading dim
         ``n_time_steps_full = n_time_steps + burn_in``:
@@ -830,7 +877,8 @@ def build_symbolic_graph(
     # ``baseline_floor_scope`` decides WHAT the floor clips.
     #
     # "intercept": clip the intercept walk only. Every other term stays exactly
-    #     linear in its node (``covariate_contribution[:, m] == g_zy·ρ·Z``), which
+    #     linear in its node (``covariate_contribution[:, m]`` is the literal
+    #     ``(g_zy[m]·ρ[m])·Z[:, m]`` on the reported Z), which
     #     is the cheapest, most estimator-friendly option — but a large negative
     #     ρ·Z can still drag the non-treatment total (and outcome) below zero.
     # "non_treatment": clip the RUNNING TOTAL as each parent is added, in the LOCKED
@@ -843,8 +891,10 @@ def build_symbolic_graph(
     #         absorbed rather than pushing outcome negative;
     #       * the columns still telescope EXACTLY, so the decomposition identity
     #         is untouched;
-    #       * where the floor does not bind, every column is bit-identical to the
-    #         linear split, so this is a clip and never a re-parameterisation.
+    #       * where the floor does not bind, every column is the linear split up to
+    #         float64 rounding of the telescoped difference ``(A + x) - A``, so this
+    #         is a clip and never a re-parameterisation; only the default
+    #         "intercept" scope keeps the literal product.
     delta_dy = _arr(params["delta_dy"], (n_latent,))
     rho_zy = _arr(params["rho_zy"], (n_covariates,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)

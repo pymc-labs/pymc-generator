@@ -24,6 +24,8 @@ import numpy as np
 
 from .random_walk import _centred_walk_scale, _kernel_width
 from .sampler import (
+    _CORPUS_NATURAL_NAMES,
+    _CORPUS_TRAJECTORY_NAMES,
     CARRYOVER_FAMILY_KEYS,
     SATURATION_FAMILY_KEYS,
     SCMPrior,
@@ -80,6 +82,13 @@ _LEGACY_WORLD_PARAM_NAMES = tuple(
         "confounding_strength",
     )
 )
+
+#: Schedule audit outputs exist only when a schedule component is admitted. They
+#: stay out of ``sample_scm``'s stream reference, so random variables reached only
+#: through them are appended instead of reordering legacy streams. (Corpus
+#: generation gets the same effect by requesting them first, so the walk reaches
+#: them last.)
+_SCHEDULE_AUDIT_OUTPUTS = frozenset(_CORPUS_TRAJECTORY_NAMES + _CORPUS_NATURAL_NAMES)
 
 
 def _copy_audit_value(value: Any) -> Any:
@@ -1100,7 +1109,16 @@ def sample_scm(
         g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
     )
     primitive_names = tuple(rv.name for rv in model.free_RVs)
-    draw_names = tuple(dict.fromkeys(out_names + param_names + _EXOGENOUS_NAMES + primitive_names))
+    legacy_names = tuple(dict.fromkeys(out_names + param_names + _EXOGENOUS_NAMES))
+    # PyMC's draw walk reaches the last-requested outputs first, and streams the
+    # reference does not reach are appended in that walk's order. Primitives main
+    # never requested therefore lead the request: walked last, they cannot move the
+    # streams main gave its own leftover variables (e.g. unused texture innovations).
+    draw_names = tuple(name for name in primitive_names if name not in legacy_names) + legacy_names
+    reference_names = (
+        tuple(name for name in out_names if name not in _SCHEDULE_AUDIT_OUTPUTS)
+        + _LEGACY_WORLD_PARAM_NAMES
+    )
     scheduled_treatment = np.zeros(len(g_act["g_cy"]), dtype=bool)
     if cfg.trajectory_components_enabled:
         for component in SCHEDULE_COMPONENTS:
@@ -1116,13 +1134,15 @@ def sample_scm(
         # Capture outputs, reports, raw innovations and every primitive in one
         # candidate draw. Derived parameter products alone do not preserve all
         # generator arithmetic. In a confounded model["eps_c"] is still the
-        # independent pre-mixture Normal RV; the graph receives eps_c_eff.
+        # independent pre-mixture Normal RV; the graph receives eps_c_eff. The
+        # stream reference is the legacy output set, so an admitted schedule
+        # component that no input carries keeps the default world's streams.
         drawn = draw_worlds(
             model,
             draw_names,
             draw_seed,
             draws=max_eps_draws,
-            rng_reference_names=out_names + _LEGACY_WORLD_PARAM_NAMES,
+            rng_reference_names=reference_names,
         )
         for b in range(max_eps_draws):
             d = {nm: np.array(drawn[nm][b], copy=True) for nm in out_names}
