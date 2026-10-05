@@ -1172,8 +1172,26 @@ def _compact_world_metric(
         name for name, scale in zip(constants, scales, strict=True) if scale <= rank_tolerance
     ]
 
-    views: dict[str, dict[str, float | None]] = {}
+    views: dict[str, dict[str, Any]] = {}
     for view_name, view in diagnostic.views.items():
+        # Dependence diagnostics are computed on the requested view.  The
+        # design diagnostics must use that same representation: in particular,
+        # differencing happens before rank/condition calculations.
+        view_predictors = np.diff(predictors, axis=0) if view_name == "differences" else predictors
+        view_design = np.column_stack([view_predictors, np.ones(view_predictors.shape[0])])
+        view_rank = design_rank_condition(view_design, rank_tolerance=rank_tolerance)
+        view_scales = np.std(view_predictors, axis=0)
+        view_standardized = np.zeros_like(view_predictors)
+        view_nonconstant = view_scales > rank_tolerance
+        if np.any(view_nonconstant):
+            view_standardized[:, view_nonconstant] = (
+                view_predictors[:, view_nonconstant]
+                - view_predictors[:, view_nonconstant].mean(axis=0)
+            ) / view_scales[view_nonconstant]
+        view_standardized_metric = design_rank_condition(
+            np.column_stack([view_standardized, np.ones(view_standardized.shape[0])]),
+            rank_tolerance=rank_tolerance,
+        )
         dependence = view.dependence
         keys = [descriptor.key for descriptor in dependence.descriptors]
         observed = [i for i, key in enumerate(keys) if key.startswith(("C", "Z"))]
@@ -1186,6 +1204,8 @@ def _compact_world_metric(
             "max_abs_pearson_correlation": _max_off_diagonal(pearson, pearson_valid),
             "max_vif": _finite_max(vif_values),
             "vif_infinite": bool(np.isposinf(vif.vif[row]).any()),
+            "rank": view_rank,
+            "standardized": view_standardized_metric,
         }
     graph = prior.layout.unpack(np.asarray(corpus["g"][row]))
     graph_flags = classify_graph_paths(graph)
@@ -1255,11 +1275,18 @@ def _world_indicators(
 ) -> dict[str, dict[str, bool]]:
     raw = record["raw_input_diagnostics"]
     result: dict[str, dict[str, bool]] = {}
-    for view_name in ("levels", "differences"):
+    available_views = list(raw.get("views", {}))
+    # Older compact hand-built records had only the top-level rank and no
+    # views.  Keep that fixture compatibility, but never invent a diagnostic
+    # view when the runner has explicitly omitted it.
+    if not available_views:
+        available_views = ["levels"]
+    for view_name in available_views:
         view = raw.get("views", {}).get(view_name, {})
-        condition = raw["rank"].get("condition")
+        rank = view.get("rank", raw.get("rank", {}))
+        condition = rank.get("condition")
         indicators = {
-            "rank_deficient": bool(raw["rank"].get("rank_deficient", False)),
+            "rank_deficient": bool(rank.get("rank_deficient", False)),
         }
         for threshold in thresholds["condition"]:
             indicators[f"condition_ge_{_threshold_key(threshold)}"] = (
@@ -1337,9 +1364,16 @@ def _summarize_indicator_set(
     for cell in cells:
         source = cell[estimand]
         if view not in source:
-            # Compatibility with compact hand-built records from C1/C2 tests.
-            source = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
-            values.append(bool(source.get("levels", source)[metric]))
+            # ``first_world`` stores raw rank metadata, while its indicators
+            # live in the cell's view map.  Use that map when it has the
+            # requested view; never synthesize an omitted view.
+            binary = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
+            if view in binary:
+                values.append(bool(binary[view][metric]))
+            elif "levels" not in binary and metric in source:
+                values.append(bool(source[metric]))
+            else:
+                raise ValueError(f"diagnostic view {view!r} is unavailable")
         else:
             values.append(bool(source[view][metric]))
     return cell_binary_summary(
@@ -1361,9 +1395,9 @@ def _pilot_summaries(
     if not cells:
         return {"status": "unavailable", "reason": "no complete cells"}
     thresholds = thresholds or DEFAULT_STUDY["thresholds"]
-    views = ("levels", "differences")
     binary = cells[0]["binary"]
-    metrics = list(binary.get("levels", binary))
+    views = [view for view in ("levels", "differences") if view in binary]
+    metrics = list(binary[views[0]]) if views else []
     summary: dict[str, Any] = {
         "status": "available",
         "unit": "cell",
@@ -1379,7 +1413,8 @@ def _pilot_summaries(
             for view in views
         }
         # Compatibility aliases retain the original C2 keys while levels are explicit above.
-        summary["estimands"][estimand].update(summary["estimands"][estimand]["levels"])
+        if "levels" in summary["estimands"][estimand]:
+            summary["estimands"][estimand].update(summary["estimands"][estimand]["levels"])
     if treatment_bands is not None and control_bands is not None:
         summary["count_band_wilson"] = {}
         for i, treatment_band in enumerate(treatment_bands):
@@ -1432,18 +1467,68 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
-def validate_pilot_report(report: Mapping[str, Any], resolved: Mapping[str, Any]) -> None:
-    """Reject reports whose schema, content hash, settings, or provenance drifted."""
+def _required_source_provenance(value: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} provenance is missing")
+    required = ("package", "package_version", "source_commit", "source_dirty")
+    if any(key not in value for key in required):
+        raise ValueError(f"{label} provenance is incomplete")
+    return {key: value[key] for key in required}
+
+
+def validate_pilot_report(
+    report: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    *,
+    manifest: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate a report against its immutable run manifest.
+
+    A report may legitimately come from an older source checkout.  Its source
+    identity is therefore compared with the archived manifest for this run,
+    rather than with the current checkout, while config/schema identity is
+    still checked against the requested resolved configuration.
+    """
     if report.get("schema_version") != PILOT_SCHEMA_VERSION:
         raise ValueError("pilot report schema mismatch")
     if report.get("config_hash") != resolved.get("config_hash"):
         raise ValueError("pilot report config hash mismatch")
     if report.get("resolved_config") != resolved:
         raise ValueError("pilot report resolved configuration mismatch")
-    if not isinstance(report.get("source_provenance"), Mapping):
-        raise ValueError("pilot report provenance is missing")
+    manifest_path = report.get("manifest_path")
+    if not isinstance(manifest_path, str):
+        raise ValueError("pilot report manifest path is missing")
+    if manifest is None:
+        try:
+            manifest = load_json(manifest_path)
+        except (OSError, ValueError) as exc:
+            raise ValueError("pilot report manifest cannot be loaded") from exc
+    else:
+        try:
+            archived_manifest = load_json(manifest_path)
+        except (OSError, ValueError) as exc:
+            raise ValueError("pilot report manifest cannot be loaded") from exc
+        if archived_manifest != manifest:
+            raise ValueError("pilot report manifest does not match its archived path")
+    if manifest.get("schema_version") != PILOT_SCHEMA_VERSION:
+        raise ValueError("pilot manifest schema mismatch")
+    if manifest.get("config_hash") != resolved.get("config_hash"):
+        raise ValueError("pilot manifest config hash mismatch")
+    if manifest.get("resolved_config") != resolved:
+        raise ValueError("pilot manifest resolved configuration mismatch")
+    manifest_provenance = _required_source_provenance(
+        manifest.get("source_provenance"), label="manifest"
+    )
+    report_provenance = _required_source_provenance(report.get("source_provenance"), label="report")
+    if report_provenance != manifest_provenance:
+        raise ValueError("pilot report provenance does not match its manifest")
+    manifest_hash = config_hash(manifest)
+    if report.get("manifest_hash") != manifest_hash:
+        raise ValueError("pilot report manifest hash mismatch")
     if not isinstance(report.get("schedule"), list) or not report["schedule"]:
         raise ValueError("pilot report seed schedule is missing")
+    if report.get("schedule") != manifest.get("schedule"):
+        raise ValueError("pilot report schedule does not match its manifest")
     if report.get("status") not in {"complete", "partial"}:
         raise ValueError("pilot report status is invalid")
 
@@ -1456,32 +1541,72 @@ class _PilotInterruptedError(RuntimeError):
     pass
 
 
+def _run_phase_child(function: Any, result_path: str) -> None:
+    """Execute one inherited callable and serialize its result out of band."""
+    import pickle
+
+    try:
+        result = ("ok", function())
+    except BaseException as exc:  # transfer the phase exception exactly once
+        result = ("error", type(exc).__name__, str(exc))
+    with open(result_path, "wb") as handle:
+        pickle.dump(result, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 def _bounded_phase(function: Any, deadline: float, clock: Any) -> Any:
-    """Run a blocking generation/diagnostic phase with an interruptible cap."""
+    """Run blocking work in an owned process with a hard parent-side timeout."""
     if float(clock()) >= deadline:
         raise _PilotDeadlineExceededError("pilot wall deadline reached before phase")
+    import multiprocessing
+
+    if "fork" not in multiprocessing.get_all_start_methods():
+        raise RuntimeError("bounded pilot phases require fork process isolation on this host")
+    import os
+    import pickle
+    import tempfile
+
+    context = multiprocessing.get_context("fork")
+    result_fd, result_path = tempfile.mkstemp(prefix="linear-recovery-phase-")
+    os.close(result_fd)
+    process = context.Process(target=_run_phase_child, args=(function, result_path), daemon=True)
     try:
-        import signal
-
-        if not hasattr(signal, "setitimer"):
-            return function()
-        remaining = max(0.001, deadline - float(clock()))
-        previous = signal.getsignal(signal.SIGALRM)
-
-        def on_alarm(_signum: int, _frame: Any) -> None:
-            raise _PilotDeadlineExceededError("pilot wall deadline reached during phase")
-
-        signal.signal(signal.SIGALRM, on_alarm)
-        signal.setitimer(signal.ITIMER_REAL, remaining)
+        process.start()
+    except BaseException:
         try:
-            return function()
-        finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, previous)
-    except ValueError:
-        # Non-main-thread callers cannot install signal handlers; frequent clock
-        # checks still enforce the cap around the phase where possible.
-        return function()
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
+        raise
+    try:
+        while process.is_alive():
+            remaining = float(deadline) - float(clock())
+            if remaining <= 0:
+                process.terminate()
+                process.join()
+                raise _PilotDeadlineExceededError("pilot wall deadline reached during phase")
+            process.join(min(remaining, 0.05))
+        process.join()
+        try:
+            with open(result_path, "rb") as handle:
+                result = pickle.load(handle)
+        except (OSError, EOFError, pickle.UnpicklingError) as exc:
+            raise RuntimeError("bounded pilot phase exited without a result") from exc
+        if result[0] == "ok":
+            return result[1]
+        name, message = result[1], result[2]
+        if name == "ValueError":
+            raise ValueError(message)
+        raise RuntimeError(f"pilot phase {name}: {message}")
+    except BaseException:
+        if process.is_alive():
+            process.terminate()
+            process.join()
+        raise
+    finally:
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
 
 
 def run_pilot(
@@ -1503,6 +1628,9 @@ def run_pilot(
     )
     if not 0 < limit <= PILOT_WALL_LIMIT_SECONDS:
         raise ValueError(f"pilot wall limit must be in (0, {PILOT_WALL_LIMIT_SECONDS}] seconds")
+    # Begin the total budget before creating any run evidence. Resumed time is
+    # added below, so evidence creation and finalization share this budget.
+    started = float(clock())
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
     prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
@@ -1560,18 +1688,24 @@ def run_pilot(
                 "existing pilot checkpoint differs; refusing a seed/config change on resume"
             )
     consumed = float(checkpoint.get("wall_elapsed_seconds", 0.0))
-    started = float(clock())
-    deadline = started + max(0.0, limit - consumed)
-    partial = consumed >= limit
+    finalization_reserve = min(30.0, limit * 0.10)
+    phase_budget = max(0.0, limit - consumed - finalization_reserve)
+    deadline = started + phase_budget
+    finalization_deadline = started + max(0.0, limit - consumed)
+    partial = consumed >= limit or phase_budget <= 0.0
     stop_reason = "resumed wall budget already exhausted" if partial else None
     cells_since_checkpoint = 0
 
     def elapsed() -> float:
-        return consumed + max(0.0, float(clock()) - started)
+        # Never clamp an overrun: artifacts expose actual elapsed accounting.
+        return consumed + float(clock()) - started
 
     def persist() -> None:
-        checkpoint["wall_elapsed_seconds"] = min(limit, elapsed())
+        checkpoint["wall_elapsed_seconds"] = elapsed()
         _write_json(checkpoint_path, checkpoint)
+
+    def finalization_overdue() -> bool:
+        return float(clock()) > finalization_deadline
 
     def upsert_failure(config_index: int, item: Mapping[str, Any], reason: str) -> None:
         failures = [
@@ -1598,6 +1732,14 @@ def run_pilot(
 
     interrupted = False
     old_term = None
+
+    def restore_term_handler() -> None:
+        if old_term is None:
+            return
+        import signal
+
+        signal.signal(signal.SIGTERM, old_term)
+
     try:
         try:
             import signal
@@ -1608,8 +1750,10 @@ def run_pilot(
                 raise _PilotInterruptedError("pilot received SIGTERM")
 
             signal.signal(signal.SIGTERM, on_term)
-        except (ImportError, ValueError):
-            old_term = None
+        except (ImportError, ValueError) as exc:
+            raise RuntimeError(
+                "pilot SIGTERM handling requires execution in the main thread on this host"
+            ) from exc
         completed = {
             (int(row["config_index"]), int(row["cell_id"]))
             for row in checkpoint.get("cells", [])
@@ -1745,14 +1889,12 @@ def run_pilot(
         partial, stop_reason = True, str(exc)
         interrupted = isinstance(exc, _PilotInterruptedError)
         persist()
-    finally:
-        try:
-            import signal
-
-            if old_term is not None:
-                signal.signal(signal.SIGTERM, old_term)
-        except (ImportError, ValueError):
-            pass
+    except BaseException:
+        # Keep TERM handling active while checkpointing an interrupted phase.
+        if cells_since_checkpoint:
+            persist()
+        restore_term_handler()
+        raise
     if cells_since_checkpoint:
         persist()
 
@@ -1796,6 +1938,9 @@ def run_pilot(
                 ),
             }
         )
+    if finalization_overdue():
+        partial = True
+        stop_reason = "wall deadline reached during finalization"
     requested_cells = len(configs) * int(study["pilot_cells_per_config"])
     complete = sum(1 for row in cell_records if row.get("status") == "complete") == requested_cells
     status = "complete" if complete and not partial else "partial"
@@ -1804,7 +1949,8 @@ def run_pilot(
         "status": status,
         "config_hash": resolved["config_hash"],
         "resolved_config": resolved,
-        "source_provenance": _source_provenance(),
+        "source_provenance": manifest["source_provenance"],
+        "manifest_hash": config_hash(manifest),
         "manifest_path": str(manifest_path),
         "checkpoint_path": str(checkpoint_path),
         "report_path": str(report_path),
@@ -1844,9 +1990,7 @@ def run_pilot(
                 for item in checkpoint.get("config_accounting", [])
             )
             + len(checkpoint.get("config_failures", [])),
-            "wall_elapsed_seconds": min(
-                limit, float(checkpoint.get("wall_elapsed_seconds", elapsed()))
-            ),
+            "wall_elapsed_seconds": elapsed(),
             "wall_budget_seconds": limit,
             "empty_band_policy": "zero-denominator bands are unavailable/missing, never zero",
         },
@@ -1872,6 +2016,8 @@ def run_pilot(
     _write_json(report_path, report)
     checkpoint["status"] = status
     persist()
+    # TERM remains handled through report construction and both atomic writes.
+    restore_term_handler()
     return report
 
 

@@ -767,6 +767,47 @@ def _c2_mock_record(config_index, cell_id, sibling_index):
     }
 
 
+def test_c2_diagnostic_views_keep_view_specific_rank_condition_and_subset():
+    from scripts.linear_recovery_prevalence import _world_indicators
+
+    record = {
+        "raw_input_diagnostics": {
+            "rank": {"rank_deficient": False, "condition": 2.0},
+            "views": {
+                "levels": {
+                    "rank": {"rank_deficient": False, "condition": 2.0},
+                    "max_abs_pearson_correlation": None,
+                    "max_vif": None,
+                    "vif_infinite": False,
+                },
+                "differences": {
+                    "rank": {"rank_deficient": True, "condition": 200.0},
+                    "max_abs_pearson_correlation": None,
+                    "max_vif": None,
+                    "vif_infinite": False,
+                },
+            },
+        }
+    }
+    thresholds = {
+        "absolute_correlation": [0.8, 0.9],
+        "vif": [5.0, 10.0],
+        "condition": [30.0, 100.0],
+    }
+    indicators = _world_indicators(record, thresholds)
+    assert not indicators["levels"]["rank_deficient"]
+    assert not indicators["levels"]["condition_ge_30p0"]
+    assert indicators["differences"]["rank_deficient"]
+    assert indicators["differences"]["condition_ge_100p0"]
+
+    subset = {
+        "raw_input_diagnostics": {
+            "views": {"levels": record["raw_input_diagnostics"]["views"]["levels"]}
+        }
+    }
+    assert list(_world_indicators(subset, thresholds)) == ["levels"]
+
+
 def test_c2_configured_indicators_and_realized_band_wilson_tables():
     from scripts.linear_recovery_prevalence import _pilot_cell_records, _pilot_summaries
 
@@ -838,10 +879,47 @@ def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp
         runner.run_pilot(
             config, output_dir=tmp_path, wall_time_seconds=60, resume=False, clock=lambda: 0.0
         )
+    import copy
+
     resolved = runner.resolve_config(config)
     broken = {**report, "config_hash": "wrong"}
     with pytest.raises(ValueError, match="config hash"):
         runner.validate_pilot_report(broken, resolved)
+    for field, value in (
+        ("schema_version", "wrong-schema"),
+        ("resolved_config", {**report["resolved_config"], "config_hash": "wrong"}),
+        ("manifest_hash", "wrong-manifest"),
+        ("schedule", []),
+        ("status", "invalid"),
+    ):
+        mutated = copy.deepcopy(report)
+        mutated[field] = value
+        with pytest.raises(ValueError):
+            runner.validate_pilot_report(mutated, resolved)
+    for provenance_field in ("package", "package_version", "source_commit", "source_dirty"):
+        mutated = copy.deepcopy(report)
+        mutated["source_provenance"][provenance_field] = "mutated"
+        with pytest.raises(ValueError):
+            runner.validate_pilot_report(mutated, resolved)
+
+
+def test_c2_bounded_phase_isolates_sleep_and_transfers_value_error_once(tmp_path):
+    import time
+
+    from scripts import linear_recovery_prevalence as runner
+
+    marker = tmp_path / "phase-calls"
+
+    def failing_phase():
+        marker.write_text(marker.read_text() + "x" if marker.exists() else "x")
+        raise ValueError("phase value error")
+
+    for phase in ("generation", "diagnostics"):
+        with pytest.raises(runner._PilotDeadlineExceededError):
+            runner._bounded_phase(lambda: time.sleep(2), time.monotonic() + 0.1, time.monotonic)
+    with pytest.raises(ValueError, match="phase value error"):
+        runner._bounded_phase(failing_phase, time.monotonic() + 2, time.monotonic)
+    assert marker.read_text() == "x"
 
 
 def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeypatch):
@@ -850,13 +928,14 @@ def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeyp
     from scripts import linear_recovery_prevalence as runner
 
     config = _c2_mock_config()
-    calls = {"sample": 0}
+    failure_marker = tmp_path / "planned-failure.once"
 
     def sample(_prior):
-        calls["sample"] += 1
-        if calls["sample"] == 1:
-            raise RuntimeError("planned failure")
-        return {"cell_id": np.array([0, 0, 1, 1])}
+        try:
+            failure_marker.touch(exist_ok=False)
+        except FileExistsError:
+            return {"cell_id": np.array([0, 0, 1, 1])}
+        raise RuntimeError("planned failure")
 
     monkeypatch.setattr(runner, "sample_prior_predictive", sample)
     monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
@@ -879,9 +958,51 @@ def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeyp
     )
     first = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
     assert first["status"] == "partial"
+    checkpoint_path = (
+        tmp_path
+        / f"linear-recovery-c2-{runner.resolve_config(config)['config_hash'][:16]}.checkpoint.json"
+    )
+    report_path = (
+        tmp_path / f"linear-recovery-c2-{runner.resolve_config(config)['config_hash'][:16]}.json"
+    )
+    checkpoint = runner.load_json(checkpoint_path)
+    partial_report = runner.load_json(report_path)
+    assert len(checkpoint["config_failures"]) == 1
+    assert partial_report["status"] == "partial"
     second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
     assert second["status"] == "complete"
     assert second["accounting"]["failures"] == 0
+
+
+def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path, monkeypatch):
+    import os
+    import signal
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: (time.sleep(2), {"cell_id": np.array([0, 0, 1, 1])})[1],
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    timer = threading.Timer(0.2, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.start()
+    try:
+        report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=10)
+    finally:
+        timer.cancel()
+    assert report["status"] == "partial"
+    assert report["interrupted"]
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    persisted = runner.load_json(report["report_path"])
+    assert checkpoint["status"] == "partial"
+    assert persisted["status"] == "partial"
+    assert persisted["accounting"]["wall_elapsed_seconds"] >= 0.0
 
 
 def test_c2_runner_handles_deadline_during_generation_and_diagnostics(tmp_path, monkeypatch):
