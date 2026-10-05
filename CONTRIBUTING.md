@@ -55,15 +55,16 @@ metadata, so their values are heterogeneous rather than uniformly ndarrays.
 
 The docs are a MkDocs Material site under `docs/`. The API pages are generated
 from docstrings (mkdocstrings), the guide pages execute real Python and render
-plots inline at build time (markdown-exec), and both notebooks under
-`docs/examples/` are executed by mkdocs-jupyter. The docs require the full
-modeling stack and a Jupyter kernel named `pymc-generator`:
+plots inline at build time (markdown-exec), and the notebooks under
+`docs/examples/` are executed by mkdocs-jupyter, including the trajectory and
+corpus-quality showcase. The docs require the full modeling stack and a
+Jupyter kernel named `pymc-generator`:
 
 ```bash
 uv sync --locked --extra dev --extra docs
-uv run --no-sync python -m ipykernel install --user --name pymc-generator
-uv run --no-sync mkdocs serve            # http://127.0.0.1:8000
-uv run --no-sync mkdocs build --strict   # fails on documentation build warnings
+.venv/bin/python -m ipykernel install --prefix "$PWD/.venv" --name pymc-generator
+.venv/bin/python -m mkdocs serve            # http://127.0.0.1:8000
+.venv/bin/python -m mkdocs build --strict   # fails on documentation build warnings
 ```
 
 Edit the `.ipynb` files directly: they are the canonical sources, not generated
@@ -71,12 +72,16 @@ copies of Python string literals. Commit source cells without outputs, execution
 counters, or widget state. Clear them before committing:
 
 ```bash
-uv run --no-sync jupyter nbconvert --to notebook --inplace \
+.venv/bin/python -m nbconvert --to notebook --inplace \
   --ClearOutputPreprocessor.enabled=True \
   --ClearMetadataPreprocessor.enabled=True \
   --ClearMetadataPreprocessor.preserve_nb_metadata_mask='{("language_info", "name"), "kernelspec"}' \
+  --ClearMetadataPreprocessor.preserve_cell_metadata_mask='{"tags"}' \
   docs/examples/*.ipynb
 ```
+
+Keep cell tags: the trajectory showcase uses them for report-only execution in
+a fresh kernel without generation.
 
 A full build samples worlds and executes the recovery case study's three
 four-chain MCMC fits. Allow for their runtime and inspect their actual warnings

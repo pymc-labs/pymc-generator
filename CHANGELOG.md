@@ -8,6 +8,16 @@ read the migration notes before upgrading.
 
 ### Added
 
+- **Public trajectory showcase and corpus-quality report (#29, #31).**
+  An executable guide notebook generates 17 small 104-week datasets: eight
+  sparse mixed worlds, eight trajectory archetypes, and one all-component
+  replay world. It reports stored-mask component prevalence and count-grid
+  coverage, descriptor distributions and between-world comparisons,
+  configurable rank/VIF screening, measured input shapes and gaps, seeded
+  visual samples, and manual dataset selection. The report can run from a
+  schema-v5 file in a fresh kernel without generation. The tour also checks
+  reference priors, exact replay, same-input template parity, and oracle
+  forward values, and exports model-facing CSVs with a dataset manifest.
 - **Richer worlds end-to-end (#27).** Ordinary generation, `sample_scm`, and
   reusable templates support all eight trajectory components and fractional
   per-input inclusion alongside richer mechanism priors. Template flags are

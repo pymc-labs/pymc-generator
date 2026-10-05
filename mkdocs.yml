@@ -156,6 +156,8 @@ nav:
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
       - Input trajectories: guide/trajectories.md
+      - Trajectory showcase: examples/trajectory-showcase.ipynb
+      - Corpus quality: guide/corpus-quality.md
       - The posterior oracle: guide/oracle.md
       - Interrogating the data: guide/data-diagnostics.md
       - Comparing worlds: guide/world-descriptors.md
