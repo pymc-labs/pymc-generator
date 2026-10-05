@@ -267,6 +267,8 @@ def validate_study_settings(settings: Mapping[str, Any] | None) -> dict[str, Any
             or resolved[name] < 1
         ):
             raise ValueError(f"{name} must be a positive integer")
+    if resolved["pilot_cells_per_config"] < 2:
+        raise ValueError("pilot_cells_per_config must be at least 2 for generation")
     wall = resolved["pilot_wall_time_seconds"]
     if (
         isinstance(wall, bool)
@@ -1240,70 +1242,183 @@ def pilot_seed_schedule(generator: Mapping[str, Any], seed: int) -> list[dict[st
     ]
 
 
-def _pilot_cell_records(world_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _threshold_key(value: float) -> str:
+    return str(value).replace(".", "p")
+
+
+def _band_for_count(count: int, bands: list[list[int]]) -> list[int] | None:
+    return next((band for band in bands if band[0] <= count <= band[1]), None)
+
+
+def _world_indicators(
+    record: Mapping[str, Any], thresholds: Mapping[str, list[float]]
+) -> dict[str, dict[str, bool]]:
+    raw = record["raw_input_diagnostics"]
+    result: dict[str, dict[str, bool]] = {}
+    for view_name in ("levels", "differences"):
+        view = raw.get("views", {}).get(view_name, {})
+        condition = raw["rank"].get("condition")
+        indicators = {
+            "rank_deficient": bool(raw["rank"].get("rank_deficient", False)),
+        }
+        for threshold in thresholds["condition"]:
+            indicators[f"condition_ge_{_threshold_key(threshold)}"] = (
+                condition is not None and condition >= threshold
+            )
+        correlation = view.get("max_abs_pearson_correlation")
+        for threshold in thresholds["absolute_correlation"]:
+            indicators[f"absolute_correlation_ge_{_threshold_key(threshold)}"] = (
+                correlation is not None and correlation >= threshold
+            )
+        vif = view.get("max_vif")
+        vif_infinite = bool(view.get("vif_infinite", False))
+        for threshold in thresholds["vif"]:
+            indicators[f"vif_ge_{_threshold_key(threshold)}"] = vif_infinite or (
+                vif is not None and vif >= threshold
+            )
+        result[view_name] = indicators
+    return result
+
+
+def _pilot_cell_records(
+    world_records: list[dict[str, Any]],
+    *,
+    thresholds: Mapping[str, list[float]] | None = None,
+    treatment_bands: list[list[int]] | None = None,
+    control_bands: list[list[int]] | None = None,
+) -> list[dict[str, Any]]:
+    thresholds = thresholds or DEFAULT_STUDY["thresholds"]
+    treatment_bands = treatment_bands or DEFAULT_STUDY["treatment_count_bands"]
+    control_bands = control_bands or DEFAULT_STUDY["control_count_bands"]
     by_cell: dict[int, list[dict[str, Any]]] = {}
     for record in world_records:
         by_cell.setdefault(int(record["cell_id"]), []).append(record)
     cells = []
     for cell_id, siblings in sorted(by_cell.items()):
         first = min(siblings, key=lambda item: item["sibling_index"])
-        raw = first["raw_input_diagnostics"]
+        first_indicators = _world_indicators(first, thresholds)
+        sibling_indicators = [_world_indicators(item, thresholds) for item in siblings]
+        any_indicators = {
+            view: {
+                metric: any(item[view][metric] for item in sibling_indicators)
+                for metric in first_indicators[view]
+            }
+            for view in first_indicators
+        }
+        counts = first.get("active_counts", {})
+        treatment_band = _band_for_count(int(counts.get("treatments", 0)), treatment_bands)
+        control_band = _band_for_count(int(counts.get("covariates", 0)), control_bands)
         cells.append(
             {
                 "cell_id": cell_id,
                 "n_siblings": len(siblings),
+                "active_counts": counts,
+                "count_band": {
+                    "treatments": treatment_band,
+                    "controls": control_band,
+                },
                 "first_world": {
                     "world_index": first.get("world_index"),
                     "sibling_index": first["sibling_index"],
-                    "rank": raw["rank"],
-                    "standardized": raw.get("standardized"),
+                    "rank": first["raw_input_diagnostics"]["rank"],
+                    "standardized": first["raw_input_diagnostics"].get("standardized"),
                 },
-                "binary": {
-                    "rank_deficient": bool(raw["rank"]["rank_deficient"]),
-                    "condition_ge_30": raw["rank"]["condition"] is not None
-                    and raw["rank"]["condition"] >= 30,
-                    "condition_ge_100": raw["rank"]["condition"] is not None
-                    and raw["rank"]["condition"] >= 100,
-                },
-                "any_sibling": {
-                    "rank_deficient": any(
-                        item["raw_input_diagnostics"]["rank"]["rank_deficient"] for item in siblings
-                    ),
-                    "condition_ge_30": any(
-                        item["raw_input_diagnostics"]["rank"]["condition"] is not None
-                        and item["raw_input_diagnostics"]["rank"]["condition"] >= 30
-                        for item in siblings
-                    ),
-                    "condition_ge_100": any(
-                        item["raw_input_diagnostics"]["rank"]["condition"] is not None
-                        and item["raw_input_diagnostics"]["rank"]["condition"] >= 100
-                        for item in siblings
-                    ),
-                },
+                "binary": first_indicators,
+                "any_sibling": any_indicators,
             }
         )
     return cells
 
 
-def _pilot_summaries(cells: list[dict[str, Any]], confidence: float) -> dict[str, Any]:
+def _summarize_indicator_set(
+    cells: list[dict[str, Any]], estimand: str, confidence: float, view: str, metric: str
+) -> dict[str, Any]:
+    values = []
+    for cell in cells:
+        source = cell[estimand]
+        if view not in source:
+            # Compatibility with compact hand-built records from C1/C2 tests.
+            source = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
+            values.append(bool(source.get("levels", source)[metric]))
+        else:
+            values.append(bool(source[view][metric]))
+    return cell_binary_summary(
+        [cell["cell_id"] for cell in cells],
+        values,
+        estimand=estimand,
+        confidence_level=confidence,
+    )
+
+
+def _pilot_summaries(
+    cells: list[dict[str, Any]],
+    confidence: float,
+    *,
+    thresholds: Mapping[str, list[float]] | None = None,
+    treatment_bands: list[list[int]] | None = None,
+    control_bands: list[list[int]] | None = None,
+) -> dict[str, Any]:
     if not cells:
         return {"status": "unavailable", "reason": "no complete cells"}
-    cell_ids = [cell["cell_id"] for cell in cells]
-    summary: dict[str, Any] = {"unit": "cell", "estimands": {}}
+    thresholds = thresholds or DEFAULT_STUDY["thresholds"]
+    views = ("levels", "differences")
+    binary = cells[0]["binary"]
+    metrics = list(binary.get("levels", binary))
+    summary: dict[str, Any] = {
+        "status": "available",
+        "unit": "cell",
+        "thresholds": _plain(thresholds),
+        "estimands": {},
+    }
     for estimand in ("first_world", "any_sibling"):
-        values = []
-        for cell in cells:
-            source = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
-            values.append(source)
         summary["estimands"][estimand] = {
-            metric: cell_binary_summary(
-                cell_ids,
-                [value[metric] for value in values],
-                estimand=estimand,
-                confidence_level=confidence,
-            )
-            for metric in ("rank_deficient", "condition_ge_30", "condition_ge_100")
+            view: {
+                metric: _summarize_indicator_set(cells, estimand, confidence, view, metric)
+                for metric in metrics
+            }
+            for view in views
         }
+        # Compatibility aliases retain the original C2 keys while levels are explicit above.
+        summary["estimands"][estimand].update(summary["estimands"][estimand]["levels"])
+    if treatment_bands is not None and control_bands is not None:
+        summary["count_band_wilson"] = {}
+        for i, treatment_band in enumerate(treatment_bands):
+            for j, control_band in enumerate(control_bands):
+                selected = [
+                    cell
+                    for cell in cells
+                    if cell["count_band"]["treatments"] == treatment_band
+                    and cell["count_band"]["controls"] == control_band
+                ]
+                key = f"treatments_{treatment_band[0]}_{treatment_band[1]}__controls_{control_band[0]}_{control_band[1]}"
+                summary["count_band_wilson"][key] = {
+                    "treatment_band": treatment_band,
+                    "control_band": control_band,
+                    "status": "available" if selected else "unavailable",
+                    "n_cells": len(selected),
+                    "estimands": {
+                        estimand: {
+                            view: {
+                                metric: (
+                                    _summarize_indicator_set(
+                                        selected, estimand, confidence, view, metric
+                                    )
+                                    if selected
+                                    else {
+                                        "estimand": estimand,
+                                        "unit": "cell",
+                                        "n_cells": 0,
+                                        "status": "unavailable",
+                                    }
+                                )
+                                for metric in metrics
+                            }
+                            for view in views
+                        }
+                        for estimand in ("first_world", "any_sibling")
+                    },
+                }
+        summary["empty_band_policy"] = "zero-denominator bands are unavailable/missing, never zero"
     summary["sensitivity_note"] = (
         "any_sibling is a separate sensitivity estimand; siblings are not pooled as independent cells"
     )
@@ -1317,6 +1432,58 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def validate_pilot_report(report: Mapping[str, Any], resolved: Mapping[str, Any]) -> None:
+    """Reject reports whose schema, content hash, settings, or provenance drifted."""
+    if report.get("schema_version") != PILOT_SCHEMA_VERSION:
+        raise ValueError("pilot report schema mismatch")
+    if report.get("config_hash") != resolved.get("config_hash"):
+        raise ValueError("pilot report config hash mismatch")
+    if report.get("resolved_config") != resolved:
+        raise ValueError("pilot report resolved configuration mismatch")
+    if not isinstance(report.get("source_provenance"), Mapping):
+        raise ValueError("pilot report provenance is missing")
+    if not isinstance(report.get("schedule"), list) or not report["schedule"]:
+        raise ValueError("pilot report seed schedule is missing")
+    if report.get("status") not in {"complete", "partial"}:
+        raise ValueError("pilot report status is invalid")
+
+
+class _PilotDeadlineExceededError(RuntimeError):
+    pass
+
+
+class _PilotInterruptedError(RuntimeError):
+    pass
+
+
+def _bounded_phase(function: Any, deadline: float, clock: Any) -> Any:
+    """Run a blocking generation/diagnostic phase with an interruptible cap."""
+    if float(clock()) >= deadline:
+        raise _PilotDeadlineExceededError("pilot wall deadline reached before phase")
+    try:
+        import signal
+
+        if not hasattr(signal, "setitimer"):
+            return function()
+        remaining = max(0.001, deadline - float(clock()))
+        previous = signal.getsignal(signal.SIGALRM)
+
+        def on_alarm(_signum: int, _frame: Any) -> None:
+            raise _PilotDeadlineExceededError("pilot wall deadline reached during phase")
+
+        signal.signal(signal.SIGALRM, on_alarm)
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        try:
+            return function()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+    except ValueError:
+        # Non-main-thread callers cannot install signal handlers; frequent clock
+        # checks still enforce the cap around the phase where possible.
+        return function()
+
+
 def run_pilot(
     config_path: str | os.PathLike[str] | Mapping[str, Any],
     *,
@@ -1326,13 +1493,7 @@ def run_pilot(
     resume: bool = True,
     clock: Any = time.monotonic,
 ) -> dict[str, Any]:
-    """Run the approved bounded C2 pilot, checkpointing compact JSON only.
-
-    This function is intentionally not called by the notebook or test suite.
-    A partial deadline report is labelled partial and contains no prevalence
-    claim. Existing checkpoints are keyed by config hash and cell/world ids;
-    changing the seed schedule or resolved settings refuses to resume.
-    """
+    """Run a resumable, atomically checkpointed C2 pilot under one wall budget."""
     raw = load_json(config_path) if not isinstance(config_path, Mapping) else dict(config_path)
     sidecar = load_json(study_settings_path) if study_settings_path is not None else None
     resolved = resolve_config(raw, sidecar)
@@ -1347,6 +1508,11 @@ def run_pilot(
     prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
     checkpoint_path = target / f"{prefix}.checkpoint.json"
     report_path = target / f"{prefix}.json"
+    manifest_path = target / f"{prefix}.manifest.json"
+    evidence = (manifest_path, checkpoint_path, report_path)
+    if not resume and any(path.exists() for path in evidence):
+        raise FileExistsError("--no-resume refuses to overwrite existing pilot run evidence")
+
     generator = resolved["generator_factory"]
     configs = _pilot_configurations(generator, int(study["seed"]))
     schedule = pilot_seed_schedule(generator, int(study["seed"]))
@@ -1366,13 +1532,12 @@ def run_pilot(
             "wall_time_seconds": limit,
             "allocation": "independent active counts; not balanced by count bands",
             "stop_rules": {
-                "wall_time": "stop before starting the next bounded generation/diagnostic phase at the declared cap; partial reports are not prevalence claims",
+                "wall_time": "one total generation, diagnostic, checkpoint, and finalization budget; partial reports are not prevalence claims",
                 "generation_failure_rate": "stop before the next configuration when generation_failures / evaluated_candidates exceeds 0.10",
-                "count_stratum_overrun": "not applicable to independent allocation; report realized and empty bands instead of treating them as balanced",
+                "count_stratum_overrun": "report realized and empty bands instead of treating them as balanced",
             },
         },
     }
-    manifest_path = target / f"{prefix}.manifest.json"
     if manifest_path.exists() and load_json(manifest_path) != manifest:
         raise FileExistsError(
             "existing pilot manifest differs; refusing a seed/config change on resume"
@@ -1385,6 +1550,8 @@ def run_pilot(
         "worlds": [],
         "cells": [],
         "config_accounting": [],
+        "config_failures": [],
+        "wall_elapsed_seconds": 0.0,
     }
     if resume and checkpoint_path.exists():
         checkpoint = load_json(checkpoint_path)
@@ -1392,127 +1559,214 @@ def run_pilot(
             raise FileExistsError(
                 "existing pilot checkpoint differs; refusing a seed/config change on resume"
             )
-    completed = {
-        (int(row["config_index"]), int(row["cell_id"]))
-        for row in checkpoint.get("cells", [])
-        if row.get("status") == "complete"
-    }
+    consumed = float(checkpoint.get("wall_elapsed_seconds", 0.0))
     started = float(clock())
-    deadline = started + limit
-    partial = False
-    stop_reason = None
-    for config_index, item in enumerate(configs):
-        pending_cells = set(range(int(study["pilot_cells_per_config"]))) - {
-            cell for index, cell in completed if index == config_index
-        }
-        if not pending_cells:
-            continue
-        if float(clock()) >= deadline:
-            partial = True
-            break
-        config_generator = dict(item["generator"])
-        config_study = dict(study)
-        config_study.update(
-            n_cells=int(study["pilot_cells_per_config"]),
-            draws_per_cell=int(study["pilot_siblings_per_cell"]),
-            seed=int(item["seed"]),
-        )
-        config_study = _study_for_generator(config_generator, config_study)
-        prior = make_prior(config_generator, config_study)
-        generation_error = None
-        try:
-            corpus = sample_prior_predictive(prior)
-        except Exception as exc:  # record a config failure without inventing worlds
-            generation_error = f"{type(exc).__name__}: {exc}"
-            corpus = None
-        if generation_error is not None:
-            checkpoint.setdefault("config_failures", []).append(
-                {"config_index": config_index, "name": item["name"], "reason": generation_error}
-            )
-            stop_reason = (
-                f"generation failed for {item['name']}; failure rate cannot be treated as zero"
-            )
-            partial = True
-            _write_json(checkpoint_path, checkpoint)
-            break
-        accounting = count_accounting(corpus, prior, config_study)
-        evaluated_candidates = max(int(accounting["evaluated_candidates"]), 1)
-        failure_rate = int(accounting["generation_failures"]) / evaluated_candidates
-        if failure_rate > 0.10:
-            stop_reason = (
-                f"generation failure rate {failure_rate:.3f} exceeded 0.10 for {item['name']}"
-            )
-            partial = True
-        checkpoint["config_accounting"] = [
-            row
-            for row in checkpoint.get("config_accounting", [])
-            if int(row["config_index"]) != config_index
-        ] + [{"config_index": config_index, **accounting}]
+    deadline = started + max(0.0, limit - consumed)
+    partial = consumed >= limit
+    stop_reason = "resumed wall budget already exhausted" if partial else None
+    cells_since_checkpoint = 0
+
+    def elapsed() -> float:
+        return consumed + max(0.0, float(clock()) - started)
+
+    def persist() -> None:
+        checkpoint["wall_elapsed_seconds"] = min(limit, elapsed())
         _write_json(checkpoint_path, checkpoint)
-        if partial:
-            _write_json(checkpoint_path, checkpoint)
-            break
-        diagnostic = data_diagnostics(
-            corpus,
-            views=tuple(study["diagnostic_views"]),
-            keep_series=False,
+
+    def upsert_failure(config_index: int, item: Mapping[str, Any], reason: str) -> None:
+        failures = [
+            row
+            for row in checkpoint.get("config_failures", [])
+            if int(row.get("config_index", -1)) != config_index
+        ]
+        failures.append(
+            {
+                "config_index": config_index,
+                "name": item["name"],
+                "seed": item["seed"],
+                "reason": reason,
+            }
         )
-        cell_ids = np.asarray(corpus["cell_id"], dtype=int)
-        for cell_id in sorted(pending_cells):
-            if float(clock()) >= deadline:
-                partial = True
+        checkpoint["config_failures"] = failures
+
+    def clear_failure(config_index: int) -> None:
+        checkpoint["config_failures"] = [
+            row
+            for row in checkpoint.get("config_failures", [])
+            if int(row.get("config_index", -1)) != config_index
+        ]
+
+    interrupted = False
+    old_term = None
+    try:
+        try:
+            import signal
+
+            old_term = signal.getsignal(signal.SIGTERM)
+
+            def on_term(_signum: int, _frame: Any) -> None:
+                raise _PilotInterruptedError("pilot received SIGTERM")
+
+            signal.signal(signal.SIGTERM, on_term)
+        except (ImportError, ValueError):
+            old_term = None
+        completed = {
+            (int(row["config_index"]), int(row["cell_id"]))
+            for row in checkpoint.get("cells", [])
+            if row.get("status") == "complete"
+        }
+        for config_index, item in enumerate(configs):
+            if partial:
                 break
-            rows = np.flatnonzero(cell_ids == cell_id)
-            for sibling_index, row in enumerate(rows):
-                key = (config_index, int(cell_id), int(sibling_index))
-                if any(
-                    int(existing.get("config_index", -1)) == key[0]
-                    and int(existing.get("cell_id", -1)) == key[1]
-                    and int(existing.get("sibling_index", -1)) == key[2]
-                    for existing in checkpoint["worlds"]
-                ):
-                    continue
-                checkpoint["worlds"].append(
-                    _compact_world_metric(
-                        corpus,
-                        prior,
-                        diagnostic,
-                        int(row),
-                        config_index=config_index,
-                        cell_index=int(cell_id),
-                        sibling_index=sibling_index,
-                        rank_tolerance=float(study["rank_tolerance"]),
-                    )
-                )
-            records = [
-                record
-                for record in checkpoint["worlds"]
-                if int(record["config_index"]) == config_index and int(record["cell_id"]) == cell_id
-            ]
-            checkpoint["cells"] = [
-                row
-                for row in checkpoint["cells"]
-                if not (int(row["config_index"]) == config_index and int(row["cell_id"]) == cell_id)
-            ] + [
+            pending_cells = set(range(int(study["pilot_cells_per_config"]))) - {
+                cell for index, cell in completed if index == config_index
+            }
+            if not pending_cells:
+                continue
+            if float(clock()) >= deadline:
+                partial, stop_reason = True, "wall deadline reached before configuration"
+                break
+            config_generator = dict(item["generator"])
+            config_study = _study_for_generator(
+                config_generator,
                 {
-                    "config_index": config_index,
-                    "cell_id": int(cell_id),
-                    "n_worlds": len(records),
-                    "status": "complete"
-                    if len(records) == int(study["pilot_siblings_per_cell"])
-                    else "partial",
-                }
-            ]
-            completed.add((config_index, int(cell_id)))
-            _write_json(checkpoint_path, checkpoint)
-        if partial:
-            break
-    world_records = checkpoint["worlds"]
-    cell_records = checkpoint["cells"]
+                    **study,
+                    "n_cells": int(study["pilot_cells_per_config"]),
+                    "draws_per_cell": int(study["pilot_siblings_per_cell"]),
+                    "seed": int(item["seed"]),
+                },
+            )
+            prior = make_prior(config_generator, config_study)
+            try:
+                corpus = _bounded_phase(
+                    lambda prior=prior: sample_prior_predictive(prior), deadline, clock
+                )
+            except (_PilotDeadlineExceededError, _PilotInterruptedError) as exc:
+                partial, stop_reason = True, str(exc)
+                interrupted = isinstance(exc, _PilotInterruptedError)
+                persist()
+                break
+            except Exception as exc:
+                upsert_failure(config_index, item, f"{type(exc).__name__}: {exc}")
+                partial, stop_reason = True, f"generation failed for {item['name']}"
+                persist()
+                break
+            clear_failure(config_index)
+            accounting = count_accounting(corpus, prior, config_study)
+            evaluated = max(int(accounting["evaluated_candidates"]), 1)
+            failure_rate = int(accounting["generation_failures"]) / evaluated
+            checkpoint["config_accounting"] = [
+                row
+                for row in checkpoint.get("config_accounting", [])
+                if int(row["config_index"]) != config_index
+            ] + [{"config_index": config_index, "name": item["name"], **accounting}]
+            persist()
+            if failure_rate > 0.10:
+                partial, stop_reason = (
+                    True,
+                    f"generation failure rate {failure_rate:.3f} exceeded 0.10 for {item['name']}",
+                )
+                persist()
+                break
+            try:
+                diagnostic = _bounded_phase(
+                    lambda corpus=corpus: data_diagnostics(
+                        corpus, views=tuple(study["diagnostic_views"]), keep_series=False
+                    ),
+                    deadline,
+                    clock,
+                )
+            except (_PilotDeadlineExceededError, _PilotInterruptedError) as exc:
+                partial, stop_reason = True, str(exc)
+                interrupted = isinstance(exc, _PilotInterruptedError)
+                persist()
+                break
+            cell_ids = np.asarray(corpus["cell_id"], dtype=int)
+            for cell_id in sorted(pending_cells):
+                if float(clock()) >= deadline:
+                    partial, stop_reason = True, "wall deadline reached during metric finalization"
+                    break
+                rows = np.flatnonzero(cell_ids == cell_id)
+                for sibling_index, row in enumerate(rows):
+                    key = (config_index, int(cell_id), int(sibling_index))
+                    if any(
+                        (
+                            int(existing.get("config_index", -1)),
+                            int(existing.get("cell_id", -1)),
+                            int(existing.get("sibling_index", -1)),
+                        )
+                        == key
+                        for existing in checkpoint["worlds"]
+                    ):
+                        continue
+                    checkpoint["worlds"].append(
+                        _compact_world_metric(
+                            corpus,
+                            prior,
+                            diagnostic,
+                            int(row),
+                            config_index=config_index,
+                            cell_index=int(cell_id),
+                            sibling_index=sibling_index,
+                            rank_tolerance=float(study["rank_tolerance"]),
+                        )
+                    )
+                records = [
+                    row
+                    for row in checkpoint["worlds"]
+                    if int(row["config_index"]) == config_index and int(row["cell_id"]) == cell_id
+                ]
+                checkpoint["cells"] = [
+                    row
+                    for row in checkpoint["cells"]
+                    if not (
+                        int(row["config_index"]) == config_index and int(row["cell_id"]) == cell_id
+                    )
+                ] + [
+                    {
+                        "config_index": config_index,
+                        "cell_id": int(cell_id),
+                        "n_worlds": len(records),
+                        "status": "complete"
+                        if len(records) == int(study["pilot_siblings_per_cell"])
+                        else "partial",
+                    }
+                ]
+                if len(records) == int(study["pilot_siblings_per_cell"]):
+                    completed.add((config_index, int(cell_id)))
+                cells_since_checkpoint += 1
+                if cells_since_checkpoint >= int(study["pilot_checkpoint_every_cells"]):
+                    persist()
+                    cells_since_checkpoint = 0
+            persist()
+            if partial:
+                break
+    except (_PilotDeadlineExceededError, _PilotInterruptedError) as exc:
+        partial, stop_reason = True, str(exc)
+        interrupted = isinstance(exc, _PilotInterruptedError)
+        persist()
+    finally:
+        try:
+            import signal
+
+            if old_term is not None:
+                signal.signal(signal.SIGTERM, old_term)
+        except (ImportError, ValueError):
+            pass
+    if cells_since_checkpoint:
+        persist()
+
+    world_records = checkpoint.get("worlds", [])
+    cell_records = checkpoint.get("cells", [])
     summaries = []
     for config_index, item in enumerate(configs):
         worlds = [row for row in world_records if int(row["config_index"]) == config_index]
-        cells = _pilot_cell_records(worlds)
+        cells = _pilot_cell_records(
+            worlds,
+            thresholds=study["thresholds"],
+            treatment_bands=study["treatment_count_bands"],
+            control_bands=study["control_count_bands"],
+        )
         complete_cells = [
             cell for cell in cells if cell["n_siblings"] == int(study["pilot_siblings_per_cell"])
         ]
@@ -1520,11 +1774,18 @@ def run_pilot(
             {
                 "config_index": config_index,
                 "name": item["name"],
+                "label": item.get("label", "runtime_stress_variant"),
                 "generator": item["generator"],
                 "seed": item["seed"],
                 "worlds": worlds,
                 "cells": cells,
-                "summary": _pilot_summaries(complete_cells, float(study["confidence_level"])),
+                "summary": _pilot_summaries(
+                    complete_cells,
+                    float(study["confidence_level"]),
+                    thresholds=study["thresholds"],
+                    treatment_bands=study["treatment_count_bands"],
+                    control_bands=study["control_count_bands"],
+                ),
                 "accounting": next(
                     (
                         row
@@ -1535,7 +1796,9 @@ def run_pilot(
                 ),
             }
         )
-    status = "partial" if partial else "complete"
+    requested_cells = len(configs) * int(study["pilot_cells_per_config"])
+    complete = sum(1 for row in cell_records if row.get("status") == "complete") == requested_cells
+    status = "complete" if complete and not partial else "partial"
     report = {
         "schema_version": PILOT_SCHEMA_VERSION,
         "status": status,
@@ -1547,6 +1810,7 @@ def run_pilot(
         "report_path": str(report_path),
         "schedule": schedule,
         "stop_reason": stop_reason,
+        "interrupted": interrupted,
         "configs": summaries,
         "accounting": {
             "evaluated_world_metrics": len(world_records),
@@ -1562,7 +1826,7 @@ def run_pilot(
             "realized_cells": len(cell_records),
             "complete_cells": sum(1 for item in cell_records if item.get("status") == "complete"),
             "partial_cells": sum(1 for item in cell_records if item.get("status") != "complete"),
-            "requested_cells": len(configs) * int(study["pilot_cells_per_config"]),
+            "requested_cells": requested_cells,
             "requested_worlds": len(configs)
             * int(study["pilot_cells_per_config"])
             * int(study["pilot_siblings_per_cell"]),
@@ -1580,7 +1844,11 @@ def run_pilot(
                 for item in checkpoint.get("config_accounting", [])
             )
             + len(checkpoint.get("config_failures", [])),
-            "empty_band_strata": "reported per completed configuration from realized independent counts; no balanced-band claim",
+            "wall_elapsed_seconds": min(
+                limit, float(checkpoint.get("wall_elapsed_seconds", elapsed()))
+            ),
+            "wall_budget_seconds": limit,
+            "empty_band_policy": "zero-denominator bands are unavailable/missing, never zero",
         },
         "analyses": {
             "raw_input_conditioning": {
@@ -1596,15 +1864,14 @@ def run_pilot(
                 "scope": "graph flags are reported separately from raw-input dependence",
             },
         },
-        "pilot_claim": (
-            "partial pilot; no prevalence estimate until all preregistered cells complete"
-            if partial
-            else "bounded pilot summaries for the selected study recipe and labelled stress strata; not a training-prior prevalence claim"
-        ),
+        "pilot_claim": "partial pilot; no prevalence estimate until all preregistered cells complete"
+        if status == "partial"
+        else "bounded pilot summaries by configuration and realized count band; not a training-prior prevalence claim",
         "ci_note": "Wilson intervals use one first-world indicator per complete cell; any_sibling is sensitivity only and siblings are not pooled",
     }
     _write_json(report_path, report)
-    _write_json(checkpoint_path, {**checkpoint, "status": status})
+    checkpoint["status"] = status
+    persist()
     return report
 
 

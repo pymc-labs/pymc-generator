@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
+import pytest
 
 from pymc_generator import mechanisms
 from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
@@ -713,6 +714,229 @@ def test_c1_band_validation_rejects_gaps_and_incomplete_ranges():
         },
     }
     assert resolve_config(eleven)["generator_factory"]["n_treatments"] == 11
+
+
+def _c2_mock_config():
+    return {
+        "generator": {
+            "n_treatments": 2,
+            "n_covariates": 2,
+            "n_latent": 1,
+            "n_treatments_active_range": [1, 2],
+            "n_covariates_active_range": [1, 2],
+            "n_latent_active_range": [1, 1],
+            "n_time_steps": 16,
+            "trajectories": "composable",
+            "nonlinearity": "diverse",
+        },
+        "study": {
+            "n_cells": 2,
+            "draws_per_cell": 2,
+            "pilot_cells_per_config": 2,
+            "pilot_siblings_per_cell": 2,
+            "pilot_checkpoint_every_cells": 1,
+            "pilot_wall_time_seconds": 60,
+            "treatment_count_bands": [[1, 2]],
+            "control_count_bands": [[1, 2]],
+        },
+    }
+
+
+def _c2_mock_record(config_index, cell_id, sibling_index):
+    return {
+        "config_index": config_index,
+        "cell_id": cell_id,
+        "sibling_index": sibling_index,
+        "world_index": sibling_index,
+        "active_counts": {"treatments": 1, "covariates": 1},
+        "raw_input_diagnostics": {
+            "rank": {"rank_deficient": sibling_index == 1, "condition": 40.0},
+            "views": {
+                "levels": {
+                    "max_abs_pearson_correlation": 0.92,
+                    "max_vif": 6.0,
+                    "vif_infinite": False,
+                },
+                "differences": {
+                    "max_abs_pearson_correlation": 0.92,
+                    "max_vif": 6.0,
+                    "vif_infinite": False,
+                },
+            },
+        },
+    }
+
+
+def test_c2_configured_indicators_and_realized_band_wilson_tables():
+    from scripts.linear_recovery_prevalence import _pilot_cell_records, _pilot_summaries
+
+    records = [
+        _c2_mock_record(0, 0, 0),
+        _c2_mock_record(0, 0, 1),
+        _c2_mock_record(0, 1, 0),
+        _c2_mock_record(0, 1, 1),
+    ]
+    thresholds = {
+        "absolute_correlation": [0.8, 0.99],
+        "vif": [5.0, 10.0],
+        "condition": [30.0, 100.0],
+    }
+    cells = _pilot_cell_records(
+        records,
+        thresholds=thresholds,
+        treatment_bands=[[1, 1], [2, 2]],
+        control_bands=[[1, 1], [2, 2]],
+    )
+    summary = _pilot_summaries(
+        cells,
+        0.95,
+        thresholds=thresholds,
+        treatment_bands=[[1, 1], [2, 2]],
+        control_bands=[[1, 1], [2, 2]],
+    )
+    assert summary["thresholds"] == thresholds
+    indicator = summary["estimands"]["any_sibling"]["differences"]
+    assert indicator["absolute_correlation_ge_0p8"]["n_successes"] == 2
+    assert indicator["vif_ge_5p0"]["n_successes"] == 2
+    assert summary["count_band_wilson"]["treatments_1_1__controls_1_1"]["status"] == "available"
+    assert summary["count_band_wilson"]["treatments_2_2__controls_2_2"]["status"] == "unavailable"
+
+
+def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _corpus, _prior, _diagnostic, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert report["status"] == "complete"
+    assert report["accounting"]["complete_cells"] == 20
+    assert report["accounting"]["accepted_world_metrics"] == 40
+    assert report["configs"][0]["summary"]["count_band_wilson"]
+    with pytest.raises(FileExistsError, match="no-resume"):
+        runner.run_pilot(
+            config, output_dir=tmp_path, wall_time_seconds=60, resume=False, clock=lambda: 0.0
+        )
+    resolved = runner.resolve_config(config)
+    broken = {**report, "config_hash": "wrong"}
+    with pytest.raises(ValueError, match="config hash"):
+        runner.validate_pilot_report(broken, resolved)
+
+
+def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    calls = {"sample": 0}
+
+    def sample(_prior):
+        calls["sample"] += 1
+        if calls["sample"] == 1:
+            raise RuntimeError("planned failure")
+        return {"cell_id": np.array([0, 0, 1, 1])}
+
+    monkeypatch.setattr(runner, "sample_prior_predictive", sample)
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _corpus, _prior, _diagnostic, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    first = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert first["status"] == "partial"
+    second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert second["status"] == "complete"
+    assert second["accounting"]["failures"] == 0
+
+
+def test_c2_runner_handles_deadline_during_generation_and_diagnostics(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_bounded_phase",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            runner._PilotDeadlineExceededError("deadline")
+        ),
+    )
+    generation = runner.run_pilot(
+        config, output_dir=tmp_path / "generation", wall_time_seconds=60, clock=lambda: 0.0
+    )
+    assert generation["status"] == "partial" and generation["accounting"]["complete_cells"] == 0
+
+    calls = {"phase": 0}
+
+    def phase(function, deadline, clock):
+        calls["phase"] += 1
+        if calls["phase"] == 2:
+            raise runner._PilotDeadlineExceededError("deadline")
+        return function()
+
+    monkeypatch.setattr(runner, "_bounded_phase", phase)
+    diagnostic = runner.run_pilot(
+        config, output_dir=tmp_path / "diagnostic", wall_time_seconds=60, clock=lambda: 0.0
+    )
+    assert diagnostic["status"] == "partial"
+    assert diagnostic["accounting"]["accepted_candidates"] == 4
 
 
 __all__ = [
