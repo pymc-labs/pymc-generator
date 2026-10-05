@@ -112,7 +112,8 @@ read the migration notes before upgrading.
   bump — the block is optional. Stratified allocation seeds its own stream
   with one draw from the corpus RNG and skips the per-cell treatment and
   covariate draws, so at the same seed it changes every later structure draw
-  (documented per #28). For #26 in isolation before this end-to-end v5 cutover,
+  (see *Seeds and randomness* under active-count coverage; #28). For #26 in
+  isolation before this end-to-end v5 cutover,
   default same-seed corpora, diagnostics, saved shards, `sample_scm` worlds and
   template payloads and draws were bit-identical to before;
   `write_scenario_bundles`' `recipe.json` lists the two new `SCMPrior` fields
@@ -212,9 +213,9 @@ read the migration notes before upgrading.
   Fractional inclusion flags draw from
   child streams spawned off the corpus RNG and consume none of its state, but a
   cell that wires a component generally reaches different PyMC random streams,
-  so its other draws change at the same seed (stream stability on enabling is
-  tracked in #28), and corpora of two configs stay aligned only while their
-  acceptance counts match.
+  so its other draws change at the same seed (PyMC assigns streams by discovery
+  order; see the randomness docs, #28), and corpora of two configs stay aligned
+  only while their acceptance counts match.
   #27 extends this support to `sample_scm`, descriptions, bundles, exact replay,
   fixed-input oracles and the experimental template, including fractional
   per-input `hf` / `pulse` inclusion.
@@ -286,9 +287,43 @@ read the migration notes before upgrading.
   versioned identifiability metadata.
 - Complete bundle recipes containing effective priors, seeds, connectivity,
   environment versions, and replay instructions.
+- **Main-reproduction guards (#28).** The slow
+  `tests/test_main_reproduction.py` compares, byte for byte in the same
+  environment, a features-off matrix against main `ce068d5`: 35 corpus
+  configurations (with raw candidate draws), 9 `sample_scm` worlds at two
+  seeds, fixed-point oracle evaluations for 5 worlds in both latent modes,
+  `DataGenerator` batches and 9 template layouts; CI's slow job checks main out
+  for it.
+  The fast `tests/test_rng_owner_contract.py` pins main's random-stream owner
+  order by RV name for every carryover × saturation pair, shocks, templates,
+  texture-off worlds and inert schedules, and checks that this is the order a
+  real draw reseeds; `tests/test_trajectories.py` restores the corpus owner
+  contract #27 removed.
+  `tests/test_control_identity.py` pins every covariate column as the literal
+  `(g_zy * rho_zy) * Z` on the reported covariates, and the outcome as reading
+  exactly that Z, with and without trajectory components.
 
 ### Changed — migration notes
 
+- **Feature-enabled same-seed outputs can differ from the #27 pre-release (#28).**
+  Restoring main's default graphs also affects feature-enabled configurations
+  that use no opt-in mechanism setting — composable trajectories, fractional
+  texture inclusion and active-count allocation — which return to main's
+  saturation arithmetic, relative-noise product and stream order. Every
+  template, including mechanism-prior templates, returns to main's parent-sum
+  order and summation. `sample_scm` worlds can draw different streams where
+  their stream reference or request changed: worlds that admit a schedule
+  component (all such worlds without shocks; with shocks, those whose inputs
+  carry one) and worlds that leave a texture innovation unused (a texture range
+  at zero, or `hf` / `pulse` inclusion below 1). Their seeded draws differ from
+  the #27 branch. Opt-in mechanism-prior ordinary corpora and oracles are
+  unchanged, and so are their other `sample_scm` worlds. With every feature
+  off, ordinary corpora (including raw candidate draws), `sample_scm` worlds,
+  `DataGenerator` batches, fixed-point oracle evaluations and template draws
+  reproduce main `ce068d5` byte for byte in the same environment.
+- **Template throughput returns to main's (#28).** The #27 dot-product parent
+  sums cut template candidate time by roughly 30% but changed every template
+  draw; restoring main's n-ary sums restores main's speed.
 - **`pymc_generator.mechanisms.SATURATION_PRIOR_RANGES` removed (breaking).**
   Saturation shape supports are configuration, not module state: read
   `SCMPrior().saturation_prior_ranges` (or a config's own mapping) instead.
