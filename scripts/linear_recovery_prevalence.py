@@ -1,12 +1,10 @@
-"""Configuration-driven C1 calibration for linear-recovery reports.
+"""Configuration-driven C1 calibration and bounded C2 pilot runner.
 
-This is validation-only code.  It deliberately separates generator settings from
-study settings, records the resolved configuration before sampling, and treats a
-cell (not a sibling world) as the independent unit for binary summaries.
-
-The runner is intentionally a calibration scaffold: it measures generation and
-post-hoc diagnostics separately and does not write prevalence CSVs or claim a
-pilot estimate.
+This is validation-only code. It separates generator, study, and output concerns,
+records the resolved configuration before sampling, and treats a cell (not a
+sibling world) as the independent unit for binary summaries. C1 calibration and
+C2 pilot artifacts are compact JSON; no raw corpus or final prevalence CSV is
+written by this runner.
 """
 
 from __future__ import annotations
@@ -29,7 +27,9 @@ from pymc_generator.active_counts import summarize_active_count_coverage
 from pymc_generator.sampler import SCMPrior
 
 SCHEMA_VERSION = "linear-recovery-c1/v1"
+PILOT_SCHEMA_VERSION = "linear-recovery-c2/v1"
 CI_METHOD = "wilson"
+PILOT_WALL_LIMIT_SECONDS = 90 * 60
 DEFAULT_GENERATOR: dict[str, Any] = {
     "n_treatments": 10,
     "n_covariates": 10,
@@ -57,6 +57,12 @@ DEFAULT_STUDY: dict[str, Any] = {
     },
     "treatment_count_bands": [[1, 2], [3, 5], [6, 8], [9, 10]],
     "control_count_bands": [[1, 2], [3, 5], [6, 8], [9, 10]],
+    # C2 is opt-in: C1 keeps its four-cell calibration budget, while pilot
+    # settings declare the approved complete 10-config budget separately.
+    "pilot_cells_per_config": 32,
+    "pilot_siblings_per_cell": 2,
+    "pilot_wall_time_seconds": PILOT_WALL_LIMIT_SECONDS,
+    "pilot_checkpoint_every_cells": 1,
 }
 STUDY_KEYS = frozenset(DEFAULT_STUDY)
 _FACTORY_KEYS = frozenset(("edge_budget", "nonlinearity", "trajectories"))
@@ -250,6 +256,24 @@ def validate_study_settings(settings: Mapping[str, Any] | None) -> dict[str, Any
         raise ValueError("confidence_level must lie strictly between zero and one")
     if resolved["cell_binary_estimand"] not in {"first_world", "any_sibling"}:
         raise ValueError("cell_binary_estimand must be 'first_world' or 'any_sibling'")
+    for name in (
+        "pilot_cells_per_config",
+        "pilot_siblings_per_cell",
+        "pilot_checkpoint_every_cells",
+    ):
+        if (
+            isinstance(resolved[name], bool)
+            or not isinstance(resolved[name], int)
+            or resolved[name] < 1
+        ):
+            raise ValueError(f"{name} must be a positive integer")
+    wall = resolved["pilot_wall_time_seconds"]
+    if (
+        isinstance(wall, bool)
+        or not isinstance(wall, (int, float))
+        or not 0 < wall <= PILOT_WALL_LIMIT_SECONDS
+    ):
+        raise ValueError(f"pilot_wall_time_seconds must be in (0, {PILOT_WALL_LIMIT_SECONDS}]")
     views = resolved["diagnostic_views"]
     if (
         not isinstance(views, list)
@@ -756,6 +780,10 @@ def count_accounting(
         "evaluated_candidates": evaluated,
         "rejected_candidates": rejected,
         "generation_failures": failures,
+        "evaluated": evaluated,
+        "accepted": n_worlds,
+        "rejected": rejected,
+        "failures": failures,
         "draws_per_cell": int(prior.draws_per_cell),
         "coverage": summary,
         "count_band_accounting": _band_accounting(
@@ -1008,7 +1036,7 @@ def run_calibration(
         "balanced_stratification": "not proposed; requires separate approval",
         "uncertainty": "Wilson intervals use 32 independent cell indicators; empty or sparsely realized bands have wide or unavailable intervals",
         "budget_status": "proposal_only_pending_human_approval",
-        "stop_rule": "stop before the sweep if any config exceeds 2x the measured high-active runtime, generation failures exceed 10%, or projected wall time exceeds 30 minutes; seek human review before scaling",
+        "stop_rule": "pilot wall cap is 90 minutes; stop before the next config if generation failures exceed 10% of evaluated candidates; active-count bands are not balanced, so stratum overrun is reported rather than silently stopped",
     }
     high_seconds = (
         high_measurement["timing"]["generation_seconds"]
@@ -1087,6 +1115,499 @@ def run_calibration(
     return report
 
 
+def _finite_max(values: Any) -> float | None:
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    return None if finite.size == 0 else float(np.max(finite))
+
+
+def _max_off_diagonal(values: Any, valid: Any) -> float | None:
+    matrix = np.asarray(values, dtype=float)
+    mask = np.asarray(valid, dtype=bool)
+    if matrix.ndim != 2 or matrix.shape != mask.shape:
+        raise ValueError("diagnostic matrices and validity masks must have equal rank-2 shape")
+    off_diagonal = ~np.eye(matrix.shape[0], dtype=bool)
+    selected = np.abs(matrix[mask & off_diagonal])
+    return _finite_max(selected)
+
+
+def _compact_world_metric(
+    corpus: Mapping[str, Any],
+    prior: SCMPrior,
+    diagnostic: Any,
+    row: int,
+    *,
+    config_index: int,
+    cell_index: int,
+    sibling_index: int,
+    rank_tolerance: float,
+) -> dict[str, Any]:
+    """Create one compact, raw-input-labelled metric row for a corpus world."""
+    treatment_mask = np.asarray(corpus["treatment_active_mask"][row], dtype=bool)
+    covariate_mask = np.asarray(corpus["covariate_active_mask"][row], dtype=bool)
+    treatment = np.asarray(corpus["treatment_raw"][row], dtype=float)
+    covariates = np.asarray(corpus["covariates"][row], dtype=float)
+    columns = [treatment[:, treatment_mask], covariates[:, covariate_mask]]
+    predictors = np.column_stack([item for item in columns if item.shape[1]])
+    raw_design = np.column_stack([predictors, np.ones(predictors.shape[0])])
+    raw_metric = design_rank_condition(raw_design, rank_tolerance=rank_tolerance)
+    scales = np.std(predictors, axis=0)
+    standardized = np.zeros_like(predictors)
+    nonconstant = scales > rank_tolerance
+    if np.any(nonconstant):
+        standardized[:, nonconstant] = (
+            predictors[:, nonconstant] - predictors[:, nonconstant].mean(axis=0)
+        ) / scales[nonconstant]
+    standardized_metric = design_rank_condition(
+        np.column_stack([standardized, np.ones(standardized.shape[0])]),
+        rank_tolerance=rank_tolerance,
+    )
+    constants = [
+        *(f"C{index + 1}" for index, active in enumerate(treatment_mask) if active),
+        *(f"Z{index + 1}" for index, active in enumerate(covariate_mask) if active),
+    ]
+    constant_names = [
+        name for name, scale in zip(constants, scales, strict=True) if scale <= rank_tolerance
+    ]
+
+    views: dict[str, dict[str, float | None]] = {}
+    for view_name, view in diagnostic.views.items():
+        dependence = view.dependence
+        keys = [descriptor.key for descriptor in dependence.descriptors]
+        observed = [i for i, key in enumerate(keys) if key.startswith(("C", "Z"))]
+        index = np.ix_(observed, observed)
+        pearson = dependence.matrices["pearson"][row][index]
+        pearson_valid = dependence.valid["pearson"][row][index]
+        vif = view.vif["observed"]
+        vif_values = vif.vif[row][vif.valid[row]]
+        views[view_name] = {
+            "max_abs_pearson_correlation": _max_off_diagonal(pearson, pearson_valid),
+            "max_vif": _finite_max(vif_values),
+            "vif_infinite": bool(np.isposinf(vif.vif[row]).any()),
+        }
+    graph = prior.layout.unpack(np.asarray(corpus["g"][row]))
+    graph_flags = classify_graph_paths(graph)
+    components = {}
+    for name in ("treatment_components", "covariate_components"):
+        if name in corpus:
+            values = np.asarray(corpus[name][row])
+            mask = treatment_mask if name.startswith("treatment") else covariate_mask
+            components[name] = values[mask].astype(int).tolist()
+    if "sat_family" in corpus:
+        components["sat_family"] = (
+            np.asarray(corpus["sat_family"][row])[treatment_mask].astype(int).tolist()
+        )
+    return {
+        "config_index": config_index,
+        "cell_index": cell_index,
+        "sibling_index": sibling_index,
+        "world_index": int(row),
+        "cell_id": int(corpus["cell_id"][row]),
+        "active_counts": {
+            "treatments": int(treatment_mask.sum()),
+            "covariates": int(covariate_mask.sum()),
+            "latents": int(np.asarray(corpus["latent_active_mask"][row]).sum()),
+        },
+        "active_masks": {
+            "treatments": treatment_mask.astype(int).tolist(),
+            "covariates": covariate_mask.astype(int).tolist(),
+            "latents": np.asarray(corpus["latent_active_mask"][row], dtype=bool)
+            .astype(int)
+            .tolist(),
+        },
+        "components": components,
+        "raw_input_diagnostics": {
+            "scope": "observed raw inputs; not true mechanism features",
+            "views": views,
+            "rank": raw_metric,
+            "standardized": standardized_metric,
+            "constant_active_inputs": constant_names,
+        },
+        "graph_flags": graph_flags,
+    }
+
+
+def _pilot_configurations(generator: Mapping[str, Any], seed: int) -> list[dict[str, Any]]:
+    """Return the preregistered primary plus nine labelled stress recipes."""
+    return _stress_configurations(generator, seed)
+
+
+def pilot_seed_schedule(generator: Mapping[str, Any], seed: int) -> list[dict[str, Any]]:
+    """Expose the deterministic config schedule without drawing any worlds."""
+    return [
+        {"index": index, "name": item["name"], "seed": item["seed"], "generator": item["generator"]}
+        for index, item in enumerate(_pilot_configurations(generator, seed))
+    ]
+
+
+def _pilot_cell_records(world_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_cell: dict[int, list[dict[str, Any]]] = {}
+    for record in world_records:
+        by_cell.setdefault(int(record["cell_id"]), []).append(record)
+    cells = []
+    for cell_id, siblings in sorted(by_cell.items()):
+        first = min(siblings, key=lambda item: item["sibling_index"])
+        raw = first["raw_input_diagnostics"]
+        cells.append(
+            {
+                "cell_id": cell_id,
+                "n_siblings": len(siblings),
+                "first_world": {
+                    "world_index": first.get("world_index"),
+                    "sibling_index": first["sibling_index"],
+                    "rank": raw["rank"],
+                    "standardized": raw.get("standardized"),
+                },
+                "binary": {
+                    "rank_deficient": bool(raw["rank"]["rank_deficient"]),
+                    "condition_ge_30": raw["rank"]["condition"] is not None
+                    and raw["rank"]["condition"] >= 30,
+                    "condition_ge_100": raw["rank"]["condition"] is not None
+                    and raw["rank"]["condition"] >= 100,
+                },
+                "any_sibling": {
+                    "rank_deficient": any(
+                        item["raw_input_diagnostics"]["rank"]["rank_deficient"] for item in siblings
+                    ),
+                    "condition_ge_30": any(
+                        item["raw_input_diagnostics"]["rank"]["condition"] is not None
+                        and item["raw_input_diagnostics"]["rank"]["condition"] >= 30
+                        for item in siblings
+                    ),
+                    "condition_ge_100": any(
+                        item["raw_input_diagnostics"]["rank"]["condition"] is not None
+                        and item["raw_input_diagnostics"]["rank"]["condition"] >= 100
+                        for item in siblings
+                    ),
+                },
+            }
+        )
+    return cells
+
+
+def _pilot_summaries(cells: list[dict[str, Any]], confidence: float) -> dict[str, Any]:
+    if not cells:
+        return {"status": "unavailable", "reason": "no complete cells"}
+    cell_ids = [cell["cell_id"] for cell in cells]
+    summary: dict[str, Any] = {"unit": "cell", "estimands": {}}
+    for estimand in ("first_world", "any_sibling"):
+        values = []
+        for cell in cells:
+            source = cell["binary"] if estimand == "first_world" else cell["any_sibling"]
+            values.append(source)
+        summary["estimands"][estimand] = {
+            metric: cell_binary_summary(
+                cell_ids,
+                [value[metric] for value in values],
+                estimand=estimand,
+                confidence_level=confidence,
+            )
+            for metric in ("rank_deficient", "condition_ge_30", "condition_ge_100")
+        }
+    summary["sensitivity_note"] = (
+        "any_sibling is a separate sensitivity estimand; siblings are not pooled as independent cells"
+    )
+    return summary
+
+
+def _write_json(path: Path, value: Mapping[str, Any]) -> None:
+    payload = canonical_json(value) + "\n"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(path)
+
+
+def run_pilot(
+    config_path: str | os.PathLike[str] | Mapping[str, Any],
+    *,
+    output_dir: str | os.PathLike[str],
+    study_settings_path: str | os.PathLike[str] | None = None,
+    wall_time_seconds: float | None = None,
+    resume: bool = True,
+    clock: Any = time.monotonic,
+) -> dict[str, Any]:
+    """Run the approved bounded C2 pilot, checkpointing compact JSON only.
+
+    This function is intentionally not called by the notebook or test suite.
+    A partial deadline report is labelled partial and contains no prevalence
+    claim. Existing checkpoints are keyed by config hash and cell/world ids;
+    changing the seed schedule or resolved settings refuses to resume.
+    """
+    raw = load_json(config_path) if not isinstance(config_path, Mapping) else dict(config_path)
+    sidecar = load_json(study_settings_path) if study_settings_path is not None else None
+    resolved = resolve_config(raw, sidecar)
+    study = resolved["study"]
+    limit = float(
+        study["pilot_wall_time_seconds"] if wall_time_seconds is None else wall_time_seconds
+    )
+    if not 0 < limit <= PILOT_WALL_LIMIT_SECONDS:
+        raise ValueError(f"pilot wall limit must be in (0, {PILOT_WALL_LIMIT_SECONDS}] seconds")
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
+    checkpoint_path = target / f"{prefix}.checkpoint.json"
+    report_path = target / f"{prefix}.json"
+    generator = resolved["generator_factory"]
+    configs = _pilot_configurations(generator, int(study["seed"]))
+    schedule = pilot_seed_schedule(generator, int(study["seed"]))
+    manifest = {
+        "schema_version": PILOT_SCHEMA_VERSION,
+        "config_hash": resolved["config_hash"],
+        "resolved_config": resolved,
+        "source_provenance": _source_provenance(),
+        "schedule": schedule,
+        "budget": {
+            "configs": len(configs),
+            "cells_per_config": int(study["pilot_cells_per_config"]),
+            "siblings_per_cell": int(study["pilot_siblings_per_cell"]),
+            "worlds_total": len(configs)
+            * int(study["pilot_cells_per_config"])
+            * int(study["pilot_siblings_per_cell"]),
+            "wall_time_seconds": limit,
+            "allocation": "independent active counts; not balanced by count bands",
+            "stop_rules": {
+                "wall_time": "stop before starting the next bounded generation/diagnostic phase at the declared cap; partial reports are not prevalence claims",
+                "generation_failure_rate": "stop before the next configuration when generation_failures / evaluated_candidates exceeds 0.10",
+                "count_stratum_overrun": "not applicable to independent allocation; report realized and empty bands instead of treating them as balanced",
+            },
+        },
+    }
+    manifest_path = target / f"{prefix}.manifest.json"
+    if manifest_path.exists() and load_json(manifest_path) != manifest:
+        raise FileExistsError(
+            "existing pilot manifest differs; refusing a seed/config change on resume"
+        )
+    if not manifest_path.exists():
+        _write_json(manifest_path, manifest)
+    checkpoint: dict[str, Any] = {
+        "manifest_hash": config_hash(manifest),
+        "completed": [],
+        "worlds": [],
+        "cells": [],
+        "config_accounting": [],
+    }
+    if resume and checkpoint_path.exists():
+        checkpoint = load_json(checkpoint_path)
+        if checkpoint.get("manifest_hash") != config_hash(manifest):
+            raise FileExistsError(
+                "existing pilot checkpoint differs; refusing a seed/config change on resume"
+            )
+    completed = {
+        (int(row["config_index"]), int(row["cell_id"]))
+        for row in checkpoint.get("cells", [])
+        if row.get("status") == "complete"
+    }
+    started = float(clock())
+    deadline = started + limit
+    partial = False
+    stop_reason = None
+    for config_index, item in enumerate(configs):
+        pending_cells = set(range(int(study["pilot_cells_per_config"]))) - {
+            cell for index, cell in completed if index == config_index
+        }
+        if not pending_cells:
+            continue
+        if float(clock()) >= deadline:
+            partial = True
+            break
+        config_generator = dict(item["generator"])
+        config_study = dict(study)
+        config_study.update(
+            n_cells=int(study["pilot_cells_per_config"]),
+            draws_per_cell=int(study["pilot_siblings_per_cell"]),
+            seed=int(item["seed"]),
+        )
+        config_study = _study_for_generator(config_generator, config_study)
+        prior = make_prior(config_generator, config_study)
+        generation_error = None
+        try:
+            corpus = sample_prior_predictive(prior)
+        except Exception as exc:  # record a config failure without inventing worlds
+            generation_error = f"{type(exc).__name__}: {exc}"
+            corpus = None
+        if generation_error is not None:
+            checkpoint.setdefault("config_failures", []).append(
+                {"config_index": config_index, "name": item["name"], "reason": generation_error}
+            )
+            stop_reason = (
+                f"generation failed for {item['name']}; failure rate cannot be treated as zero"
+            )
+            partial = True
+            _write_json(checkpoint_path, checkpoint)
+            break
+        accounting = count_accounting(corpus, prior, config_study)
+        evaluated_candidates = max(int(accounting["evaluated_candidates"]), 1)
+        failure_rate = int(accounting["generation_failures"]) / evaluated_candidates
+        if failure_rate > 0.10:
+            stop_reason = (
+                f"generation failure rate {failure_rate:.3f} exceeded 0.10 for {item['name']}"
+            )
+            partial = True
+        checkpoint["config_accounting"] = [
+            row
+            for row in checkpoint.get("config_accounting", [])
+            if int(row["config_index"]) != config_index
+        ] + [{"config_index": config_index, **accounting}]
+        _write_json(checkpoint_path, checkpoint)
+        if partial:
+            _write_json(checkpoint_path, checkpoint)
+            break
+        diagnostic = data_diagnostics(
+            corpus,
+            views=tuple(study["diagnostic_views"]),
+            keep_series=False,
+        )
+        cell_ids = np.asarray(corpus["cell_id"], dtype=int)
+        for cell_id in sorted(pending_cells):
+            if float(clock()) >= deadline:
+                partial = True
+                break
+            rows = np.flatnonzero(cell_ids == cell_id)
+            for sibling_index, row in enumerate(rows):
+                key = (config_index, int(cell_id), int(sibling_index))
+                if any(
+                    int(existing.get("config_index", -1)) == key[0]
+                    and int(existing.get("cell_id", -1)) == key[1]
+                    and int(existing.get("sibling_index", -1)) == key[2]
+                    for existing in checkpoint["worlds"]
+                ):
+                    continue
+                checkpoint["worlds"].append(
+                    _compact_world_metric(
+                        corpus,
+                        prior,
+                        diagnostic,
+                        int(row),
+                        config_index=config_index,
+                        cell_index=int(cell_id),
+                        sibling_index=sibling_index,
+                        rank_tolerance=float(study["rank_tolerance"]),
+                    )
+                )
+            records = [
+                record
+                for record in checkpoint["worlds"]
+                if int(record["config_index"]) == config_index and int(record["cell_id"]) == cell_id
+            ]
+            checkpoint["cells"] = [
+                row
+                for row in checkpoint["cells"]
+                if not (int(row["config_index"]) == config_index and int(row["cell_id"]) == cell_id)
+            ] + [
+                {
+                    "config_index": config_index,
+                    "cell_id": int(cell_id),
+                    "n_worlds": len(records),
+                    "status": "complete"
+                    if len(records) == int(study["pilot_siblings_per_cell"])
+                    else "partial",
+                }
+            ]
+            completed.add((config_index, int(cell_id)))
+            _write_json(checkpoint_path, checkpoint)
+        if partial:
+            break
+    world_records = checkpoint["worlds"]
+    cell_records = checkpoint["cells"]
+    summaries = []
+    for config_index, item in enumerate(configs):
+        worlds = [row for row in world_records if int(row["config_index"]) == config_index]
+        cells = _pilot_cell_records(worlds)
+        complete_cells = [
+            cell for cell in cells if cell["n_siblings"] == int(study["pilot_siblings_per_cell"])
+        ]
+        summaries.append(
+            {
+                "config_index": config_index,
+                "name": item["name"],
+                "generator": item["generator"],
+                "seed": item["seed"],
+                "worlds": worlds,
+                "cells": cells,
+                "summary": _pilot_summaries(complete_cells, float(study["confidence_level"])),
+                "accounting": next(
+                    (
+                        row
+                        for row in checkpoint.get("config_accounting", [])
+                        if int(row["config_index"]) == config_index
+                    ),
+                    {"status": "unavailable", "reason": "configuration was not completed"},
+                ),
+            }
+        )
+    status = "partial" if partial else "complete"
+    report = {
+        "schema_version": PILOT_SCHEMA_VERSION,
+        "status": status,
+        "config_hash": resolved["config_hash"],
+        "resolved_config": resolved,
+        "source_provenance": _source_provenance(),
+        "manifest_path": str(manifest_path),
+        "checkpoint_path": str(checkpoint_path),
+        "report_path": str(report_path),
+        "schedule": schedule,
+        "stop_reason": stop_reason,
+        "configs": summaries,
+        "accounting": {
+            "evaluated_world_metrics": len(world_records),
+            "accepted_world_metrics": len(world_records),
+            "evaluated_candidates": sum(
+                int(item.get("evaluated_candidates", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "accepted_candidates": sum(
+                int(item.get("accepted_worlds", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "realized_cells": len(cell_records),
+            "complete_cells": sum(1 for item in cell_records if item.get("status") == "complete"),
+            "partial_cells": sum(1 for item in cell_records if item.get("status") != "complete"),
+            "requested_cells": len(configs) * int(study["pilot_cells_per_config"]),
+            "requested_worlds": len(configs)
+            * int(study["pilot_cells_per_config"])
+            * int(study["pilot_siblings_per_cell"]),
+            "rejected_candidates": sum(
+                int(item.get("rejected_candidates", 0))
+                for item in checkpoint.get("config_accounting", [])
+            ),
+            "generation_failures": sum(
+                int(item.get("generation_failures", 0))
+                for item in checkpoint.get("config_accounting", [])
+            )
+            + len(checkpoint.get("config_failures", [])),
+            "failures": sum(
+                int(item.get("generation_failures", 0))
+                for item in checkpoint.get("config_accounting", [])
+            )
+            + len(checkpoint.get("config_failures", [])),
+            "empty_band_strata": "reported per completed configuration from realized independent counts; no balanced-band claim",
+        },
+        "analyses": {
+            "raw_input_conditioning": {
+                "status": "available",
+                "scope": "levels and differences; not true-mechanism identifiability",
+            },
+            "true_feature_recovery": unsupported_status(
+                "true_feature_recovery",
+                "C2 corpus does not persist every truth field required for exact reconstruction",
+            ),
+            "causal_confounding": {
+                "status": "available",
+                "scope": "graph flags are reported separately from raw-input dependence",
+            },
+        },
+        "pilot_claim": (
+            "partial pilot; no prevalence estimate until all preregistered cells complete"
+            if partial
+            else "bounded pilot summaries for the selected study recipe and labelled stress strata; not a training-prior prevalence claim"
+        ),
+        "ci_note": "Wilson intervals use one first-world indicator per complete cell; any_sibling is sensitivity only and siblings are not pooled",
+    }
+    _write_json(report_path, report)
+    _write_json(checkpoint_path, {**checkpoint, "status": status})
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="JSON generator configuration")
@@ -1094,13 +1615,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output-dir", required=True, help="directory for the config-specific report"
     )
-    args = parser.parse_args(argv)
-    report = run_calibration(
-        args.config, output_dir=args.output_dir, study_settings_path=args.study_settings
+    parser.add_argument("--mode", choices=("calibration", "pilot"), default="calibration")
+    parser.add_argument("--wall-time-seconds", type=float, help="pilot cap, at most 5400 seconds")
+    parser.add_argument(
+        "--no-resume", action="store_true", help="do not read an existing pilot checkpoint"
     )
+    args = parser.parse_args(argv)
+    runner = run_pilot if args.mode == "pilot" else run_calibration
+    kwargs = {"output_dir": args.output_dir, "study_settings_path": args.study_settings}
+    if args.mode == "pilot":
+        kwargs.update(wall_time_seconds=args.wall_time_seconds, resume=not args.no_resume)
+    report = runner(args.config, **kwargs)
     print(
         json.dumps(
-            {"report": report["report_path"], "config_hash": report["config_hash"]}, sort_keys=True
+            {
+                "report": report["report_path"],
+                "status": report.get("status", "calibration"),
+                "config_hash": report["config_hash"],
+            },
+            sort_keys=True,
         )
     )
     return 0

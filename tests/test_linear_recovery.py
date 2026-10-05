@@ -599,6 +599,83 @@ def test_c1_rejections_exclude_failures_from_evaluated_candidates():
     assert zero_band["count_band_accounting"]["n_empty_cell_band_strata"] == 3
 
 
+def test_c2_pilot_schedule_has_primary_and_nine_labelled_stress_configs():
+    from scripts.linear_recovery_prevalence import pilot_seed_schedule
+
+    generator = {
+        "n_treatments": 2,
+        "n_covariates": 2,
+        "n_latent": 1,
+        "n_treatments_active_range": [1, 2],
+        "n_covariates_active_range": [1, 2],
+        "n_latent_active_range": [1, 1],
+        "n_time_steps": 16,
+        "trajectories": "composable",
+        "nonlinearity": "diverse",
+    }
+    first = pilot_seed_schedule(generator, 20261005)
+    second = pilot_seed_schedule(generator, 20261005)
+    assert first == second
+    assert [row["name"] for row in first] == [
+        "primary_composable",
+        "texture",
+        "always_on_spikes",
+        "periodic_on_off",
+        "delayed_start",
+        "ramp_up",
+        "decay_to_zero",
+        "level_doubling",
+        "seasonal",
+        "trend",
+    ]
+    assert len({row["seed"] for row in first}) == 10
+
+
+def test_c2_any_sibling_summary_is_distinct_from_first_world_estimand():
+    from scripts.linear_recovery_prevalence import _pilot_cell_records, _pilot_summaries
+
+    world = {
+        "config_index": 0,
+        "cell_id": 0,
+        "sibling_index": 0,
+        "raw_input_diagnostics": {
+            "rank": {"rank_deficient": False, "condition": 1.0},
+        },
+    }
+    sibling = {
+        **world,
+        "sibling_index": 1,
+        "raw_input_diagnostics": {"rank": {"rank_deficient": True, "condition": 1000.0}},
+    }
+    summary = _pilot_summaries(_pilot_cell_records([world, sibling]), 0.95)
+    assert summary["estimands"]["first_world"]["rank_deficient"]["n_successes"] == 0
+    assert summary["estimands"]["any_sibling"]["rank_deficient"]["n_successes"] == 1
+    assert summary["estimands"]["any_sibling"]["rank_deficient"]["estimand"] == "any_sibling"
+    assert "not pooled" in summary["sensitivity_note"]
+
+
+def test_c2_pilot_wall_limit_rejects_cap_above_approved_ninety_minutes():
+    import pytest
+
+    from scripts.linear_recovery_prevalence import run_pilot
+
+    with pytest.raises(ValueError, match="5400"):
+        run_pilot(
+            {
+                "generator": {
+                    "n_treatments": 10,
+                    "n_covariates": 10,
+                    "n_latent": 1,
+                    "n_treatments_active_range": [1, 10],
+                    "n_covariates_active_range": [1, 10],
+                    "n_latent_active_range": [1, 1],
+                }
+            },
+            output_dir="/tmp/linear-recovery-c2-test",
+            wall_time_seconds=5401,
+        )
+
+
 def test_c1_band_validation_rejects_gaps_and_incomplete_ranges():
     import pytest
 
