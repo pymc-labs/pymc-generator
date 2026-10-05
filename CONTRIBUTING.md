@@ -110,8 +110,9 @@ commit, or outside a git checkout such as an sdist, it skips. Run it with
 The fast `tests/test_rng_owner_contract.py` requires this tree to reseed random
 variables in main's order — PyMC assigns streams by discovery order, so this is
 the platform-independent part of the contract — for every carryover × saturation
-pair of a probe cell (corpus cell and `sample_scm` world), a shock corpus and
-three template layouts. The orders live in the generated
+pair of a probe cell (corpus cell, `sample_scm` world and texture-off
+`sample_scm` world), a shock corpus and three template layouts, and checks that
+the measured order is the list a real draw reseeds. The orders live in the generated
 `tests/_rng_owner_baseline.py`. Regenerate it only from a checkout of main at
 `$MAIN`, from a neutral directory, then confirm this tree still reproduces it
 (the diff must be empty):

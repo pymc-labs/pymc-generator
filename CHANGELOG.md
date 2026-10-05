@@ -409,6 +409,15 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- **`sample_scm` with a texture term off keeps main's leftover streams (#28).**
+  #27 appended every primitive random variable to the world's draw request.
+  PyMC's draw walk reaches the last-requested names first and appends streams
+  the reference does not reach in that order, so the streams main gave unused
+  texture innovations and unused-family shape parameters moved: with any texture
+  range at zero — including `SCMPrior()` defaults — `SCM.exogenous` and
+  `SCM.params` differed from main while `SCM.data` did not. Primitives main never
+  requested now lead the request. The golden test's `sample_scm` section and the
+  owner contract now include texture-off worlds.
 - **`sample_scm` keeps default streams while admitted schedule components are
   carried by no input (#28).** The world's stream reference listed the schedule
   audit outputs (`treatment_activity` … `outcome_natural`) among the legacy

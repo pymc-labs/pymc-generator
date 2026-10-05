@@ -139,6 +139,9 @@ SCM_WORLDS = (
     "floor_non_treatment",
     "shocks",
     "prior_cond",
+    # Unused texture innovations take leftover streams.
+    "texture_off",
+    "smooth_covariates",
 )
 SCM_SEEDS = (0, 1)
 #: None is floored, so the marginal oracle builds for every one of them. Root's

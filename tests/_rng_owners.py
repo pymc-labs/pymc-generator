@@ -51,6 +51,18 @@ PROBE: dict[str, Any] = {"n_treatments": 2, "n_covariates": 1, "n_latent": 1, "n
 #: Every carryover x saturation family pair, keyed ``"carryover/saturation"``.
 PAIRS = tuple(f"{c}/{s}" for c in CARRYOVER_FAMILY_KEYS for s in SATURATION_FAMILY_KEYS)
 
+#: Every texture term off: unused texture innovations take leftover streams.
+TEXTURE_OFF: dict[str, tuple[float, float]] = dict.fromkeys(
+    (
+        "treatment_hf_sigma_range",
+        "treatment_pulse_prob_range",
+        "covariate_hf_sigma_range",
+        "covariate_pulse_prob_range",
+        "covariate_pulse_amp_range",
+    ),
+    (0.0, 0.0),
+)
+
 #: Template layouts: the default graph, every saturation family with padded
 #: slots, and texture off under absolute outcome noise.
 TEMPLATES: dict[str, dict[str, Any]] = {
@@ -85,16 +97,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "n_cells": 4,
         "seed": 21,
         "outcome_std_mode": "absolute",
-        **dict.fromkeys(
-            (
-                "treatment_hf_sigma_range",
-                "treatment_pulse_prob_range",
-                "covariate_hf_sigma_range",
-                "covariate_pulse_prob_range",
-                "covariate_pulse_amp_range",
-            ),
-            (0.0, 0.0),
-        ),
+        **TEXTURE_OFF,
     },
 }
 
@@ -249,11 +252,16 @@ def record() -> dict[str, dict[str, tuple[str, ...]]]:
     corpus, world = corpus_request(), world_request()
     shocked = pg.make_scm_prior(**PROBE, n_treatment_shocks=1)
     shock_corpus = corpus_request(n_treatment_shocks=1)
+    textureless = pg.make_scm_prior(**PROBE, **TEXTURE_OFF)
+    textureless_world = world_request(**TEXTURE_OFF)
     return {
         "ORDINARY": {pair: probe_order(probe, pair, corpus) for pair in PAIRS},
         "SINGLE_WORLD": {pair: probe_order(probe, pair, world) for pair in PAIRS},
         "SHOCKS": {"weibull/hill": probe_order(shocked, "weibull/hill", shock_corpus)},
         "TEMPLATE": {name: template_order(name) for name in TEMPLATES},
+        "TEXTURE_OFF_WORLD": {
+            pair: probe_order(textureless, pair, textureless_world) for pair in PAIRS
+        },
     }
 
 

@@ -4,10 +4,11 @@ A seeded draw hands stream ``i`` of one spawned ``SeedSequence`` to the ``i``-th
 RNG of its draw function's reseed list, so that list's random-variable order
 decides every seeded value. ``tests/_rng_owner_baseline.py`` records the order on
 main (ce068d5) for every carryover x saturation pair of the probe cell, in a
-corpus cell and in a ``sample_scm`` world, for a shock corpus and for three
-template layouts. These tests measure the same orders on this tree from the
-draw names its real calls request (``tests/_rng_owners.py``) and require them
-unchanged, the appended tail included.
+corpus cell, in a ``sample_scm`` world and in a texture-off ``sample_scm`` world,
+for a shock corpus and for three template layouts. These tests measure the same
+orders on this tree from the draw names its real calls request
+(``tests/_rng_owners.py``), require them unchanged, the appended tail included,
+and check that the measured order is the list a real draw reseeds.
 """
 
 from __future__ import annotations
@@ -72,7 +73,8 @@ def test_ordinary_corpus_rng_owners_match_main(corpus_request, pair):
 
 @pytest.mark.parametrize("pair", _owners.PAIRS)
 def test_single_world_rng_owners_match_main(world_request, pair):
-    """``sample_scm`` draws more names than main; their RNGs may only append."""
+    """``sample_scm`` requests more names than main, but they reach no random
+    variable main's request missed, so the order is main's exactly."""
     probe = make_scm_prior(**_owners.PROBE)
     assert _owners.probe_order(probe, pair, world_request) == _main.SINGLE_WORLD[pair]
 
@@ -87,6 +89,19 @@ def test_shock_corpus_rng_owners_match_main():
 def test_template_rng_owners_match_main(name):
     """Every family and parent is wired behind data switches, so each sum's order counts."""
     assert _owners.template_order(name) == _main.TEMPLATE[name]
+
+
+@pytest.fixture(scope="module")
+def textureless_world_request():
+    return _owners.world_request(**_owners.TEXTURE_OFF)
+
+
+@pytest.mark.parametrize("pair", _owners.PAIRS)
+def test_texture_off_world_rng_owners_match_main(textureless_world_request, pair):
+    """Unused texture innovations keep main's leftover streams behind every requested name."""
+    textureless = make_scm_prior(**_owners.PROBE, **_owners.TEXTURE_OFF)
+    order = _owners.probe_order(textureless, pair, textureless_world_request)
+    assert order == _main.TEXTURE_OFF_WORLD[pair]
 
 
 def test_inert_schedules_keep_the_single_world_rng_owners():

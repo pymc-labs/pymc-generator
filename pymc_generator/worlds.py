@@ -1109,7 +1109,12 @@ def sample_scm(
         g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
     )
     primitive_names = tuple(rv.name for rv in model.free_RVs)
-    draw_names = tuple(dict.fromkeys(out_names + param_names + _EXOGENOUS_NAMES + primitive_names))
+    legacy_names = tuple(dict.fromkeys(out_names + param_names + _EXOGENOUS_NAMES))
+    # PyMC's draw walk reaches the last-requested outputs first, and streams the
+    # reference does not reach are appended in that walk's order. Primitives main
+    # never requested therefore lead the request: walked last, they cannot move the
+    # streams main gave its own leftover variables (e.g. unused texture innovations).
+    draw_names = tuple(name for name in primitive_names if name not in legacy_names) + legacy_names
     reference_names = (
         tuple(name for name in out_names if name not in _SCHEDULE_AUDIT_OUTPUTS)
         + _LEGACY_WORLD_PARAM_NAMES
