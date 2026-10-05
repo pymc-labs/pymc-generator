@@ -335,6 +335,113 @@ def test_checkpoint_a_graph_has_no_confounding_or_floor_paths():
     assert world.params["baseline_floor"] is None
 
 
+def test_c1_config_roundtrip_hash_and_two_valid_configurations():
+    from scripts.linear_recovery_prevalence import (
+        DEFAULT_STUDY,
+        config_hash,
+        resolve_config,
+    )
+
+    first = {
+        "generator": {
+            "n_treatments": 2,
+            "n_covariates": 2,
+            "n_latent": 1,
+            "n_time_steps": 16,
+            "trajectories": "texture",
+            "nonlinearity": "diverse",
+        },
+        "study": {**DEFAULT_STUDY, "n_cells": 2, "draws_per_cell": 1},
+    }
+    second = {
+        **first,
+        "generator": {**first["generator"], "n_treatments": 3},
+    }
+    resolved_first = resolve_config(first)
+    resolved_again = resolve_config(first)
+    resolved_second = resolve_config(second)
+    assert resolved_first["config_hash"] == resolved_again["config_hash"]
+    assert resolved_first["config_hash"] == config_hash(
+        {key: value for key, value in resolved_first.items() if key != "config_hash"}
+    )
+    assert resolved_first["config_hash"] != resolved_second["config_hash"]
+    assert resolved_first["generator_resolved"]["n_treatments"] == 2
+
+
+def test_c1_invalid_and_unsupported_configuration_is_explicit():
+    import pytest
+
+    from scripts.linear_recovery_prevalence import (
+        resolve_config,
+        unsupported_status,
+    )
+
+    with pytest.raises(ValueError, match="unsupported generator"):
+        resolve_config(
+            {"generator": {"n_treatments": 2, "n_covariates": 2, "n_latent": 1, "made_up": 4}}
+        )
+    with pytest.raises(ValueError, match="study-only"):
+        resolve_config(
+            {"generator": {"n_treatments": 2, "n_covariates": 2, "n_latent": 1, "seed": 9}}
+        )
+    status = unsupported_status("true_feature_recovery", "truth fields are absent")
+    assert status == {
+        "analysis": "true_feature_recovery",
+        "status": "unavailable",
+        "reason": "truth fields are absent",
+    }
+
+
+def test_c1_cell_accounting_wilson_and_explicit_estimand():
+    from scripts.linear_recovery_prevalence import cell_binary_summary, wilson_interval
+
+    first = cell_binary_summary([0, 0, 1, 1], [False, True, True, False])
+    assert first["unit"] == "cell"
+    assert first["estimand"] == "first_world"
+    assert first["n_cells"] == 2
+    assert first["n_successes"] == 1
+    assert first["interval"]["method"] == "wilson"
+    any_sibling = cell_binary_summary(
+        [0, 0, 1, 1], [False, True, False, False], estimand="any_sibling"
+    )
+    assert any_sibling["n_successes"] == 1
+    assert wilson_interval(0, 4)[0] == 0.0
+
+
+def test_c1_design_semantics_keep_constant_active_inputs_and_separate_causal_paths():
+    from scripts.linear_recovery_prevalence import (
+        classify_design,
+        classify_graph_paths,
+        design_rank_condition,
+    )
+
+    measured = design_rank_condition(
+        np.column_stack([np.ones(8), np.arange(8), np.ones(8)]),
+        active_mask=[True, True, True],
+    )
+    assert measured["exact_rank"] == 2
+    assert measured["constant_active_columns"] == 2
+    result = classify_design(
+        2,
+        3,
+        float("inf"),
+        rank_tolerance=1e-10,
+        constant_active_columns=1,
+        causal_path=True,
+    )
+    assert result["rank_deficient"]
+    assert result["constant_active_inputs_retained"]
+    assert result["padded_columns_excluded_by_mask"]
+    assert result["causal_path_present"]
+    assert "not a multicollinearity" in result["causal_path_interpretation"]
+    paths = classify_graph_paths(
+        {"g_cy": [1], "g_dc": [[1]], "g_dy": [1], "g_zc": [[1]], "g_zy": [1]}
+    )
+    assert paths["direct_treatment_outcome_reachability"]
+    assert paths["shared_latent_confounding"]
+    assert paths["mediated_or_observed_path"]
+
+
 __all__ = [
     "N_TIME_STEPS",
     "SEED",
