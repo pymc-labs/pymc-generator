@@ -10,6 +10,7 @@ was being built.
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal, localcontext
 from typing import Any
 
@@ -17,7 +18,10 @@ import numpy as np
 import pytensor
 import pytensor.tensor as pt
 import pytest
+from pytensor.compile.mode import Mode, get_mode
 from pytensor.graph.replace import clone_replace
+from pytensor.scalar import Add
+from pytensor.tensor.elemwise import Elemwise
 
 import pymc_generator.world_model as world_model
 from pymc_generator import make_scm_prior
@@ -1012,3 +1016,129 @@ def test_template_handles_more_than_32_candidate_parents_with_sparse_edges_and_p
         + latent @ (g["g_dy"] * result["param_delta_dy"][0])
     )
     np.testing.assert_allclose(result["baseline"][0], expected_baseline, rtol=2e-12, atol=1e-12)
+
+
+def _add_widths(fn) -> list[int]:
+    return [
+        len(node.inputs)
+        for node in fn.maker.fgraph.toposort()
+        if isinstance(node.op, Elemwise) and isinstance(node.op.scalar_op, Add)
+    ]
+
+
+_SPLIT_WIDTHS = {
+    "31": [31],
+    "32": [31, 2],
+    "33": [31, 3],
+    "61": [31, 31],
+    "62": [31, 31, 2],
+    "95": [31, 31, 31, 5],
+    "bool-first-chunk": [31, 6],
+    "int8-first-chunk": [31, 6],
+}
+
+
+@pytest.mark.parametrize("case", sorted(_SPLIT_WIDTHS))
+def test_wide_python_addition_is_split_into_bounded_additions(case):
+    """The Python backend runs additions past its 32-operand limit, and only those change.
+
+    ``case`` counts every addend. One of them broadcasts from length 1, and the
+    narrow-dtype cases put 31 bool or int8 addends first, so a chunk that kept
+    its inputs' dtype would add as a logical OR or overflow.
+    """
+    widths = _SPLIT_WIDTHS[case]
+    rng = np.random.default_rng(32)
+    if case.endswith("first-chunk"):
+        dtype = case.split("-")[0]
+        inputs = [pt.vector(f"n{i}", dtype=dtype) for i in range(31)]
+        inputs += [pt.dvector(f"x{i}") for i in range(5)]
+        values = [np.full(8, 1 if dtype == "bool" else 100, dtype=dtype) for _ in range(31)]
+        values += [np.full(8, 0.5) for _ in range(5)]
+    else:
+        n = int(case)
+        inputs = [pt.dvector(f"x{i}") for i in range(n - 1)]
+        inputs.append(pt.tensor("b", shape=(1,), dtype="float64"))
+        values = [rng.normal(size=8) for _ in range(n - 1)] + [rng.normal(size=1)]
+    total = pt.add(*inputs)
+    # A predicate that rebuilt an identical node would loop; make that an error.
+    with pytensor.config.change_flags(on_opt_error="raise"):
+        split = pytensor.function(inputs, total, mode="FAST_COMPILE")
+        unsplit = pytensor.function(
+            inputs, total, mode=get_mode("FAST_COMPILE").excluding("pymc_generator_split_wide_add")
+        )
+    assert _add_widths(split) == widths
+    assert split.maker.fgraph.outputs[0].type == total.type
+    result = split(*values)
+    if case.endswith("first-chunk"):
+        assert result.tobytes() == np.full(8, 33.5 if case.startswith("bool") else 3102.5).tobytes()
+    else:
+        columns = np.broadcast_arrays(*values)
+        exact = np.array([math.fsum(column[i] for column in columns) for i in range(8)])
+        bound = 2 * len(values) * np.finfo(np.float64).eps * np.sum(np.abs(columns), axis=0)
+        assert np.all(np.abs(result - exact) <= bound)
+    if widths == [31]:
+        assert unsplit(*values).tobytes() == result.tobytes()
+    else:
+        with pytest.raises(NotImplementedError, match="more than 32 operands"):
+            unsplit(*values)
+
+
+@pytest.mark.parametrize("linker", ("cvm", "numba"))
+def test_wide_addition_split_never_reaches_c_or_numba_compiles(linker):
+    """C and Numba run wide additions natively, so even their FAST_COMPILE optimizer keeps them.
+
+    A split there would re-round results of graphs that already ran.
+    """
+    mode = Mode(linker=linker, optimizer="fast_compile")
+    if "py_only" in mode.linker.required_rewrites:
+        pytest.skip(f"{linker} runs Python thunks here (no C compiler), which need the split")
+    xs = [pt.dvector(f"x{i}") for i in range(40)]
+    values = [np.random.default_rng(i).normal(size=64) for i in range(40)]
+    compiled = pytensor.function(xs, pt.add(*xs), mode=mode)
+    unsplit = pytensor.function(
+        xs, pt.add(*xs), mode=mode.excluding("pymc_generator_split_wide_add")
+    )
+    assert _add_widths(compiled) == [40]
+    assert compiled(*values).tobytes() == unsplit(*values).tobytes()
+
+
+@pytest.mark.slow
+def test_template_runs_layouts_whose_flattened_parent_sums_exceed_the_python_limit():
+    """Every parent group is narrow, but the flattened treatment equation is not.
+
+    Canonicalization flattens own + latent + covariate (+ treatment) terms into one
+    addition of more than 31 operands, so a per-call width threshold would still
+    fail under FAST_COMPILE here.
+    """
+    cfg = _cfg(
+        n_treatments=2,
+        n_covariates=15,
+        n_latent=16,
+        n_treatments_active_range=(2, 2),
+        n_covariates_active_range=(15, 15),
+        n_latent_active_range=(16, 16),
+    )
+    g, _, _ = _concrete_scm_inputs(2, 15, 16, cfg.n_time_steps + cfg.carryover_burn_in)
+    for key in ("g_dc", "g_dz", "g_zc"):
+        g[key][:] = 1
+    active = {
+        "active_treatment": np.ones(2),
+        "active_covariate": np.ones(15),
+        "active_latent": np.ones(16),
+    }
+    structural = sample_structure(g, cfg, np.random.default_rng(11))
+    cell = build_cell_inputs(cfg, g, active, structural)
+    model, outputs, reports = build_world_model_template(cfg, cell, cfg.n_time_steps)
+    names = tuple(dict.fromkeys((*outputs, *reports, *(rv.name for rv in model.free_RVs))))
+    result = compile_template_draw_fn(model, names, mode="FAST_COMPILE")(cell, seed=83)
+    for name in outputs:
+        assert np.isfinite(result[name]).all(), name
+    _assert_ordinary_template_parity(cfg, g, structural, result, outputs)
+    np.testing.assert_allclose(
+        result["outcome"][0],
+        result["baseline"][0]
+        + result["contributions"][0].sum(axis=-1)
+        + result["indirect_effects"][0],
+        rtol=0.0,
+        atol=1e-12,
+    )

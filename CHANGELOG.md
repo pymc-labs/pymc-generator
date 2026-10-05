@@ -12,8 +12,10 @@ read the migration notes before upgrading.
   reusable templates support all eight trajectory components and fractional
   per-input inclusion alongside richer mechanism priors. Template flags are
   per-cell inputs; padded schedule outputs are zero. Natural-path response
-  evaluation uses the same dynamic families, and dynamic parent sums avoid
-  the Python backend's wide-elementwise operand limit.
+  evaluation uses the same dynamic families. Dynamic parent sums keep the n-ary
+  addition and its random-stream order; a Python-backend-only rewrite splits
+  additions wider than the backend's 32-operand limit, so large templates still
+  run under `FAST_COMPILE`.
 - **Exact SCM replay.** `SCM.primitive_parameters` exposes defensive copies of
   the accepted primitive prior draw and raw full-horizon innovations.
   `SCM.replay()` rebuilds and executes the generator at those runtime-bound
@@ -407,6 +409,14 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- **Template parent sums reproduce main again (#28).** #27 replaced the
+  template's n-ary parent sums with `pt.dot`. PyMC's draw walk then reached
+  coefficients before parents and reassigned 9 of 39 random streams in the
+  measured layout, and the accumulation order changed by ulps, so every template
+  draw differed from main; mechanism-prior templates changed their parent-sum
+  order and rounding too. The n-ary sums are restored; to keep large templates
+  running, Python-backend compilation splits only Elemwise additions wider than
+  its 32-operand limit, which could not run before.
 - **Default relative outcome noise is main's literal product again (#28).**
   Unless an opt-in mechanism setting is active, `rw_b_std` and `rw_y_std` are
   `std * sqrt(sum((g_cy * beta)**2))` in generation, templates and both oracle

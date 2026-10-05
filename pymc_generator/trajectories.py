@@ -441,8 +441,9 @@ def _jump_steps(jump: dict[str, Any], i: int, t: np.ndarray) -> TensorVariable:
 
     One matrix rather than K separate terms: PyTensor would fuse K terms into a
     single elementwise op, and the FAST_COMPILE Python backend refuses more than
-    32 operands (the reason :func:`pymc_generator.symbolic_graph._dot_terms`
-    uses a dot product too).
+    32 operands per elementwise op (only wide additions are split for it, by
+    :func:`pymc_generator.symbolic_graph._split_wide_py_add`; treatment jumps
+    multiply).
     """
     import pytensor.tensor as pt
 
