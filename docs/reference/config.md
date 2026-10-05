@@ -756,8 +756,12 @@ for treatments. So:
 - the columns still sum **exactly** to the total, so the decomposition identity
   is untouched (measured identity error 1.8e-15);
 - where the floor does not bind, every column equals the linear split
-  ($g^{zy}_m \rho_m Z_m$) and the persisted corpus is byte-identical to the
-  unfloored one.
+  ($g^{zy}_m \rho_m Z_m$) up to float64 rounding of the telescoped difference
+  $(A^{(i-1)} + x) - A^{(i-1)}$, whose error grows with
+  $\lvert A^{(i-1)}\rvert / \lvert x\rvert$; float32 storage usually absorbs it,
+  but byte identity with the unfloored corpus is not guaranteed. The default
+  `"intercept"` scope keeps every covariate column the literal product
+  $(g^{zy}_m \rho_m) Z_m$ on the reported covariate.
 
 The cost is that a per-node column is **no longer linear in its node** where the
 floor binds: a linear MMM's $\rho_m Z_m$ term cannot reproduce the absorbed

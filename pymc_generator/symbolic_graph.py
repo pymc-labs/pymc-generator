@@ -877,7 +877,8 @@ def build_symbolic_graph(
     # ``baseline_floor_scope`` decides WHAT the floor clips.
     #
     # "intercept": clip the intercept walk only. Every other term stays exactly
-    #     linear in its node (``covariate_contribution[:, m] == g_zy·ρ·Z``), which
+    #     linear in its node (``covariate_contribution[:, m]`` is the literal
+    #     ``(g_zy[m]·ρ[m])·Z[:, m]`` on the reported Z), which
     #     is the cheapest, most estimator-friendly option — but a large negative
     #     ρ·Z can still drag the non-treatment total (and outcome) below zero.
     # "non_treatment": clip the RUNNING TOTAL as each parent is added, in the LOCKED
@@ -890,8 +891,10 @@ def build_symbolic_graph(
     #         absorbed rather than pushing outcome negative;
     #       * the columns still telescope EXACTLY, so the decomposition identity
     #         is untouched;
-    #       * where the floor does not bind, every column is bit-identical to the
-    #         linear split, so this is a clip and never a re-parameterisation.
+    #       * where the floor does not bind, every column is the linear split up to
+    #         float64 rounding of the telescoped difference ``(A + x) - A``, so this
+    #         is a clip and never a re-parameterisation; only the default
+    #         "intercept" scope keeps the literal product.
     delta_dy = _arr(params["delta_dy"], (n_latent,))
     rho_zy = _arr(params["rho_zy"], (n_covariates,))
     walk_b = _walk_column(eps_b, params["rw_b"], 0, n_time_steps_full)

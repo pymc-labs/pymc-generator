@@ -452,9 +452,9 @@ class SCMPrior:
     #       covariate effect is then credited only down to the floor and the excess
     #       is absorbed, so the whole mean function of outcome is >= 0 by
     #       construction (treatment contributions are already >= 0). Per-node columns
-    #       become the telescoping differences each node caused — exact, and
-    #       identical to the linear split wherever the floor does not bind, but
-    #       no longer linear in the node where it does.
+    #       become the telescoping differences each node caused — exact in sum, and
+    #       equal to the linear split up to float64 rounding wherever the floor does
+    #       not bind, but no longer linear in the node where it does.
     baseline_floor_scope: Literal["intercept", "non_treatment"] = "intercept"
     carryover_burn_in: int = 0
 
