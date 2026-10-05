@@ -34,10 +34,12 @@ read the migration notes before upgrading.
   instead of requiring their rounded products to recover targets exactly.
   `load_corpus` now rejects every pre-v5 or versionless archive with a clear
   version error, rather than migrating or zero-filling missing truth.
-- **Richer-prior numerical domains.** Rescaled relative-noise norms and final
-  mantissa/exponent products retain representable tiny and subnormal amplitudes
-  without floors or premature rounding. Their analytic pullbacks avoid tiny-scale
-  denominator squares and gradient-product rounding. Bounded logistic evaluation and support
+- **Richer-prior numerical domains.** Under opt-in mechanism priors, rescaled
+  relative-noise norms and final mantissa/exponent products retain representable
+  tiny and subnormal amplitudes without floors or premature rounding; default
+  recipes keep `std * sqrt(sum((g_cy * beta)**2))`. Their analytic pullbacks avoid
+  tiny-scale denominator squares and gradient-product rounding. Bounded logistic
+  evaluation and support
   bounds preserve subnormal lambda products even when an input/reference ratio
   overflows. Under opt-in mechanism priors, relative tanh and root responses rescue
   underflowed/overflowed ratios before bounded/concave evaluation, and MM retains
@@ -405,6 +407,15 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- **Default relative outcome noise is main's literal product again (#28).**
+  Unless an opt-in mechanism setting is active, `rw_b_std` and `rw_y_std` are
+  `std * sqrt(sum((g_cy * beta)**2))` in generation, templates and both oracle
+  modes. The #27 mantissa/exponent product differed from it by up to 3 ulp in
+  measured worlds and was opaque to the canonicalizer that flattens the baseline
+  walk's scale, so every relative-noise world drifted in its noise, baseline and
+  outcome. It now
+  applies only under opt-in mechanism settings; raw ranges reaching subnormal
+  noise products need such a setting to keep extended-range arithmetic.
 - **Default MM, tanh and root saturation reproduce main again (#28).** The #27
   scalar ops had replaced the default library graphs. MM's node visited its
   reference and kappa before its input, so PyMC assigned different random streams

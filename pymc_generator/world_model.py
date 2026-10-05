@@ -1127,15 +1127,19 @@ def _apply_outcome_std_scale(
 ) -> None:
     """Convert relative outcome scales to their parameter-only absolute amplitudes.
 
-    The Euclidean norm of ``g_cy * beta`` depends only on structural and
+    The anchor ``sqrt(sum((g_cy * beta)**2))`` depends only on structural and
     continuous parameters. It cannot depend on innovations without making the
-    prior undefined independently of the noise it generates. Scaling before
-    squaring preserves tiny nonzero amplitudes; the minimum-normal arithmetic
-    scale keeps its reciprocal finite without flooring the resulting norm.
-    Mantissa/exponent multiplication defers subnormal rounding to the final
-    standard deviation rather than an intermediate coefficient norm or product.
-    Its analytic pullback uses the bounded coefficient direction so a tiny
-    intermediate derivative cannot round before the normalization cancels.
+    prior undefined independently of the noise it generates.
+
+    Default recipes emit that product literally: generation, templates and both
+    oracle modes keep its rounding and the canonicalizer's flattening of the
+    baseline walk's scale. Opt-in mechanism priors, whose derived coefficients can
+    be tiny or subnormal, use ``_relative_std_product`` instead: scaling before
+    squaring preserves tiny nonzero amplitudes, the minimum-normal arithmetic scale
+    keeps its reciprocal finite without flooring the norm, and mantissa/exponent
+    multiplication defers subnormal rounding to the final standard deviation. Its
+    analytic pullback uses the bounded coefficient direction so a tiny intermediate
+    derivative cannot round before the normalization cancels.
     """
     if cfg.outcome_std_mode == "absolute":
         return
@@ -1144,6 +1148,14 @@ def _apply_outcome_std_scale(
             f"outcome_std_mode must be 'relative' or 'absolute', got {cfg.outcome_std_mode!r}"
         )
     g_cy_t = pt.as_tensor_variable(g_cy)
+    if not cfg.mechanism_priors_enabled:
+        treatment_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
+        for group_name in ("rw_b", "rw_y"):
+            rw[group_name]["std"] = pm.Deterministic(
+                f"{prefix}{group_name}_std",
+                rw[group_name]["std"] * treatment_amplitude,
+            )
+        return
     amplitudes = g_cy_t * beta
     for group_name in ("rw_b", "rw_y"):
         rw[group_name]["std"] = pm.Deterministic(

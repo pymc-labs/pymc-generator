@@ -316,14 +316,16 @@ def test_relative_outcome_scale_is_shared_by_generation_and_oracle(
 
 @pytest.mark.parametrize("latent", ("marginal", "sampled"))
 @pytest.mark.parametrize(
-    ("beta_range", "std_range", "center_observation"),
+    ("beta_range", "std_range", "center_observation", "opt_in"),
     (
-        pytest.param((1.0, 2.0), (0.1, 0.2), False, id="regular"),
-        pytest.param((1e-180, 2e-180), (5e37, 1e38), True, id="tiny-coefficient"),
+        pytest.param((1.0, 2.0), (0.1, 0.2), False, False, id="regular"),
+        # Extended-range coefficients need the opt-in noise product; this opt-in
+        # adds no RV to the linear world.
+        pytest.param((1e-180, 2e-180), (5e37, 1e38), True, True, id="tiny-coefficient"),
     ),
 )
 def test_relative_noise_posterior_gradients_match_finite_differences(
-    latent, beta_range, std_range, center_observation
+    latent, beta_range, std_range, center_observation, opt_in
 ):
     """NUTS derivatives retain the coupling between beta and both noise scales."""
     cfg = _small_cfg(
@@ -334,7 +336,9 @@ def test_relative_noise_posterior_gradients_match_finite_differences(
         beta_additive_range=beta_range,
         rw_baseline_std_range=std_range,
         rw_outcome_std_range=std_range,
+        **({"mm_scale_prior": "log_uniform"} if opt_in else {}),
     )
+    assert cfg.mechanism_priors_enabled is opt_in
     g = _direct_only_graph()
     structural = sample_structure(g, cfg, np.random.default_rng(19))
     generative, output_names, _ = build_world_model(g, cfg, structural, cfg.n_time_steps)

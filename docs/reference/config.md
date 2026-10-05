@@ -136,8 +136,10 @@ Michaelis–Menten, tanh and root). Defaults keep pymc-marketing's library graph
 their rounding and their random-stream order. The opt-in MM, tanh and root forms
 retain their unit forward curves and use analytic pullbacks that avoid
 tiny-denominator squares or indeterminate saturated derivatives. The stable
-relative-noise norm above applies
-to all recipes. Descriptions and DOT graphs of opt-in worlds
+relative-noise norm above applies whenever an opt-in mechanism setting is active;
+default recipes keep `std * sqrt(sum((g_cy * beta)**2))` and its rounding, so
+raw-coefficient ranges reaching subnormal noise products need such a setting for
+extended-range arithmetic. Descriptions and DOT graphs of opt-in worlds
 print saturation shape parameters, `beta` and edge coefficients with four
 significant digits, and conditioning intervals exactly.
 
