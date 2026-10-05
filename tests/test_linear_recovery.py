@@ -26,6 +26,9 @@ L_MAX = 4
 N_TREATMENTS = 3
 N_COVARIATES = 2
 N_LATENT = 1
+NOISE_LEVELS = (1.2, 0.6, 0.3)
+N_REPLICATES = 96
+REPLICATE_SEED = 20301005
 
 
 @dataclass(frozen=True)
@@ -227,6 +230,64 @@ def test_checkpoint_a_noiseless_ols_recovers_the_generated_coefficients(capsys):
     assert rank == 6
     assert condition < 100.0
     np.testing.assert_allclose(coefficient, truth, rtol=2e-12, atol=2e-12)
+
+
+def _noisy_recovery(world: ControlledWorld) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit independent Gaussian-noise replicates on one fixed generated design.
+
+    The design and noiseless mean stay fixed, so this is a conditional-on-X
+    OLS sampling experiment.  Each returned level has shape
+    ``(N_REPLICATES, n_coefficients)``.
+    """
+    outputs = world.outputs
+    features_full = _mechanism_features(
+        outputs["treatments"], outputs["saturation_scale"], world.params
+    )
+    window = slice(WARMUP, None)
+    design = np.column_stack(
+        [features_full[window], outputs["covariates"][window], np.ones(N_TIME_STEPS)]
+    )
+    truth = np.concatenate(
+        [np.asarray(world.params["beta"]), np.asarray(world.params["rho_zy"]), [5.0]]
+    )
+    mean = outputs["outcome"][window]
+    standard_error = np.sqrt(np.diag(np.linalg.inv(design.T @ design)))
+    estimates = []
+    for level_index, sigma in enumerate(NOISE_LEVELS):
+        level_estimates = []
+        for replicate in range(N_REPLICATES):
+            seed = REPLICATE_SEED + level_index * N_REPLICATES + replicate
+            noise = np.random.default_rng(seed).normal(0.0, sigma, size=N_TIME_STEPS)
+            level_estimates.append(np.linalg.lstsq(design, mean + noise, rcond=None)[0])
+        estimates.append(np.asarray(level_estimates))
+    return np.asarray(estimates), truth, standard_error
+
+
+def test_checkpoint_b_noisy_recovery_matches_conditional_ols_standard_errors(capsys):
+    world = _controlled_world()
+    estimates, truth, standard_error = _noisy_recovery(world)
+    print(
+        f"replicates={N_REPLICATES} seeds={REPLICATE_SEED}-"
+        f"{REPLICATE_SEED + len(NOISE_LEVELS) * N_REPLICATES - 1} "
+        f"noise_sigmas={','.join(f'{sigma:g}' for sigma in NOISE_LEVELS)}"
+    )
+    for sigma, level_estimates in zip(NOISE_LEVELS, estimates, strict=True):
+        z_scores = (level_estimates - truth) / (sigma * standard_error)
+        spread_ratio = np.std(level_estimates, axis=0, ddof=1) / (sigma * standard_error)
+        coverage = np.mean(np.abs(z_scores) <= 1.96)
+        median_abs_z = float(np.median(np.abs(z_scores)))
+        median_spread_ratio = float(np.median(spread_ratio))
+        print(
+            f"sigma={sigma:g} median_abs_z={median_abs_z:.4f} median_spread_over_se={median_spread_ratio:.4f} coverage95={coverage:.4f}"
+        )
+        # These are aggregate distributional checks, not per-realization
+        # monotonicity requirements.  The nominal interval is conditional on X.
+        assert 0.55 <= median_abs_z <= 0.85
+        assert 0.75 <= median_spread_ratio <= 1.25
+        assert 0.90 <= coverage <= 0.99
+    captured = capsys.readouterr().out
+    assert "replicates=96" in captured
+    assert "noise_sigmas=1.2,0.6,0.3" in captured
 
 
 def test_checkpoint_a_features_match_generation_and_use_history():
