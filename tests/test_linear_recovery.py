@@ -529,9 +529,7 @@ def test_c1_active_variants_only_override_resolved_ranges():
             "latent": expected[2],
         }
         assert metadata["overrides"] == {
-            key: variant[key]
-            for key in variant
-            if base.get(key) != variant[key]
+            key: variant[key] for key in variant if base.get(key) != variant[key]
         }
         assert all(variant[key] == base[key] for key in base if key not in metadata["overrides"])
         assert variant["n_time_steps"] == 104

@@ -558,9 +558,7 @@ def classify_graph_paths(
 
     def any_reachable(starts: Any, target_nodes: Any) -> bool:
         return any(
-            reachable(int(start), int(target))
-            for start in starts
-            for target in target_nodes
+            reachable(int(start), int(target)) for start in starts for target in target_nodes
         )
 
     latent_nodes = range(latent_offset, latent_offset + n_latents)
@@ -800,9 +798,7 @@ def _active_dimension_generator(
         "n_covariates_active_range": [active[1], active[1]],
         "n_latent_active_range": [active[2], active[2]],
     }
-    overrides = {
-        key: value for key, value in variant.items() if base.get(key) != value
-    }
+    overrides = {key: value for key, value in variant.items() if base.get(key) != value}
     for key, value in base.items():
         if key not in overrides:
             assert variant[key] == value
