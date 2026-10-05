@@ -131,10 +131,12 @@ reference-input products, including those from an oracle's supplied
 coefficient that still leaves this domain through rounding raises the same
 named `ValueError` in `sample_scm` and in corpus generation; corpus generation
 never resamples it. Opt-in mechanism settings use numerically stable,
-mathematically equivalent Hill/logistic evaluation; default Hill/logistic
-evaluation remains on its legacy path. MM and tanh retain their unit forward
-curves and use analytic pullbacks that avoid tiny-denominator squares or
-indeterminate saturated derivatives. The stable relative-noise norm above applies
+mathematically equivalent evaluation of every saturation family (Hill, logistic,
+Michaelis–Menten, tanh and root). Defaults keep pymc-marketing's library graphs,
+their rounding and their random-stream order. The opt-in MM, tanh and root forms
+retain their unit forward curves and use analytic pullbacks that avoid
+tiny-denominator squares or indeterminate saturated derivatives. The stable
+relative-noise norm above applies
 to all recipes. Descriptions and DOT graphs of opt-in worlds
 print saturation shape parameters, `beta` and edge coefficients with four
 significant digits, and conditioning intervals exactly.

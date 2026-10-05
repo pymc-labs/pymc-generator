@@ -39,9 +39,11 @@ read the migration notes before upgrading.
   without floors or premature rounding. Their analytic pullbacks avoid tiny-scale
   denominator squares and gradient-product rounding. Bounded logistic evaluation and support
   bounds preserve subnormal lambda products even when an input/reference ratio
-  overflows. Relative tanh and root responses rescue underflowed/overflowed ratios
-  before bounded/concave evaluation; MM retains representable responses and complete
-  weighted shape derivatives across denominator overflow and subnormal products.
+  overflows. Under opt-in mechanism priors, relative tanh and root responses rescue
+  underflowed/overflowed ratios before bounded/concave evaluation, and MM retains
+  representable responses and complete weighted shape derivatives across
+  denominator overflow and subnormal products; default recipes keep the
+  pymc-marketing library graphs.
   Hill and logistic pullbacks combine the incoming cotangent, relative factors
   and exponential tail before exponentiation, retaining finite complete
   posterior derivatives without changing the forward curves.
@@ -127,7 +129,8 @@ read the migration notes before upgrading.
   `prior_cond` labels cannot resolve; runtime reference-domain failures raise
   the same named error in single worlds and corpora, never a silent redraw.
   Treatment coefficients use the shared response at the actual reference
-  input; opt-in Hill/logistic responses use stable evaluation, log-uniform MM
+  input; opt-in Hill, logistic, Michaelis–Menten, tanh and root responses use
+  stable evaluation, log-uniform MM
   scales stay inside their configured bounds, and opt-in descriptions keep
   significant digits. Defaults retain the former shape supports, uniform MM
   law, graph arithmetic, RNG consumption, seeded numerical arrays and
@@ -402,6 +405,22 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- **Default MM, tanh and root saturation reproduce main again (#28).** The #27
+  scalar ops had replaced the default library graphs. MM's node visited its
+  reference and kappa before its input, so PyMC assigned different random streams
+  and whole same-seed worlds changed whenever an MM treatment's input reached an
+  undrawn variable; the opaque node also blocked the library's fold of the
+  downstream gate into the quotient (1–2 ulp). tanh evaluated `(x/r)/c` instead
+  of the canonicalized `x/(r·c)` (1–3 ulp), and root's scalar op rounded its
+  power 1–4 ulp differently under the Numba backend (ulp counts from measured
+  worlds); inside oracle graphs the opaque root node and its analytic pullback
+  also changed contributions, densities and gradients in both backends (sampled
+  corpora were unaffected).
+  Defaults are the library graphs again; the scalar ops are now
+  `stable_michaelis_menten_kappa_relative`, `stable_tanh_kappa_relative` and
+  `stable_root_kappa_relative` in the new `mechanisms.STABLE_SATURATION_FAMILIES`,
+  selected with the stable Hill and logistic forms only when an opt-in mechanism
+  setting is active.
 - Reusable world-model templates compile only the structure inputs their
   requested outputs reach, so a single-treatment template no longer fails with
   an unused-input error. Templates that already compiled draw identical arrays.

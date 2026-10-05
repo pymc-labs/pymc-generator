@@ -31,14 +31,24 @@ FAMILY_SHAPES: dict[str, dict[str, float]] = {
 }
 
 
+#: The default library curves and the opt-in stable forms promise the same
+#: mathematical curves, so every landmark below holds for both tables.
+TABLES = {
+    "default": mechanisms.SATURATION_FAMILIES,
+    "stable": mechanisms.STABLE_SATURATION_FAMILIES,
+}
+
+
 def _evaluate(expression) -> np.ndarray:
     """Evaluate a symbolic saturation column as a float64 array."""
     return np.asarray(expression.eval(), dtype=np.float64)
 
 
-def _family(name: str, x, reference_level=REFERENCE_LEVEL, **shape) -> np.ndarray:
-    """Evaluate one κ-relative family through the name dispatch table."""
-    return _evaluate(mechanisms.SATURATION_FAMILIES[name](x, reference_level, **shape))
+def _family(
+    name: str, x, reference_level=REFERENCE_LEVEL, *, table: str = "default", **shape
+) -> np.ndarray:
+    """Evaluate one κ-relative family through a name dispatch table."""
+    return _evaluate(TABLES[table][name](x, reference_level, **shape))
 
 
 @pytest.mark.parametrize(
@@ -63,19 +73,21 @@ def _family(name: str, x, reference_level=REFERENCE_LEVEL, **shape) -> np.ndarra
     ],
     ids=lambda value: repr(value) if isinstance(value, dict) else str(value),
 )
-def test_family_reproduces_its_analytic_landmark(name, shape, landmark_x, landmark_y):
+@pytest.mark.parametrize("table", sorted(TABLES))
+def test_family_reproduces_its_analytic_landmark(name, shape, landmark_x, landmark_y, table):
     """Each family's documented anchor value is exact, not approximate.
 
     These are the identities that let ``beta`` be read as "the treatment's
     contribution at its κ anchor": a family whose half point drifted with its
     shape parameter would make ``beta`` mean something different per draw.
     """
-    value = _family(name, np.array([landmark_x]), **shape)
+    value = _family(name, np.array([landmark_x]), table=table, **shape)
     np.testing.assert_allclose(value, landmark_y, rtol=0.0, atol=1e-12)
 
 
+@pytest.mark.parametrize("table", sorted(TABLES))
 @pytest.mark.parametrize("name", sorted(FAMILY_SHAPES))
-def test_family_is_strictly_monotone_in_x(name):
+def test_family_is_strictly_monotone_in_x(name, table):
     """Monotonicity is what makes a contribution attributable to its treatment.
 
     Asserted STRICTLY: a family that plateaued in float (or that read the wrong
@@ -83,13 +95,14 @@ def test_family_is_strictly_monotone_in_x(name):
     graph and still satisfy every decomposition identity.
     """
     x = np.linspace(0.0, 4.0 * REFERENCE_LEVEL, 97)
-    y = _family(name, x, **FAMILY_SHAPES[name])
+    y = _family(name, x, table=table, **FAMILY_SHAPES[name])
     assert (np.diff(y) > 0.0).all(), f"{name} is not strictly increasing in x"
 
 
+@pytest.mark.parametrize("table", sorted(TABLES))
 @pytest.mark.parametrize("scale", [1e-3, 0.5, 2.0, 1e3])
 @pytest.mark.parametrize("name", sorted(FAMILY_SHAPES))
-def test_family_is_scale_free_in_its_anchor(name, scale):
+def test_family_is_scale_free_in_its_anchor(name, scale, table):
     """Scaling ``x`` and ``reference_level`` together leaves the response unchanged.
 
     Under reference-relative parameterization,
@@ -100,8 +113,10 @@ def test_family_is_scale_free_in_its_anchor(name, scale):
     """
     x = np.linspace(0.05, 4.0 * REFERENCE_LEVEL, 41)
     shape = FAMILY_SHAPES[name]
-    base = _family(name, x, **shape)
-    rescaled = _family(name, x * scale, reference_level=REFERENCE_LEVEL * scale, **shape)
+    base = _family(name, x, table=table, **shape)
+    rescaled = _family(
+        name, x * scale, reference_level=REFERENCE_LEVEL * scale, table=table, **shape
+    )
     np.testing.assert_allclose(rescaled, base, rtol=1e-12, atol=0.0)
 
 
@@ -121,7 +136,7 @@ DISPATCH_PARAMS: dict[str, np.ndarray] = {
 }
 
 
-def _expected_family_column(name: str, x: np.ndarray) -> np.ndarray:
+def _expected_family_column(name: str, x: np.ndarray, table: str) -> np.ndarray:
     """The column ``_saturate_col`` must produce for family ``name``.
 
     ``linear`` is the one family with no κ-relative wrapper — it is the plain
@@ -129,25 +144,30 @@ def _expected_family_column(name: str, x: np.ndarray) -> np.ndarray:
     """
     if name == "linear":
         return x / REFERENCE_LEVEL
-    return _family(name, x, **FAMILY_SHAPES[name])
+    return _family(name, x, table=table, **FAMILY_SHAPES[name])
 
 
+@pytest.mark.parametrize("table", sorted(TABLES))
 @pytest.mark.parametrize("dynamic_family", [False, True], ids=["concrete", "switch"])
 @pytest.mark.parametrize(
     "family_id", range(len(SATURATION_FAMILY_KEYS)), ids=SATURATION_FAMILY_KEYS
 )
-def test_saturate_col_routes_every_family_id_to_its_own_wrapper(family_id, dynamic_family):
+def test_saturate_col_routes_every_family_id_to_its_own_wrapper(family_id, dynamic_family, table):
     """The integer family id and the name table agree, on both dispatch paths.
 
     ``params["sat_family"]`` is a persisted integer, so the id -> family map is
     a data-format contract: an off-by-one would silently re-label every stored
     world's mechanism. The ``dynamic_family`` path is the riskier one — it
     builds ALL families and picks with a chain of ``pt.switch`` comparisons
-    against the id, which is exactly where an index shift hides.
+    against the id, which is exactly where an index shift hides. The ids must
+    route the same way with opt-in mechanism priors set; which table the flag
+    selects is pinned bit for bit in ``test_mechanism_priors``.
     """
     name = SATURATION_FAMILY_KEYS[family_id]
     x = np.linspace(0.1, 3.0 * REFERENCE_LEVEL, 12)
     params = dict(DISPATCH_PARAMS, sat_family=np.full(2, family_id))
+    if table == "stable":
+        params["mechanism_priors_enabled"] = True
 
     routed = _evaluate(
         _saturate_col(
@@ -158,7 +178,9 @@ def test_saturate_col_routes_every_family_id_to_its_own_wrapper(family_id, dynam
             dynamic_family=dynamic_family,
         )
     )
-    np.testing.assert_allclose(routed, _expected_family_column(name, x), rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(
+        routed, _expected_family_column(name, x, table), rtol=1e-12, atol=1e-12
+    )
 
 
 @pytest.mark.parametrize(

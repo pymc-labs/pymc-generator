@@ -348,15 +348,18 @@ def _saturate_family(
 
     ``linear`` is the only family without a κ-relative wrapper. The
     name-to-wrapper dispatch lives in mechanisms; these branches only bind each
-    wrapper's distinct shape parameters.
+    wrapper's distinct shape parameters. Opt-in mechanism priors select
+    ``mechanisms.STABLE_SATURATION_FAMILIES``; otherwise
+    ``mechanisms.SATURATION_FAMILIES`` keeps the legacy library graphs.
     """
     if name == "linear":
         return cast(TensorVariable, ad_col / saturation_scale)
-    family = mechanisms.SATURATION_FAMILIES[name]
-    if params.get("mechanism_priors_enabled", False) and name == "hill":
-        family = mechanisms.stable_hill_kappa_relative
-    elif params.get("mechanism_priors_enabled", False) and name == "logistic":
-        family = mechanisms.stable_logistic_kappa_relative
+    table = (
+        mechanisms.STABLE_SATURATION_FAMILIES
+        if params.get("mechanism_priors_enabled", False)
+        else mechanisms.SATURATION_FAMILIES
+    )
+    family = table[name]
     if name == "hill":
         return family(
             ad_col,
@@ -438,9 +441,11 @@ def build_symbolic_graph(
         ``params["trajectory"]`` (from
         :func:`pymc_generator.trajectories.trajectory_params`, or the same layout
         with numpy values) adds the composable per-input trajectory components.
-        ``params["mechanism_priors_enabled"]`` selects numerically stable but
-        mathematically identical Hill/logistic evaluation for opt-in mechanism
-        priors. Omit it or leave it False to preserve the legacy graph and math.
+        ``params["mechanism_priors_enabled"]`` selects numerically stable,
+        mathematically identical evaluation of every saturation family
+        (``mechanisms.STABLE_SATURATION_FAMILIES``) for opt-in mechanism priors.
+        Omit it or leave it False to keep the legacy graph, its rounding and its
+        random-stream order.
     eps : dict
         The caller's noise RVs, each with leading dim
         ``n_time_steps_full = n_time_steps + burn_in``:
