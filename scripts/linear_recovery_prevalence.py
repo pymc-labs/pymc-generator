@@ -319,7 +319,6 @@ def resolve_config(
         study = validate_study_settings(merged)
     else:
         study = embedded_study
-    _validate_band_coverage(generator, study)
     resolved = {
         "schema_version": SCHEMA_VERSION,
         "generator_factory": generator,
@@ -328,6 +327,15 @@ def resolve_config(
     }
     prior = make_prior(generator, study)
     resolved["generator_resolved"] = _plain(dataclasses.asdict(prior))
+    _validate_band_coverage(
+        {
+            "n_treatments": prior.n_treatments,
+            "n_covariates": prior.n_covariates,
+            "n_treatments_active_range": list(prior.n_treatments_active_range),
+            "n_covariates_active_range": list(prior.n_covariates_active_range),
+        },
+        study,
+    )
     # The digest is content-addressed configuration only; source identity is separate.
     resolved["config_hash"] = config_hash(resolved)
     return resolved
@@ -889,13 +897,20 @@ def run_calibration(
     resolved = resolve_config(raw, sidecar)
     generator = resolved["generator_factory"]
     study = resolved["study"]
-    low_generator, low_variant = _active_dimension_generator(generator, "low")
-    high_generator, high_variant = _active_dimension_generator(generator, "high")
+    effective_generator = dict(generator)
+    for field in (
+        "n_treatments_active_range",
+        "n_covariates_active_range",
+        "n_latent_active_range",
+    ):
+        effective_generator[field] = resolved["generator_resolved"][field]
+    low_generator, low_variant = _active_dimension_generator(effective_generator, "low")
+    high_generator, high_variant = _active_dimension_generator(effective_generator, "high")
     low_seed = study["seed"] + CALIBRATION_SEED_OFFSETS["primary_low_active"]
     high_seed = study["seed"] + CALIBRATION_SEED_OFFSETS["primary_high_active"]
     low_measurement = _measure_calibration(low_generator, _calibration_study(study, low_seed))
     high_measurement = _measure_calibration(high_generator, _calibration_study(study, high_seed))
-    selected_measurement = _measure_calibration(generator, study)
+    selected_measurement = _measure_calibration(effective_generator, study)
     stress_configs = _stress_configurations(generator, study["seed"])
     stress_seed_schedule = {
         item["name"]: item["seed"]

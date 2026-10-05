@@ -347,6 +347,8 @@ def test_c1_config_roundtrip_hash_and_two_valid_configurations():
             "n_treatments": 2,
             "n_covariates": 2,
             "n_latent": 1,
+            "n_treatments_active_range": [1, 2],
+            "n_covariates_active_range": [1, 2],
             "n_time_steps": 16,
             "trajectories": "texture",
             "nonlinearity": "diverse",
