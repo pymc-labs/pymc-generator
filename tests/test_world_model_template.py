@@ -948,6 +948,32 @@ def test_reused_template_zeroes_padded_schedule_outputs_and_reports(rich_templat
     np.testing.assert_array_equal(result["outcome"], result["outcome_natural"])
 
 
+@pytest.mark.parametrize("component", TRAJECTORY_COMPONENTS)
+@pytest.mark.parametrize("role", TRAJECTORY_INPUTS)
+def test_runtime_component_flags_are_data_and_move_no_draw(rich_template, role, component):
+    """Inside one compiled template, a per-cell flag selects only its component's effect.
+
+    Turning one component on for one input reuses the compiled function, so every
+    random variable keeps its stream: the draws of every other component and of
+    the legacy parameters and innovations are byte-identical. Admitting the
+    component in the config is what reseeds a template, not its per-cell flags.
+    """
+    _, cases, outputs, reports, draw, _ = rich_template
+    cell = cases[0][2]
+    on, off = ({name: value.copy() for name, value in cell.items()} for _ in range(2))
+    for flags in (on, off):
+        for other in TRAJECTORY_COMPONENTS:
+            flags[structural_key(role, other)][0] = 0
+    on[structural_key(role, component)][0] = 1
+    enabled, disabled = draw(on, seed=61), draw(off, seed=61)
+    primitives = [name for name in enabled if name not in outputs and name not in reports]
+    assert primitives
+    for name in primitives:
+        assert enabled[name].tobytes() == disabled[name].tobytes(), name
+    series = "treatments" if role == "treatment" else "covariates"
+    assert not np.array_equal(enabled[series][0, :, 0], disabled[series][0, :, 0])
+
+
 def test_actual_builders_disable_texture_even_when_its_prior_ranges_are_live():
     cfg = _cfg(
         treatment_hf_sigma_range=(0.05, 0.15),

@@ -799,7 +799,8 @@ def _scm_params(
         # There is no stream-stable position for a live draw — reseed_rngs
         # walks collect_default_updates' graph-traversal order, not this
         # creation order — so enabling the texture deliberately reseeds every
-        # world (see tests/test_identifiability.py's two hash contracts).
+        # world (tests/test_rng_owner_contract.py pins the default owner order;
+        # docs/reference/config.md "Randomness and seeds" lists the limits).
         "covariate_hf_sigma": _uniform(*specs["covariate_hf_sigma"]) * rw["rw_z"]["std"],
         "covariate_pulse_amp": _uniform(*specs["covariate_pulse_amp"]) * rw["rw_z"]["std"],
         "covariate_pulse_prob": _uniform(*specs["covariate_pulse_prob"]),
