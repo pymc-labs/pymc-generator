@@ -835,7 +835,9 @@ def _study_for_generator(generator: Mapping[str, Any], study: Mapping[str, Any])
         active_range = generator.get(
             f"n_{dimension}_active_range", [1, generator[f"n_{dimension}"]]
         )
-        resolved[field] = [[int(active_range[0]), int(active_range[1])]]
+        bands = resolved[field]
+        if bands[0][0] != active_range[0] or bands[-1][1] != active_range[1]:
+            resolved[field] = [[int(active_range[0]), int(active_range[1])]]
     return resolved
 
 
@@ -893,6 +895,7 @@ def run_calibration(
     high_seed = study["seed"] + CALIBRATION_SEED_OFFSETS["primary_high_active"]
     low_measurement = _measure_calibration(low_generator, _calibration_study(study, low_seed))
     high_measurement = _measure_calibration(high_generator, _calibration_study(study, high_seed))
+    selected_measurement = _measure_calibration(generator, study)
     stress_configs = _stress_configurations(generator, study["seed"])
     stress_seed_schedule = {
         item["name"]: item["seed"]
@@ -932,9 +935,9 @@ def run_calibration(
             "primary_high_active": high_seed,
             "stress_variants": stress_seed_schedule,
         },
-        "timing": high_measurement["timing"],
-        "accounting": high_measurement["accounting"],
-        "diagnostics": high_measurement["diagnostics"],
+        "timing": selected_measurement["timing"],
+        "accounting": selected_measurement["accounting"],
+        "diagnostics": selected_measurement["diagnostics"],
         "calibration": [
             {
                 "label": "low_active_runtime_stress_variant",
@@ -947,6 +950,11 @@ def run_calibration(
                 "variant": high_variant,
                 "seed": high_seed,
                 **high_measurement,
+            },
+            {
+                "label": "selected_primary_recipe",
+                "seed": study["seed"],
+                **selected_measurement,
             },
         ],
         "stress_configurations": stress_configs,
