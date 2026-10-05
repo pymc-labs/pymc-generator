@@ -1451,11 +1451,35 @@ def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, 
     checkpoint_path = (
         tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.checkpoint.json"
     )
+    manifest_path = tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.manifest.json"
+    original_bounded_phase = runner._bounded_phase
+    bounded_phase_calls = 0
+
+    def assert_initial_checkpoint(function, deadline, clock):
+        nonlocal bounded_phase_calls
+        if bounded_phase_calls == 0:
+            bounded_phase_calls += 1
+            assert manifest_path.exists()
+            manifest_reference = runner.load_json(manifest_path)
+            expected_manifest_hash = runner.config_hash(manifest_reference)
+            assert checkpoint_path.exists()
+            initial_checkpoint = runner.load_json(checkpoint_path)
+            assert initial_checkpoint["manifest_hash"] == expected_manifest_hash
+            assert initial_checkpoint["completed"] == []
+            assert initial_checkpoint["worlds"] == []
+            assert initial_checkpoint["cells"] == []
+            assert initial_checkpoint["config_accounting"] == []
+            assert initial_checkpoint["config_failures"] == []
+            assert "status" not in initial_checkpoint
+            assert not (
+                tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.json"
+            ).exists()
+        return original_bounded_phase(function, deadline, clock)
+
+    monkeypatch.setattr(runner, "_bounded_phase", assert_initial_checkpoint)
     original_cells = runner._pilot_cell_records
 
     def overrun(*args, **kwargs):
-        # The initial checkpoint is persisted before the first blocking phase.
-        assert checkpoint_path.exists()
         clock_state["value"] = 100.0
         return original_cells(*args, **kwargs)
 
