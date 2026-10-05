@@ -470,6 +470,89 @@ def test_c1_design_semantics_keep_constant_active_inputs_and_separate_causal_pat
         {"g_cy": [1], "g_dc": [[1]], "g_dy": [0]}, focal_treatment=0
     )
     assert not treatment_only["potential_unobserved_confounding"]
+    disconnected_mediated = classify_graph_paths(
+        {
+            "g_dz": [[1, 0]],  # D0 -> Z0
+            "g_zc": [[0], [1]],  # Z1 -> C0; Z0 has no treatment edge
+            "g_cy": [1],
+            "g_dy": [0],
+            "g_zy": [0, 0],
+        },
+        focal_treatment=0,
+    )
+    assert not disconnected_mediated["raw_reachability"]["mediated_latent_to_treatment"]
+
+
+def test_c1_active_variants_only_override_resolved_ranges():
+    from scripts.linear_recovery_prevalence import (
+        _active_dimension_generator,
+        resolve_config,
+    )
+
+    resolved = resolve_config(
+        {
+            "generator": {
+                "n_treatments": 4,
+                "n_covariates": 5,
+                "n_latent": 2,
+                "n_treatments_active_range": [1, 4],
+                "n_covariates_active_range": [2, 5],
+                "n_latent_active_range": [1, 2],
+                "n_time_steps": 104,
+                "trajectories": "composable",
+                "nonlinearity": "diverse",
+            },
+            "study": {
+                "n_cells": 2,
+                "draws_per_cell": 1,
+                "treatment_count_bands": [[1, 4]],
+                "control_count_bands": [[2, 5]],
+            },
+        }
+    )
+    base = {
+        **resolved["generator_factory"],
+        **{
+            name: resolved["generator_resolved"][name]
+            for name in (
+                "n_treatments_active_range",
+                "n_covariates_active_range",
+                "n_latent_active_range",
+            )
+        },
+    }
+    for level, expected in (("low", (1, 2, 1)), ("high", (4, 5, 2))):
+        variant, metadata = _active_dimension_generator(base, level)
+        assert metadata["active_dimensions"] == {
+            "treatments": expected[0],
+            "covariates": expected[1],
+            "latent": expected[2],
+        }
+        assert metadata["overrides"] == {
+            key: variant[key]
+            for key in variant
+            if base.get(key) != variant[key]
+        }
+        assert all(variant[key] == base[key] for key in base if key not in metadata["overrides"])
+        assert variant["n_time_steps"] == 104
+        assert variant["trajectories"] == "composable"
+        assert variant["nonlinearity"] == "diverse"
+
+
+def test_c1_compact_artifact_size_arithmetic_is_explicit():
+    from scripts.linear_recovery_prevalence import _artifact_size_estimate, canonical_json
+
+    proposed = {"configs": 10, "cells_total": 320, "worlds_total": 640}
+    estimate = _artifact_size_estimate({"schema_version": "test", "summary": {}}, proposed)
+    fixed = estimate["fixed_schema_config_summary_bytes"]
+    world = estimate["representative_world_record"]["bytes"]
+    cell = estimate["representative_cell_record"]["bytes"]
+    assert estimate["projected_bytes"] == fixed + 640 * world + 320 * cell
+    assert estimate["representative_world_record"]["bytes"] == len(
+        canonical_json(estimate["representative_world_record"]["schema"]).encode("utf-8")
+    )
+    assert estimate["assumptions"]["persisted_arrays"] is False
+    assert "640" in estimate["arithmetic"] and "320" in estimate["arithmetic"]
 
 
 def test_c1_rejections_exclude_failures_from_evaluated_candidates():

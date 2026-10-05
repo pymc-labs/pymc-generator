@@ -556,16 +556,38 @@ def classify_graph_paths(
             ),
         }
 
-    def any_edge(name: str) -> bool:
-        return bool(np.asarray(graph.get(name, []), dtype=bool).any())
+    def any_reachable(starts: Any, target_nodes: Any) -> bool:
+        return any(
+            reachable(int(start), int(target))
+            for start in starts
+            for target in target_nodes
+        )
+
+    latent_nodes = range(latent_offset, latent_offset + n_latents)
+    covariate_nodes = range(covariate_offset, covariate_offset + n_covariates)
+    treatment_nodes = range(treatment_offset, treatment_offset + n_treatments)
+    mediated_latent_to_treatment = any(
+        reachable(latent, covariate) and reachable(covariate, treatment)
+        for latent in latent_nodes
+        for covariate in covariate_nodes
+        for treatment in treatment_nodes
+    )
+    mediated_latent_to_outcome = any(
+        reachable(latent, covariate) and reachable(covariate, outcome)
+        for latent in latent_nodes
+        for covariate in covariate_nodes
+    )
+    direct_treatment_outcome = any_reachable(treatment_nodes, (outcome,))
+    latent_to_treatment = any_reachable(latent_nodes, treatment_nodes)
+    latent_to_outcome = any_reachable(latent_nodes, (outcome,))
 
     return {
-        "direct_treatment_outcome_reachability": any_edge("g_cy"),
+        "direct_treatment_outcome_reachability": direct_treatment_outcome,
         "raw_reachability": {
-            "latent_to_treatment": any_edge("g_dc"),
-            "latent_to_outcome": any_edge("g_dy"),
-            "mediated_latent_to_treatment": bool(g_dz.any() and g_zc.any()),
-            "mediated_latent_to_outcome": bool(g_dz.any() and g_zy.any()),
+            "latent_to_treatment": latent_to_treatment,
+            "latent_to_outcome": latent_to_outcome,
+            "mediated_latent_to_treatment": mediated_latent_to_treatment,
+            "mediated_latent_to_outcome": mediated_latent_to_outcome,
         },
         "focal_treatments": focal_results,
         "potential_unobserved_confounding": any(
@@ -578,8 +600,8 @@ def classify_graph_paths(
             for result in focal_results.values()
         ),
         # Compatibility labels retained with corrected semantics.
-        "latent_to_treatment": any_edge("g_dc"),
-        "latent_to_outcome": any_edge("g_dy"),
+        "latent_to_treatment": latent_to_treatment,
+        "latent_to_outcome": latent_to_outcome,
         "shared_latent_confounding": any(
             result["potential_unobserved_confounding"] for result in focal_results.values()
         ),
@@ -750,46 +772,53 @@ def count_accounting(
 def _active_dimension_generator(
     generator: Mapping[str, Any], level: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Build deterministic low/high active-count runtime stress variants."""
+    """Build low/high variants by pinning only resolved active-count ranges."""
     if level not in {"low", "high"}:
         raise ValueError("active-dimension level must be low or high")
-    variant = dict(generator)
+    base = dict(generator)
     treatment_range = _as_range(
-        variant.get("n_treatments_active_range", [1, variant["n_treatments"]]),
+        base.get("n_treatments_active_range", [1, base["n_treatments"]]),
         "n_treatments_active_range",
     )
     covariate_range = _as_range(
-        variant.get("n_covariates_active_range", [1, variant["n_covariates"]]),
+        base.get("n_covariates_active_range", [1, base["n_covariates"]]),
         "n_covariates_active_range",
     )
     latent_range = _as_range(
-        variant.get("n_latent_active_range", [1, variant["n_latent"]]),
+        base.get("n_latent_active_range", [1, base["n_latent"]]),
         "n_latent_active_range",
     )
     assert treatment_range is not None and covariate_range is not None and latent_range is not None
-    if level == "low":
-        variant["n_treatments"] = max(2, treatment_range[0])
-        variant["n_covariates"] = max(2, covariate_range[0])
-        variant["n_latent"] = max(1, latent_range[0])
-        variant["n_time_steps"] = min(int(variant.get("n_time_steps", 104)), 32)
-        active = (treatment_range[0], covariate_range[0], latent_range[0])
-        variant["trajectories"] = "texture"
-    else:
-        active = (treatment_range[1], covariate_range[1], latent_range[1])
-    variant["n_treatments_active_range"] = [active[0], active[0]]
-    variant["n_covariates_active_range"] = [active[1], active[1]]
-    variant["n_latent_active_range"] = [active[2], active[2]]
+    active = (
+        treatment_range[0] if level == "low" else treatment_range[1],
+        covariate_range[0] if level == "low" else covariate_range[1],
+        latent_range[0] if level == "low" else latent_range[1],
+    )
+    variant = {
+        **base,
+        "n_treatments_active_range": [active[0], active[0]],
+        "n_covariates_active_range": [active[1], active[1]],
+        "n_latent_active_range": [active[2], active[2]],
+    }
+    overrides = {
+        key: value for key, value in variant.items() if base.get(key) != value
+    }
+    for key, value in base.items():
+        if key not in overrides:
+            assert variant[key] == value
+    assert set(overrides) <= {
+        "n_treatments_active_range",
+        "n_covariates_active_range",
+        "n_latent_active_range",
+    }
     return variant, {
         "active_dimensions": {
             "treatments": active[0],
             "covariates": active[1],
             "latent": active[2],
         },
-        "overrides": {
-            "n_treatments_active_range": variant["n_treatments_active_range"],
-            "n_covariates_active_range": variant["n_covariates_active_range"],
-            "n_latent_active_range": variant["n_latent_active_range"],
-        },
+        "overrides": overrides,
+        "study_seed_disclosed_separately": True,
         "label": "runtime_stress_variant",
     }
 
@@ -885,6 +914,59 @@ def _diagnostic_summary(diagnostics: Any) -> dict[str, Any]:
     }
 
 
+def _artifact_size_estimate(
+    fixed_report: Mapping[str, Any], proposed: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Estimate compact pilot JSON size without counting generated raw arrays."""
+    fixed_bytes = len(canonical_json(fixed_report).encode("utf-8"))
+    representative_world = {
+        "config_index": 0,
+        "cell_index": 0,
+        "sibling_index": 0,
+        "accepted": True,
+        "generation_failed": False,
+    }
+    representative_cell = {
+        "config_index": 0,
+        "cell_index": 0,
+        "success": False,
+        "estimand": "first_world",
+    }
+    world_bytes = len(canonical_json(representative_world).encode("utf-8"))
+    cell_bytes = len(canonical_json(representative_cell).encode("utf-8"))
+    world_count = int(proposed["worlds_total"])
+    cell_count = int(proposed["cells_total"])
+    projected_bytes = fixed_bytes + world_count * world_bytes + cell_count * cell_bytes
+    return {
+        "method": "fixed canonical UTF-8 JSON schema/config/summary overhead plus compact records",
+        "assumptions": {
+            "serialization": "canonical JSON with sorted keys and no whitespace",
+            "persisted_arrays": False,
+            "fixed_overhead": "schema, resolved config, provenance, seed schedule, calibration summaries, analyses, and runtime summary",
+            "representative_records": "one compact per-world accounting record and one compact per-cell metric record",
+            "expected_counts": {
+                "configs": int(proposed["configs"]),
+                "cells": cell_count,
+                "worlds": world_count,
+            },
+        },
+        "fixed_schema_config_summary_bytes": fixed_bytes,
+        "representative_world_record": {
+            "schema": representative_world,
+            "bytes": world_bytes,
+        },
+        "representative_cell_record": {
+            "schema": representative_cell,
+            "bytes": cell_bytes,
+        },
+        "arithmetic": (
+            f"{fixed_bytes} + ({world_count} * {world_bytes}) + "
+            f"({cell_count} * {cell_bytes}) = {projected_bytes} bytes"
+        ),
+        "projected_bytes": projected_bytes,
+    }
+
+
 def run_calibration(
     config_path: str | os.PathLike[str] | Mapping[str, Any],
     *,
@@ -911,7 +993,7 @@ def run_calibration(
     low_measurement = _measure_calibration(low_generator, _calibration_study(study, low_seed))
     high_measurement = _measure_calibration(high_generator, _calibration_study(study, high_seed))
     selected_measurement = _measure_calibration(effective_generator, study)
-    stress_configs = _stress_configurations(generator, study["seed"])
+    stress_configs = _stress_configurations(effective_generator, study["seed"])
     stress_seed_schedule = {
         item["name"]: item["seed"]
         for item in stress_configs
@@ -938,7 +1020,6 @@ def run_calibration(
     )
     high_worlds = max(high_measurement["accounting"]["realized_worlds"], 1)
     projected_seconds = high_seconds / high_worlds * proposed["worlds_total"]
-    representative_bytes = len(canonical_json(high_measurement).encode("utf-8"))
     report = {
         "schema_version": SCHEMA_VERSION,
         "config_hash": resolved["config_hash"],
@@ -978,11 +1059,6 @@ def run_calibration(
             "seconds": projected_seconds,
             "minutes": projected_seconds / 60.0,
         },
-        "expected_artifact_size": {
-            "method": "canonical UTF-8 JSON summary size from the high-active calibration, scaled across ten configuration summaries; raw series/corpora are not persisted",
-            "representative_summary_bytes": representative_bytes,
-            "projected_summary_bytes": representative_bytes * proposed["configs"],
-        },
         "analyses": {
             "raw_input_conditioning": {
                 "status": "available",
@@ -1000,6 +1076,7 @@ def run_calibration(
         "pilot_claim": "calibration only; no prevalence estimate",
         "proposed_pilot": proposed,
     }
+    report["expected_artifact_size"] = _artifact_size_estimate(report, proposed)
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
     report_path = target / f"linear-recovery-c1-{resolved['config_hash'][:16]}.json"
