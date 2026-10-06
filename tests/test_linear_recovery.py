@@ -2229,24 +2229,172 @@ def test_c2_compact_summary_rejects_grouped_omitted_accounting_mutation(tmp_path
         runner.validate_compact_summary(mutated)
 
 
-def test_c2_compact_export_binds_supplied_source_bytes(tmp_path):
+def _compact_byte_fixture(tmp_path, monkeypatch):
+    """Build export inputs from the accepted, checked-in compact CSV."""
+    import csv
+    import hashlib
     import json
 
     from scripts import linear_recovery_prevalence as runner
 
-    prefix = Path(
-        "/home/teemu/pymc-labs/prior-generator-artifacts/issue-30-c2/linear-recovery-c2-b2a7fb98d69cc8ed"
+    csv_path = Path("docs/examples/data/linear-recovery-prevalence.csv")
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    csv_metadata = {
+        row["key"]: json.loads(row["value"]) for row in rows if row["row_type"] == "metadata"
+    }
+    accepted_hashes = {
+        "report": "49db994f3420e4b11616deaeb304f61b8d4dedb5e97acb35527e8506c4569b8c",
+        "checkpoint": "18f18c7e3f87632b3d048420716bd2d89337b571c2ce3140a25f5d087b2dc3b0",
+        "manifest": "8fa78d620e0bf3685f27f64a448ee157043e9706421dc5592b4c28b93130a0d5",
+        "run_log": "ee247b6b37cb379bd3c48f4a08f487e010cb6c943611a5d2a70f3a8aa297b87a",
+    }
+    assert runner.COMPACT_ARTIFACT_SHA256 == accepted_hashes
+    assert csv_metadata["artifact_sha256"] == accepted_hashes
+    assert (
+        runner.COMPACT_CONFIG_HASH
+        == "b2a7fb98d69cc8ed1463492f803f10baf3a33013f226ab136cfd28278634a014"
     )
-    report_path = Path(f"{prefix}.json")
-    manifest_path = Path(f"{prefix}.manifest.json")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert (
+        runner.COMPACT_MANIFEST_HASH
+        == "d597b07290e40c4d3c21f7744a507b3d2680e525c1dfd1a318545b60affcc334"
+    )
+    assert runner.COMPACT_SOURCE_COMMIT == csv_metadata["source_commit"]
+    assert runner.COMPACT_PACKAGE_VERSION == csv_metadata["package_version"]
+
+    resolved = runner.resolve_config(
+        json.loads(Path("docs/examples/data/linear-recovery-prevalence-config.json").read_text())
+    )
+    config_hash = resolved["config_hash"]
+    schedule = runner._expected_compact_schedule()
+    configs = []
+    for item in schedule:
+        index = str(item["index"])
+        config_metrics = [
+            r for r in rows if r["row_type"] == "metric" and r["config_index"] == index
+        ]
+        config_occupancy = [
+            r for r in rows if r["row_type"] == "occupancy" and r["config_index"] == index
+        ]
+        estimands = {}
+        for row in config_metrics:
+            result = {
+                "status": row["status"],
+                "n_cells": int(row["n_cells"]),
+                "n_successes": int(row["n_successes"]),
+                "rate": float(row["rate"]),
+                "interval": {"lower": float(row["ci_lower"]), "upper": float(row["ci_upper"])},
+            }
+            estimands.setdefault(row["estimand"], {}).setdefault(row["view"], {})[row["metric"]] = (
+                result
+            )
+        occupancy = {
+            r["key"]: {
+                "treatment_band": json.loads(r["treatment_band"]),
+                "control_band": json.loads(r["control_band"]),
+                "status": r["status"],
+                "n_cells": int(r["n_cells"]),
+            }
+            for r in config_occupancy
+        }
+        configs.append(
+            {
+                "config_index": item["index"],
+                "name": item["name"],
+                "label": "selected_primary_recipe"
+                if item["index"] == 0
+                else "runtime_stress_variant",
+                "seed": item["seed"],
+                "summary": {
+                    "status": "available",
+                    "estimands": estimands,
+                    "count_band_wilson": occupancy,
+                },
+            }
+        )
+
+    source = {
+        "package": "pymc-generator",
+        "source_commit": runner.COMPACT_SOURCE_COMMIT,
+        "package_version": runner.COMPACT_PACKAGE_VERSION,
+        "source_dirty": False,
+    }
+    manifest = {
+        "resolved_config": resolved,
+        "config_hash": config_hash,
+        "source_provenance": source,
+        "budget": {
+            "wall_time_seconds": resolved["study"]["pilot_wall_time_seconds"],
+            "stop_rules": {
+                "count_stratum_overrun": "report realized and empty bands instead of treating them as balanced"
+            },
+        },
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(runner.canonical_json(manifest), encoding="utf-8")
+    manifest_hash = runner.config_hash(manifest)
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "cells": [{}] * 320,
+                "worlds": [{}] * 640,
+                "wall_elapsed_seconds": 1.0,
+                "completed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+    report = {
+        "status": "complete",
+        "accounting": {
+            "requested_cells": 320,
+            "complete_cells": 320,
+            "realized_cells": 320,
+            "requested_worlds": 640,
+            "accepted_world_metrics": 640,
+            "evaluated_world_metrics": 640,
+            "failures": 0,
+            "generation_failures": 0,
+            "rejected_candidates": 0,
+            "wall_elapsed_seconds": 1.0,
+        },
+        "configs": configs,
+        "config_hash": config_hash,
+        "manifest_hash": manifest_hash,
+        "resolved_config": resolved,
+        "source_provenance": source,
+        "schedule": csv_metadata["seed_schedule"],
+        "checkpoint_path": str(checkpoint_path),
+        "report_path": str(report_path),
+        "manifest_path": str(manifest_path),
+    }
+    report_path.write_text(runner.canonical_json(report), encoding="utf-8")
+    manifest_path.write_text(runner.canonical_json(manifest), encoding="utf-8")
+    run_log = tmp_path / "pilot-run.log"
+    run_log.write_bytes(b"synthetic fixture log\n")
     paths = {
         "report": report_path,
-        "checkpoint": Path(report["checkpoint_path"]),
+        "checkpoint": checkpoint_path,
         "manifest": manifest_path,
-        "run_log": manifest_path.with_name("pilot-run.log"),
+        "run_log": run_log,
     }
+    synthetic_hashes = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in paths.items()
+    }
+    monkeypatch.setattr(runner, "COMPACT_ARTIFACT_SHA256", synthetic_hashes)
+    monkeypatch.setattr(runner, "COMPACT_CONFIG_HASH", config_hash)
+    monkeypatch.setattr(runner, "COMPACT_MANIFEST_HASH", manifest_hash)
+    return runner, report, manifest, paths
+
+
+def test_c2_compact_export_binds_supplied_source_bytes(tmp_path, monkeypatch):
+    import json
+
+    runner, report, manifest, paths = _compact_byte_fixture(tmp_path, monkeypatch)
+    report_path = paths["report"]
     metadata = runner.export_compact_summary(
         report, manifest, tmp_path / "valid.csv", artifact_paths=paths
     )
@@ -2276,18 +2424,14 @@ def test_c2_compact_export_binds_supplied_source_bytes(tmp_path):
         )
 
 
-def test_c2_compact_export_rejects_same_config_commit_alternate_manifest_bytes(tmp_path):
+def test_c2_compact_export_rejects_same_config_commit_alternate_manifest_bytes(
+    tmp_path, monkeypatch
+):
     import json
 
-    from scripts import linear_recovery_prevalence as runner
-
-    prefix = Path(
-        "/home/teemu/pymc-labs/prior-generator-artifacts/issue-30-c2/linear-recovery-c2-b2a7fb98d69cc8ed"
-    )
-    report_path = Path(f"{prefix}.json")
-    manifest_path = Path(f"{prefix}.manifest.json")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    runner, report, manifest, paths = _compact_byte_fixture(tmp_path, monkeypatch)
+    report_path = paths["report"]
+    manifest_path = paths["manifest"]
     original_policy = "report realized and empty bands instead of treating them as balanced"
     alternate_policy = (
         "report realized and empty bands; do not treat count strata as balanced quotas"
