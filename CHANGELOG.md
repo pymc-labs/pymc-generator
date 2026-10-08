@@ -8,6 +8,20 @@ read the migration notes before upgrading.
 
 ### Added
 
+- **Public trajectory showcase and corpus-quality report (#29, #31).**
+  An executable guide notebook inspects an eight-world baseline before
+  generating **100 primary 104-week simulations in 50 generation cells**.
+  Applicable parameter distributions use equal-world weights, shared bins
+  and justified recorded-prior references; unused families, unknown supports,
+  observed constants and unavailable primitive truth stay explicit.
+  Zero-period diagnostics report exact run counts/observed lengths, boundary
+  clipping, pooled/equal-world series balance and world-level prevalence.
+  The complete stored-file quality report includes mask coverage, descriptors,
+  rank/VIF screening, seeded visual samples and manual dataset selection.
+  Eight atlas and one replay examples retain exact replay/template/oracle
+  checks. Both mixed archives and 117 source-qualified model-facing CSVs/bundles
+  are mapped by the manifest; report-only execution and optional two-file
+  comparison run in a fresh kernel without data generation.
 - **Richer worlds end-to-end (#27).** Ordinary generation, `sample_scm`, and
   reusable templates support all eight trajectory components and fractional
   per-input inclusion alongside richer mechanism priors. Template flags are
