@@ -1,0 +1,599 @@
+{
+  "schema_version": "linear-recovery-true-feature-sweep/v1",
+  "population": {
+    "label": "scalar-baseline restricted population",
+    "outcome_std_mode": "relative",
+    "rw_baseline_std_range": [
+      0.0,
+      0.0
+    ],
+    "baseline_floor": null,
+    "n_time_steps": 104,
+    "carryover_burn_in": 0,
+    "count_ranges": {
+      "n_treatments": [
+        1,
+        10
+      ],
+      "n_covariates": [
+        1,
+        10
+      ],
+      "n_latent": [
+        1,
+        1
+      ]
+    },
+    "retained_generator_axes": {
+      "factory": {
+        "nonlinearity": "diverse",
+        "trajectories": "composable"
+      },
+      "resolved_prior": {
+        "n_time_steps": 104,
+        "n_cells": 50,
+        "draws_per_cell": 20,
+        "val_cell_frac": 0.2,
+        "query_frac": 0.25,
+        "p_long_horizon": 0.5,
+        "treatment_cv_floor": 0.08,
+        "l_max": 8,
+        "seed": 0,
+        "active_count_allocation": "independent",
+        "active_count_weights": null,
+        "carryover_alpha_range": [
+          0.2,
+          0.8
+        ],
+        "carryover_family_probs": {
+          "none": 0.15,
+          "geometric": 0.425,
+          "weibull": 0.425
+        },
+        "saturation_family_probs": {
+          "linear": 0.15,
+          "hill": 0.17,
+          "logistic": 0.17,
+          "michaelis_menten": 0.17,
+          "tanh": 0.17,
+          "root": 0.17
+        },
+        "saturation_prior_ranges": {
+          "hill": {
+            "slope": [
+              1.0,
+              3.0
+            ],
+            "kappa_mult": [
+              0.7,
+              1.5
+            ]
+          },
+          "logistic": {
+            "lam": [
+              0.5,
+              3.0
+            ]
+          },
+          "michaelis_menten": {
+            "kappa_mult": [
+              0.7,
+              1.5
+            ]
+          },
+          "tanh": {
+            "c": [
+              0.3,
+              1.5
+            ]
+          },
+          "root": {
+            "alpha": [
+              0.3,
+              0.9
+            ]
+          }
+        },
+        "mm_scale_prior": "uniform",
+        "weibull_lam_range": [
+          2.0,
+          8.0
+        ],
+        "weibull_k_range": [
+          1.5,
+          4.0
+        ],
+        "dz_base_rate": 0.3,
+        "zc_base_rate": 0.3,
+        "cc_base_rate": 0.15,
+        "zz_base_rate": 0.1,
+        "dc_coeff_range": [
+          0.1,
+          0.5
+        ],
+        "dz_coeff_range": [
+          0.1,
+          0.5
+        ],
+        "zc_coeff_range": [
+          0.05,
+          0.3
+        ],
+        "cc_coeff_range": [
+          0.05,
+          0.3
+        ],
+        "zz_coeff_range": [
+          -0.2,
+          0.2
+        ],
+        "dy_coeff_range": [
+          0.15,
+          0.45
+        ],
+        "zy_coeff_range": [
+          0.1,
+          0.4
+        ],
+        "beta_additive_range": [
+          0.5,
+          2.0
+        ],
+        "treatment_reference_contribution_range": null,
+        "treatment_reference_multiplier": 1.0,
+        "covariate_reference_contribution_range": null,
+        "covariate_reference_scale": 1.0,
+        "rw_covariate_mean_range": [
+          -3.0,
+          3.0
+        ],
+        "rw_positive_mean_range": [
+          0.1,
+          8.0
+        ],
+        "rw_baseline_mean_range": [
+          3.0,
+          8.0
+        ],
+        "rw_std_sigma": 1.5,
+        "rw_baseline_std_sigma": 1.0,
+        "rw_outcome_std_sigma": 0.25,
+        "outcome_std_mode": "relative",
+        "rw_baseline_std_range": [
+          0.0,
+          0.0
+        ],
+        "rw_outcome_std_range": [
+          0.01,
+          0.028
+        ],
+        "rw_smoothness_alpha": 2.0,
+        "rw_smoothness_beta": 2.0,
+        "rw_smoothness_max_weeks": 26,
+        "confounding_strength_range": null,
+        "rw_treatment_std_range": [
+          0.1,
+          1.2
+        ],
+        "treatment_hf_sigma_range": [
+          0.08,
+          0.6
+        ],
+        "treatment_pulse_prob_range": [
+          0.0,
+          0.25
+        ],
+        "treatment_pulse_amp_range": [
+          0.4,
+          2.5
+        ],
+        "covariate_hf_sigma_range": [
+          0.1,
+          0.8
+        ],
+        "covariate_pulse_prob_range": [
+          0.0,
+          0.25
+        ],
+        "covariate_pulse_amp_range": [
+          0.5,
+          3.0
+        ],
+        "baseline_floor": null,
+        "baseline_floor_scope": "intercept",
+        "carryover_burn_in": 0,
+        "n_treatment_shocks": 0,
+        "treatment_shock_length_range": [
+          2,
+          2
+        ],
+        "treatment_shock_level_range": [
+          0.0,
+          0.0
+        ],
+        "include_identifiability_labels": true,
+        "prior_conditioning": false,
+        "prior_cond_width_ranges": null,
+        "edge_rate_overrides": null,
+        "edge_budget": null,
+        "min_no_direct_effect_treatments": 0,
+        "treatment_hf_inclusion_prob": 0.9,
+        "treatment_pulse_inclusion_prob": 0.7,
+        "treatment_onset_inclusion_prob": 0.15,
+        "treatment_offset_inclusion_prob": 0.1,
+        "treatment_flighting_inclusion_prob": 0.2,
+        "treatment_level_jump_inclusion_prob": 0.2,
+        "treatment_seasonal_inclusion_prob": 0.3,
+        "treatment_trend_inclusion_prob": 0.3,
+        "covariate_hf_inclusion_prob": 0.9,
+        "covariate_pulse_inclusion_prob": 0.6,
+        "covariate_onset_inclusion_prob": 0.1,
+        "covariate_offset_inclusion_prob": 0.1,
+        "covariate_flighting_inclusion_prob": 0.15,
+        "covariate_level_jump_inclusion_prob": 0.3,
+        "covariate_seasonal_inclusion_prob": 0.35,
+        "covariate_trend_inclusion_prob": 0.3,
+        "treatment_onset_frac_range": [
+          0.052884615384615384,
+          0.12980769230769232
+        ],
+        "covariate_onset_frac_range": [
+          0.052884615384615384,
+          0.12980769230769232
+        ],
+        "treatment_offset_frac_range": [
+          0.6009615384615384,
+          0.9086538461538461
+        ],
+        "covariate_offset_frac_range": [
+          0.6009615384615384,
+          0.9086538461538461
+        ],
+        "treatment_flighting_period_weeks_range": [
+          4,
+          13
+        ],
+        "covariate_flighting_period_weeks_range": [
+          4,
+          13
+        ],
+        "treatment_flighting_duty_range": [
+          0.3,
+          0.8
+        ],
+        "covariate_flighting_duty_range": [
+          0.3,
+          0.8
+        ],
+        "treatment_level_jump_count": 1,
+        "covariate_level_jump_count": 1,
+        "treatment_level_jump_factor_range": [
+          0.5,
+          2.0
+        ],
+        "covariate_level_jump_size_range": [
+          -1.0,
+          1.0
+        ],
+        "treatment_seasonal_amplitude_range": [
+          0.1,
+          0.5
+        ],
+        "covariate_seasonal_amplitude_range": [
+          0.2,
+          1.0
+        ],
+        "treatment_seasonal_period_weeks_range": [
+          52.0,
+          52.0
+        ],
+        "covariate_seasonal_period_weeks_range": [
+          52.0,
+          52.0
+        ],
+        "treatment_trend_log_change_range": [
+          -1.0,
+          1.0
+        ],
+        "covariate_trend_change_range": [
+          -1.0,
+          1.0
+        ]
+      },
+      "origin": "C2-derived composable/diverse defaults; scalar-baseline restriction; independently drawn fixed dimensions"
+    },
+    "excluded_claims": [
+      "time-varying-baseline worlds",
+      "causal identification"
+    ],
+    "count_rule": "independent inclusive uniform integers; fixed-size public prior; J=1"
+  },
+  "study": {
+    "maximum_schedule": 1000,
+    "calibration_count": 3,
+    "wall_time_seconds": 5400,
+    "finalization_reserve_seconds": 300,
+    "rank_tolerance": 1e-10,
+    "easy_condition_threshold": 100.0,
+    "hard_condition_threshold": 10000.0,
+    "minimum_subgroup_size": 10,
+    "example_selection": {
+      "rule": "first scheduled attempt in each of nine configured-count band pairs in manifest order",
+      "selected_before_outcomes": true,
+      "rationale": "configuration-only natural count bands; no outcome screening or replacement of failed, ineligible or unattempted selections",
+      "absent_rule": "null attempt with band_absent_from_manifest reason"
+    },
+    "tolerances": {
+      "identity": 2e-12,
+      "noisefree_coefficient": 2e-10,
+      "scalar_identity": 2e-12
+    },
+    "categories": [
+      "generation_failed",
+      "unsupported_truth",
+      "identity_or_truth_ineligible",
+      "rank_deficient",
+      "easy",
+      "moderate",
+      "hard",
+      "noisefree_recovered",
+      "paired_noisy_available",
+      "unattempted_budget"
+    ],
+    "maximum_schedule_rationale": "pre-outcome finite maximum; pooled worst-case 95% Wilson half-width about 3.09 percentage points at 1000; natural exact-cell expected occupancy 10; not a MAP allocation",
+    "seed_streams": {
+      "science": {
+        "count_seed": 20261008,
+        "world_seed": 20261010
+      },
+      "calibration": {
+        "world_seed": 20261011
+      }
+    },
+    "schedule_rule": "PCG64; independent science count pairs uniform inclusive 1..10 and uint32 world seeds; fixed calibration dimensions and separate uint32 world seeds; reject collisions globally without redraw/reorder/replacement",
+    "conservative_cost_rule": "2*max(all three completed calibration inclusive durations: cold compilation+generation+analysis+persistence+verification)",
+    "frozen_count_formula": "min(1000,max(0,floor((5400-E-300)/(2*max(C0,C1,C2)))))",
+    "clock_rule": "one monotonic inclusive clock starts before setup/calibration; elapsed E includes setup, cold compilation, generation, analysis, persistence and verification; actual deadline enforcement is independent of cost heuristic",
+    "rank_rule": "singular_value > rank_tolerance * largest_singular_value",
+    "noisefree_recovery_rule": "full_rank and max_abs_coefficient_error <= noisefree_coefficient",
+    "conditioning_rule": "raw condition <100 easy; >=10000 hard; otherwise moderate; null unavailable",
+    "fit_rows": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103
+    ],
+    "subgroup_rule": "minimum_subgroup_size=10 applies only to conditional outcome-rate availability; retain all sparse frequency cells and numerator/denominator; zero denominator unavailable, never zero",
+    "pooled_precision_adequacy_count": 400,
+    "pooled_precision_rule": "Ncap >= 400 is an allocation adequacy flag only, never an execution or release gate; actual eligible denominator governs precision; no marginal or subgroup precision guarantee",
+    "calibration_dimensions": {
+      "n_treatments": 10,
+      "n_covariates": 10,
+      "n_latent": 1
+    },
+    "calibration_rule": "three fixed-dimension timing-only worlds, IDs 1000..1002; excluded from every science denominator; all three must complete with finite positive inclusive costs",
+    "reporting": {
+      "configured_count_bands": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          8,
+          10
+        ]
+      ],
+      "direct_dimension_bands": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          8,
+          10
+        ]
+      ],
+      "configured_views": [
+        "T_marginal",
+        "M_marginal",
+        "exact_T_M_cells",
+        "nine_T_M_band_pairs"
+      ],
+      "frequency_denominators": {
+        "planned_configured": "Ncap",
+        "attempted_configured": "A",
+        "direct_dimensions": "G",
+        "graph_patterns": "G"
+      },
+      "sparse_frequency_rule": "retain all cells including zero counts; descriptive one-vs-rest Wilson frequencies are non-simultaneous; minimum 10 does not suppress frequencies",
+      "precision_rule": "pooled, marginal, exact-cell and band precision are separate; no forced-balanced science",
+      "interval_rule": "95% Wilson, one predeclared binary indicator per independently seeded world per view; never rows, coefficients or paired targets; descriptive coefficient errors have no binomial interval",
+      "zero_denominator_rule": "unavailable rate and interval, never zero",
+      "denominator_predicates": {
+        "A": "started science attempt within the frozen prefix",
+        "G": "A and retained verified generated graph/world, including analysis/persistence failures",
+        "E": "G and analysis.status.truth_eligibility == eligible and no analysis exception (explicit failure stage or unsupported_truth:/identity_or_truth_ineligible: reason prefix)",
+        "F": "E and analysis.status.rank == full_rank",
+        "evidence_unavailable": "A without retained verified graph and without a confirmed generation-stage error",
+        "confirmed_generation_failed": "A without generated graph and with retained generation-stage error evidence"
+      },
+      "indicators": {
+        "full_rank": {
+          "numerator": "F",
+          "denominator": "E"
+        },
+        "rank_deficient": {
+          "numerator": "E and analysis.status.rank == rank_deficient",
+          "denominator": "E"
+        },
+        "noisefree_recovered": {
+          "numerator": "F and analysis.status.noisefree_recovery is true",
+          "denominator": "F"
+        },
+        "paired_noisy_available": {
+          "numerator": "E and analysis.status.paired_noisy.available is true",
+          "denominator": "E"
+        },
+        "failure_stage": {
+          "numerator": "one of generation_failed, unsupported_truth, identity_or_truth_ineligible, analysis_failed",
+          "denominator": "A"
+        },
+        "graph_pattern": {
+          "numerator": "G and graph matches pattern",
+          "denominator": "G"
+        },
+        "persistence_failed": {
+          "denominator": "A",
+          "numerator": "retained persistence-stage error; orthogonal to generation evidence partition"
+        },
+        "evidence_unavailable": {
+          "denominator": "A",
+          "numerator": "evidence_unavailable"
+        }
+      },
+      "conservation": [
+        "0 <= F <= E <= G <= A <= Ncap <= 1000",
+        "E = F + eligible_rank_deficient",
+        "A = G + confirmed_generation_failed + evidence_unavailable",
+        "G = E + generated_ineligible",
+        "1000 = (1000-Ncap) + (Ncap-A) + A"
+      ],
+      "allocation_excluded": "1000-Ncap",
+      "runtime_unattempted": "Ncap-A",
+      "record_states": [
+        "unattempted_budget",
+        "generation_failed",
+        "unsupported_truth",
+        "identity_or_truth_ineligible",
+        "analysis_failed",
+        "eligible_full_rank",
+        "eligible_rank_deficient",
+        "evidence_unavailable",
+        "generated_analysis_unavailable"
+      ],
+      "missing_evidence_substatuses": [
+        "known_generation_completed_missing_evidence",
+        "generation_outcome_unknown"
+      ]
+    }
+  },
+  "input_contract_version": "ols-scientific-input/v3",
+  "accounting_correction": {
+    "previous_input_version": "ols-scientific-input/v2",
+    "previous_config_digest": "e0e13db341c6e3b692e7b57cb07cd0effcfff3655a308bf342ef1a92f2ea05e0",
+    "authority": "2026-10-07 coordinator truthful missing-evidence correction; PM revisions c6bed304",
+    "reason": "Missing verified generation evidence is not a confirmed generation failure. Compact integrity is not execution provenance."
+  }
+}
