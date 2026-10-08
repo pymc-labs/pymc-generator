@@ -1,0 +1,2496 @@
+"""Checkpoint A: noiseless OLS recovery in a controlled generated world.
+
+This is one deterministic world, not a prevalence survey.  The graph is
+structure-known and deliberately excludes confounding, mediation, floors, and
+latent paths so that the linear target is well specified.  Each regressor is
+still computed independently from that treatment's generated carryover and
+saturation mechanism.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pytensor
+import pytensor.tensor as pt
+import pytest
+
+from pymc_generator import mechanisms
+from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
+from pymc_generator.symbolic_graph import build_symbolic_graph
+
+SEED = 20261005
+N_TIME_STEPS = 64
+WARMUP = 4
+L_MAX = 4
+N_TREATMENTS = 3
+N_COVARIATES = 2
+N_LATENT = 1
+NOISE_LEVELS = (1.2, 0.6, 0.3)
+N_REPLICATES = 96
+REPLICATE_SEED = 20301005
+
+
+@dataclass(frozen=True)
+class ControlledWorld:
+    """Generated arrays and the fixed parameters used to generate them."""
+
+    outputs: dict[str, np.ndarray]
+    params: dict[str, object]
+    graph: dict[str, np.ndarray]
+
+
+def _rw(mean, std, *, positive_only: bool) -> dict[str, object]:
+    mean_array = np.asarray(mean, dtype=float)
+    return {
+        "mean": mean_array,
+        "std": np.asarray(std, dtype=float),
+        "smoothness": np.zeros(mean_array.size),
+        "positive_only": positive_only,
+        "rw_smoothness_max_weeks": 26,
+    }
+
+
+def _controlled_world() -> ControlledWorld:
+    """Build one seeded world through the production symbolic generation graph.
+
+    The first ``WARMUP`` generated rows are retained as carryover history and
+    excluded from the fit.  Treatments use geometric, Weibull, and geometric
+    carryover; their saturations are Hill, Michaelis--Menten, and root.  The
+    two observed controls are direct, while the latent is disconnected.
+    """
+    n_full = N_TIME_STEPS + WARMUP
+    rng = np.random.default_rng(SEED)
+    eps = {
+        "eps_d": np.zeros((n_full, N_LATENT)),
+        "eps_z": rng.normal(size=(n_full, N_COVARIATES)),
+        "eps_c": rng.normal(size=(n_full, N_TREATMENTS)),
+        "eps_b": np.zeros(n_full),
+        "eps_y": np.zeros(n_full),
+        "eps_c_hf": np.zeros((n_full, N_TREATMENTS)),
+        "eps_c_pulse": np.zeros((n_full, N_TREATMENTS)),
+    }
+    params: dict[str, object] = {
+        "l_max": L_MAX,
+        "carryover_family": np.array(
+            [CARRYOVER_FAMILY_KEYS.index(name) for name in ("geometric", "weibull", "geometric")]
+        ),
+        "carryover_alpha": np.array([0.42, 0.61, 0.73]),
+        "weibull_lam": np.array([2.4, 3.1, 3.7]),
+        "weibull_k": np.array([1.9, 2.3, 2.7]),
+        "sat_family": np.array(
+            [SATURATION_FAMILY_KEYS.index(name) for name in ("hill", "michaelis_menten", "root")]
+        ),
+        "hill_slope": np.array([1.8, 2.0, 2.2]),
+        "hill_kappa_mult": np.array([0.85, 1.0, 1.15]),
+        "logistic_lam": np.ones(N_TREATMENTS),
+        "mm_kappa_mult": np.array([0.9, 1.25, 1.0]),
+        "tanh_c": np.ones(N_TREATMENTS),
+        "root_alpha": np.array([0.65, 0.72, 0.83]),
+        "rw_d": _rw([0.0], [0.0], positive_only=False),
+        "rw_z": _rw([0.25, -0.45], [0.55, 0.45], positive_only=False),
+        "rw_c": _rw([0.45, 0.95, 1.35], [0.55, 0.65, 0.5], positive_only=True),
+        "rw_b": _rw([5.0], [0.0], positive_only=False),
+        "rw_y": _rw([0.0], [0.0], positive_only=False),
+        "u_dz": np.zeros((N_LATENT, N_COVARIATES)),
+        "gamma_zz": np.zeros((N_COVARIATES, N_COVARIATES)),
+        "w_dc": np.zeros((N_LATENT, N_TREATMENTS)),
+        "v_zc": np.zeros((N_COVARIATES, N_TREATMENTS)),
+        "alpha_cc": np.zeros((N_TREATMENTS, N_TREATMENTS)),
+        "delta_dy": np.zeros(N_LATENT),
+        "rho_zy": np.array([0.35, -0.28]),
+        "beta": np.array([1.15, 0.82, 1.08]),
+        "hf_sigma": np.zeros(N_TREATMENTS),
+        "pulse_amp": np.zeros(N_TREATMENTS),
+        "pulse_prob": np.zeros(N_TREATMENTS),
+        "covariate_hf_sigma": np.zeros(N_COVARIATES),
+        "covariate_pulse_amp": np.zeros(N_COVARIATES),
+        "covariate_pulse_prob": np.zeros(N_COVARIATES),
+        "baseline_floor": None,
+    }
+    graph = {
+        "g_cy": np.ones(N_TREATMENTS, dtype=int),
+        "g_dc": np.zeros((N_LATENT, N_TREATMENTS), dtype=int),
+        "g_dz": np.zeros((N_LATENT, N_COVARIATES), dtype=int),
+        "g_dy": np.zeros(N_LATENT, dtype=int),
+        "g_zy": np.ones(N_COVARIATES, dtype=int),
+        "g_zc": np.zeros((N_COVARIATES, N_TREATMENTS), dtype=int),
+        "g_cc": np.zeros((N_TREATMENTS, N_TREATMENTS), dtype=int),
+        "g_zz": np.zeros((N_COVARIATES, N_COVARIATES), dtype=int),
+    }
+    symbolic = build_symbolic_graph(
+        graph,
+        params,
+        n_full,
+        N_TREATMENTS,
+        N_COVARIATES,
+        N_LATENT,
+        burn_in=0,
+        eps=eps,
+    )["outputs"]
+    evaluate = pytensor.function([], list(symbolic.values()))
+    outputs = {name: np.asarray(value) for name, value in zip(symbolic, evaluate(), strict=True)}
+    return ControlledWorld(outputs=outputs, params=params, graph=graph)
+
+
+def _evaluate(expression: pt.TensorVariable) -> np.ndarray:
+    return np.asarray(pytensor.function([], expression)())
+
+
+def _mechanism_features(
+    treatments: np.ndarray, scales: np.ndarray, params: dict[str, object]
+) -> np.ndarray:
+    """Apply each channel's true carryover, then its true saturation."""
+    features = []
+    carryover_family = np.asarray(params["carryover_family"])
+    saturation_family = np.asarray(params["sat_family"])
+    for k in range(N_TREATMENTS):
+        column = pt.as_tensor_variable(treatments[:, k, None])
+        carry_id = int(carryover_family[k])
+        if carry_id == CARRYOVER_FAMILY_KEYS.index("none"):
+            carried = column[:, 0]
+        elif carry_id == CARRYOVER_FAMILY_KEYS.index("geometric"):
+            carried = mechanisms.apply_geometric_carryover(
+                column, np.asarray(params["carryover_alpha"])[k], L_MAX
+            )[:, 0]
+        else:
+            carried = mechanisms.apply_weibull_pdf_carryover(
+                column,
+                np.asarray(params["weibull_lam"])[k],
+                np.asarray(params["weibull_k"])[k],
+                L_MAX,
+            )[:, 0]
+        carried_values = _evaluate(carried)
+        family = SATURATION_FAMILY_KEYS[int(saturation_family[k])]
+        if family == "linear":
+            saturated = pt.as_tensor_variable(carried_values / scales[k])
+        elif family == "hill":
+            saturated = mechanisms.SATURATION_FAMILIES[family](
+                pt.as_tensor_variable(carried_values),
+                scales[k],
+                slope=np.asarray(params["hill_slope"])[k],
+                kappa_mult=np.asarray(params["hill_kappa_mult"])[k],
+            )
+        elif family == "logistic":
+            saturated = mechanisms.SATURATION_FAMILIES[family](
+                pt.as_tensor_variable(carried_values),
+                scales[k],
+                lam=np.asarray(params["logistic_lam"])[k],
+            )
+        elif family == "michaelis_menten":
+            saturated = mechanisms.SATURATION_FAMILIES[family](
+                pt.as_tensor_variable(carried_values),
+                scales[k],
+                kappa_mult=np.asarray(params["mm_kappa_mult"])[k],
+            )
+        elif family == "tanh":
+            saturated = mechanisms.SATURATION_FAMILIES[family](
+                pt.as_tensor_variable(carried_values),
+                scales[k],
+                c=np.asarray(params["tanh_c"])[k],
+            )
+        else:
+            saturated = mechanisms.SATURATION_FAMILIES[family](
+                pt.as_tensor_variable(carried_values),
+                scales[k],
+                alpha=np.asarray(params["root_alpha"])[k],
+            )
+        features.append(_evaluate(saturated))
+    return np.column_stack(features)
+
+
+def _fit(world: ControlledWorld) -> tuple[np.ndarray, np.ndarray, int, float]:
+    outputs = world.outputs
+    params = world.params
+    features_full = _mechanism_features(outputs["treatments"], outputs["saturation_scale"], params)
+    window = slice(WARMUP, None)
+    design = np.column_stack(
+        [features_full[window], outputs["covariates"][window], np.ones(N_TIME_STEPS)]
+    )
+    coefficient, _residuals, rank, _singular_values = np.linalg.lstsq(
+        design, outputs["outcome"][window], rcond=None
+    )
+    truth = np.concatenate([np.asarray(params["beta"]), np.asarray(params["rho_zy"]), [5.0]])
+    return coefficient, truth, int(rank), float(np.linalg.cond(design))
+
+
+def test_checkpoint_a_noiseless_ols_recovers_the_generated_coefficients(capsys):
+    world = _controlled_world()
+    coefficient, truth, rank, condition = _fit(world)
+    error = coefficient - truth
+    print(
+        "seed=20261005 warmup=4 l_max=4 rank="
+        f"{rank}/6 raw_condition={condition:.12g} max_abs_error={np.max(np.abs(error)):.12g}"
+    )
+    print("coefficient truth estimate error")
+    for target, estimate, delta in zip(truth, coefficient, error, strict=True):
+        print(f"{target:.16g} {estimate:.16g} {delta:.3g}")
+    captured = capsys.readouterr().out
+    assert "rank=6/6" in captured
+    assert rank == 6
+    assert condition < 100.0
+    np.testing.assert_allclose(coefficient, truth, rtol=2e-12, atol=2e-12)
+
+
+def _noisy_recovery(world: ControlledWorld) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit independent Gaussian-noise replicates on one fixed generated design.
+
+    The design and noiseless mean stay fixed, so this is a conditional-on-X
+    OLS sampling experiment.  Each returned level has shape
+    ``(N_REPLICATES, n_coefficients)``.
+    """
+    outputs = world.outputs
+    features_full = _mechanism_features(
+        outputs["treatments"], outputs["saturation_scale"], world.params
+    )
+    window = slice(WARMUP, None)
+    design = np.column_stack(
+        [features_full[window], outputs["covariates"][window], np.ones(N_TIME_STEPS)]
+    )
+    truth = np.concatenate(
+        [np.asarray(world.params["beta"]), np.asarray(world.params["rho_zy"]), [5.0]]
+    )
+    mean = outputs["outcome"][window]
+    standard_error = np.sqrt(np.diag(np.linalg.inv(design.T @ design)))
+    estimates = []
+    for level_index, sigma in enumerate(NOISE_LEVELS):
+        level_estimates = []
+        for replicate in range(N_REPLICATES):
+            seed = REPLICATE_SEED + level_index * N_REPLICATES + replicate
+            noise = np.random.default_rng(seed).normal(0.0, sigma, size=N_TIME_STEPS)
+            level_estimates.append(np.linalg.lstsq(design, mean + noise, rcond=None)[0])
+        estimates.append(np.asarray(level_estimates))
+    return np.asarray(estimates), truth, standard_error
+
+
+def test_checkpoint_b_noisy_recovery_matches_conditional_ols_standard_errors(capsys):
+    world = _controlled_world()
+    estimates, truth, standard_error = _noisy_recovery(world)
+    print(
+        f"replicates={N_REPLICATES} seeds={REPLICATE_SEED}-"
+        f"{REPLICATE_SEED + len(NOISE_LEVELS) * N_REPLICATES - 1} "
+        f"noise_sigmas={','.join(f'{sigma:g}' for sigma in NOISE_LEVELS)}"
+    )
+    for sigma, level_estimates in zip(NOISE_LEVELS, estimates, strict=True):
+        z_scores = (level_estimates - truth) / (sigma * standard_error)
+        spread_ratio = np.std(level_estimates, axis=0, ddof=1) / (sigma * standard_error)
+        coverage = np.mean(np.abs(z_scores) <= 1.96)
+        median_abs_z = float(np.median(np.abs(z_scores)))
+        median_spread_ratio = float(np.median(spread_ratio))
+        print(
+            f"sigma={sigma:g} median_abs_z={median_abs_z:.4f} median_spread_over_se={median_spread_ratio:.4f} coverage95={coverage:.4f}"
+        )
+        # These are aggregate distributional checks, not per-realization
+        # monotonicity requirements.  The nominal interval is conditional on X.
+        assert 0.55 <= median_abs_z <= 0.85
+        assert 0.75 <= median_spread_ratio <= 1.25
+        assert 0.90 <= coverage <= 0.99
+    captured = capsys.readouterr().out
+    assert "replicates=96" in captured
+    assert "noise_sigmas=1.2,0.6,0.3" in captured
+
+
+def test_checkpoint_a_features_match_generation_and_use_history():
+    world = _controlled_world()
+    outputs = world.outputs
+    features_full = _mechanism_features(
+        outputs["treatments"], outputs["saturation_scale"], world.params
+    )
+    window = slice(WARMUP, None)
+    generated_contributions = outputs["contributions_observed"][window]
+    np.testing.assert_allclose(
+        generated_contributions,
+        features_full[window] * np.asarray(world.params["beta"]),
+        rtol=2e-12,
+        atol=2e-12,
+    )
+    np.testing.assert_array_equal(outputs["outcome_noise"], 0.0)
+    np.testing.assert_array_equal(outputs["baseline_intrinsic"], 5.0)
+    np.testing.assert_allclose(
+        outputs["baseline"],
+        outputs["baseline_intrinsic"] + outputs["covariate_contribution"].sum(axis=1),
+        rtol=0.0,
+        atol=2e-15,
+    )
+    assert np.all(outputs["saturation_scale"] > 0.0)
+
+    # Re-starting the carryover at the fit window is a silent feature error.
+    reset_features = _mechanism_features(
+        outputs["treatments"][window], outputs["saturation_scale"], world.params
+    )
+    assert np.max(np.abs(reset_features[0] - features_full[WARMUP])) > 1e-4
+
+
+def test_checkpoint_a_graph_has_no_confounding_or_floor_paths():
+    world = _controlled_world()
+    graph = world.graph
+    assert not graph["g_dc"].any()
+    assert not graph["g_dz"].any()
+    assert not graph["g_dy"].any()
+    assert not graph["g_zc"].any()
+    assert not graph["g_cc"].any()
+    assert not graph["g_zz"].any()
+    assert graph["g_cy"].all()
+    assert graph["g_zy"].all()
+    assert world.params["baseline_floor"] is None
+
+
+def test_c1_config_roundtrip_hash_and_two_valid_configurations():
+    from scripts.linear_recovery_prevalence import (
+        DEFAULT_STUDY,
+        config_hash,
+        resolve_config,
+    )
+
+    first = {
+        "generator": {
+            "n_treatments": 2,
+            "n_covariates": 2,
+            "n_latent": 1,
+            "n_treatments_active_range": [1, 2],
+            "n_covariates_active_range": [1, 2],
+            "n_time_steps": 16,
+            "trajectories": "texture",
+            "nonlinearity": "diverse",
+        },
+        "study": {
+            **DEFAULT_STUDY,
+            "n_cells": 2,
+            "draws_per_cell": 1,
+            "treatment_count_bands": [[1, 2]],
+            "control_count_bands": [[1, 2]],
+        },
+    }
+    second = {
+        **first,
+        "generator": {**first["generator"], "n_time_steps": 17},
+    }
+    resolved_first = resolve_config(first)
+    resolved_again = resolve_config(first)
+    resolved_second = resolve_config(second)
+    assert resolved_first["config_hash"] == resolved_again["config_hash"]
+    assert resolved_first["config_hash"] == config_hash(
+        {key: value for key, value in resolved_first.items() if key != "config_hash"}
+    )
+    assert resolved_first["config_hash"] != resolved_second["config_hash"]
+    assert resolved_first["generator_resolved"]["n_treatments"] == 2
+
+
+def test_c1_invalid_and_unsupported_configuration_is_explicit():
+    import pytest
+
+    from scripts.linear_recovery_prevalence import (
+        resolve_config,
+        unsupported_status,
+    )
+
+    with pytest.raises(ValueError, match="unsupported generator"):
+        resolve_config(
+            {"generator": {"n_treatments": 2, "n_covariates": 2, "n_latent": 1, "made_up": 4}}
+        )
+    with pytest.raises(ValueError, match="study-only"):
+        resolve_config(
+            {"generator": {"n_treatments": 2, "n_covariates": 2, "n_latent": 1, "seed": 9}}
+        )
+    status = unsupported_status("true_feature_recovery", "truth fields are absent")
+    assert status == {
+        "analysis": "true_feature_recovery",
+        "status": "unavailable",
+        "reason": "truth fields are absent",
+    }
+
+
+def test_c1_cell_accounting_wilson_and_explicit_estimand():
+    from scripts.linear_recovery_prevalence import cell_binary_summary, wilson_interval
+
+    first = cell_binary_summary([0, 0, 1, 1], [False, True, True, False])
+    assert first["unit"] == "cell"
+    assert first["estimand"] == "first_world"
+    assert first["n_cells"] == 2
+    assert first["n_successes"] == 1
+    assert first["interval"]["method"] == "wilson"
+    any_sibling = cell_binary_summary(
+        [0, 0, 1, 1], [False, True, False, False], estimand="any_sibling"
+    )
+    assert any_sibling["n_successes"] == 1
+    assert wilson_interval(0, 4)[0] == 0.0
+
+
+def test_c1_design_semantics_keep_constant_active_inputs_and_separate_causal_paths():
+    from scripts.linear_recovery_prevalence import (
+        classify_design,
+        classify_graph_paths,
+        design_rank_condition,
+    )
+
+    measured = design_rank_condition(
+        np.column_stack([np.ones(8), np.arange(8), np.ones(8)]),
+        active_mask=[True, True, True],
+    )
+    assert measured["exact_rank"] == 2
+    assert measured["constant_active_columns"] == 2
+    result = classify_design(
+        2,
+        3,
+        float("inf"),
+        rank_tolerance=1e-10,
+        constant_active_columns=1,
+        causal_path=True,
+    )
+    assert result["rank_deficient"]
+    assert result["constant_active_inputs_retained"]
+    assert not result["padded_columns_excluded_by_mask"]
+    assert result["causal_path_present"]
+    assert "not a multicollinearity" in result["causal_path_interpretation"]
+    paths = classify_graph_paths(
+        {"g_cy": [1], "g_dc": [[1]], "g_dy": [1], "g_zc": [[1]], "g_zy": [1]}
+    )
+    assert paths["direct_treatment_outcome_reachability"]
+    assert paths["shared_latent_confounding"]
+    assert paths["mediated_or_observed_path"]
+
+    disjoint = classify_graph_paths(
+        {
+            "g_cy": [1],
+            "g_dc": [[1], [0]],
+            "g_dy": [0, 1],
+            "g_dz": [[0], [0]],
+            "g_zc": [[1]],
+            "g_zy": [1],
+        },
+        focal_treatment=0,
+    )
+    assert not disjoint["shared_latent_confounding"]
+    mediated = classify_graph_paths(
+        {"g_cy": [1], "g_dc": [[0]], "g_dy": [0], "g_dz": [[1]], "g_zc": [[1]], "g_zy": [1]},
+        focal_treatment=0,
+    )
+    assert mediated["potential_unobserved_confounding"]
+    treatment_only = classify_graph_paths(
+        {"g_cy": [1], "g_dc": [[1]], "g_dy": [0]}, focal_treatment=0
+    )
+    assert not treatment_only["potential_unobserved_confounding"]
+    disconnected_mediated = classify_graph_paths(
+        {
+            "g_dz": [[1, 0]],  # D0 -> Z0
+            "g_zc": [[0], [1]],  # Z1 -> C0; Z0 has no treatment edge
+            "g_cy": [1],
+            "g_dy": [0],
+            "g_zy": [0, 0],
+        },
+        focal_treatment=0,
+    )
+    assert not disconnected_mediated["raw_reachability"]["mediated_latent_to_treatment"]
+
+
+def test_c1_active_variants_only_override_resolved_ranges():
+    from scripts.linear_recovery_prevalence import (
+        _active_dimension_generator,
+        resolve_config,
+    )
+
+    resolved = resolve_config(
+        {
+            "generator": {
+                "n_treatments": 4,
+                "n_covariates": 5,
+                "n_latent": 2,
+                "n_treatments_active_range": [1, 4],
+                "n_covariates_active_range": [2, 5],
+                "n_latent_active_range": [1, 2],
+                "n_time_steps": 104,
+                "trajectories": "composable",
+                "nonlinearity": "diverse",
+            },
+            "study": {
+                "n_cells": 2,
+                "draws_per_cell": 1,
+                "treatment_count_bands": [[1, 4]],
+                "control_count_bands": [[2, 5]],
+            },
+        }
+    )
+    base = {
+        **resolved["generator_factory"],
+        **{
+            name: resolved["generator_resolved"][name]
+            for name in (
+                "n_treatments_active_range",
+                "n_covariates_active_range",
+                "n_latent_active_range",
+            )
+        },
+    }
+    for level, expected in (("low", (1, 2, 1)), ("high", (4, 5, 2))):
+        variant, metadata = _active_dimension_generator(base, level)
+        assert metadata["active_dimensions"] == {
+            "treatments": expected[0],
+            "covariates": expected[1],
+            "latent": expected[2],
+        }
+        assert metadata["overrides"] == {
+            key: variant[key] for key in variant if base.get(key) != variant[key]
+        }
+        assert all(variant[key] == base[key] for key in base if key not in metadata["overrides"])
+        assert variant["n_time_steps"] == 104
+        assert variant["trajectories"] == "composable"
+        assert variant["nonlinearity"] == "diverse"
+
+
+def test_c1_compact_artifact_size_arithmetic_is_explicit():
+    from scripts.linear_recovery_prevalence import _artifact_size_estimate, canonical_json
+
+    proposed = {"configs": 10, "cells_total": 320, "worlds_total": 640}
+    estimate = _artifact_size_estimate({"schema_version": "test", "summary": {}}, proposed)
+    fixed = estimate["fixed_schema_config_summary_bytes"]
+    world = estimate["representative_world_record"]["bytes"]
+    cell = estimate["representative_cell_record"]["bytes"]
+    assert estimate["projected_bytes"] == fixed + 640 * world + 320 * cell
+    assert estimate["representative_world_record"]["bytes"] == len(
+        canonical_json(estimate["representative_world_record"]["schema"]).encode("utf-8")
+    )
+    assert estimate["assumptions"]["persisted_arrays"] is False
+    assert "640" in estimate["arithmetic"] and "320" in estimate["arithmetic"]
+
+
+def test_c1_rejections_exclude_failures_from_evaluated_candidates():
+    from types import SimpleNamespace
+
+    from scripts.linear_recovery_prevalence import count_accounting
+
+    prior = SimpleNamespace(
+        n_cells=3,
+        draws_per_cell=1,
+        n_treatments=1,
+        n_covariates=1,
+        n_treatments_active_range=(1, 1),
+        n_covariates_active_range=(1, 1),
+    )
+    corpus = {
+        "treatment_active_mask": np.ones((3, 1), dtype=bool),
+        "covariate_active_mask": np.ones((3, 1), dtype=bool),
+        "cell_id": np.arange(3),
+        "diagnostics": {"n_draws_evaluated": 7, "n_draw_failures": 2},
+    }
+    study = {
+        "treatment_count_bands": [[1, 1]],
+        "control_count_bands": [[1, 1]],
+    }
+    accounting = count_accounting(corpus, prior, study)
+    assert accounting["rejected_candidates"] == 4
+    assert accounting["generation_failures"] == 2
+    prior_with_two_counts = SimpleNamespace(
+        n_cells=3,
+        draws_per_cell=1,
+        n_treatments=2,
+        n_covariates=2,
+        n_treatments_active_range=(1, 2),
+        n_covariates_active_range=(1, 2),
+    )
+    zero_band = count_accounting(
+        {
+            **corpus,
+            "treatment_active_mask": np.ones((3, 2), dtype=bool),
+            "covariate_active_mask": np.ones((3, 2), dtype=bool),
+        },
+        prior_with_two_counts,
+        {"treatment_count_bands": [[1, 1], [2, 2]], "control_count_bands": [[1, 1], [2, 2]]},
+    )
+    assert zero_band["count_band_accounting"]["n_empty_cell_band_strata"] == 3
+
+
+def test_c2_pilot_schedule_has_primary_and_nine_labelled_stress_configs():
+    from scripts.linear_recovery_prevalence import pilot_seed_schedule
+
+    generator = {
+        "n_treatments": 2,
+        "n_covariates": 2,
+        "n_latent": 1,
+        "n_treatments_active_range": [1, 2],
+        "n_covariates_active_range": [1, 2],
+        "n_latent_active_range": [1, 1],
+        "n_time_steps": 16,
+        "trajectories": "composable",
+        "nonlinearity": "diverse",
+    }
+    first = pilot_seed_schedule(generator, 20261005)
+    second = pilot_seed_schedule(generator, 20261005)
+    assert first == second
+    assert [row["name"] for row in first] == [
+        "primary_composable",
+        "texture",
+        "always_on_spikes",
+        "periodic_on_off",
+        "delayed_start",
+        "ramp_up",
+        "decay_to_zero",
+        "level_doubling",
+        "seasonal",
+        "trend",
+    ]
+    assert len({row["seed"] for row in first}) == 10
+
+
+def test_c2_any_sibling_summary_is_distinct_from_first_world_estimand():
+    from scripts.linear_recovery_prevalence import _pilot_cell_records, _pilot_summaries
+
+    world = {
+        "config_index": 0,
+        "cell_id": 0,
+        "sibling_index": 0,
+        "raw_input_diagnostics": {
+            "views": {"levels": {"rank": {"rank_deficient": False, "condition": 1.0}}},
+        },
+    }
+    sibling = {
+        **world,
+        "sibling_index": 1,
+        "raw_input_diagnostics": {
+            "views": {"levels": {"rank": {"rank_deficient": True, "condition": 1000.0}}}
+        },
+    }
+    summary = _pilot_summaries(_pilot_cell_records([world, sibling]), 0.95)
+    assert summary["estimands"]["first_world"]["levels"]["rank_deficient"]["n_successes"] == 0
+    assert summary["estimands"]["any_sibling"]["levels"]["rank_deficient"]["n_successes"] == 1
+    assert (
+        summary["estimands"]["any_sibling"]["levels"]["rank_deficient"]["estimand"] == "any_sibling"
+    )
+    assert "not pooled" in summary["sensitivity_note"]
+
+
+def test_c2_pilot_wall_limit_rejects_cap_above_approved_ninety_minutes():
+    import pytest
+
+    from scripts.linear_recovery_prevalence import run_pilot
+
+    with pytest.raises(ValueError, match="5400"):
+        run_pilot(
+            {
+                "generator": {
+                    "n_treatments": 10,
+                    "n_covariates": 10,
+                    "n_latent": 1,
+                    "n_treatments_active_range": [1, 10],
+                    "n_covariates_active_range": [1, 10],
+                    "n_latent_active_range": [1, 1],
+                }
+            },
+            output_dir="/tmp/linear-recovery-c2-test",
+            wall_time_seconds=5401,
+        )
+
+
+def test_c1_band_validation_rejects_gaps_and_incomplete_ranges():
+    import pytest
+
+    from scripts.linear_recovery_prevalence import resolve_config
+
+    config = {
+        "generator": {"n_treatments": 3, "n_covariates": 3, "n_latent": 1},
+        "study": {
+            "treatment_count_bands": [[1, 1], [3, 3]],
+            "control_count_bands": [[1, 3]],
+        },
+    }
+    with pytest.raises(ValueError, match="non-overlapping|gap|cover"):
+        resolve_config(config)
+    overlap = {
+        **config,
+        "study": {
+            "treatment_count_bands": [[1, 2], [2, 3]],
+            "control_count_bands": [[1, 3]],
+        },
+    }
+    with pytest.raises(ValueError, match="non-overlapping"):
+        resolve_config(overlap)
+    eleven = {
+        "generator": {
+            "n_treatments": 11,
+            "n_covariates": 11,
+            "n_latent": 1,
+            "n_treatments_active_range": [1, 11],
+            "n_covariates_active_range": [1, 11],
+        },
+        "study": {
+            "treatment_count_bands": [[1, 10], [11, 11]],
+            "control_count_bands": [[1, 10], [11, 11]],
+        },
+    }
+    assert resolve_config(eleven)["generator_factory"]["n_treatments"] == 11
+
+
+def _c2_mock_config():
+    return {
+        "generator": {
+            "n_treatments": 2,
+            "n_covariates": 2,
+            "n_latent": 1,
+            "n_treatments_active_range": [1, 2],
+            "n_covariates_active_range": [1, 2],
+            "n_latent_active_range": [1, 1],
+            "n_time_steps": 16,
+            "trajectories": "composable",
+            "nonlinearity": "diverse",
+        },
+        "study": {
+            "n_cells": 2,
+            "draws_per_cell": 2,
+            "pilot_cells_per_config": 2,
+            "pilot_siblings_per_cell": 2,
+            "pilot_checkpoint_every_cells": 1,
+            "pilot_wall_time_seconds": 60,
+            "treatment_count_bands": [[1, 2]],
+            "control_count_bands": [[1, 2]],
+        },
+    }
+
+
+def _c2_mock_record(config_index, cell_id, sibling_index):
+    return {
+        "config_index": config_index,
+        "cell_id": cell_id,
+        "sibling_index": sibling_index,
+        "world_index": sibling_index,
+        "active_counts": {"treatments": 1, "covariates": 1},
+        "raw_input_diagnostics": {
+            "views": {
+                "levels": {
+                    "rank": {"rank_deficient": sibling_index == 1, "condition": 40.0},
+                    "max_abs_pearson_correlation": 0.92,
+                    "max_vif": 6.0,
+                    "vif_infinite": False,
+                },
+                "differences": {
+                    "rank": {"rank_deficient": sibling_index == 1, "condition": 40.0},
+                    "max_abs_pearson_correlation": 0.92,
+                    "max_vif": 6.0,
+                    "vif_infinite": False,
+                },
+            },
+        },
+    }
+
+
+def test_c2_diagnostic_views_keep_view_specific_rank_condition_and_subset():
+    from scripts.linear_recovery_prevalence import _world_indicators
+
+    record = {
+        "raw_input_diagnostics": {
+            "rank": {"rank_deficient": False, "condition": 2.0},
+            "views": {
+                "levels": {
+                    "rank": {"rank_deficient": False, "condition": 2.0},
+                    "max_abs_pearson_correlation": None,
+                    "max_vif": None,
+                    "vif_infinite": False,
+                },
+                "differences": {
+                    "rank": {"rank_deficient": True, "condition": 200.0},
+                    "max_abs_pearson_correlation": None,
+                    "max_vif": None,
+                    "vif_infinite": False,
+                },
+            },
+        }
+    }
+    thresholds = {
+        "absolute_correlation": [0.8, 0.9],
+        "vif": [5.0, 10.0],
+        "condition": [30.0, 100.0],
+    }
+    indicators = _world_indicators(record, thresholds)
+    assert not indicators["levels"]["rank_deficient"]
+    assert not indicators["levels"]["condition_ge_30p0"]
+    assert indicators["differences"]["rank_deficient"]
+    assert indicators["differences"]["condition_ge_100p0"]
+
+    subset = {
+        "raw_input_diagnostics": {
+            "views": {"levels": record["raw_input_diagnostics"]["views"]["levels"]}
+        }
+    }
+    assert list(_world_indicators(subset, thresholds)) == ["levels"]
+
+
+def test_c2_compaction_uses_actual_predictors_and_only_configured_views():
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    levels = np.array([[0.0, 1.0, 3.0, 6.0, 10.0], [0.0, 2.0, 5.0, 9.0, 14.0]])
+    descriptors = [SimpleNamespace(key="C1"), SimpleNamespace(key="C2")]
+
+    def diagnostic_view():
+        dependence = SimpleNamespace(
+            descriptors=descriptors,
+            matrices={"pearson": np.zeros((1, 2, 2))},
+            valid={"pearson": np.ones((1, 2, 2), dtype=bool)},
+        )
+        vif = SimpleNamespace(
+            vif=np.ones((1, 2)),
+            valid=np.ones((1, 2), dtype=bool),
+        )
+        return SimpleNamespace(dependence=dependence, vif={"observed": vif})
+
+    graph = {
+        "g_dc": np.zeros((1, 2), dtype=int),
+        "g_dz": np.zeros((1, 0), dtype=int),
+        "g_dy": np.zeros(1, dtype=int),
+        "g_zc": np.zeros((0, 2), dtype=int),
+        "g_zy": np.zeros(0, dtype=int),
+        "g_cc": np.zeros((2, 2), dtype=int),
+        "g_zz": np.zeros((0, 0), dtype=int),
+        "g_cy": np.zeros(2, dtype=int),
+    }
+    prior = SimpleNamespace(layout=SimpleNamespace(unpack=lambda _value: graph))
+    corpus = {
+        "treatment_active_mask": np.array([[True, True]]),
+        "covariate_active_mask": np.zeros((1, 0), dtype=bool),
+        "latent_active_mask": np.array([[True]]),
+        "treatment_raw": levels.T[None, :, :],
+        "covariates": np.zeros((1, levels.shape[1], 0)),
+        "cell_id": np.array([3]),
+        "g": np.zeros((1, 1)),
+    }
+    both = SimpleNamespace(views={"levels": diagnostic_view(), "differences": diagnostic_view()})
+    record = runner._compact_world_metric(
+        corpus, prior, both, 0, config_index=0, cell_index=3, sibling_index=0, rank_tolerance=1e-10
+    )
+    views = record["raw_input_diagnostics"]["views"]
+    assert set(views) == {"levels", "differences"}
+    assert views["levels"]["rank"]["exact_rank"] == 3
+    assert views["differences"]["rank"]["exact_rank"] == 2
+    assert "rank" not in record["raw_input_diagnostics"]
+    assert "standardized" not in record["raw_input_diagnostics"]
+    assert all("constant_active_inputs" in value for value in views.values())
+    assert "constant_active_inputs" not in record["raw_input_diagnostics"]
+
+    differences_only = SimpleNamespace(views={"differences": diagnostic_view()})
+    subset = runner._compact_world_metric(
+        corpus,
+        prior,
+        differences_only,
+        0,
+        config_index=0,
+        cell_index=3,
+        sibling_index=0,
+        rank_tolerance=1e-10,
+    )
+    assert set(subset["raw_input_diagnostics"]["views"]) == {"differences"}
+    assert "rank" not in subset["raw_input_diagnostics"]
+    assert "constant_active_inputs" not in subset["raw_input_diagnostics"]
+    assert list(runner._world_indicators(subset, runner.DEFAULT_STUDY["thresholds"])) == [
+        "differences"
+    ]
+
+
+def test_c2_configured_indicators_and_realized_band_wilson_tables():
+    from scripts.linear_recovery_prevalence import _pilot_cell_records, _pilot_summaries
+
+    records = [
+        _c2_mock_record(0, 0, 0),
+        _c2_mock_record(0, 0, 1),
+        _c2_mock_record(0, 1, 0),
+        _c2_mock_record(0, 1, 1),
+    ]
+    thresholds = {
+        "absolute_correlation": [0.8, 0.99],
+        "vif": [5.0, 10.0],
+        "condition": [30.0, 100.0],
+    }
+    cells = _pilot_cell_records(
+        records,
+        thresholds=thresholds,
+        treatment_bands=[[1, 1], [2, 2]],
+        control_bands=[[1, 1], [2, 2]],
+    )
+    summary = _pilot_summaries(
+        cells,
+        0.95,
+        thresholds=thresholds,
+        treatment_bands=[[1, 1], [2, 2]],
+        control_bands=[[1, 1], [2, 2]],
+    )
+    assert summary["thresholds"] == thresholds
+    indicator = summary["estimands"]["any_sibling"]["differences"]
+    assert indicator["absolute_correlation_ge_0p8"]["n_successes"] == 2
+    assert indicator["vif_ge_5p0"]["n_successes"] == 2
+    assert summary["count_band_wilson"]["treatments_1_1__controls_1_1"]["status"] == "available"
+    assert summary["count_band_wilson"]["treatments_2_2__controls_2_2"]["status"] == "unavailable"
+
+
+def test_c2_fork_guard_fails_closed_on_native_threads(monkeypatch):
+    import threading
+    import time
+
+    from scripts import linear_recovery_prevalence as runner
+
+    monkeypatch.setattr(runner, "_actual_os_thread_count", lambda: 2)
+    monkeypatch.setattr(threading, "active_count", lambda: 1)
+    with pytest.raises(RuntimeError, match="exactly one OS thread"):
+        runner._bounded_phase(lambda: None, time.monotonic() + 1, time.monotonic)
+
+
+def test_c2_supported_subprocess_reports_one_actual_os_thread():
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+    }
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            "import os, threading, numpy; print(len(os.listdir('/proc/self/task')), threading.active_count())",
+        ],
+        env=env,
+        text=True,
+    ).strip()
+    os_threads, python_threads = (int(item) for item in output.split())
+    assert os_threads == 1
+    assert python_threads == 1
+
+
+def test_c2_phase_kills_term_ignoring_child_and_reaps_it(tmp_path):
+    import os
+    import signal
+    import time
+
+    from scripts import linear_recovery_prevalence as runner
+
+    child_pid_path = tmp_path / "child.pid"
+
+    def ignores_term():
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        child_pid_path.write_text(str(os.getpid()))
+        time.sleep(10)
+
+    with pytest.raises(runner._PilotDeadlineExceededError):
+        runner._bounded_phase(ignores_term, time.monotonic() + 0.1, time.monotonic)
+    child_pid = int(child_pid_path.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_c2_runner_executes_real_generation_and_diagnostic_phases_once(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    generation_marker = tmp_path / "generation.calls"
+    diagnostic_marker = tmp_path / "diagnostics.calls"
+
+    def failing_generation(_prior):
+        generation_marker.write_text(
+            generation_marker.read_text() + "x" if generation_marker.exists() else "x"
+        )
+        raise ValueError("phase value error")
+
+    monkeypatch.setattr(runner, "sample_prior_predictive", failing_generation)
+    report = runner.run_pilot(config, output_dir=tmp_path / "generation", wall_time_seconds=60)
+    assert generation_marker.read_text() == "x"
+    assert report["status"] == "partial"
+    assert report["accounting"]["failures"] == 1
+
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+
+    def failing_diagnostics(*args, **kwargs):
+        diagnostic_marker.write_text(
+            diagnostic_marker.read_text() + "x" if diagnostic_marker.exists() else "x"
+        )
+        raise ValueError("phase value error")
+
+    monkeypatch.setattr(runner, "data_diagnostics", failing_diagnostics)
+    with pytest.raises(ValueError, match="phase value error"):
+        runner.run_pilot(config, output_dir=tmp_path / "diagnostics", wall_time_seconds=60)
+    assert diagnostic_marker.read_text() == "x"
+
+
+def test_c2_notebook_renders_runner_complete_partial_and_rejects_wrong_manifest(
+    tmp_path, monkeypatch
+):
+    import copy
+    import json
+    import os
+    from types import SimpleNamespace
+
+    import nbformat
+    from nbclient import NotebookClient
+    from nbclient.exceptions import CellExecutionError
+
+    from scripts import linear_recovery_prevalence as runner
+
+    notebook = nbformat.read("docs/examples/linear-recovery.ipynb", as_version=4)
+    render_source = notebook.cells[11].source
+    monkeypatch.setattr(
+        runner,
+        "_pilot_configurations",
+        lambda generator, seed: [
+            {"name": "primary_composable", "label": "primary", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner,
+        "pilot_seed_schedule",
+        lambda generator, seed: [
+            {"index": 0, "name": "primary_composable", "seed": seed, "generator": generator}
+        ],
+    )
+    n_rows = 64
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: {"cell_id": np.repeat(np.arange(32), 2)},
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": n_rows,
+            "accepted_worlds": n_rows,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    protocol = runner.load_json("docs/examples/data/linear-recovery-prevalence-config.json")
+    complete_dir = tmp_path / "complete"
+    complete = runner.run_pilot(protocol, output_dir=complete_dir, wall_time_seconds=60)
+    partial = runner.run_pilot(protocol, output_dir=tmp_path / "partial", wall_time_seconds=0.001)
+    assert complete["status"] == "complete"
+    assert partial["status"] == "partial"
+
+    def execute(report_path):
+        os.environ["LINEAR_RECOVERY_C2_REPORT"] = str(report_path)
+        source = f"from pathlib import Path\nrepo_root = Path({str(Path.cwd())!r})\n"
+        source += render_source
+        test_notebook = nbformat.v4.new_notebook(
+            cells=[nbformat.v4.new_code_cell(source)], metadata=notebook.metadata
+        )
+        NotebookClient(test_notebook, timeout=120, kernel_name="python").execute(
+            cwd=str(Path.cwd())
+        )
+
+    execute(Path(complete["report_path"]))
+    execute(Path(partial["report_path"]))
+    manifest_path = Path(complete["manifest_path"])
+    original = runner.load_json(manifest_path)
+    broken = copy.deepcopy(original)
+    broken["schedule"] = []
+    runner._write_json(manifest_path, broken)
+    with pytest.raises(CellExecutionError):
+        execute(Path(complete["report_path"]))
+    runner._write_json(manifest_path, original)
+    assert "validate_compact_summary" in render_source
+    assert "data/linear-recovery-prevalence.csv" in render_source
+    assert json.loads(Path(complete["report_path"]).read_text())["source_provenance"]
+
+
+def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _corpus, _prior, _diagnostic, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert report["status"] == "complete"
+    assert report["accounting"]["complete_cells"] == 20
+    assert report["accounting"]["accepted_world_metrics"] == 40
+    assert report["configs"][0]["summary"]["count_band_wilson"]
+    with pytest.raises(FileExistsError, match="no-resume"):
+        runner.run_pilot(
+            config, output_dir=tmp_path, wall_time_seconds=60, resume=False, clock=lambda: 0.0
+        )
+    import copy
+
+    resolved = runner.resolve_config(config)
+    broken = {**report, "config_hash": "wrong"}
+    with pytest.raises(ValueError, match="config hash"):
+        runner.validate_pilot_report(broken, resolved)
+    for field, value in (
+        ("schema_version", "wrong-schema"),
+        ("resolved_config", {**report["resolved_config"], "config_hash": "wrong"}),
+        ("manifest_hash", "wrong-manifest"),
+        ("schedule", []),
+        ("status", "invalid"),
+    ):
+        mutated = copy.deepcopy(report)
+        mutated[field] = value
+        with pytest.raises(ValueError):
+            runner.validate_pilot_report(mutated, resolved)
+    for provenance_field in ("package", "package_version", "source_commit", "source_dirty"):
+        mutated = copy.deepcopy(report)
+        mutated["source_provenance"][provenance_field] = "mutated"
+        with pytest.raises(ValueError):
+            runner.validate_pilot_report(mutated, resolved)
+
+    manifest_path = Path(report["manifest_path"])
+    original_manifest = runner.load_json(manifest_path)
+    for field, value in (
+        ("schema_version", "wrong-schema"),
+        ("config_hash", "wrong-config"),
+        ("resolved_config", {**original_manifest["resolved_config"], "config_hash": "wrong"}),
+        ("source_provenance", {**original_manifest["source_provenance"], "source_commit": "wrong"}),
+        ("schedule", []),
+    ):
+        mutated_manifest = copy.deepcopy(original_manifest)
+        mutated_manifest[field] = value
+        runner._write_json(manifest_path, mutated_manifest)
+        with pytest.raises(ValueError):
+            runner.validate_pilot_report(report, resolved)
+    runner._write_json(manifest_path, original_manifest)
+
+
+def test_c2_bounded_phase_isolates_sleep_and_transfers_value_error_once(tmp_path):
+    import time
+
+    from scripts import linear_recovery_prevalence as runner
+
+    marker = tmp_path / "phase-calls"
+
+    def failing_phase():
+        marker.write_text(marker.read_text() + "x" if marker.exists() else "x")
+        raise ValueError("phase value error")
+
+    for phase in ("generation", "diagnostics"):
+        with pytest.raises(runner._PilotDeadlineExceededError):
+            runner._bounded_phase(lambda: time.sleep(2), time.monotonic() + 0.1, time.monotonic)
+    with pytest.raises(ValueError, match="phase value error"):
+        runner._bounded_phase(failing_phase, time.monotonic() + 2, time.monotonic)
+    assert marker.read_text() == "x"
+
+
+def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    failure_marker = tmp_path / "planned-failure.once"
+
+    def sample(_prior):
+        try:
+            failure_marker.touch(exist_ok=False)
+        except FileExistsError:
+            return {"cell_id": np.array([0, 0, 1, 1])}
+        raise RuntimeError("planned failure")
+
+    monkeypatch.setattr(runner, "sample_prior_predictive", sample)
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _corpus, _prior, _diagnostic, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    first = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert first["status"] == "partial"
+    checkpoint_path = (
+        tmp_path
+        / f"linear-recovery-c2-{runner.resolve_config(config)['config_hash'][:16]}.checkpoint.json"
+    )
+    report_path = (
+        tmp_path / f"linear-recovery-c2-{runner.resolve_config(config)['config_hash'][:16]}.json"
+    )
+    checkpoint = runner.load_json(checkpoint_path)
+    partial_report = runner.load_json(report_path)
+    assert len(checkpoint["config_failures"]) == 1
+    assert partial_report["status"] == "partial"
+    second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert second["status"] == "complete"
+    assert second["accounting"]["failures"] == 0
+
+
+def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplication(
+    tmp_path, monkeypatch
+):
+    import copy
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    marker = tmp_path / "planned-repeated-failures"
+
+    def sample(_prior):
+        count = int(marker.read_text()) if marker.exists() else 0
+        marker.write_text(str(count + 1))
+        if count < 2:
+            raise RuntimeError("planned repeated failure")
+        return {"cell_id": np.array([0, 0, 1, 1])}
+
+    monkeypatch.setattr(runner, "sample_prior_predictive", sample)
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    # Establish a persisted completed cell first, then leave the other cell
+    # pending so later failures must not discard or duplicate the earlier data.
+    marker.write_text("2")
+    seeded = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(seeded["checkpoint_path"])
+    checkpoint["cells"] = [row for row in checkpoint["cells"] if row["cell_id"] == 0]
+    checkpoint["worlds"] = [row for row in checkpoint["worlds"] if row["cell_id"] == 0]
+    checkpoint["wall_elapsed_seconds"] = 3.0
+    runner._write_json(Path(seeded["checkpoint_path"]), checkpoint)
+    previous_cells = copy.deepcopy(checkpoint["cells"])
+    previous_worlds = copy.deepcopy(checkpoint["worlds"])
+
+    def assert_previous_records_preserved(current):
+        def world_key(row):
+            return row["config_index"], row["cell_id"], row["sibling_index"]
+
+        def cell_key(row):
+            return row["config_index"], row["cell_id"]
+
+        worlds = {world_key(row): row for row in current["worlds"]}
+        cells = {cell_key(row): row for row in current["cells"]}
+        assert len(worlds) == len(current["worlds"])
+        assert len(cells) == len(current["cells"])
+        assert all(worlds[world_key(row)] == row for row in previous_worlds)
+        assert all(cells[cell_key(row)] == row for row in previous_cells)
+
+    marker.write_text("0")
+
+    second = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(second["checkpoint_path"])
+    second_persisted = runner.load_json(second["report_path"])
+    assert len(checkpoint["config_failures"]) == 1
+    assert second_persisted["accounting"]["failures"] == 1
+    assert len(checkpoint["worlds"]) == 20
+    assert_previous_records_preserved(checkpoint)
+    assert second_persisted["accounting"]["wall_elapsed_seconds"] >= 3.0
+    checkpoint["wall_elapsed_seconds"] = 7.0
+    runner._write_json(Path(second["checkpoint_path"]), checkpoint)
+
+    third = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(third["checkpoint_path"])
+    third_persisted = runner.load_json(third["report_path"])
+    assert len(checkpoint["config_failures"]) == 1
+    assert third_persisted["accounting"]["failures"] == 1
+    assert len(checkpoint["worlds"]) == 20
+    assert_previous_records_preserved(checkpoint)
+    checkpoint["wall_elapsed_seconds"] = 11.0
+    runner._write_json(Path(third["checkpoint_path"]), checkpoint)
+
+    success = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    persisted = runner.load_json(success["report_path"])
+    persisted_checkpoint = runner.load_json(success["checkpoint_path"])
+    assert success["status"] == "complete"
+    assert persisted["status"] == "complete"
+    assert success["accounting"]["wall_elapsed_seconds"] >= 11.0
+    assert persisted["accounting"]["failures"] == 0
+    assert persisted_checkpoint["config_failures"] == []
+    assert len(persisted_checkpoint["worlds"]) == 40
+    assert_previous_records_preserved(persisted_checkpoint)
+    assert len(success["configs"]) == 10
+    assert success["accounting"]["accepted_world_metrics"] == 40
+
+
+def test_c2_resume_accumulates_budget_and_replaces_stale_failure_metadata(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    checkpoint["wall_elapsed_seconds"] = 59.5
+    runner._write_json(Path(report["checkpoint_path"]), checkpoint)
+    resumed = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: 0.0)
+    assert resumed["status"] == "partial"
+    assert resumed["accounting"]["wall_elapsed_seconds"] >= 59.5
+    assert resumed["accounting"]["wall_budget_seconds"] == 60.0
+
+
+def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "_pilot_configurations",
+        lambda generator, seed: [
+            {"name": "primary_composable", "label": "primary", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner,
+        "pilot_seed_schedule",
+        lambda generator, seed: [
+            {"index": 0, "name": "primary_composable", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    clock_state = {"value": 0.0}
+    resolved = runner.resolve_config(config)
+    checkpoint_path = (
+        tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.checkpoint.json"
+    )
+    manifest_path = tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.manifest.json"
+    original_bounded_phase = runner._bounded_phase
+    bounded_phase_calls = 0
+
+    def assert_initial_checkpoint(function, deadline, clock):
+        nonlocal bounded_phase_calls
+        if bounded_phase_calls == 0:
+            bounded_phase_calls += 1
+            assert manifest_path.exists()
+            manifest_reference = runner.load_json(manifest_path)
+            expected_manifest_hash = runner.config_hash(manifest_reference)
+            assert checkpoint_path.exists()
+            initial_checkpoint = runner.load_json(checkpoint_path)
+            assert initial_checkpoint["manifest_hash"] == expected_manifest_hash
+            assert initial_checkpoint["completed"] == []
+            assert initial_checkpoint["worlds"] == []
+            assert initial_checkpoint["cells"] == []
+            assert initial_checkpoint["config_accounting"] == []
+            assert initial_checkpoint["config_failures"] == []
+            assert "status" not in initial_checkpoint
+            assert not (
+                tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.json"
+            ).exists()
+        return original_bounded_phase(function, deadline, clock)
+
+    monkeypatch.setattr(runner, "_bounded_phase", assert_initial_checkpoint)
+    original_cells = runner._pilot_cell_records
+
+    def overrun(*args, **kwargs):
+        clock_state["value"] = 100.0
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
+    calls = []
+    original_minimal = runner._minimal_partial_report
+    original_full = runner._build_pilot_report
+    original_write = runner._write_json
+
+    def track_minimal(*args, **kwargs):
+        calls.append(("minimal", clock_state["value"]))
+        return original_minimal(*args, **kwargs)
+
+    def track_full(*args, **kwargs):
+        calls.append(("full", clock_state["value"]))
+        return original_full(*args, **kwargs)
+
+    def track_write(path, value):
+        calls.append(("write", clock_state["value"], path))
+        return original_write(path, value)
+
+    monkeypatch.setattr(runner, "_minimal_partial_report", track_minimal)
+    monkeypatch.setattr(runner, "_build_pilot_report", track_full)
+    monkeypatch.setattr(runner, "_write_json", track_write)
+    import signal
+
+    old_handler = signal.getsignal(signal.SIGTERM)
+    report = runner.run_pilot(
+        config,
+        output_dir=tmp_path,
+        wall_time_seconds=60,
+        clock=lambda: clock_state["value"],
+    )
+    assert Path(report["checkpoint_path"]) == checkpoint_path
+    assert report["status"] == "partial"
+    assert report["finalization_status"] == "incomplete"
+    assert report["incomplete"]
+    assert report["config_hash"] == resolved["config_hash"]
+    assert not Path(report["report_path"]).exists()
+    assert set(report["existing_evidence"]) == {
+        str(Path(report["manifest_path"])),
+        str(checkpoint_path),
+    }
+    assert report["last_atomic_checkpoint"] == str(checkpoint_path)
+    assert runner.load_json(checkpoint_path)["cells"]
+    assert report["report_available"] is False
+    assert all(call[1] < 60.0 for call in calls)
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+
+
+def test_c2_early_expiry_without_checkpoint_reports_only_existing_manifest(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    resolved = runner.resolve_config(config)
+    calls = {"count": 0}
+
+    def clock():
+        calls["count"] += 1
+        return 0.0 if calls["count"] == 1 else 60.0
+
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60, clock=clock)
+    manifest_path = Path(report["manifest_path"])
+    checkpoint_path = Path(report["checkpoint_path"])
+    report_path = Path(report["report_path"])
+    assert report["status"] == "partial"
+    assert report["finalization_status"] == "incomplete"
+    assert report["incomplete"] is True
+    assert report["config_hash"] == resolved["config_hash"]
+    assert manifest_path.exists()
+    assert not checkpoint_path.exists()
+    assert not report_path.exists()
+    assert report["existing_evidence"] == [str(manifest_path)]
+    assert report["last_atomic_checkpoint"] is None
+
+
+def test_c2_main_reports_incomplete_without_claiming_report_file(tmp_path, monkeypatch, capsys):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_c2_mock_config()), encoding="utf-8")
+    config_hash = runner.resolve_config(_c2_mock_config())["config_hash"]
+    calls = {"count": 0}
+
+    def clock():
+        calls["count"] += 1
+        return 0.0 if calls["count"] == 1 else 60.0
+
+    original_run = runner.run_pilot
+
+    def early_expiry_run(*args, **kwargs):
+        kwargs["clock"] = clock
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "run_pilot", early_expiry_run)
+
+    assert (
+        runner.main(
+            [
+                "--mode",
+                "pilot",
+                "--config",
+                str(config_path),
+                "--output-dir",
+                str(tmp_path),
+                "--wall-time-seconds",
+                "60",
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "config_hash": config_hash,
+        "report": None,
+        "status": "partial",
+    }
+    report_path = tmp_path / f"linear-recovery-c2-{config_hash[:16]}.json"
+    assert not report_path.exists()
+
+
+def test_c2_nonterm_soft_deadline_persists_checkpoint_only_fallback(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: {"cell_id": np.array([0, 0, 1, 1])},
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    clock_state = {"value": 0.0}
+    original_cells = runner._pilot_cell_records
+
+    def overrun(*args, **kwargs):
+        clock_state["value"] = 55.0
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
+    limit = 60.0
+    reserve = min(
+        30.0,
+        max(
+            runner._PHASE_TERM_GRACE_SECONDS
+            + runner._PHASE_KILL_JOIN_SECONDS
+            + runner._MINIMAL_FINALIZATION_ALLOWANCE_SECONDS,
+            limit * 0.10,
+        ),
+    )
+    soft_deadline = limit - reserve
+    report = runner.run_pilot(
+        config, output_dir=tmp_path, wall_time_seconds=limit, clock=lambda: clock_state["value"]
+    )
+    persisted = runner.load_json(report["report_path"])
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    assert soft_deadline <= clock_state["value"] < limit
+    assert limit - clock_state["value"] > 0.0
+    assert report["status"] == "partial"
+    assert persisted["status"] == "partial"
+    assert persisted["accounting"]["wall_elapsed_seconds"] == clock_state["value"]
+    persisted_worlds = [row for item in persisted["configs"] for row in item["world_refs"]]
+    persisted_cells = [row for item in persisted["configs"] for row in item["cell_refs"]]
+    assert persisted_worlds == checkpoint["worlds"]
+    assert persisted_cells == checkpoint["cells"]
+    assert len(
+        {(row["config_index"], row["cell_id"], row["sibling_index"]) for row in persisted_worlds}
+    ) == len(persisted_worlds)
+    assert len({(row["config_index"], row["cell_id"]) for row in persisted_cells}) == len(
+        persisted_cells
+    )
+
+
+def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_path, monkeypatch):
+    import os
+    import signal
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    # Force summary overrun before the report-write TERM boundary.  The
+    # checkpoint-only candidate must already exist when the TERM arrives.
+    clock_state = {"value": 0.0}
+    original_cells = runner._pilot_cell_records
+
+    def overrun(*args, **kwargs):
+        clock_state["value"] = 50.0
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", overrun)
+    resolved = runner.resolve_config(config)
+    report_path = tmp_path / f"linear-recovery-c2-{resolved['config_hash'][:16]}.json"
+    original_write = runner._write_json
+    injected = False
+
+    def interrupt_report_write(path, value):
+        nonlocal injected
+        if path == report_path and not injected:
+            injected = True
+            os.kill(os.getpid(), signal.SIGTERM)
+        return original_write(path, value)
+
+    monkeypatch.setattr(runner, "_write_json", interrupt_report_write)
+    old_handler = signal.getsignal(signal.SIGTERM)
+    started = time.monotonic()
+    report = runner.run_pilot(
+        config, output_dir=tmp_path, wall_time_seconds=60, clock=lambda: clock_state["value"]
+    )
+    assert time.monotonic() - started < 5.0
+    assert injected
+    persisted = runner.load_json(report["report_path"])
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    assert report["status"] == "partial"
+    assert persisted["status"] == "partial"
+    assert report["interrupted"]
+    assert persisted["interrupted"]
+    assert checkpoint["cells"]
+    assert len(checkpoint["worlds"]) == 40
+    # This is an ordinary overrun inside the finalization reserve, not an
+    # already-expired hard deadline: fallback may write an honest partial.
+    assert 0.0 < clock_state["value"] < 60.0
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+
+
+def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp_path, monkeypatch):
+    import copy
+    import os
+    import signal
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: {"cell_id": np.array([0, 0, 1, 1])},
+    )
+    seeded = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60)
+    checkpoint_path = Path(seeded["checkpoint_path"])
+    seeded_checkpoint = runner.load_json(checkpoint_path)
+    # Leave one completed cell persisted while the next cell fails.  Capture
+    # complete records, not just counts, so TERM cannot hide replacement data.
+    seeded_checkpoint["cells"] = [
+        row
+        for row in seeded_checkpoint["cells"]
+        if row["config_index"] == 0 and row["cell_id"] == 0
+    ]
+    seeded_checkpoint["worlds"] = [
+        row
+        for row in seeded_checkpoint["worlds"]
+        if row["config_index"] == 0 and row["cell_id"] == 0
+    ]
+    previous_cells = copy.deepcopy(seeded_checkpoint["cells"])
+    previous_worlds = copy.deepcopy(seeded_checkpoint["worlds"])
+
+    def world_keys(rows):
+        return [(row["config_index"], row["cell_id"], row["sibling_index"]) for row in rows]
+
+    assert len(world_keys(previous_worlds)) == len(set(world_keys(previous_worlds)))
+    runner._write_json(checkpoint_path, seeded_checkpoint)
+
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: (_ for _ in ()).throw(RuntimeError("planned failure")),
+    )
+    original_write = runner._write_json
+    injected = False
+
+    def interrupt_checkpoint_write(path, value):
+        nonlocal injected
+        if path == checkpoint_path and not injected:
+            injected = True
+            os.kill(os.getpid(), signal.SIGTERM)
+        return original_write(path, value)
+
+    monkeypatch.setattr(runner, "_write_json", interrupt_checkpoint_write)
+    old_handler = signal.getsignal(signal.SIGTERM)
+    started = time.monotonic()
+    report = runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=60)
+    assert time.monotonic() - started < 5.0
+    persisted = runner.load_json(report["report_path"])
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    assert injected
+    assert report["status"] == "partial"
+    assert persisted["interrupted"]
+    assert len(checkpoint["config_failures"]) == 1
+    assert checkpoint["cells"][:1] == previous_cells
+    assert all(row in checkpoint["worlds"] for row in previous_worlds)
+    assert world_keys(checkpoint["worlds"]) == list(dict.fromkeys(world_keys(checkpoint["worlds"])))
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+
+
+def test_c2_runner_handles_term_during_finalization_after_completed_checkpoint(
+    tmp_path, monkeypatch
+):
+    import json
+    import os
+    import signal
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "_pilot_configurations",
+        lambda generator, seed: [
+            {"name": "primary_composable", "label": "primary", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner,
+        "pilot_seed_schedule",
+        lambda generator, seed: [
+            {"index": 0, "name": "primary_composable", "seed": seed, "generator": generator}
+        ],
+    )
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    original_cells = runner._pilot_cell_records
+
+    def slow_finalization(*args, **kwargs):
+        time.sleep(2)
+        return original_cells(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_pilot_cell_records", slow_finalization)
+    resolved = runner.resolve_config(config)
+    prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
+    output = tmp_path / "finalization"
+    pid = os.fork()
+    if pid == 0:
+        try:
+            runner.run_pilot(config, output_dir=output, wall_time_seconds=60)
+        finally:
+            os._exit(0)
+    checkpoint_path = output / f"{prefix}.checkpoint.json"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if checkpoint_path.is_file():
+            try:
+                checkpoint = json.loads(checkpoint_path.read_text())
+            except json.JSONDecodeError:
+                checkpoint = {}
+            if any(row.get("status") == "complete" for row in checkpoint.get("cells", [])):
+                break
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGTERM)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    report = runner.load_json(output / f"{prefix}.json")
+    assert report["status"] == "partial"
+    assert report["interrupted"]
+
+
+def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path, monkeypatch):
+    """Exercise TERM in a single-threaded runner process, not a forked pytest parent."""
+    import os
+    import signal
+    import time
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner,
+        "sample_prior_predictive",
+        lambda _prior: (time.sleep(2), {"cell_id": np.array([0, 0, 1, 1])})[1],
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    resolved = runner.resolve_config(config)
+    prefix = f"linear-recovery-c2-{resolved['config_hash'][:16]}"
+    pid = os.fork()
+    if pid == 0:
+        try:
+            runner.run_pilot(config, output_dir=tmp_path, wall_time_seconds=10)
+        finally:
+            os._exit(0)
+    time.sleep(0.2)
+    os.kill(pid, signal.SIGTERM)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    report = runner.load_json(tmp_path / f"{prefix}.json")
+    assert report["status"] == "partial"
+    assert report["interrupted"]
+    checkpoint = runner.load_json(report["checkpoint_path"])
+    persisted = runner.load_json(report["report_path"])
+    assert checkpoint["status"] == "partial"
+    assert persisted["status"] == "partial"
+    assert persisted["accounting"]["wall_elapsed_seconds"] >= 0.0
+
+
+def test_c2_runner_handles_deadline_during_generation_and_diagnostics(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import linear_recovery_prevalence as runner
+
+    config = _c2_mock_config()
+    monkeypatch.setattr(
+        runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
+    )
+    monkeypatch.setattr(runner, "data_diagnostics", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        runner,
+        "count_accounting",
+        lambda *args, **kwargs: {
+            "evaluated_candidates": 4,
+            "accepted_worlds": 4,
+            "rejected_candidates": 0,
+            "generation_failures": 0,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_compact_world_metric",
+        lambda _c, _p, _d, row, **kwargs: _c2_mock_record(
+            kwargs["config_index"], kwargs["cell_index"], kwargs["sibling_index"]
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_bounded_phase",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            runner._PilotDeadlineExceededError("deadline")
+        ),
+    )
+    generation = runner.run_pilot(
+        config, output_dir=tmp_path / "generation", wall_time_seconds=60, clock=lambda: 0.0
+    )
+    assert generation["status"] == "partial" and generation["accounting"]["complete_cells"] == 0
+
+    calls = {"phase": 0}
+
+    def phase(function, deadline, clock):
+        calls["phase"] += 1
+        if calls["phase"] == 2:
+            raise runner._PilotDeadlineExceededError("deadline")
+        return function()
+
+    monkeypatch.setattr(runner, "_bounded_phase", phase)
+    diagnostic = runner.run_pilot(
+        config, output_dir=tmp_path / "diagnostic", wall_time_seconds=60, clock=lambda: 0.0
+    )
+    assert diagnostic["status"] == "partial"
+    assert diagnostic["accounting"]["accepted_candidates"] == 4
+
+
+__all__ = [
+    "N_TIME_STEPS",
+    "SEED",
+    "WARMUP",
+    "_controlled_world",
+    "_fit",
+    "_mechanism_features",
+]
+
+
+def test_c2_compact_summary_is_portable_complete_and_provenance_bound():
+    from scripts import linear_recovery_prevalence as runner
+
+    summary = runner.validate_compact_summary(
+        "docs/examples/data/linear-recovery-prevalence.csv",
+        expected_config_hash="b2a7fb98d69cc8ed1463492f803f10baf3a33013f226ab136cfd28278634a014",
+        expected_manifest_hash=runner.COMPACT_MANIFEST_HASH,
+        expected_source_commit=runner.COMPACT_SOURCE_COMMIT,
+    )
+    assert summary["metadata"]["accounting"]["requested_cells"] == 320
+    assert summary["metadata"]["accounting"]["requested_worlds"] == 640
+    assert len(summary["metrics"]) == 280
+    assert len(summary["occupancy"]) == 160
+    assert {row["estimand"] for row in summary["metrics"]} == {"first_world", "any_sibling"}
+    assert any(row["status"] == "unavailable" for row in summary["occupancy"])
+
+
+def test_c2_compact_summary_rejects_wrong_settings_and_malformed_rows(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    with pytest.raises(ValueError, match="provenance"):
+        runner.validate_compact_summary(
+            "docs/examples/data/linear-recovery-prevalence.csv",
+            expected_config_hash="wrong",
+        )
+    broken = tmp_path / "broken.csv"
+    broken.write_text("schema_version,row_type\nwrong,metadata\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="header/schema"):
+        runner.validate_compact_summary(broken)
+
+
+def _write_compact_mutation(source, destination, mutate):
+    import csv
+
+    with open(source, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        fields = list(reader.fieldnames or [])
+    mutate(rows)
+    with open(destination, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+@pytest.mark.parametrize(
+    "name,mutate",
+    [
+        (
+            "invented metric",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                metric="invented"
+            ),
+        ),
+        (
+            "wrong view",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(view="unknown"),
+        ),
+        (
+            "wrong estimand",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                estimand="pooled"
+            ),
+        ),
+        (
+            "wrong status",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                status="unavailable"
+            ),
+        ),
+        (
+            "wrong n_cells",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(n_cells="31"),
+        ),
+        (
+            "wrong config",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(
+                config_name="other"
+            ),
+        ),
+        (
+            "wrong seed",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(seed="7"),
+        ),
+        (
+            "fabricated Wilson",
+            lambda rows: next(r for r in rows if r["row_type"] == "metric").update(ci_upper="1.0"),
+        ),
+        (
+            "wrong occupancy band",
+            lambda rows: next(r for r in rows if r["row_type"] == "occupancy").update(
+                control_band="[9,10]"
+            ),
+        ),
+        (
+            "wrong occupancy total",
+            lambda rows: next(r for r in rows if r["row_type"] == "occupancy").update(n_cells="2"),
+        ),
+        (
+            "zero cell available",
+            lambda rows: next(
+                r for r in rows if r["row_type"] == "occupancy" and r["n_cells"] == "0"
+            ).update(status="available"),
+        ),
+        (
+            "nonzero cell unavailable",
+            lambda rows: next(
+                r for r in rows if r["row_type"] == "occupancy" and r["n_cells"] != "0"
+            ).update(status="unavailable"),
+        ),
+    ],
+)
+def test_c2_compact_summary_rejects_each_publication_matrix_mutation(tmp_path, name, mutate):
+    from scripts import linear_recovery_prevalence as runner
+
+    mutated = tmp_path / f"{name.replace(' ', '-')}.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, mutate)
+    with pytest.raises(ValueError):
+        runner.validate_compact_summary(mutated)
+
+
+def test_c2_compact_summary_rejects_duplicate_and_missing_matrix_keys(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    def duplicate(rows):
+        metrics = [r for r in rows if r["row_type"] == "metric"]
+        metrics[1]["metric"] = metrics[0]["metric"]
+
+    mutated = tmp_path / "duplicate.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, duplicate)
+    with pytest.raises(ValueError):
+        runner.validate_compact_summary(mutated)
+
+
+def test_c2_compact_summary_rejects_total_preserving_occupancy_redistribution(tmp_path):
+    from scripts import linear_recovery_prevalence as runner
+
+    def redistribute(rows):
+        occupancy = [
+            row for row in rows if row["row_type"] == "occupancy" and row["config_index"] == "0"
+        ]
+        source = next(row for row in occupancy if row["key"].endswith("controls_3_5"))
+        destination = next(row for row in occupancy if row["key"].endswith("controls_1_2"))
+        assert int(source["n_cells"]) > 0
+        source["n_cells"] = str(int(source["n_cells"]) - 1)
+        destination["n_cells"] = str(int(destination["n_cells"]) + 1)
+
+    mutated = tmp_path / "redistributed-occupancy.csv"
+    _write_compact_mutation(
+        "docs/examples/data/linear-recovery-prevalence.csv", mutated, redistribute
+    )
+    with pytest.raises(ValueError, match="accepted matrix"):
+        runner.validate_compact_summary(mutated)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("realized_cells", 0),
+        ("evaluated_world_metrics", 0),
+        ("generation_failures", 99),
+        ("rejected_candidates", 99),
+    ],
+)
+def test_c2_compact_summary_rejects_each_omitted_accounting_mutation(tmp_path, field, value):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    def mutate(rows):
+        metadata = next(
+            row for row in rows if row["row_type"] == "metadata" and row["key"] == "accounting"
+        )
+        accounting = json.loads(metadata["value"])
+        accounting[field] = value
+        metadata["value"] = json.dumps(accounting, separators=(",", ":"))
+
+    mutated = tmp_path / f"accounting-{field}.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, mutate)
+    with pytest.raises(ValueError, match="accounting"):
+        runner.validate_compact_summary(mutated)
+
+
+def test_c2_compact_summary_rejects_grouped_omitted_accounting_mutation(tmp_path):
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    def mutate(rows):
+        metadata = next(
+            row for row in rows if row["row_type"] == "metadata" and row["key"] == "accounting"
+        )
+        accounting = json.loads(metadata["value"])
+        accounting.update(
+            realized_cells=0,
+            evaluated_world_metrics=0,
+            generation_failures=99,
+            rejected_candidates=99,
+        )
+        metadata["value"] = json.dumps(accounting, separators=(",", ":"))
+
+    mutated = tmp_path / "accounting-grouped.csv"
+    _write_compact_mutation("docs/examples/data/linear-recovery-prevalence.csv", mutated, mutate)
+    with pytest.raises(ValueError, match="accounting"):
+        runner.validate_compact_summary(mutated)
+
+
+def _compact_byte_fixture(tmp_path, monkeypatch):
+    """Build export inputs from the accepted, checked-in compact CSV."""
+    import csv
+    import hashlib
+    import json
+
+    from scripts import linear_recovery_prevalence as runner
+
+    csv_path = Path("docs/examples/data/linear-recovery-prevalence.csv")
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    csv_metadata = {
+        row["key"]: json.loads(row["value"]) for row in rows if row["row_type"] == "metadata"
+    }
+    accepted_hashes = {
+        "report": "49db994f3420e4b11616deaeb304f61b8d4dedb5e97acb35527e8506c4569b8c",
+        "checkpoint": "18f18c7e3f87632b3d048420716bd2d89337b571c2ce3140a25f5d087b2dc3b0",
+        "manifest": "8fa78d620e0bf3685f27f64a448ee157043e9706421dc5592b4c28b93130a0d5",
+        "run_log": "ee247b6b37cb379bd3c48f4a08f487e010cb6c943611a5d2a70f3a8aa297b87a",
+    }
+    assert runner.COMPACT_ARTIFACT_SHA256 == accepted_hashes
+    assert csv_metadata["artifact_sha256"] == accepted_hashes
+    assert (
+        runner.COMPACT_CONFIG_HASH
+        == "b2a7fb98d69cc8ed1463492f803f10baf3a33013f226ab136cfd28278634a014"
+    )
+    assert (
+        runner.COMPACT_MANIFEST_HASH
+        == "d597b07290e40c4d3c21f7744a507b3d2680e525c1dfd1a318545b60affcc334"
+    )
+    assert runner.COMPACT_SOURCE_COMMIT == csv_metadata["source_commit"]
+    assert runner.COMPACT_PACKAGE_VERSION == csv_metadata["package_version"]
+
+    resolved = runner.resolve_config(
+        json.loads(Path("docs/examples/data/linear-recovery-prevalence-config.json").read_text())
+    )
+    config_hash = resolved["config_hash"]
+    schedule = runner._expected_compact_schedule()
+    configs = []
+    for item in schedule:
+        index = str(item["index"])
+        config_metrics = [
+            r for r in rows if r["row_type"] == "metric" and r["config_index"] == index
+        ]
+        config_occupancy = [
+            r for r in rows if r["row_type"] == "occupancy" and r["config_index"] == index
+        ]
+        estimands = {}
+        for row in config_metrics:
+            result = {
+                "status": row["status"],
+                "n_cells": int(row["n_cells"]),
+                "n_successes": int(row["n_successes"]),
+                "rate": float(row["rate"]),
+                "interval": {"lower": float(row["ci_lower"]), "upper": float(row["ci_upper"])},
+            }
+            estimands.setdefault(row["estimand"], {}).setdefault(row["view"], {})[row["metric"]] = (
+                result
+            )
+        occupancy = {
+            r["key"]: {
+                "treatment_band": json.loads(r["treatment_band"]),
+                "control_band": json.loads(r["control_band"]),
+                "status": r["status"],
+                "n_cells": int(r["n_cells"]),
+            }
+            for r in config_occupancy
+        }
+        configs.append(
+            {
+                "config_index": item["index"],
+                "name": item["name"],
+                "label": "selected_primary_recipe"
+                if item["index"] == 0
+                else "runtime_stress_variant",
+                "seed": item["seed"],
+                "summary": {
+                    "status": "available",
+                    "estimands": estimands,
+                    "count_band_wilson": occupancy,
+                },
+            }
+        )
+
+    source = {
+        "package": "pymc-generator",
+        "source_commit": runner.COMPACT_SOURCE_COMMIT,
+        "package_version": runner.COMPACT_PACKAGE_VERSION,
+        "source_dirty": False,
+    }
+    manifest = {
+        "resolved_config": resolved,
+        "config_hash": config_hash,
+        "source_provenance": source,
+        "budget": {
+            "wall_time_seconds": resolved["study"]["pilot_wall_time_seconds"],
+            "stop_rules": {
+                "count_stratum_overrun": "report realized and empty bands instead of treating them as balanced"
+            },
+        },
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(runner.canonical_json(manifest), encoding="utf-8")
+    manifest_hash = runner.config_hash(manifest)
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "cells": [{}] * 320,
+                "worlds": [{}] * 640,
+                "wall_elapsed_seconds": 1.0,
+                "completed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+    report = {
+        "status": "complete",
+        "accounting": {
+            "requested_cells": 320,
+            "complete_cells": 320,
+            "realized_cells": 320,
+            "requested_worlds": 640,
+            "accepted_world_metrics": 640,
+            "evaluated_world_metrics": 640,
+            "failures": 0,
+            "generation_failures": 0,
+            "rejected_candidates": 0,
+            "wall_elapsed_seconds": 1.0,
+        },
+        "configs": configs,
+        "config_hash": config_hash,
+        "manifest_hash": manifest_hash,
+        "resolved_config": resolved,
+        "source_provenance": source,
+        "schedule": csv_metadata["seed_schedule"],
+        "checkpoint_path": str(checkpoint_path),
+        "report_path": str(report_path),
+        "manifest_path": str(manifest_path),
+    }
+    report_path.write_text(runner.canonical_json(report), encoding="utf-8")
+    manifest_path.write_text(runner.canonical_json(manifest), encoding="utf-8")
+    run_log = tmp_path / "pilot-run.log"
+    run_log.write_bytes(b"synthetic fixture log\n")
+    paths = {
+        "report": report_path,
+        "checkpoint": checkpoint_path,
+        "manifest": manifest_path,
+        "run_log": run_log,
+    }
+    synthetic_hashes = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in paths.items()
+    }
+    monkeypatch.setattr(runner, "COMPACT_ARTIFACT_SHA256", synthetic_hashes)
+    monkeypatch.setattr(runner, "COMPACT_CONFIG_HASH", config_hash)
+    monkeypatch.setattr(runner, "COMPACT_MANIFEST_HASH", manifest_hash)
+    return runner, report, manifest, paths
+
+
+def test_c2_compact_export_binds_supplied_source_bytes(tmp_path, monkeypatch):
+    import json
+
+    runner, report, manifest, paths = _compact_byte_fixture(tmp_path, monkeypatch)
+    report_path = paths["report"]
+    metadata = runner.export_compact_summary(
+        report, manifest, tmp_path / "valid.csv", artifact_paths=paths
+    )
+    assert metadata["artifact_sha256"] == runner.COMPACT_ARTIFACT_SHA256
+
+    modified_report_path = tmp_path / "modified-report.json"
+    modified_report_path.write_bytes(report_path.read_bytes() + b"\\n")
+    modified_report = dict(report, report_path=str(modified_report_path))
+    with pytest.raises(ValueError, match="artifact bytes"):
+        runner.export_compact_summary(
+            modified_report,
+            manifest,
+            tmp_path / "modified.csv",
+            artifact_paths={**paths, "report": modified_report_path},
+        )
+
+    alternate_manifest = tmp_path / "alternate.manifest.json"
+    changed = dict(manifest)
+    changed["source_provenance"] = dict(changed["source_provenance"], source_commit="bogus")
+    alternate_manifest.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(ValueError):
+        runner.export_compact_summary(
+            report,
+            changed,
+            tmp_path / "alternate.csv",
+            artifact_paths={**paths, "manifest": alternate_manifest},
+        )
+
+
+def test_c2_compact_export_rejects_same_config_commit_alternate_manifest_bytes(
+    tmp_path, monkeypatch
+):
+    import json
+
+    runner, report, manifest, paths = _compact_byte_fixture(tmp_path, monkeypatch)
+    report_path = paths["report"]
+    manifest_path = paths["manifest"]
+    original_policy = "report realized and empty bands instead of treating them as balanced"
+    alternate_policy = (
+        "report realized and empty bands; do not treat count strata as balanced quotas"
+    )
+    assert manifest["budget"]["stop_rules"]["count_stratum_overrun"] == original_policy
+    changed = dict(
+        manifest,
+        budget=dict(
+            manifest["budget"],
+            stop_rules=dict(
+                manifest["budget"]["stop_rules"],
+                count_stratum_overrun=alternate_policy,
+            ),
+        ),
+    )
+    assert changed["resolved_config"] == manifest["resolved_config"]
+    assert changed["config_hash"] == manifest["config_hash"]
+    assert (
+        changed["source_provenance"]["source_commit"]
+        == manifest["source_provenance"]["source_commit"]
+    )
+    assert (
+        changed["budget"]["wall_time_seconds"]
+        == changed["resolved_config"]["study"]["pilot_wall_time_seconds"]
+        == manifest["budget"]["wall_time_seconds"]
+    )
+    assert changed["budget"]["stop_rules"]["count_stratum_overrun"] == alternate_policy
+
+    alternate_manifest = tmp_path / "alternate-manifest.json"
+    alternate_manifest.write_text(json.dumps(changed), encoding="utf-8")
+    assert runner.load_json(alternate_manifest) == changed
+    alternate_report = dict(report, manifest_path=str(alternate_manifest))
+    assert alternate_report["manifest_path"] == str(alternate_manifest)
+    paths = {
+        "report": report_path,
+        "checkpoint": Path(report["checkpoint_path"]),
+        "manifest": alternate_manifest,
+        "run_log": manifest_path.with_name("pilot-run.log"),
+    }
+    assert runner._sha256_file(manifest_path) == runner.COMPACT_ARTIFACT_SHA256["manifest"]
+    assert runner._sha256_file(alternate_manifest) != runner.COMPACT_ARTIFACT_SHA256["manifest"]
+    with pytest.raises(ValueError) as exc_info:
+        runner._validated_artifact_hashes(alternate_report, changed, paths)
+    assert str(exc_info.value) == "compact source artifact bytes do not match accepted hashes"
+
+
+def test_c2_notebook_is_qualified_and_cleared():
+    import json
+
+    notebook = json.loads(Path("docs/examples/linear-recovery.ipynb").read_text(encoding="utf-8"))
+    text = "\\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
+    assert "paired representations" in text
+    assert "not proof of identification or conditioning improvement" in text
+    assert "inclusive `>=`" in text
+    assert "unscaled, uncentered" in text
+    assert "intercept geometry" in text
+    assert all(
+        cell.get("execution_count") is None and cell.get("outputs") == []
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "widgets" not in notebook.get("metadata", {})
