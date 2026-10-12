@@ -114,6 +114,8 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    # Executed, hash-pinned generated reports; their source is build_notebook.py.
+    "studies/recovery/results/*/report.ipynb",
 ]
 
 [tool.ruff.lint]

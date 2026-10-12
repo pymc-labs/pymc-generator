@@ -28,8 +28,8 @@ Use Python 3.13.12 with the repository's pinned `studies/recovery/requirements-r
 
 ```sh
 # cd /path/to/CLEAN-PR2-source-export  # no old studies/recovery/report-artifacts, no old notebooks/* fit/data
-P=/tmp/recovery-pipeline-export.JV7T5W/studies/recovery/.venv/bin  # example existing isolated env; replace with your installed env/bin
-export JUPYTER_PATH=/tmp/recovery-pipeline-export.JV7T5W/studies/recovery/.venv/share/jupyter
+P=studies/recovery/.venv/bin  # isolated env created per studies/recovery/README.md
+export JUPYTER_PATH="$PWD/studies/recovery/.venv/share/jupyter"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMBA_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1
 $P/python -m pytest -p no:cacheprovider studies/recovery/results/tv_baseline/test_results.py -q
 $P/python studies/recovery/results/tv_baseline/build_notebook.py
