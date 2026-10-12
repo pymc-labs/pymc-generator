@@ -155,6 +155,7 @@ nav:
       - Audit bundles: guide/bundles.md
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
+      - Input trajectories: guide/trajectories.md
       - The posterior oracle: guide/oracle.md
       - Interrogating the data: guide/data-diagnostics.md
       - Comparing worlds: guide/world-descriptors.md

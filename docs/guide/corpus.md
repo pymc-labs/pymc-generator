@@ -210,6 +210,24 @@ finiteness, binary masks, and normalization identities — and returns a list of
 errors (empty means valid). `DataGenerator.generate` runs it for you unless you
 pass `validate=False`.
 
+It also requires `treatment_raw >= 0` in every corpus; every corpus the
+generator has produced satisfies that by construction, so the rule rejects no
+existing shard. When the optional [trajectory block](#composable-input-trajectories) is
+present, `validate_corpus` checks it end to end: its six arrays and
+`diagnostics["trajectory"]` present together, their shapes and dtypes, binary
+flags and activity, zero padding, flags constant within a cell, activity `1` on
+active inputs without a gate component and shift `0.0` on active inputs without
+a level component, and the converse for active gated inputs — any gate flag
+means at least one off-week in the window and at least two on-weeks inside the
+task's support window, an `onset` flag means week 0 is off, and an `offset` flag
+means the last week is off. It also checks `treatment_raw == 0` on activity-off
+weeks outside shocks and `covariates == 0` on covariate off-weeks, the canonical
+component layout, inclusion probabilities that are floats in `[0, 1]` — an echo
+of exactly `0.0` requires prevalence `0`, and one of exactly `1.0` prevalence
+`1` wherever that input type has active inputs, both counted from the stored
+flags — and `prevalence` / `n_inputs` equal to their exact recomputation from
+the stored flags.
+
 ```python exec="1" source="block" result="text"
 from scm_docs import corpus
 from pymc_generator.data_generator import DataGenerator
@@ -362,6 +380,7 @@ serves every level.
 | **Nonlinearity** | treatment-response family mix | `nonlinearity="diverse"` / `"linear"` |
 | **Signal / noise** | coefficient & noise ranges | `**overrides` |
 | **Texture** | treatments' and covariates' high-frequency drive | explicit noise, pulse, and walk ranges |
+| **Trajectories** | which inputs launch, stop, run in flights, jump, cycle or drift | `trajectories="composable"` or an [archetype](trajectories.md#archetypes); the `*_inclusion_prob` knobs and component priors |
 
 ### The edge budget
 
@@ -455,3 +474,63 @@ print("echo:", c["diagnostics"]["prior_cond"]["supports"])
 - The single-world path honors the same draw: `sample_scm` records the
   intervals in `SCM.extras["prior_cond"]` and `describe_scm` prints them
   alongside the mechanisms they bound.
+
+## Composable input trajectories
+
+A config that sets any [trajectory knob](trajectories.md) away from its default
+(`SCMPrior.trajectory_metadata_enabled`) adds six arrays and a
+`diagnostics["trajectory"]` block to the corpus. They are present together or not
+at all; a default corpus has none of them and is byte-identical to one
+generated before they existed.
+
+| Key | Shape | dtype | Meaning |
+| --- | --- | --- | --- |
+| `treatment_components` | `(n_tasks, n_treatments, 8)` | `uint8` | `1` where the treatment carries the component, in `TRAJECTORY_COMPONENTS` order; constant within a cell |
+| `covariate_components` | `(n_tasks, n_covariates, 8)` | `uint8` | the same for covariates |
+| `treatment_activity` | `(n_tasks, n_time_steps, n_treatments)` | `uint8` | the gate schedule, `1` = on; all ones for an input without a gate |
+| `covariate_activity` | `(n_tasks, n_time_steps, n_covariates)` | `uint8` | the same for covariates |
+| `treatment_log_level_shift` | `(n_tasks, n_time_steps, n_treatments)` | `float32` | seasonal + trend + `log f` of every passed jump — the log of the level multiplier; `0.0` without a level component |
+| `covariate_level_shift` | `(n_tasks, n_time_steps, n_covariates)` | `float32` | seasonal + trend + every passed jump size, in covariate units |
+
+The component axis follows `pymc_generator.slots.TRAJECTORY_COMPONENTS`
+(`hf, pulse, onset, offset, flighting, level_jump, seasonal, trend`). Padded
+slots are zero in all six arrays, and a config that only changes `hf` / `pulse`
+probabilities stores activity `1` and shift `0.0` on every active input.
+Off-weeks are exact: `treatment_raw == 0.0` there outside shocks, and
+`covariates == 0.0`. `treatment_activity` is the schedule **gate**, not the
+realised on-state — a [treatment shock](../reference/config.md#treatment-shocks)
+holds its level through an off-week — so read it with `treatment_shock_mask`.
+
+```python exec="1" source="block" result="text"
+import pymc_generator as pg
+from pymc_generator.data_generator import DataGenerator
+from pymc_generator.slots import TRAJECTORY_ARRAY_FIELDS
+
+cfg = pg.make_scm_prior(n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=40,
+                        n_cells=2, draws_per_cell=2, seed=7, trajectories="composable")
+c = pg.sample_prior_predictive(cfg)
+
+for key in TRAJECTORY_ARRAY_FIELDS:
+    print(f"{key:<26} {str(c[key].shape):<12} {c[key].dtype}")
+block = c["diagnostics"]["trajectory"]
+print("diagnostics['trajectory'] keys:", list(block))
+print("n_inputs:", block["n_inputs"])
+print("treatment prevalence:", {k: round(v, 2) for k, v in block["prevalence"]["treatment"].items()})
+print("validation errors:", DataGenerator.validate_corpus(c) or "none")
+```
+
+- `components` is the layout list above.
+- `inclusion_probs` echoes the **effective** probabilities,
+  `SCMPrior.trajectory_inclusion_probs()`: `hf` / `pulse` read `0.0` wherever
+  their texture range is off.
+- `prevalence[input][component]` is the fraction of active `(task, input)`
+  slots — `*_active_mask == 1` — whose stored flag is `1`, and
+  `n_inputs[input]` is that denominator; padded slots never count. Both are
+  computed from the stored arrays after any `n=` truncation, so they describe
+  the corpus you hold, and `validate_corpus` recomputes them exactly.
+- Every value is a plain Python `float` or `int`, so the block round-trips
+  through `save_corpus` / `load_corpus` unchanged.
+
+There is no schema-version bump: like `prior_cond`, the block is optional, so
+persisted v4 corpora are unchanged. See the [trajectories guide](trajectories.md)
+for the archetypes these arrays record.

@@ -203,6 +203,46 @@ CORPUS_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
     "weibull_k": (("task", "treatment"), np.float32),
 }
 
+# --------------------------------------------------------------------------
+# Composable per-input trajectories (optional corpus block)
+# --------------------------------------------------------------------------
+#: Input series that carry trajectory components, in canonical order.
+TRAJECTORY_INPUTS: tuple[str, ...] = ("treatment", "covariate")
+
+#: Per-input trajectory components, in the canonical order of the stored
+#: ``component`` axis and of ``diagnostics["trajectory"]``. ``hf`` and ``pulse``
+#: are the existing texture terms; ``onset``/``offset``/``flighting`` are the
+#: gate forms; ``level_jump``/``seasonal``/``trend`` are the level forms.
+TRAJECTORY_COMPONENTS: tuple[str, ...] = (
+    "hf",
+    "pulse",
+    "onset",
+    "offset",
+    "flighting",
+    "level_jump",
+    "seasonal",
+    "trend",
+)
+
+#: Largest admitted treatment log-level swing ``A_hi + |B|_max + K·max|log f|``
+#: (seasonal amplitude, trend change, jump count times jump size), i.e. a level
+#: multiplier within ``[e^-3, e^3]`` (about x20). It keeps scheduled treatments at a
+#: realism-filter scale and their decomposition representable in float32.
+TRAJECTORY_MAX_LOG_SHIFT: float = 3.0
+
+#: Optional trajectory arrays, present together (with ``diagnostics["trajectory"]``)
+#: iff the config sets any trajectory inclusion knob. ``*_components`` are the
+#: per-input 0/1 component flags; ``*_activity`` is the gate schedule (1 = on);
+#: ``*_level_shift`` is the summed level component (treatments: log-level).
+TRAJECTORY_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
+    "treatment_components": (("task", "treatment", "component"), np.uint8),
+    "covariate_components": (("task", "covariate", "component"), np.uint8),
+    "treatment_activity": (("task", "time", "treatment"), np.uint8),
+    "covariate_activity": (("task", "time", "covariate"), np.uint8),
+    "treatment_log_level_shift": (("task", "time", "treatment"), np.float32),
+    "covariate_level_shift": (("task", "time", "covariate"), np.float32),
+}
+
 
 @dataclass(frozen=True)
 class SlotLayout:

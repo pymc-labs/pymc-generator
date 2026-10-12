@@ -44,6 +44,7 @@ from .symbolic_graph import (
     _walk_column,
     build_symbolic_graph,
 )
+from .trajectories import sample_component_flags, trajectory_params
 
 # Compiling a draw function costs seconds, so repeated batches from the SAME
 # model (realism-filter top-up rounds) reuse one. The cache lives on the model
@@ -202,10 +203,10 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     def _smooth(n: int) -> np.ndarray:
         return rng.beta(cfg.rw_smoothness_alpha, cfg.rw_smoothness_beta, size=n)
 
-    hf_on = float(cfg.treatment_hf_sigma_range[1]) > 0.0
-    pulse_on = float(cfg.treatment_pulse_prob_range[1]) > 0.0
-    covariate_hf_on = float(cfg.covariate_hf_sigma_range[1]) > 0.0
-    covariate_pulse_on = float(cfg.covariate_pulse_prob_range[1]) > 0.0
+    # Per-input component inclusion. Probabilities of 0 or 1 (the defaults:
+    # all-or-none legacy texture) draw nothing; fractional ones draw from child
+    # streams spawned off ``rng`` without touching its bit-generator state.
+    flags = sample_component_flags(cfg, n_treatments, n_covariates, rng)
     return {
         "carryover_family": ad_fam.astype(int),
         "sat_family": sat_fam.astype(int),
@@ -213,10 +214,7 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
         "smoothness_z": _smooth(n_covariates),
         "smoothness_c": _smooth(n_treatments),
         "smoothness_b": _smooth(1),
-        "use_hf": np.full(n_treatments, hf_on),
-        "use_pulse": np.full(n_treatments, pulse_on),
-        "use_covariate_hf": np.full(n_covariates, covariate_hf_on),
-        "use_covariate_pulse": np.full(n_covariates, covariate_pulse_on),
+        **flags,
     }
 
 
@@ -1052,6 +1050,12 @@ def build_world_model(
             params["covariate_pulse_prob"],
         )
         confounding_strength = _confounded_treatment_eps(cfg, eps)
+        # Composable trajectory components: RVs only for components some input
+        # of this cell carries; absent (None) when no schedule component is
+        # enabled, which leaves the graph exactly as before.
+        trajectory = trajectory_params(cfg, structural, n_treatments, n_covariates, n_time_steps)
+        if trajectory is not None:
+            params["trajectory"] = trajectory
 
         graph = build_symbolic_graph(
             g_active,
