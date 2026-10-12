@@ -32,6 +32,13 @@ def test_active_conda_recipes_declare_nutpie_runtime_dependency(recipe_path: Pat
     assert "nutpie" in _recipe_runtime_requirements(recipe_path)
 
 
+@pytest.mark.parametrize("recipe_path", [RECIPE, CONDA_FORGE_RECIPE])
+def test_active_conda_recipes_declare_bounded_arviz_runtime_dependency(recipe_path: Path):
+    assert "arviz" in _project_runtime_requirements()
+    runtime = recipe_path.read_text().split("\n  run:\n", 1)[1].split("\n\ntest:", 1)[0]
+    assert "- arviz >=1,<2" in runtime
+
+
 def test_public_nutpie_requirement_remains_unpinned():
     with PYPROJECT.open("rb") as pyproject:
         dependencies = tomllib.load(pyproject)["project"]["dependencies"]

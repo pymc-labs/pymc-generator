@@ -1418,9 +1418,9 @@ def build_oracle_model(
 
         def _oracle_spec(key: str):
             name, lo, hi, shape = specs[key]
-            if key == "carryover_alpha":
+            if key == "carryover_alpha" and lo != hi:
                 lo, hi = prior_bounds["carryover_alpha"]
-            elif key == "hill_slope":
+            elif key == "hill_slope" and lo != hi:
                 lo, hi = prior_bounds["hill_shape"]
             return name, lo, hi, shape
 

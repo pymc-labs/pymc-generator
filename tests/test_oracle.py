@@ -754,6 +754,7 @@ def test_oracle_reproduces_every_week_when_no_carryover_is_admitted():
 
     oracle = world.oracle_model()
     assert tuple(oracle["outcome"].shape.eval()) == (cfg.n_time_steps,)
+    assert np.isfinite(oracle.compile_logp()(oracle.initial_point()))
 
     truth_values = {**world.params, **world.exogenous}
     treatment_amplitude = np.sqrt(np.sum((world.g["g_cy"] * world.params["beta"]) ** 2))

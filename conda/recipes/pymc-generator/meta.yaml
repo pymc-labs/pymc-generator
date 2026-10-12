@@ -21,8 +21,8 @@ requirements:
     - wheel
   run:
     # Mirror pyproject.toml's runtime requirements exactly. Transitive packages
-    # (arviz, numba, pydantic, scikit-learn, preliz, pymc-extras) are resolved
-    # by pymc/pymc-marketing and are deliberately not re-declared here: exact
+    # (numba, pydantic, scikit-learn, preliz, pymc-extras) are resolved by
+    # pymc/pymc-marketing and are deliberately not re-declared here: exact
     # `==` run pins would make this package uninstallable beside any other
     # conda-forge content and are rejected by conda-forge review. Exact
     # reproduction of the validated stack belongs to uv.lock and to the
@@ -36,6 +36,7 @@ requirements:
     - pytensor >=3.2.3,<4
     - pymc >=6.2,<7
     - pymc-marketing >=1.1,<2
+    - arviz >=1,<2
     - nutpie
 
 test:

@@ -48,6 +48,8 @@ def _tree(
     energy: Any = None,
     tree_depth: Any = None,
     reached_max_treedepth: Any = None,
+    depth: Any = None,
+    maxdepth_reached: Any = None,
     include_posterior: bool = True,
     include_stats: bool = True,
 ):
@@ -65,6 +67,8 @@ def _tree(
             "energy": energy,
             "tree_depth": tree_depth,
             "reached_max_treedepth": reached_max_treedepth,
+            "depth": depth,
+            "maxdepth_reached": maxdepth_reached,
         }
         data = {
             name: (("chain", "draw"), np.asarray(value))
@@ -233,6 +237,9 @@ def test_config_rejects_nondefault_adaptation_for_pymc():
         "blocking",
         "sampler",
         "adaptation",
+        "low_rank_modified_mass_matrix",
+        "transform_adapt",
+        "use_grad_based_mass_matrix",
         "nuts_sampler_kwargs",
         "return_raw_trace",
         "progressbar",
@@ -397,8 +404,11 @@ def test_sample_oracle_uses_only_scm_oracle_model_and_one_nuts_call(monkeypatch,
         "progressbar": False,
         "compute_convergence_checks": False,
         "nuts_sampler": nuts_sampler,
-        **({"nuts_sampler_kwargs": {"adaptation": "diag"}} if nuts_sampler == "nutpie" else {}),
-        "nuts": {"max_treedepth": 12},
+        **(
+            {"nuts": {"max_treedepth": 12, "adaptation": "diag"}}
+            if nuts_sampler == "nutpie"
+            else {"nuts": {"max_treedepth": 12}}
+        ),
     }
     assert result.idata is tree
     assert isinstance(result.idata, xr.DataTree)
@@ -409,8 +419,22 @@ def test_one_shot_nutpie_passes_exact_adaptation_through_supported_kwargs(monkey
     result, calls = _sample(
         monkeypatch, _valid_tree(), adaptation="draw_diag", nuts_sampler="nutpie"
     )
-    assert calls[0]["nuts_sampler_kwargs"] == {"adaptation": "draw_diag"}
+    assert calls[0]["nuts"] == {"adaptation": "draw_diag"}
+    assert "nuts_sampler_kwargs" not in calls[0]
     assert result.receipt.to_dict()["sampling"]["requested"]["adaptation"] == "draw_diag"
+
+
+def test_one_shot_nutpie_rejects_user_nuts_adaptation(monkeypatch):
+    world, model_calls = _world()
+    sample_calls = []
+    monkeypatch.setattr(oracle.pm, "sample", lambda **kwargs: sample_calls.append(kwargs))
+    with pytest.raises(ValueError, match="must not set adaptation"):
+        pg.sample_oracle(
+            world,
+            pg.OracleSamplingConfig(sampler_kwargs={"nuts": {"adaptation": "low_rank"}}),
+        )
+    assert model_calls == []
+    assert sample_calls == []
 
 
 def test_nondefault_nutpie_adaptation_rejects_before_sampling(monkeypatch):
@@ -662,6 +686,24 @@ def test_diagnostics_use_bracket_groups_and_expected_reductions(monkeypatch):
         "status": "available",
         "value": 0,
         "source": "reached_max_treedepth",
+    }
+
+
+def test_diagnostics_accept_nutpie_tree_depth_stat_names(monkeypatch):
+    tree = _valid_tree(
+        tree_depth=None,
+        reached_max_treedepth=None,
+        depth=np.full((2, 4), 7),
+        maxdepth_reached=np.array([[False, True, False, False], [False] * 4]),
+    )
+    _patch_arviz(monkeypatch)
+    result, _ = _sample(monkeypatch, tree)
+    diagnostics = result.receipt.to_dict()["diagnostics"]
+    assert diagnostics["tree_depth_max"] == {"status": "available", "value": 7}
+    assert diagnostics["tree_depth_saturation"] == {
+        "status": "available",
+        "value": 1,
+        "source": "maxdepth_reached",
     }
 
 
@@ -960,6 +1002,74 @@ def test_compile_oracle_compiles_once_and_binds_each_fit(monkeypatch):
     assert not np.array_equal(fake.payloads[0]["sales_data"], fake.payloads[1]["sales_data"])
     assert set(fake.payloads[0]) == set(pg.ORACLE_SHARED_DATA_NAMES)
     assert np.array_equal(fake.payloads[0]["observed_indices_data"], [0, 1, 2])
+
+
+def test_generated_marginal_template_binds_only_connected_inputs():
+    cfg = pg.make_scm_prior(
+        n_time_steps=20,
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_cells=2,
+        edge_budget={
+            "cy": (1, 1),
+            "dc": 0,
+            "dy": 0,
+            "zy": 0,
+            "dz": 0,
+            "zc": 0,
+            "cc": 0,
+            "zz": 0,
+        },
+    )
+    world = pg.sample_scm(cfg, seed=3, max_eps_draws=4)
+    assert np.array_equal(world.g["g_dy"], np.zeros(1))
+    template = pg.build_oracle_template(world, latent="marginal")
+    assert {"g_db_data", "walk_width_d_data"}.isdisjoint(template.data_contract or ())
+    fake = _FakeCompiled(_valid_tree())
+
+    _compiled(template, fake).fit(world)
+
+    assert set(fake.payloads[0]) == set(template.data_contract or ())
+
+
+def test_prior_conditioned_template_binds_only_connected_mechanism_inputs():
+    cfg = pg.make_scm_prior(
+        n_time_steps=20,
+        n_treatments=1,
+        n_covariates=1,
+        n_latent=1,
+        n_cells=2,
+        prior_conditioning=True,
+        carryover_family_probs={"none": 1.0, "geometric": 0.0, "weibull": 0.0},
+        saturation_family_probs={
+            "linear": 1.0,
+            "hill": 0.0,
+            "logistic": 0.0,
+            "michaelis_menten": 0.0,
+            "tanh": 0.0,
+            "root": 0.0,
+        },
+    )
+    world = pg.sample_scm(cfg, seed=3, max_eps_draws=4)
+    template = pg.build_oracle_template(world, latent="marginal")
+    assert {
+        "prior_cond_carryover_alpha_data",
+        "prior_cond_hill_shape_data",
+    }.isdisjoint(template.data_contract or ())
+    fake = _FakeCompiled(_valid_tree())
+
+    _compiled(template, fake).fit(world)
+
+    assert set(fake.payloads[0]) == set(template.data_contract or ())
+
+
+def test_compile_oracle_reports_missing_runtime_nutpie(monkeypatch):
+    template, _ = _shared_template_and_world()
+    monkeypatch.setitem(__import__("sys").modules, "nutpie", None)
+
+    with pytest.raises(ImportError, match="runtime dependency"):
+        pg.compile_oracle(template)
 
 
 def test_generated_compiled_receipt_binds_canonical_78_observed_indices(monkeypatch):

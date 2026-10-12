@@ -45,7 +45,7 @@ requirements:
     - setuptools >=77
     - wheel
   run:
-    # Mirrors pyproject.toml. Transitive packages (arviz, numba, pydantic,
+    # Mirrors pyproject.toml. Transitive packages (numba, pydantic,
     # scikit-learn, preliz, pymc-extras) are resolved through pymc and
     # pymc-marketing and are deliberately not re-declared. The package runtime
     # requirement remains the unpinned `nutpie` entry below.
@@ -58,6 +58,7 @@ requirements:
     - pytensor >=3.2.3,<4
     - pymc >=6.2,<7
     - pymc-marketing >=1.1,<2
+    - arviz >=1,<2
     - nutpie
 
 test:

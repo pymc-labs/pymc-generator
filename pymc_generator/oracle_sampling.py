@@ -52,6 +52,9 @@ _RESERVED_SAMPLER_KWARGS = frozenset(
         "blocking",
         "sampler",
         "adaptation",
+        "low_rank_modified_mass_matrix",
+        "transform_adapt",
+        "use_grad_based_mass_matrix",
         "init_mean",
         "return_raw_trace",
         "progress_callback",
@@ -464,7 +467,11 @@ def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, An
         for name in ("divergences", "tree_depth_max", "tree_depth_saturation", "bfmi"):
             diagnostics[name] = _metric("unavailable", reason="sample_stats_group_missing")
     else:
-        for field, name in (("diverging", "divergences"), ("tree_depth", "tree_depth_max")):
+        for fields, name in (
+            (("diverging",), "divergences"),
+            (("tree_depth", "depth"), "tree_depth_max"),
+        ):
+            field = next((field for field in fields if field in sample_stats), fields[0])
             if field not in sample_stats:
                 diagnostics[name] = _metric("unavailable", reason=f"{field}_missing")
                 continue
@@ -488,9 +495,17 @@ def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, An
                     diagnostics[name] = _metric("available", int(np.max(finite)))
             except Exception:
                 diagnostics[name] = _metric("invalid", reason=f"{field}_malformed")
-        if "reached_max_treedepth" in sample_stats:
+        saturation_field = next(
+            (
+                field
+                for field in ("reached_max_treedepth", "maxdepth_reached")
+                if field in sample_stats
+            ),
+            None,
+        )
+        if saturation_field is not None:
             try:
-                stat = sample_stats["reached_max_treedepth"]
+                stat = sample_stats[saturation_field]
                 values = np.asarray(stat.values)
                 if not _valid_sampling_stat(stat, sizes):
                     raise ValueError
@@ -503,11 +518,11 @@ def _diagnostics(idata: DataTree, az: Any) -> tuple[dict[str, Any], dict[str, An
                     diagnostics["tree_depth_saturation"] = _metric(
                         "available",
                         int(np.sum(finite.astype(bool))),
-                        source="reached_max_treedepth",
+                        source=saturation_field,
                     )
             except Exception:
                 diagnostics["tree_depth_saturation"] = _metric(
-                    "invalid", reason="reached_max_treedepth_malformed"
+                    "invalid", reason=f"{saturation_field}_malformed"
                 )
         else:
             diagnostics["tree_depth_saturation"] = _metric(
@@ -645,6 +660,21 @@ def sample_oracle(
         raise TypeError("criteria must be an OracleHealthCriteria")
     config.validate()
     criteria.validate()
+    sample_kwargs = _mutable(config.sampler_kwargs)
+    if config.nuts_sampler == "nutpie":
+        user_nuts = sample_kwargs.pop("nuts", None)
+        if user_nuts is None:
+            nuts = {}
+        elif not isinstance(user_nuts, Mapping):
+            raise TypeError("sampler_kwargs['nuts'] must be a mapping")
+        else:
+            nuts = dict(user_nuts)
+        if "adaptation" in nuts:
+            raise ValueError(
+                "sampler_kwargs['nuts'] must not set adaptation; use config.adaptation"
+            )
+        nuts["adaptation"] = config.adaptation
+        sample_kwargs["nuts"] = nuts
     if not callable(getattr(world, "oracle_model", None)):
         raise TypeError("world must provide a callable oracle_model")
     identities = {}
@@ -674,12 +704,7 @@ def sample_oracle(
         progressbar=config.progressbar,
         compute_convergence_checks=config.compute_convergence_checks,
         nuts_sampler=config.nuts_sampler,
-        **(
-            {"nuts_sampler_kwargs": {"adaptation": config.adaptation}}
-            if config.nuts_sampler == "nutpie"
-            else {}
-        ),
-        **_mutable(config.sampler_kwargs),
+        **sample_kwargs,
     )
     if not isinstance(idata, DataTree):
         raise TypeError("pm.sample must return an xarray.DataTree")
@@ -1138,29 +1163,6 @@ def _dynamic_payload(world: Any, names: set[str]) -> dict[str, np.ndarray]:
     return result
 
 
-def _required_dynamic_names(world: Any) -> set[str]:
-    extras = getattr(world, "extras", {})
-    prior = extras.get("prior_cond") or {}
-    required = {
-        {
-            "carryover_alpha": "prior_cond_carryover_alpha_data",
-            "hill_shape": "prior_cond_hill_shape_data",
-        }[key]
-        for key in prior
-        if key in {"carryover_alpha", "hill_shape"}
-    }
-    structural = extras.get("structural", {})
-    required.update(
-        name
-        for key, name in (
-            ("smoothness_d", "walk_width_d_data"),
-            ("smoothness_b", "walk_width_b_data"),
-        )
-        if key in structural
-    )
-    return required
-
-
 def _normalise_int32_payload(value: Any, *, name: str) -> np.ndarray:
     """Convert a discrete payload to int32 without accepting lossy values."""
     raw = np.asarray(value)
@@ -1510,16 +1512,14 @@ class CompiledOracle:
             )
         contract = self.template.data_contract or ORACLE_SHARED_DATA_NAMES
         dynamic_names = set(contract) - set(ORACLE_SHARED_DATA_NAMES)
-        missing_dynamic = _required_dynamic_names(world) - dynamic_names
-        if missing_dynamic:
-            raise ValueError(
-                "Oracle template data contract is missing required runtime inputs: "
-                + repr(sorted(missing_dynamic))
-            )
-        payload = _oracle_payload(world, indices, dynamic_names=dynamic_names)
+        payload = {
+            name: value
+            for name, value in _oracle_payload(world, indices, dynamic_names=dynamic_names).items()
+            if name in contract
+        }
         if set(payload) != set(contract):
             raise ValueError("Oracle data payload does not exactly match the required shared set")
-        for name in ORACLE_SHARED_DATA_NAMES + tuple(sorted(dynamic_names)):
+        for name in contract:
             variable = self.template.model.named_vars.get(name)
             if not isinstance(variable, SharedVariable):
                 variable = next(
@@ -1654,7 +1654,10 @@ def compile_oracle(template: OracleTemplate | SCM, **kwargs: Any) -> CompiledOra
     try:
         import nutpie  # type: ignore[import-untyped]
     except ImportError as error:
-        raise ImportError("compile_oracle requires the optional nutpie dependency") from error
+        raise ImportError(
+            "compile_oracle requires nutpie, a runtime dependency of pymc-generator; "
+            "reinstall the package"
+        ) from error
     compiled = nutpie.compile_pymc_model(template.model, backend="numba")
     return CompiledOracle(template=template, compiled=compiled, sampler=nutpie.sample)
 

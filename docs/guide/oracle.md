@@ -28,7 +28,7 @@ and `compile_oracle`:
   PyMC sampler. Use `sampler_kwargs` only for additional, non-reserved PyMC
   options. For Nutpie, `adaptation` is validated against the installed
   Nutpie 0.16.11 values (`"diag"`, `"draw_diag"`, `"low_rank"`, and `"flow"`)
-  and defaults to `"diag"`. It is passed through `nuts_sampler_kwargs` for
+  and defaults to `"diag"`. It is passed through the `nuts` mapping for
   one-shot PyMC delegation and as `adaptation` for compiled Nutpie sampling.
   A non-default adaptation request is rejected with `nuts_sampler="pymc"`
   rather than silently ignored. These defaults are not retrospective provenance
@@ -99,14 +99,12 @@ full-horizon arrays.
 
 #### Reusable data/configuration contract
 
-The template carries an explicit data contract. The required legacy inputs are
-`channels_data`, `controls_data`, `sales_data`, `saturation_scale_data`,
-`g_cy_data`, `g_db_data`, `g_zb_data`, and `observed_indices_data`; generated
-Oracle templates additionally require the four runtime numeric inputs
-`prior_cond_carryover_alpha_data`, `prior_cond_hill_shape_data`,
-`walk_width_d_data`, and `walk_width_b_data`. Manually constructed templates
-must pass the exact names they provide in `data_contract`; missing or extra
-known Oracle inputs fail closed before binding.
+The template carries an explicit data contract containing exactly the known
+Oracle data inputs connected to its graph. Generated templates can omit inputs
+that their topology or mechanism families leave disconnected. Manually
+constructed templates must pass the exact names they provide in
+`data_contract`; missing or extra known Oracle inputs fail closed before
+binding.
 
 The structural signature contains only topology, rank/shape, distribution-family,
 and branch choices. Prior interval endpoints and walk smoothness are compatible
@@ -355,10 +353,7 @@ The API reference documents these mode-dependent qualifications:
 5. **Reproducible likelihood window.** The carryover convolution sees only the
    reported window (zero-padded start) while generation used
    `carryover_burn_in` weeks of real history. With burn-in enabled the oracle
-   therefore observes `sales[warmup:]`, where `warmup` is the response support
-   after that response-history burn-in. This is a data/model-history offset, not
-   MCMC tuning or warmup draws; `tune` controls only the sampler's adaptation
-   iterations.
+   therefore observes `outcome[warmup:]`, where `warmup` is the response support
    **admitted by the oracle's own inference priors**: the direct treatments'
    carryover families, `l_max`, and the geometric decay range *after* any ACE
    prior-conditioning narrowing. Weibull's shape box
@@ -377,6 +372,8 @@ The API reference documents these mode-dependent qualifications:
    parameter-only reference level; it is persisted and supplied by
    `SCM.oracle_model()` so the oracle anchors the nonlinear response exactly
    where generation did.
+   This is a data/model-history offset, not MCMC tuning or warmup draws; `tune`
+   controls only the sampler's adaptation iterations.
 6. **Sampler eligibility.** The locked released stack differentiates
    pymc-marketing's Weibull normalization, so `pm.sample` can use NUTS for
    `weibull_lam` and `weibull_k` as well as identity/geometric-carryover parameters.
