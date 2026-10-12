@@ -16,6 +16,7 @@ import math  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
 import stat  # noqa: E402
+import sys  # noqa: E402
 from contextlib import contextmanager  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
@@ -3088,7 +3089,7 @@ def read_compact_summary(archive, reference, *, raw_archive=None):
 
 # Execution receipts are deliberately separate from the frozen compact v3 contract.
 # They record operational facts, not extra scientific classifications.
-_EXECUTION_PYTHON = "/home/teemu/pymc-labs/prior-generator/.worktrees/issue-30-identifiable-linear-recovery/.venv/bin/python3"
+_EXECUTION_PYTHON = sys.executable
 _EXECUTION_VERSION = "ols-bounded-execution/v1"
 
 

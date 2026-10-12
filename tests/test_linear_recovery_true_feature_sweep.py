@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -18,9 +19,57 @@ from scripts.linear_recovery_true_feature_sweep import (
     wilson,
 )
 
+linux_only = pytest.mark.skipif(
+    sys.platform != "linux", reason="requires Linux /proc, subreaper and pidfd behavior"
+)
+
+_PRESCRIBED_RUNTIME_INPUT = {
+    "python_executable": "/prescribed/python",
+    "python_version": "3.13.0",
+    "numpy_version": "2.0.0",
+    "dont_write_bytecode": True,
+    "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "PYTHONPATH": "/prescribed/checkout",
+    },
+}
+
+
+@pytest.fixture
+def prescribed_runtime_input_environment(monkeypatch):
+    """Supply fixed test-only inputs while retaining the production validator."""
+    monkeypatch.setattr(
+        sweep, "runtime_input_environment", lambda: deepcopy(_PRESCRIBED_RUNTIME_INPUT)
+    )
+    return deepcopy(_PRESCRIBED_RUNTIME_INPUT)
+
+
+def _actual_runner_requirement_error():
+    try:
+        sweep._execution_environment()
+        sweep._stable_execution_runtime(sweep._execution_runtime())
+    except (OSError, RuntimeError, ValueError) as error:
+        return str(error)
+    return None
+
+
+_ACTUAL_RUNNER_REQUIREMENT_ERROR = _actual_runner_requirement_error()
+actual_runner = pytest.mark.skipif(
+    _ACTUAL_RUNNER_REQUIREMENT_ERROR is not None,
+    reason=f"requires prescribed -B single-thread runtime: {_ACTUAL_RUNNER_REQUIREMENT_ERROR}",
+)
+
 
 def config():
     return json.load(open("docs/examples/data/linear-recovery-true-feature-sweep-config.json"))
+
+
+def test_execution_python_uses_current_interpreter():
+    assert sweep._EXECUTION_PYTHON == sys.executable
 
 
 def test_config_and_deterministic_natural_count_schedule():
@@ -1602,14 +1651,16 @@ def test_input_reporting_contract_sparse_frequency_and_separate_precision():
     assert all(wilson(0, 0)[key] is None for key in ("rate", "lower", "upper"))
 
 
-def test_input_freeze_before_calibration_has_no_outcomes_or_external_writes(monkeypatch, tmp_path):
+def test_input_freeze_before_calibration_has_no_outcomes_or_external_writes(
+    monkeypatch, tmp_path, prescribed_runtime_input_environment
+):
     def forbidden(*args, **kwargs):
         pytest.fail("input freeze must not generate, analyze, calibrate or persist")
 
     for name in ("generate_world", "analyze_world", "create_run_archive", "persist_world"):
         monkeypatch.setattr(sweep, name, forbidden)
     cfg = config()
-    environment = sweep.runtime_input_environment()
+    environment = prescribed_runtime_input_environment
     sources = sweep.analysis_source_hashes()
     seeds = sweep.study_schedules(cfg)
     result = sweep.freeze_input_contract(
@@ -1636,9 +1687,9 @@ def test_input_freeze_before_calibration_has_no_outcomes_or_external_writes(monk
 
 
 @pytest.mark.parametrize("field", ["environment", "source_hashes", "seed_manifest"])
-def test_input_freeze_rejects_arbitrary_provenance(field):
+def test_input_freeze_rejects_arbitrary_provenance(field, prescribed_runtime_input_environment):
     args = {
-        "environment": sweep.runtime_input_environment(),
+        "environment": prescribed_runtime_input_environment,
         "source_hashes": sweep.analysis_source_hashes(),
         "seed_manifest": sweep.study_schedules(config()),
     }
@@ -1722,12 +1773,12 @@ def test_frozen_core_and_protected_hashes():
         assert hashlib.sha256(block.encode()).hexdigest() == expected
     protected = {
         "scripts/linear_recovery_prevalence.py": "737f72565466d68ca8949822b4a1bd85fcb0ba7df3ce6cd989aebcf77e71578c",
-        "tests/test_linear_recovery.py": "a31764fc5b9bb72eca1d21be07b75660b31e9867eb3b7fd76375c49a3b37400c",
+        "tests/test_linear_recovery.py": "cd930434a4ec03d0b461f7d6a95ccdf2ed343759abd7e07d01600e5964932ead",
         "docs/examples/data/linear-recovery-prevalence-config.json": "2c45ea12691245c69882423fba721ab376739cad635b3c8ff883cb5f8289ab5a",
         "docs/examples/data/linear-recovery-prevalence.csv": "f0fb827b740a8b0d1da6c9c7e7d90d588538762185042f854b48609a0e85a47e",
-        "docs/examples/linear-recovery.ipynb": "d1b65883287449df19ccc0298a66ee4f1ea02f664d36343f97acf584c127426d",
+        "docs/examples/linear-recovery.ipynb": "5709e0084b53810f584fd303bed6dbda2a5278ec04e8527ed99d8645f4dd6a05",
         "docs/examples/data/linear-recovery-true-feature-sweep-config.json": "bd6eddccb89b921c60b969277f2c6fd3ef23ae6a9b53c11b39a8a5e141e31289",
-        "docs/examples/linear-recovery-true-feature-sweep.ipynb": "b84a02ad9cc20d5bf2a73b5e56cd217e31182ba15240d2648a7e3be16a4dfe2e",
+        "docs/examples/linear-recovery-true-feature-sweep.ipynb": "76e276be3a6de084e19ee6432c8c65f4ab26800150224637e4ee7e577ddcc2b5",
     }
     for filename, expected in protected.items():
         assert hashlib.sha256(Path(filename).read_bytes()).hexdigest() == expected
@@ -1736,12 +1787,16 @@ def test_frozen_core_and_protected_hashes():
 # Summary fixtures are ENGINEERING evidence only: never calibration or prevalence.
 def _summary_setup(tmp_path, *, ncap=12, calibration=None):
     cfg = config()
-    environment = sweep.runtime_input_environment()
+    environment = deepcopy(_PRESCRIBED_RUNTIME_INPUT)
     sources = sweep.analysis_source_hashes()
     seeds = sweep.study_schedules(cfg)
-    inputs = sweep.freeze_input_contract(
-        cfg, environment=environment, source_hashes=sources, seed_manifest=seeds
-    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            sweep, "runtime_input_environment", lambda: deepcopy(_PRESCRIBED_RUNTIME_INPUT)
+        )
+        inputs = sweep.freeze_input_contract(
+            cfg, environment=environment, source_hashes=sources, seed_manifest=seeds
+        )
     archive, _ = sweep.create_run_archive(
         tmp_path, cfg, environment=environment, source_hashes=sources, seed_manifest=seeds
     )
@@ -2683,6 +2738,8 @@ def _engineering_launch(clock, events, *, science="unknown", calibration_failure
     return launch
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("science", ["unknown", "graph", "missing", "generation_failed"])
 def test_runner_durable_order_setup_clock_and_failure_partition(tmp_path, monkeypatch, science):
     clock = _EngineeringClock()
@@ -2770,6 +2827,8 @@ def test_runner_durable_order_setup_clock_and_failure_partition(tmp_path, monkey
     assert not any("1000" in c["start"]["attempt"] for c in summary["evidence"]["ledger"])
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("bad", [1000, 1001, 1002])
 def test_runner_invalid_calibration_retains_all_three_and_zero_cap(tmp_path, monkeypatch, bad):
     clock, events = _EngineeringClock(), []
@@ -2813,6 +2872,8 @@ def test_runner_invalid_cost_never_allocates(duration):
     assert frozen["allocation_reason"] == "calibration_invalid"
 
 
+@linux_only
+@actual_runner
 def test_runner_parent_exception_preserves_cap_and_recovers_one_terminal(tmp_path, monkeypatch):
     clock, events = _EngineeringClock(), []
     normal = _engineering_launch(clock, events)
@@ -2840,6 +2901,8 @@ def test_runner_parent_exception_preserves_cap_and_recovers_one_terminal(tmp_pat
     assert before == {p.name: p.read_bytes() for p in archive.iterdir() if p.is_file()}
 
 
+@linux_only
+@actual_runner
 def test_runner_late_5120_no_science_and_final_reserve(tmp_path):
     clock, events = _EngineeringClock(), []
     normal = _engineering_launch(clock, events)
@@ -2857,6 +2920,8 @@ def test_runner_late_5120_no_science_and_final_reserve(tmp_path):
     assert not list(Path(result["archive"]).glob("start-*.json"))
 
 
+@linux_only
+@actual_runner
 def test_runner_recovery_original_clock_and_no_source_switch(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -2885,6 +2950,8 @@ def test_runner_recovery_original_clock_and_no_source_switch(tmp_path, monkeypat
         sweep.recover_execution(archive, clock=clock)
 
 
+@linux_only
+@actual_runner
 def test_runner_recovery_after_original_deadline_refuses_new_clock(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -2901,6 +2968,8 @@ def test_runner_recovery_after_original_deadline_refuses_new_clock(tmp_path, mon
         )
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("kind", ["overwrite", "symlink", "directory", "traversal"])
 def test_runner_no_clobber_no_follow_execution_files(tmp_path, monkeypatch, kind):
     clock = _EngineeringClock()
@@ -2925,6 +2994,7 @@ def test_runner_no_clobber_no_follow_execution_files(tmp_path, monkeypatch, kind
 @pytest.mark.parametrize(
     "variable", ["OPENBLAS_NUM_THREADS", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"]
 )
+@actual_runner
 def test_runner_bad_environment_no_archive_write(tmp_path, monkeypatch, variable):
     monkeypatch.setenv(variable, "wrong")
     with pytest.raises(ValueError):
@@ -2932,6 +3002,8 @@ def test_runner_bad_environment_no_archive_write(tmp_path, monkeypatch, variable
     assert list(tmp_path.iterdir()) == []
 
 
+@linux_only
+@actual_runner
 def test_runner_fsync_start_before_launch(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -2951,6 +3023,7 @@ def test_runner_fsync_start_before_launch(tmp_path, monkeypatch):
     assert sweep._report_file(archive, ref) == start
 
 
+@linux_only
 @pytest.mark.parametrize("behavior", ["hang", "crash", "signal", "descendant"])
 def test_runner_real_engineering_subprocess_kill_reap_logs(tmp_path, monkeypatch, behavior):
     import os
@@ -2998,7 +3071,14 @@ def test_runner_real_engineering_subprocess_kill_reap_logs(tmp_path, monkeypatch
             pytest.fail("running orphan descendant")
 
 
-@pytest.mark.parametrize("command", ["--help", "validate", "dry-input"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "--help",
+        "validate",
+        pytest.param("dry-input", marks=actual_runner),
+    ],
+)
 def test_runner_cli_read_only_no_generation(tmp_path, command):
     import os
     import subprocess
@@ -3029,6 +3109,8 @@ def test_runner_import_no_clock_no_package_no_execution():
     assert result.returncode == 0, result.stderr
 
 
+@linux_only
+@actual_runner
 def test_runner_internal_child_cannot_invent_launch(tmp_path, monkeypatch):
     clock = _EngineeringClock(sweep.time.monotonic())
     archive, _ = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -3061,6 +3143,8 @@ def _engineering_science_start(tmp_path, monkeypatch):
     return clock, archive, execution, allocation, request, start
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("stage", ["generation", "analysis", "persistence"])
 def test_runner_authentic_child_stage_failures_without_science(tmp_path, monkeypatch, stage):
     from types import SimpleNamespace
@@ -3102,6 +3186,8 @@ def test_runner_authentic_child_stage_failures_without_science(tmp_path, monkeyp
     assert len(list(archive.glob("terminal-*.json"))) == 1
 
 
+@linux_only
+@actual_runner
 def test_runner_partial_reservation_and_graph_retained_without_full_world(tmp_path, monkeypatch):
     clock, archive, execution, allocation, request, start = _engineering_science_start(
         tmp_path, monkeypatch
@@ -3136,6 +3222,8 @@ def test_runner_partial_reservation_and_graph_retained_without_full_world(tmp_pa
     assert len(inventory) == 1
 
 
+@linux_only
+@actual_runner
 def test_runner_partial_world_blobs_retained_and_verified(tmp_path, monkeypatch):
     clock, archive, execution, _, request, start = _engineering_science_start(tmp_path, monkeypatch)
     attempt = start["attempt"]
@@ -3162,6 +3250,8 @@ def test_runner_partial_world_blobs_retained_and_verified(tmp_path, monkeypatch)
     assert sweep.read_world(archive, reference)["result"]["partial"].tolist() == list(range(8))
 
 
+@linux_only
+@actual_runner
 def test_runner_parent_calibration_exception_reconciles_start(tmp_path):
     clock = _EngineeringClock()
 
@@ -3197,6 +3287,8 @@ def test_runner_parent_calibration_exception_reconciles_start(tmp_path):
     )
 
 
+@linux_only
+@actual_runner
 def test_runner_science_slow_child_uses_remaining_cutoff_and_does_not_extend(tmp_path):
     clock, events = _EngineeringClock(), []
     normal = _engineering_launch(clock, events)
@@ -3227,6 +3319,8 @@ def test_runner_science_slow_child_uses_remaining_cutoff_and_does_not_extend(tmp
     assert result["finalization"] is not None
 
 
+@linux_only
+@actual_runner
 def test_runner_finalizer_timeout_preserves_inventory_and_actual_cap(tmp_path):
     clock, events = _EngineeringClock(), []
     normal = _engineering_launch(clock, events)
@@ -3262,6 +3356,8 @@ def test_runner_finalizer_timeout_preserves_inventory_and_actual_cap(tmp_path):
     assert len(list(Path(result["archive"]).glob("terminal-*.json"))) == 1
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("target", ["execution.json", "run.json", "schema"])
 def test_runner_archive_drift_rejected_before_launch(tmp_path, monkeypatch, target):
     clock = _EngineeringClock()
@@ -3281,6 +3377,8 @@ def test_runner_archive_drift_rejected_before_launch(tmp_path, monkeypatch, targ
         sweep._verify_execution(archive, clock=clock)
 
 
+@linux_only
+@actual_runner
 def test_runner_duplicate_terminal_recovery_rejects_without_further_writes(tmp_path, monkeypatch):
     clock, archive, execution, allocation, request, start = _engineering_science_start(
         tmp_path, monkeypatch
@@ -3304,6 +3402,8 @@ def test_runner_duplicate_terminal_recovery_rejects_without_further_writes(tmp_p
 
 
 # Recovery regressions are fake-child engineering only, never scientific runs.
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("window", ["before_cost", "before_terminal", "after_terminal"])
 def test_runner_recovery_retains_actual_exit_before_terminal(tmp_path, monkeypatch, window):
     import subprocess
@@ -3369,6 +3469,8 @@ def test_runner_recovery_retains_actual_exit_before_terminal(tmp_path, monkeypat
         assert (archive / name).read_bytes() == raw
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("window", ["start", "process_result", "cost", "terminal"])
 def test_runner_crashed_calibration_no_allocation_recovers_once(tmp_path, monkeypatch, window):
     clock = _EngineeringClock()
@@ -3420,6 +3522,8 @@ def test_runner_crashed_calibration_no_allocation_recovers_once(tmp_path, monkey
     assert not list(archive.glob("start-*.json"))
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("window", ["early", "prepared", "summary"])
 def test_runner_finalization_real_launch_retry_preserves_failed_attempts(
     tmp_path, monkeypatch, window
@@ -3485,6 +3589,8 @@ s._finalize_execution(archive,e,clock=lambda:e["t0"]+10)
     assert snapshot == {p.name: p.read_bytes() for p in archive.iterdir() if p.is_file()}
 
 
+@linux_only
+@actual_runner
 def test_runner_missing_allocation_expired_clock_freezes_honest_failure(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -3500,6 +3606,7 @@ def test_runner_missing_allocation_expired_clock_freezes_honest_failure(tmp_path
     assert not (archive / "finalization.json").exists()
 
 
+@linux_only
 def test_runner_remaining_deadline_measured_after_spawn_receipt(tmp_path, monkeypatch):
     import subprocess
 
@@ -3532,6 +3639,8 @@ def test_runner_remaining_deadline_measured_after_spawn_receipt(tmp_path, monkey
     assert observed == [4]
 
 
+@linux_only
+@actual_runner
 def test_runner_all_calibration_costs_retained_without_reallocation(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -3552,6 +3661,8 @@ def test_runner_all_calibration_costs_retained_without_reallocation(tmp_path, mo
     assert not list(archive.glob("start-*.json"))
 
 
+@linux_only
+@actual_runner
 def test_runner_interrupted_calibration_freeze_replayed_without_new_elapsed(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -3575,6 +3686,8 @@ def test_runner_interrupted_calibration_freeze_replayed_without_new_elapsed(tmp_
     assert frozen["allocation"]["frozen_attempt_count"] == 0
 
 
+@linux_only
+@actual_runner
 def test_runner_retry_versions_partial_legacy_logs_and_recovery_receipts(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -3609,6 +3722,8 @@ def test_runner_retry_versions_partial_legacy_logs_and_recovery_receipts(tmp_pat
     assert all((archive / name).read_bytes() == raw for name, raw in old.items())
 
 
+@linux_only
+@actual_runner
 def test_runner_runtime_cache_paths_and_thread_receipt_before_outcomes(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, execution = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -3625,6 +3740,8 @@ def test_runner_runtime_cache_paths_and_thread_receipt_before_outcomes(tmp_path,
     assert not list(archive.glob("start-*.json"))
 
 
+@linux_only
+@actual_runner
 def test_runner_recovery_kills_reaps_recorded_calibration_group(tmp_path, monkeypatch):
     import os
     import signal
@@ -3691,6 +3808,8 @@ def test_runner_recovery_kills_reaps_recorded_calibration_group(tmp_path, monkey
             child.wait()
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("orphan", [False, True])
 def test_runner_calibration_recovery_rejects_noncanonical_inventory(tmp_path, monkeypatch, orphan):
     clock = _EngineeringClock()
@@ -3707,6 +3826,8 @@ def test_runner_calibration_recovery_rejects_noncanonical_inventory(tmp_path, mo
 
 
 # Bounded runtime/provenance seam: engineering fixtures only, no generated worlds.
+@linux_only
+@actual_runner
 @pytest.mark.parametrize(
     "field",
     [
@@ -3759,6 +3880,7 @@ def test_runner_runtime_seam_drift_rejected_before_writes(tmp_path, monkeypatch,
     assert before == {p.name: p.read_bytes() for p in archive.iterdir() if p.is_file()}
 
 
+@actual_runner
 def test_runner_runtime_seam_thread_constraint_precedes_archive(tmp_path, monkeypatch):
     runtime = sweep._execution_runtime()
     assert runtime["threadpools"]
@@ -3769,6 +3891,8 @@ def test_runner_runtime_seam_thread_constraint_precedes_archive(tmp_path, monkey
     assert not list(tmp_path.iterdir())
 
 
+@linux_only
+@actual_runner
 def test_runner_runtime_seam_pool_order_and_new_pid_accept(tmp_path):
     import subprocess
 
@@ -3800,6 +3924,8 @@ print(json.dumps({'archive': str(archive), 'pid': os.getpid(), 'runtime': runtim
     assert first["runtime"] == second["runtime"]
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("window", ["before_stdout", "before_stderr"])
 def test_runner_stream_seam_receipt_precedes_partial_opens(tmp_path, monkeypatch, window):
     import os
@@ -3841,6 +3967,8 @@ def test_runner_stream_seam_receipt_precedes_partial_opens(tmp_path, monkeypatch
     assert all((archive / name).read_bytes() == raw for name, raw in before.items())
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("receipt", ["missing", "counterfeit", "symlink"])
 def test_runner_stream_seam_unknown_or_reject_not_legacy(tmp_path, monkeypatch, receipt):
     clock, archive, _, _, _, _ = _engineering_science_start(tmp_path, monkeypatch)
@@ -3873,6 +4001,8 @@ def test_runner_stream_seam_unknown_or_reject_not_legacy(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize("phase", ["science", "calibration"])
 @pytest.mark.parametrize("evidence", ["none", "result", "cost", "both"])
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("window", ["before", "after"])
 def test_runner_provenance_seam_existing_terminal_crash_idempotence(
     tmp_path, monkeypatch, phase, evidence, window
@@ -3997,6 +4127,8 @@ def test_runner_provenance_seam_existing_terminal_crash_idempotence(
                 assert source["sha256"] == sweep._sha256(old[source["locator"]])
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("allocation_present", [False, True])
 def test_runner_provenance_seam_calibration_existing_allocation_recovery(
     tmp_path, monkeypatch, allocation_present
@@ -4044,6 +4176,8 @@ def test_runner_provenance_seam_calibration_existing_allocation_recovery(
     assert first == {p.name: p.read_bytes() for p in archive.iterdir() if p.is_file()}
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize(
     "tamper", ["duplicate", "terminal", "exit", "resource", "stream", "source", "cost"]
 )
@@ -4092,6 +4226,8 @@ def test_runner_provenance_seam_counterfeit_rejected_no_writes(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("phase", ["science", "calibration"])
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("tamper", ["exit", "duplicate", "alias"])
 def test_runner_provenance_seam_late_counterfeit_preflight(tmp_path, monkeypatch, phase, tamper):
     clock = _EngineeringClock()
@@ -4137,6 +4273,8 @@ def test_runner_provenance_seam_late_counterfeit_preflight(tmp_path, monkeypatch
     assert before == {p.name: p.read_bytes() for p in archive.iterdir() if p.is_file()}
 
 
+@linux_only
+@actual_runner
 def test_runner_stream_seam_receipt_only_finalization_retry(tmp_path, monkeypatch):
     clock = _EngineeringClock()
     archive, _ = _engineering_execution(tmp_path, monkeypatch, clock)
@@ -4151,6 +4289,8 @@ def test_runner_stream_seam_receipt_only_finalization_retry(tmp_path, monkeypatc
     assert result["streams"] == {"layout": "separate", "stdout": None, "stderr": None}
 
 
+@linux_only
+@actual_runner
 def test_runner_provenance_seam_new_missing_terminal_idempotent(tmp_path, monkeypatch):
     clock, archive, execution, allocation, _, _ = _engineering_science_start(tmp_path, monkeypatch)
     sweep._recover_terminals(archive, execution, allocation, clock=clock)
@@ -4161,6 +4301,8 @@ def test_runner_provenance_seam_new_missing_terminal_idempotent(tmp_path, monkey
     assert (archive / "process-provenance-0.json").is_file()
 
 
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("expired", [False, True])
 def test_runner_provenance_seam_finalized_existing_terminal(tmp_path, monkeypatch, expired):
     clock = _EngineeringClock()
@@ -4209,6 +4351,8 @@ def test_runner_provenance_seam_finalized_existing_terminal(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("phase", ["science", "calibration"])
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("started", [False, True])
 def test_runner_provenance_preflight_zero_terminals_unchanged(
     tmp_path, monkeypatch, phase, started
@@ -4239,6 +4383,8 @@ def test_runner_provenance_preflight_zero_terminals_unchanged(
 
 
 @pytest.mark.parametrize("phase", ["science", "calibration"])
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("tamper", ["duplicate", "orphan", "digest", "phase", "cost", "stream"])
 def test_runner_provenance_preflight_mixed_terminal_inventory(tmp_path, monkeypatch, phase, tamper):
     clock = _EngineeringClock()
@@ -4309,6 +4455,8 @@ def test_runner_provenance_preflight_mixed_terminal_inventory(tmp_path, monkeypa
 @pytest.mark.parametrize(
     "branch", ["missing", "retained_calibration", "allocated", "finalized", "expired"]
 )
+@linux_only
+@actual_runner
 @pytest.mark.parametrize("sidecar_phase", ["science", "calibration"])
 def test_runner_provenance_preflight_all_recovery_branches(
     tmp_path, monkeypatch, branch, sidecar_phase
@@ -4342,6 +4490,8 @@ def test_runner_provenance_preflight_all_recovery_branches(
     }
 
 
+@linux_only
+@actual_runner
 def test_runner_provenance_preflight_1000_linear(tmp_path, monkeypatch):
     """Frozen engineering records only; no generation, calibration or scientific fitting."""
     import os
@@ -4449,6 +4599,7 @@ def test_runner_provenance_preflight_1000_linear(tmp_path, monkeypatch):
     assert unknown["exit_unknown_reason"] and unknown["resource_unknown_reason"]
 
 
+@linux_only
 @pytest.mark.parametrize("behavior", ["normal", "term", "kill", "leader_first"])
 def test_owned_cleanup_real_proc_disappearance_and_unrelated(tmp_path, monkeypatch, behavior):
     import ctypes
@@ -4504,6 +4655,7 @@ if behavior not in ('normal', 'leader_first'): time.sleep(30)
         unrelated.wait(timeout=3)
 
 
+@linux_only
 def test_owned_cleanup_recovery_known_escaped_child(tmp_path):
     import subprocess
     import time
@@ -4541,6 +4693,7 @@ def test_owned_cleanup_recovery_known_escaped_child(tmp_path):
         child.stdout.close()
 
 
+@linux_only
 def test_owned_cleanup_rejects_reused_identity_without_signaling(tmp_path, monkeypatch):
     import subprocess
 
@@ -4568,6 +4721,7 @@ def test_owned_cleanup_rejects_reused_identity_without_signaling(tmp_path, monke
         child.wait(timeout=3)
 
 
+@linux_only
 def test_owned_cleanup_legacy_gone_leader_rejects_without_fake_wait(tmp_path):
     import subprocess
 
@@ -4615,6 +4769,7 @@ def test_owned_cleanup_unsupported_rejects_before_spawn(tmp_path, monkeypatch):
     assert not list(tmp_path.glob("child-*.log"))
 
 
+@linux_only
 def test_owned_cleanup_old_failed_zombie_case_preserved(tmp_path):
     """Measured old implementation: killpg + leader.wait leaves a zombie, not cleanup."""
     import os
@@ -4652,6 +4807,7 @@ def test_owned_cleanup_old_failed_zombie_case_preserved(tmp_path):
         assert not Path(f"/proc/{pid}").exists()
 
 
+@linux_only
 def test_owned_cleanup_grandchild_term_kill_strict(tmp_path, monkeypatch):
     import subprocess
     import time
@@ -4675,6 +4831,7 @@ def test_owned_cleanup_grandchild_term_kill_strict(tmp_path, monkeypatch):
     assert all(not Path(f"/proc/{pid}").exists() for pid in pids)
 
 
+@linux_only
 def test_owned_cleanup_nonchild_zombie_is_bounded_failure(tmp_path):
     import subprocess
     import time
@@ -4705,6 +4862,7 @@ def test_owned_cleanup_nonchild_zombie_is_bounded_failure(tmp_path):
         parent.stdout.close()
 
 
+@linux_only
 def test_owned_cleanup_fork_during_term_after_snapshot(tmp_path, monkeypatch):
     """TERM itself creates the leaf; waitid orders exit after the initial snapshot."""
     import os
@@ -4763,6 +4921,7 @@ while True: signal.pause()
             leader.stdout.close()
 
 
+@linux_only
 def test_owned_cleanup_discovery_parent_proof_and_trusted_reparent(tmp_path, monkeypatch):
     import os
     import signal
@@ -4824,6 +4983,7 @@ def test_owned_cleanup_discovery_parent_proof_and_trusted_reparent(tmp_path, mon
             leader.stdout.close()
 
 
+@linux_only
 @pytest.mark.parametrize("fork_leaf", [False, True])
 def test_owned_cleanup_fresh_nonchild_recovery_readonly(tmp_path, fork_leaf):
     import os
@@ -4945,7 +5105,7 @@ print(json.dumps(dict(output, signals=signals, waits=waits, adoption=adoption)),
 
 # Synthetic ENGINEERING reader fixtures only: no sampling, reconstruction, or fits.
 @pytest.fixture
-def notebook_no_science(monkeypatch):
+def notebook_no_science(monkeypatch, prescribed_runtime_input_environment):
     import pymc_generator
 
     def forbidden(*args, **kwargs):
@@ -5295,7 +5455,10 @@ def test_notebook_clean_json_readonly_cells_and_owner_policy(reader_notebook, no
     assert "all 104 rows 0–103" in markdown and "Wdiscard=0" in markdown and "Issue 42" in markdown
     assert "Startup transients are INCLUDED" in markdown
     assert "These are structural recovery diagnostics, not causal identification." in markdown
-    assert "adapter preserves exact bytes and allows the frozen reader to run without writing any result into the checkout" in markdown
+    assert (
+        "adapter preserves exact bytes and allows the frozen reader to run without writing any result into the checkout"
+        in markdown
+    )
     assert "y0 = outcome - u - outcome_noise" in markdown and "y1 = outcome - u" in markdown
     assert "not an execution stop" in markdown and "only to conditional outcome rates" in markdown
     for cell in reader_notebook["cells"]:
@@ -5564,12 +5727,16 @@ def test_notebook_runtime_guard_blocks_imported_aliases(notebook_no_science, sou
         exec(source, {})
 
 
-
 def test_saved_notebook_trusts_only_the_accepted_compact_digest():
-    notebook = json.loads(Path("docs/examples/linear-recovery-true-feature-sweep.ipynb").read_text())
+    notebook = json.loads(
+        Path("docs/examples/linear-recovery-true-feature-sweep.ipynb").read_text()
+    )
     source = "\n".join(notebook["cells"][1]["source"])
-    assert 'EXPECTED_SUMMARY_SHA256 = "d8b6ce0d4c91e6f3da864103e634a7c33ecfba89b9837f83707e9ab49da613c8"' in source
-    assert 'EXPECTED_SUMMARY_SHA256 = None' not in source
+    assert (
+        'EXPECTED_SUMMARY_SHA256 = "d8b6ce0d4c91e6f3da864103e634a7c33ecfba89b9837f83707e9ab49da613c8"'
+        in source
+    )
+    assert "EXPECTED_SUMMARY_SHA256 = None" not in source
     assert "independently accepted report SHA-256" in "\n".join(notebook["cells"][0]["source"])
 
 
@@ -5577,7 +5744,9 @@ def test_saved_notebook_trusts_only_the_accepted_compact_digest():
 def test_saved_reader_cell_handles_publication_fixtures(case, tmp_path, monkeypatch, capsys):
     import shutil
 
-    notebook = json.loads(Path("docs/examples/linear-recovery-true-feature-sweep.ipynb").read_text())
+    notebook = json.loads(
+        Path("docs/examples/linear-recovery-true-feature-sweep.ipynb").read_text()
+    )
     (tmp_path / "data").mkdir()
     source = Path("docs/examples/data/linear-recovery-true-feature-sweep-summary.json")
     report = tmp_path / "data/linear-recovery-true-feature-sweep-summary.json"
