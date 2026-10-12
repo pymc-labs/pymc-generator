@@ -488,9 +488,10 @@ def build_symbolic_graph(
     ``covariate_activity`` (n_time_steps, n) int8 gate schedules (1 = on),
     ``treatment_log_level_shift`` / ``covariate_level_shift`` (n_time_steps, n)
     summed level components (exactly 0 where an input carries none), and the
-    schedule-free realism references ``treatments_natural`` / ``outcome_natural``.
+    realism references ``treatments_natural`` / ``outcome_natural`` (no treatment
+    schedule; covariates enter as realised, their schedules included).
     With treatment shocks, ``treatments_unshocked`` / ``outcome_unshocked`` are
-    the natural recursion: no shocks and no trajectory schedule.
+    the natural recursion: no shocks and no treatment schedule.
 
     Notes
     -----
@@ -756,7 +757,7 @@ def build_symbolic_graph(
         # The natural recursion is retained solely for the realism reference.
         # The observed recursion instead sees already-clamped upstream parents,
         # which is the SCM meaning of a treatment intervention. The natural one
-        # also carries no trajectory schedule: it is the organic input.
+        # also carries no treatment schedule (covariates enter as realised).
         term_c_unshocked = _dot_terms(
             c_unshocked_cols[:k], g_cc[:k, k], alpha_cc[:k, k], n_time_steps_full, **dot_kw
         )
