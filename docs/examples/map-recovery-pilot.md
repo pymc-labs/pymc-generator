@@ -3,8 +3,17 @@
 **Implementation/preflight is not a fit release.** Independent IMPLEMENT and SAFE-RUN
 acceptance of these exact four files, then a separate coordinator release, are required
 before `--execute-released`. No generation or optimization is part of engineering tests.
-This is an illustrative population, not MAP20 prevalence, a paired baseline experiment,
+This is an illustrative population, not MAP 20 prevalence, a paired baseline experiment,
 or a scientific/publication release. No helper or rejected Phase-A source is used.
+
+
+## Historical accepted lane
+
+The committed runner is a historical record bound to the accepted pre-commit lane at
+`0e43c6b708b1584c94fd2271124142a312409a65`, plus the four then-untracked report
+files. It is not a reproducible CLI from this branch or another committed checkout:
+its `--preflight` and `--execute-released` provenance gates are not expected to pass
+there.
 
 ## Frozen public recipe
 
@@ -28,7 +37,7 @@ No screening, restart, replacement, forced graph/family, truth start or retries.
 
 Use only `world.oracle_model(latent="marginal")` and
 `model.initial_point(random_seed=support_seed)`. The native likelihood consumes
-all 104 rows; the known **Issue42 startup/warmup limitation remains unfixed**.
+all 104 rows; the known **Issue 42 startup/warmup limitation remains unfixed**.
 One native `find_MAP(start=..., vars=list(model.free_RVs), method="L-BFGS-B",
 return_raw=True, include_transformed=True, progressbar=False, maxeval=998,
 options={maxiter:1000,maxfun:1000,ftol:1e-12,gtol:1e-6,maxls:20})` follows.
@@ -41,13 +50,13 @@ unsuccessful exits are failures. Convergence is not identifiability or calibrati
 
 ## Runtime and process contract
 
-The launcher guards a separate supervisor (aggregate TERM5400/KILL30); the supervisor
-launches at most four fresh case sessions, each once, serially (TERM900/KILL30).
+The launcher guards a separate supervisor (aggregate TERM 5400/KILL 30); the supervisor
+launches at most four fresh case sessions, each once, serially (TERM 900/KILL 30).
 Linux `/proc`, process groups and subreapers track/reap descendants, including orphaned
 new sessions. Real exit codes, stdout/stderr files and hashes, exact child argv/environment,
 resource samples and TERM/KILL events are recorded. No SIGALRM is used. An additional
 independent stdlib-only watchdog protects the launcher and final report I/O, with
-TERM5400/KILL30, resource/process polling and a required startup/completion handshake.
+TERM 5400/KILL 30, resource/process polling and a required startup/completion handshake.
 It excludes itself from cleanup and signals the launcher by PID, never its inherited
 shell group. The documented GNU timeout is an additional guard, not an assumed
 substitute for this internal enforcement.
@@ -58,26 +67,26 @@ Both soft/hard AS limits must be 16 GiB. Cache plus artifacts stop at 10 GiB les
 128 MiB finalization reserve; filesystem free space must also retain that reserve.
 The private 0700 cache must be owned, canonical and exclusively locked, disjoint from
 artifacts; symlink/unowned entries are rejected. Each child inherits the same run-root
-lock. Every case receives a **new mode0700 cache directory named by case ID beneath
+lock. Every case receives a **new mode 0700 cache directory named by case ID beneath
 that root**, created exclusively before its process starts; an existing case directory
 blocks launch. No two fits share a PyTensor compiledir. Supervisor/preflight imports
 use the root, never a case directory. All one-second monitors continue to account for
 the **whole root**, including every completed case cache, plus artifacts. OS/library
 caches may still warm across fresh processes; no fully cold-machine claim is made.
 
-No new case starts with less than **930+180=1110 seconds** left. Work stops by5220,
-finalization is scheduled before5370, aggregate TERM is5400 and hard KILL5430.
+No new case starts with less than **930+180=1110 seconds** left. Work stops by 5220,
+finalization is scheduled before 5370, aggregate TERM is 5400 and hard KILL 5430.
 SIGTERM/SIGINT stop work and preserve the remaining unattempted ledger. The outer
-launcher requests work-stop at5220 and terminates a supervisor still present at5370.
+launcher requests work-stop at 5220 and terminates a supervisor still present at 5370.
 There is no promise to serialize new evidence after an uncatchable SIGKILL; already
 fsynced immutable checkpoints survive it. Resource observations are one-second samples,
 not continuous/cgroup measurements; per-child `getrusage` also records peak RSS.
 
 Before generation in **each** fresh case, preflight verifies actual imported
-PyMC6.2.0/PyTensor3.2.4/SciPy1.18.0 and their C3 package paths; cold-lane paths of
+PyMC 6.2.0/PyTensor 3.2.4/SciPy 1.18.0 and their C3 package paths; cold-lane paths of
 `pymc_generator`, `worlds`, `world_model`, `presets`, `sampler`; actual compiledir,
 interpreter/prefix, AS limits, threads, exact PYTHONPATH/cache lock and resolved factory.
-It hashes all122 tracked files against accepted git blob OIDs/modes, checks exact HEAD
+It hashes all 122 tracked files against accepted git blob OIDs/modes, checks exact HEAD
 `0e43c6b708b1584c94fd2271124142a312409a65`, branch and empty index, and records the four
 report-file freezes. Porcelain status must contain exactly those four authorized
 untracked paths; ignored runtime metadata stays ignored. Metadata versions or
@@ -93,8 +102,8 @@ then the mode flag, as quoted below. Before scientific imports, the runner check
 extra interpreter flag or different argument order is not the accepted launch context.
 The full observed `sys.path` is recorded, never rewritten after execution.
 
-Stable expectations are interpreter/script/cwd/import-path prefix, sourceOID, dependency
-versions, four thread variables equal to1 and the case-cache policy. Exact argv,
+Stable expectations are interpreter/script/cwd/import-path prefix, source OID, dependency
+versions, four thread variables equal to 1 and the case-cache policy. Exact argv,
 sanitized environment, output, lock descriptor, process-role arguments, run-cache root
 and its four case-directory names are bound **per launch**, not compared blindly across
 process roles or runs. Each supervisor/case `.launch.json` is durably written **before
@@ -110,20 +119,23 @@ No full runtime-metadata digest or measured threadpool equivalence is claimed. A
 source origins, versions, AS limits and the active compiledir are independently checked;
 this does not replace the exact launch-context check.
 
-## Accepted execution environment / CLI (not executed during implementation)
+## Historical accepted-lane reference / CLI (not executed during implementation)
 
-Run from the accepted cold lane. Substitute **new** absolute private cache/output paths;
-the output directory must not exist. Never reuse a previous attempt directory. Compare
-`sha256sum` of the four files with the independent review receipt before release. Creating
-a private temporary cache is local run setup, not an installation or shared-env change.
-Use only the already installed C3 interpreter; do not install or change dependencies.
+The following command sequence records the accepted cold lane. It is runnable only in
+that retained Linux lane with its exact interpreter and GNU/Linux process tools; do not
+recreate or run it from an ordinary checkout. In that historical lane, substitute **new**
+absolute private cache/output paths; the output directory must not exist. Never reuse a
+previous attempt directory. Compare `sha256sum` of the four files with the independent
+review receipt before release. Creating a private temporary cache is local run setup, not
+an installation or shared-env change. Use only the already installed C3 interpreter; do
+not install or change dependencies.
 
 ```bash
 cd /home/teemu/pymc-labs/prior-generator/.worktrees/issue-30-map-cold-smoke-report
 PY=/home/teemu/pymc-labs/prior-generator/.worktrees/issue-30-identifiable-linear-recovery/.venv/bin/python3
 SCRIPT="$PWD/scripts/map_recovery_pilot.py"
 CONFIG="$PWD/docs/examples/data/map-recovery-pilot-config.json"
-CACHE=$(mktemp -d /tmp/issue30-cold-cache-XXXXXX)  # owned mode0700, private to this run
+CACHE=$(mktemp -d /tmp/issue30-cold-cache-XXXXXX)  # owned mode 0700, private to this run
 OUT=/tmp/issue30-cold-report-$(date -u +%Y%m%dT%H%M%SZ)  # must not exist
 # Engineering gate only: actual imports/config/provenance; NO generation/oracle/MAP.
 env -i HOME="$HOME" PATH=/usr/bin:/bin LANG=C.UTF-8 \
@@ -181,17 +193,17 @@ saturation-scale constants, likelihood rows and observed/free-value layout/trans
 K is **not** two regime labels. Missing contracts make total K unavailable and identify a
 known-contract subset. Counterfactual avoided work is `(N-K)*C - N*bind`, where C is
 build+init+unknown internal compile. Explicit compile scenarios range from zero to the
-maximum observed inclusive API duration; assumed bind ranges use fractions0/.01/.1/1
+maximum observed inclusive API duration; assumed bind ranges use fractions 0/.01/.1/1
 of the maximum setup+inclusive duration. Missing/interrupted API timers instead produce
 explicit symbolic unknown compile/bind ranges, never zero-cost measurements. Negative
 ranges are retained. These are
 sensitivity assumptions, not measured binding/compilation, seconds saved or speedup.
-Solve work is unchanged. N20 is a symbolic projection with unknown K20 in1..20, never a
+Solve work is unchanged. N 20 is a symbolic projection with unknown K 20 in 1..20, never
 measured twenty-world estimate. Memory savings are not claimed.
 
 ## Bounded engineering verification
 
-Only the new-file suite, using C3, TERM600/KILL30:
+Only the new-file suite, using C3, TERM 600/KILL 30:
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
