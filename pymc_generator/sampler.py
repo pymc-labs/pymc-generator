@@ -18,11 +18,19 @@ from __future__ import annotations
 
 import time
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
 
+from .active_counts import (
+    ACTIVE_COUNT_ALLOCATIONS,
+    active_count_weight_matrix,
+    draw_active_counts,
+    plan_active_counts,
+    summarize_active_count_coverage,
+)
 from .signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
@@ -260,8 +268,8 @@ def _is_retryable_draw_failure(exc: BaseException) -> bool:
 class SCMPrior:
     """Corpus generation knobs + prior-range constants for the additive SCM.
 
-    Supports variable-size DAGs via padding to max sizes. Each cell draws
-    random active counts (n_treatments_active, n_covariates_active,
+    Supports variable-size DAGs via padding to max sizes. Each cell gets
+    active counts (n_treatments_active, n_covariates_active,
     n_latent_active) from configured ranges. Inactive nodes are zero-padded and
     masked via treatment_active_mask / covariate_active_mask /
     latent_active_mask.
@@ -271,6 +279,10 @@ class SCMPrior:
             treatments / observed covariates / hidden confounders).
         n_treatments_active_range / ...: per-cell active-count ranges; inactive
             nodes are zero-padded to the sizes above and masked.
+        active_count_allocation / active_count_weights: how cells cover the
+            grid of active treatment × covariate counts — independent uniform
+            draws per cell (default) or a weighted stratified allocation (see
+            :mod:`pymc_generator.active_counts`).
 
     Prefer building configs through
     :func:`pymc_generator.presets.make_scm_prior`, which pins the
@@ -298,6 +310,14 @@ class SCMPrior:
     n_treatments_active_range: tuple[int, int] = (4, 20)
     n_covariates_active_range: tuple[int, int] = (2, 10)
     n_latent_active_range: tuple[int, int] = (1, 5)
+    # How cells cover the (n_treatments_active, n_covariates_active) grid of
+    # the effective ranges above. "independent" draws both counts per cell;
+    # "stratified" allocates the cells over the grid by ``active_count_weights``
+    # (rows: treatment counts, columns: covariate counts; None = uniform), see
+    # :mod:`pymc_generator.active_counts`. Latent counts are always drawn per
+    # cell. Weights are validated in both modes and used only when stratified.
+    active_count_allocation: Literal["independent", "stratified"] = "independent"
+    active_count_weights: Sequence[Sequence[float]] | None = None
 
     # -- prior-range constants -------------------------------------------
     # Per-treatment treatment-response mechanism priors (realized as PyMC
@@ -614,6 +634,52 @@ class SCMPrior:
         lo = min(self.n_latent_active_range[0], self.n_latent)
         hi = min(self.n_latent_active_range[1], self.n_latent)
         return (lo, hi)
+
+    @property
+    def active_count_grid(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Active treatment and covariate counts spanned by the effective ranges."""
+        tr = self.n_treatments_active_range_effective
+        cv = self.n_covariates_active_range_effective
+        return tuple(range(tr[0], tr[1] + 1)), tuple(range(cv[0], cv[1] + 1))
+
+    def active_count_weight_matrix(self) -> np.ndarray:
+        """Validated ``active_count_weights`` over :attr:`active_count_grid` (ones if None).
+
+        The active ranges are checked first, as :meth:`validate` does, so callers
+        that skip :meth:`validate` (the template path) get the same errors.
+        """
+        self._validate_active_ranges()
+        return active_count_weight_matrix(self.active_count_weights, *self.active_count_grid)
+
+    def _validate_active_ranges(self) -> None:
+        """Validate the variable-size DAG ranges (called by :meth:`validate`).
+
+        The upper bound may exceed the padded size and is intentionally clamped,
+        but both declared bounds must still be ordered integers.
+        """
+        for range_name, size_name in (
+            ("n_treatments_active_range", "n_treatments"),
+            ("n_covariates_active_range", "n_covariates"),
+            ("n_latent_active_range", "n_latent"),
+        ):
+            value = getattr(self, range_name)
+            try:
+                lo, hi = value
+            except (TypeError, ValueError):
+                raise ValueError(f"{range_name} must be an integer (lo, hi) pair, got {value!r}")
+            if (
+                isinstance(lo, (bool, np.bool_))
+                or isinstance(hi, (bool, np.bool_))
+                or not isinstance(lo, (int, np.integer))
+                or not isinstance(hi, (int, np.integer))
+                or not 1 <= lo <= hi
+            ):
+                raise ValueError(
+                    f"{range_name} must have integer bounds satisfying 1 <= lo <= hi, got {value!r}"
+                )
+            size = getattr(self, size_name)
+            if lo > size:
+                raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
 
     @property
     def rw_baseline_std_sigma_effective(self) -> float:
@@ -1311,32 +1377,7 @@ class SCMPrior:
                 "n_treatment_shocks * max treatment_shock_length must be <= n_time_steps, got "
                 f"{self.n_treatment_shocks} * {shock_len_hi} > {self.n_time_steps}"
             )
-        # Validate variable-size DAG ranges. The upper bound may exceed the
-        # padded size and is intentionally clamped, but both declared bounds
-        # must still be ordered integers.
-        for range_name, size_name in (
-            ("n_treatments_active_range", "n_treatments"),
-            ("n_covariates_active_range", "n_covariates"),
-            ("n_latent_active_range", "n_latent"),
-        ):
-            value = getattr(self, range_name)
-            try:
-                lo, hi = value
-            except (TypeError, ValueError):
-                raise ValueError(f"{range_name} must be an integer (lo, hi) pair, got {value!r}")
-            if (
-                isinstance(lo, (bool, np.bool_))
-                or isinstance(hi, (bool, np.bool_))
-                or not isinstance(lo, (int, np.integer))
-                or not isinstance(hi, (int, np.integer))
-                or not 1 <= lo <= hi
-            ):
-                raise ValueError(
-                    f"{range_name} must have integer bounds satisfying 1 <= lo <= hi, got {value!r}"
-                )
-            size = getattr(self, size_name)
-            if lo > size:
-                raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
+        self._validate_active_ranges()
         # The smallest cell must accommodate both the direct-null floor and
         # the mandatory direct treatment.
         if self.min_no_direct_effect_treatments:
@@ -1347,6 +1388,14 @@ class SCMPrior:
                     f"n_treatments_active_range[0] ({active_lo}) so every cell can keep at "
                     "least one direct treatment besides the direct-null ones"
                 )
+        if not isinstance(self.active_count_allocation, str) or (
+            self.active_count_allocation not in ACTIVE_COUNT_ALLOCATIONS
+        ):
+            raise ValueError(
+                "active_count_allocation must be 'independent' or 'stratified', "
+                f"got {self.active_count_allocation!r}"
+            )
+        self.active_count_weight_matrix()
         self._validate_trajectories(_finite_range)
 
     def _validate_trajectories(self, finite_range: Any) -> None:
@@ -1979,6 +2028,23 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
                 corpus["covariate_active_mask"],
             ),
         }
+    if cfg.active_count_allocation == "stratified":
+        # Realised coverage of the grid, counted from the stored
+        # (post-truncation) masks — the same helper validate_corpus uses.
+        treatment_counts, covariate_counts = cfg.active_count_grid
+        diagnostics["active_count_coverage"] = {
+            "allocation": "stratified",
+            "n_treatments_active": list(treatment_counts),
+            "n_covariates_active": list(covariate_counts),
+            "weights": cfg.active_count_weight_matrix().tolist(),
+            **summarize_active_count_coverage(
+                corpus["treatment_active_mask"],
+                corpus["covariate_active_mask"],
+                corpus["cell_id"],
+                treatment_counts,
+                covariate_counts,
+            ),
+        }
     # Wall-clock telemetry, kept apart from every other diagnostic because it is
     # the ONLY nondeterministic entry: two same-seed generations agree on every
     # array and every other key, so quarantining the clock here is what lets
@@ -2406,14 +2472,16 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     n_evaluated = 0
     n_rejected = 0
     n_draw_failures = 0
+    # Stratified allocation fixes every cell's treatment × covariate counts up
+    # front on its own stream, seeded by one draw from ``rng``; independent
+    # allocation returns None and draws the counts per cell below, exactly as
+    # before.
+    active_count_plan = plan_active_counts(cfg, rng)
 
     for cell in range(cfg.n_cells):
-        tr = cfg.n_treatments_active_range_effective
-        cv = cfg.n_covariates_active_range_effective
-        lt = cfg.n_latent_active_range_effective
-        n_treatments_active = int(rng.integers(tr[0], tr[1] + 1))
-        n_covariates_active = int(rng.integers(cv[0], cv[1] + 1))
-        n_latent_active = int(rng.integers(lt[0], lt[1] + 1))
+        n_treatments_active, n_covariates_active, n_latent_active = draw_active_counts(
+            cfg, rng, active_count_plan, cell
+        )
         g = sample_g_additive(
             rng,
             cfg,
@@ -2657,7 +2725,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             # they call for opposite remedies (loosen the prior vs fix the
             # graph). Report both tallies so the reader can tell which happened.
             raise RuntimeError(
-                f"cell {cell}: only {accepted}/{cfg.draws_per_cell} tasks "
+                f"cell {cell} (n_treatments_active={n_treatments_active}, "
+                f"n_covariates_active={n_covariates_active}, n_latent_active={n_latent_active}): "
+                f"only {accepted}/{cfg.draws_per_cell} tasks "
                 f"accepted after {MAX_TOPUPS_PER_CELL} rounds — the realism filter "
                 f"rejected {cell_rejected}/{cell_evaluated} evaluated candidates, and "
                 f"{cell_draw_failures}/{MAX_TOPUPS_PER_CELL} rounds produced no "

@@ -838,6 +838,150 @@ function class a standard MMM carryover transform can represent from the same ob
 treatment. It is a known held-level intervention design, **not** a conventional
 treatment-only lift test.
 
+## Active-count coverage
+
+Every corpus cell fixes how many treatment and covariate slots are live. Two
+fields decide how the cells of a corpus spread over the grid of
+(`n_treatments_active`, `n_covariates_active`) combinations spanned by the
+**effective** active ranges — each upper bound clamped to its padded size, as
+`SCMPrior.active_count_grid` lists them:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `active_count_allocation` | `"independent"` | `"independent"` draws both counts per cell, uniformly and independently, so a finite corpus covers the grid only in expectation; `"stratified"` allocates the cells over the grid by weight |
+| `active_count_weights` | `None` | Weight matrix over the effective grid: row `i` holds `n_treatments_active = n_treatments_active_range[0] + i`, column `j` holds `n_covariates_active = n_covariates_active_range[0] + j`; `None` is uniform |
+
+```python
+from pymc_generator import make_scm_prior
+
+cfg = make_scm_prior(
+    n_treatments=3, n_covariates=3, n_latent=1,
+    n_treatments_active_range=(2, 5),   # clamped to (2, 3): rows 2 and 3
+    n_covariates_active_range=(1, 3),   # columns 1, 2 and 3
+    active_count_allocation="stratified",
+    active_count_weights=[[1, 1, 0],    # 2 treatments: never with 3 covariates
+                          [1, 2, 4]],   # 3 treatments: favour more covariates
+)
+```
+
+Weights must form a rectangular matrix of exactly the grid's shape — nested
+lists or tuples of `int` / `float` (numpy scalars included); arrays, booleans
+and strings are rejected (pass `weights.tolist()` for an array) — with finite,
+non-negative entries and at least one positive. They are stored as given; only
+their ratios matter. The `ValueError` names the expected shape and axes: `2x3`
+here, not the `4x3` the raw `(2, 5)` range suggests. Both fields are validated
+in either mode; the weights are used only when stratified. `n_latent_active` is
+not part of the grid: it is drawn per cell in both modes.
+`write_scenario_bundles` stores priors in `recipe.json` as JSON, so priors it
+writes need their weights as plain Python numbers.
+
+### The stratified rule
+
+Write $N$ for `n_cells` and $S$ for the combinations with positive weight. Each
+combination gets an exact rational **target** $\tau_{tc}$; the targets sum to
+$N$.
+
+- Weight zero: $\tau_{tc} = 0$, so the combination never appears.
+- **Coverage floor** ($N \ge |S|$): every positive-weight combination gets at
+  least one cell. Each combination whose proportional share of the cells is
+  below one is fixed at $\tau_{tc} = 1$, the remaining cells are shared out over
+  the remaining combinations, and this repeats until no share is below one.
+- **Cap** ($N < |S|$): no combination can hold two cells. Each share of one or
+  more is fixed at $\tau_{tc} = 1$, and the remaining cells are shared out again
+  until no share reaches one.
+
+A combination that is not fixed gets its share,
+$\tau_{tc} = N_F\, w_{tc} / W_F$, where $N_F$ is the number of cells not fixed
+and $W_F$ the total weight of the combinations not fixed; with nothing fixed
+this is the plain quota $N w_{tc} / \sum w$. Each count is then
+$\lfloor \tau_{tc} \rfloor$ or $\lceil \tau_{tc} \rceil$: the fractional parts
+are rounded by systematic sampling in a random order, so the counts sum to $N$,
+every count's expectation is its target, and a whole-number target is met
+exactly. The allocated combinations are finally shuffled over the cells, so
+`cell_id` carries no information about the counts. Hence:
+
+- Under uniform weights the counts differ by at most one, and every combination
+  appears once `n_cells` is at least the grid size.
+- Under any weights every positive-weight combination appears once `n_cells`
+  is at least their number, $|S|$.
+- Targets are exact fractions, so equal weights tie exactly and a whole-number
+  quota is never lost to float rounding.
+
+| `active_count_weights` | `n_cells` | Targets | Counts |
+| --- | --- | --- | --- |
+| `[[1, 0], [1, 2]]` | 4 | `[[1, 0], [1, 2]]` | always the targets |
+| `[[1, 100], [1, 1]]` | 4 | `[[1, 1], [1, 1]]` | always the targets: the floor lifts the three light combinations |
+| `None` (2×2 grid) | 6 | `3/2` each | two combinations get 2 cells, the other two get 1 |
+| `[[1, 9], [16, 37]]` | 7 | `[[1, 1], [80/53, 185/53]]` | `[[1, 1], [1, 4]]` or `[[1, 1], [2, 3]]` |
+| `[[100, 1], [1, 1]]` | 3 | `[[1, 2/3], [2/3, 2/3]]` | the heavy combination plus two of the other three |
+
+In the fourth row the floor takes two passes: the first fixes the weight-1
+combination (share $7/63$), the second the weight-9 one (share $54/62$ of the
+six cells left); the last five cells split $16 : 37$. A stratified corpus
+records its realised counts in
+[`diagnostics["active_count_coverage"]`](../guide/corpus.md#active-count-coverage),
+and [`pymc_generator.active_count_coverage`](corpus.md#pymc_generator.active_counts.active_count_coverage)
+reports them for any corpus (pass `prior=` when the corpus carries no block).
+
+### Which cells are allocated
+
+The allocation covers the cells of one generation call.
+
+- `sample_prior_predictive(cfg, n=...)` and `DataGenerator.generate(n_tasks=...)`
+  derive the cell count from `n` before generating — `ceil(n / draws_per_cell)`
+  cells, or two or three cells of `max(1, n // 2)` draws when
+  `n <= draws_per_cell` — and keep every generated cell; only the last may be
+  partial. The allocation is therefore over exactly the cells you get, and a
+  partial cell counts as one cell.
+- `DataGenerator.iter_batches` generates every batch as its own corpus with its
+  own seed: each batch is stratified, but their union is not allocated as a
+  whole. Each batch applies the cap or the coverage floor to its own few cells,
+  so with non-uniform weights the union follows the weights only when neither
+  moves any batch's targets off their plain quotas `n_cells·w/Σw`. That takes
+  many more cells per batch than positive-weight combinations, and more still
+  for skewed weights. With the
+  default `draws_per_cell=20`, `batch_size=100` gives five cells per batch; on
+  a grid with more than five positive-weight combinations every batch then
+  caps each combination at one cell, however much weight it holds. For
+  weighted corpora, generate in one call or use batches with many cells.
+  Uniform weights stay balanced in expectation across batches.
+- The cell-level validation split stays a random subset of cells. It is not
+  stratified, so a combination holding a single cell can sit entirely in
+  validation.
+- `sample_scm` draws one world with every node active. It has no cells and
+  ignores the allocation; the weights are still validated.
+- The experimental template path allocates through the same helpers: for a
+  stratified config and `rng = np.random.default_rng(cfg.seed)`,
+  `world_model_template.sample_cell_structures(cfg, rng)` plans the same
+  per-cell treatment and covariate counts as `sample_prior_predictive(cfg)`
+  (latent counts and structures follow the template's own RNG schedule). The
+  plan follows the generator's state, so any generator in the same state plans
+  the same cells. It also checks the allocation, the active ranges and the
+  weights itself, since it never calls `validate()`. One compiled template
+  serves every combination, because structure arrives as max-size inputs with
+  activity masks.
+
+### Seeds and randomness
+
+- **Independent is the legacy draw.** Each cell draws `n_treatments_active`,
+  `n_covariates_active` and `n_latent_active` from the corpus RNG in that
+  order, exactly as before these fields existed, and nothing is spawned.
+  Same-seed corpora, diagnostics, saved shards, `sample_scm` worlds and template
+  payloads and draws are bit-identical to those generated before
+  (`recipe.json` additionally lists the two fields at their defaults).
+- **Stratified changes the corpus at the same seed.** Before the first cell,
+  the allocation draws one integer seed from the corpus RNG for its own stream
+  and draws only from that stream: one permutation of the grid and one uniform
+  offset for the rounding, then one permutation of the cells. Each cell then
+  skips its treatment and covariate draws and draws only its latent count, so
+  every later corpus-RNG draw (graphs, structures, draw seeds, support masks,
+  the validation split) shifts. This RNG layout does not allow aligning a
+  stratified corpus with the independent one
+  ([#28](https://github.com/pymc-labs/pymc-generator/issues/28)).
+- A cell that exhausts the realism filter raises `RuntimeError` naming its
+  `n_treatments_active`, `n_covariates_active` and `n_latent_active`, so a
+  combination the prior cannot realise is identified directly.
+
 ## Direct-null treatments
 
 `min_no_direct_effect_treatments: int = 0` is the minimum number of **active**

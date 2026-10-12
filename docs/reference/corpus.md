@@ -10,6 +10,10 @@ facade (which adds batching, schema validation, and save-on-generate).
 
 ::: pymc_generator.data_generator.DataGenerator
 
+## Active-count coverage
+
+::: pymc_generator.active_counts.active_count_coverage
+
 ## Persistence
 
 ::: pymc_generator.data_generator.save_corpus

@@ -8,6 +8,58 @@ read the migration notes before upgrading.
 
 ### Added
 
+- **Controllable coverage of active treatment × covariate counts (#26).**
+  `SCMPrior.active_count_allocation` keeps independent per-cell draws
+  (`"independent"`, the default) or, with `"stratified"`, allocates a corpus's
+  cells over the grid of the effective `n_treatments_active` ×
+  `n_covariates_active` ranges by `active_count_weights` (rows are treatment
+  counts, columns covariate counts; `None` is uniform);
+  `SCMPrior.active_count_grid` and `active_count_weight_matrix()` expose the
+  grid and the validated weights. Every combination gets an exact rational
+  target: zero for zero weight; at least one cell for each positive weight
+  once `n_cells` reaches their number, at most one below it; otherwise its
+  share of the remaining cells. Counts round the targets down or up by
+  systematic sampling in a random order, so they sum to `n_cells`, each
+  count's expectation is its target, whole-number targets are met exactly, and
+  uniform weights keep counts within one of each other and cover the whole
+  grid once `n_cells` reaches its size; the allocated combinations are then
+  shuffled over the cells. Latent counts stay independent per-cell draws.
+  Weights are nested lists or tuples (arrays are rejected; use `.tolist()`).
+  Both fields are validated in either mode (weight errors name the expected
+  grid shape); the weights are used only when stratified.
+  `sample_prior_predictive(n=)` and `DataGenerator.generate` allocate over the
+  re-derived cell count and keep every generated cell. `iter_batches`
+  allocates each batch on its own, so with non-uniform weights the union
+  follows the weights only when no batch's coverage floor or cap moves a
+  target off its plain quota `n_cells·w/Σw`; in practice that needs many more
+  cells per batch than positive-weight combinations, and more still for
+  skewed weights. The cell-level validation split stays a
+  random subset of cells, and `sample_scm` (one world, every node active)
+  ignores the allocation. The experimental template path
+  (`world_model_template.sample_cell_structures`) allocates through the same
+  helpers, checks the allocation, active ranges and weights itself, and one
+  compiled template serves every combination. A cell that
+  exhausts the realism filter now names its active counts in the
+  `RuntimeError`.
+- Stratified corpora carry `diagnostics["active_count_coverage"]`: the
+  allocation, both grid axes, the weights, and per-combination `n_cells` /
+  `n_worlds` counted from the stored masks after any `n=` truncation.
+  `validate_corpus` checks its keys, axes and weights, recounts it exactly from
+  `treatment_active_mask` / `covariate_active_mask` / `cell_id`, requires every
+  task inside the grid, and checks that the cell counts round the targets of
+  the recorded weights. The new public
+  `pymc_generator.active_count_coverage(corpus, prior=None)` reports the same
+  counts for any corpus, with unreached combinations shown as zeros; it reads
+  the grid from `prior` when given, otherwise from the stored block, so
+  independent corpora need `prior=`. **Schema and RNG impact:** no schema-version
+  bump — the block is optional. Stratified allocation seeds its own stream
+  with one draw from the corpus RNG and skips the per-cell treatment and
+  covariate draws, so at the same seed it changes every later structure draw
+  (documented per #28). With the
+  defaults, same-seed corpora, diagnostics, saved shards, `sample_scm` worlds
+  and template payloads and draws are bit-identical to before;
+  `write_scenario_bundles`' `recipe.json` lists the two new `SCMPrior` fields
+  at their defaults.
 - Richer mechanism priors (#25): validated per-family
   `SCMPrior.saturation_prior_ranges`, opt-in `mm_scale_prior="log_uniform"`,
   and treatment/control reference-contribution priors. Drawn targets determine

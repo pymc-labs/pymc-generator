@@ -15,6 +15,7 @@ it.
 | [`build_oracle_model`](world-model.md#pymc_generator.world_model.build_oracle_model) | [World model](world-model.md) | Observed-data variant: the NUTS posterior oracle. |
 | [`sample_prior_predictive`](corpus.md) / [`DataGenerator`](corpus.md) | [Corpus generation](corpus.md) | Generate an `n_tasks`-world corpus (dict of arrays). |
 | [`save_corpus`](corpus.md) / [`load_corpus`](corpus.md) | [Corpus generation](corpus.md) | Compressed `.npz` persistence. |
+| [`active_count_coverage`](corpus.md#pymc_generator.active_counts.active_count_coverage) | [Corpus generation](corpus.md) | Cells and worlds per (active treatments, active covariates) combination of a corpus. |
 | [`describe_scm`](describe.md) | [Descriptions](describe.md) | Plain-text description of a world. |
 | [`write_scm_bundle`](bundles.md) / [`write_scenario_bundles`](bundles.md) | [Audit bundles](bundles.md) | Write auditable folders. |
 | [`SCENARIOS`](scenarios.md) | [Named scenarios](scenarios.md) | Five named audit scenarios. |
@@ -43,6 +44,7 @@ pg.SCENARIOS                 # the five named recipes
 pg.sample_prior_predictive   # a corpus (dict of numpy arrays)
 pg.DataGenerator             # a facade over corpus generation + validation
 pg.save_corpus, pg.load_corpus
+pg.active_count_coverage     # cells / worlds per active-count combination
 pg.outcome_distributions     # outcome/contribution magnitudes across worlds
 pg.data_diagnostics          # dependence / VIF / dynamics / contribution hierarchy
 pg.world_descriptors         # one row of statistics per world
