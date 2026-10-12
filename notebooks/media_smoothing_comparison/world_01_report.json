@@ -1,0 +1,478 @@
+{
+  "world_id": 1,
+  "source_batch": 0,
+  "source_seed": 10029,
+  "draw_seed": 1420019999,
+  "accepted_candidate": 0,
+  "active_media": 8,
+  "nonzero_media": 6,
+  "source_array_checks": [
+    "treatment_raw",
+    "treatment_norm",
+    "treatment_share",
+    "covariates",
+    "outcome_raw",
+    "outcome_norm",
+    "support_mask",
+    "is_future",
+    "g",
+    "treatment_contribution_raw",
+    "baseline_raw",
+    "latent_unobserved",
+    "treatment_means",
+    "outcome_scale",
+    "is_val",
+    "cell_id",
+    "treatment_active_mask",
+    "covariate_active_mask",
+    "latent_active_mask",
+    "n_treatments_active",
+    "n_covariates_active",
+    "n_latent_active",
+    "confounding_strength",
+    "indirect_effects",
+    "treatment_active",
+    "covariate_contribution",
+    "latent_unobserved_contribution",
+    "baseline_intrinsic",
+    "outcome_noise",
+    "indirect_effects_by_source",
+    "treatment_shock_mask",
+    "treatment_shock_index",
+    "treatment_shock_start",
+    "treatment_shock_length",
+    "treatment_shock_level_multiplier",
+    "treatment_shock_level",
+    "treatment_level",
+    "saturation_scale",
+    "carryover_family",
+    "carryover_alpha",
+    "weibull_lam",
+    "weibull_k",
+    "treatment_components",
+    "covariate_components",
+    "treatment_activity",
+    "covariate_activity",
+    "treatment_log_level_shift",
+    "covariate_level_shift",
+    "trajectory_treatment_hf_sigma",
+    "trajectory_treatment_pulse_amp",
+    "trajectory_treatment_pulse_prob",
+    "trajectory_treatment_onset_start",
+    "trajectory_treatment_offset_stop",
+    "trajectory_treatment_flighting_period",
+    "trajectory_treatment_flighting_on_weeks",
+    "trajectory_treatment_flighting_phase",
+    "trajectory_treatment_level_jump_week",
+    "trajectory_treatment_level_jump_factor",
+    "trajectory_treatment_level_jump_log_factor",
+    "trajectory_treatment_seasonal_amplitude",
+    "trajectory_treatment_seasonal_period",
+    "trajectory_treatment_seasonal_phase",
+    "trajectory_treatment_trend_change",
+    "trajectory_covariate_hf_sigma",
+    "trajectory_covariate_pulse_amp",
+    "trajectory_covariate_pulse_prob",
+    "trajectory_covariate_onset_start",
+    "trajectory_covariate_offset_stop",
+    "trajectory_covariate_flighting_period",
+    "trajectory_covariate_flighting_on_weeks",
+    "trajectory_covariate_flighting_phase",
+    "trajectory_covariate_level_jump_week",
+    "trajectory_covariate_level_jump_size",
+    "trajectory_covariate_seasonal_amplitude",
+    "trajectory_covariate_seasonal_period",
+    "trajectory_covariate_seasonal_phase",
+    "trajectory_covariate_trend_change",
+    "sat_family",
+    "mechanism_saturation_scale",
+    "beta",
+    "rho_zy",
+    "hill_slope",
+    "hill_kappa_mult",
+    "logistic_lam",
+    "mm_kappa_mult",
+    "tanh_c",
+    "root_alpha",
+    "treatment_reference_contribution",
+    "treatment_reference_input",
+    "treatment_reference_response",
+    "covariate_reference_contribution",
+    "covariate_reference_input"
+  ],
+  "protected_output_checks": [
+    "covariates",
+    "covariate_contribution",
+    "baseline_intrinsic",
+    "outcome_noise",
+    "saturation_scale",
+    "latent_unobserved",
+    "confounding_strength"
+  ],
+  "fixed_rv_replay_exact": true,
+  "source_array_replay_exact": true,
+  "rng_capture_exact": true,
+  "structure_original": {
+    "carryover_family": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "sat_family": [
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "smoothness_d": [
+      0.6003255433068719
+    ],
+    "smoothness_z": [
+      0.4755931400345657,
+      0.6172326459489827,
+      0.9135627595950799,
+      0.606974120750606,
+      0.9485079948316256
+    ],
+    "smoothness_c": [
+      0.6918875990154228,
+      0.42865787041517517,
+      0.5759649387169833,
+      0.2162201875945315,
+      0.8165429437382269,
+      0.5065783639007166,
+      0.5378823732671788,
+      0.818211114600378
+    ],
+    "smoothness_b": [
+      0.5212716267314405
+    ],
+    "use_hf": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ],
+    "use_pulse": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "use_onset": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ],
+    "use_offset": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "use_flighting": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ],
+    "use_level_jump": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false
+    ],
+    "use_seasonal": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ],
+    "use_trend": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ],
+    "use_covariate_hf": [
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "use_covariate_pulse": [
+      true,
+      true,
+      true,
+      false,
+      false
+    ],
+    "use_covariate_onset": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "use_covariate_offset": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ],
+    "use_covariate_flighting": [
+      true,
+      false,
+      false,
+      false,
+      true
+    ],
+    "use_covariate_level_jump": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "use_covariate_seasonal": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "use_covariate_trend": [
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "structure_less_smooth": {
+    "carryover_family": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "sat_family": [
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "smoothness_d": [
+      0.6003255433068719
+    ],
+    "smoothness_z": [
+      0.4755931400345657,
+      0.6172326459489827,
+      0.9135627595950799,
+      0.606974120750606,
+      0.9485079948316256
+    ],
+    "smoothness_c": [
+      0.4706770227543039,
+      0.262582027842736,
+      0.3720277072602462,
+      0.12458695015064745,
+      0.5979543677123589,
+      0.3186903760523047,
+      0.3423156652797843,
+      0.5998875763542887
+    ],
+    "smoothness_b": [
+      0.5212716267314405
+    ],
+    "use_hf": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ],
+    "use_pulse": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "use_onset": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ],
+    "use_offset": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "use_flighting": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ],
+    "use_level_jump": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false
+    ],
+    "use_seasonal": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ],
+    "use_trend": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ],
+    "use_covariate_hf": [
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "use_covariate_pulse": [
+      true,
+      true,
+      true,
+      false,
+      false
+    ],
+    "use_covariate_onset": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "use_covariate_offset": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ],
+    "use_covariate_flighting": [
+      true,
+      false,
+      false,
+      false,
+      true
+    ],
+    "use_covariate_level_jump": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "use_covariate_seasonal": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "use_covariate_trend": [
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "negative_sales_weeks": 0
+}

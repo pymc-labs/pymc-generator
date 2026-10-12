@@ -1,0 +1,182 @@
+{
+  "world_id": 27,
+  "terms": [
+    "Intercept",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "Z1",
+    "Z2",
+    "Z3",
+    "Z4",
+    "Z5"
+  ],
+  "fits": {
+    "bounded_estimated": {
+      "success": true,
+      "message": "`ftol` termination condition is satisfied.",
+      "nfev": 158,
+      "residual_calls": 4032,
+      "optimality": 0.00179040458797528,
+      "boundary_count": 8,
+      "attempts": [
+        {
+          "start": 1,
+          "success": true,
+          "nfev": 92,
+          "cost": 8.738460620476076,
+          "message": "`ftol` termination condition is satisfied."
+        },
+        {
+          "start": 2,
+          "success": true,
+          "nfev": 66,
+          "cost": 8.738455821745559,
+          "message": "`ftol` termination condition is satisfied."
+        }
+      ],
+      "seconds": 1.0982763739302754,
+      "observed_rmse": 0.42949846308157696,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C3",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "Z2"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C3",
+            "C5",
+            "C6",
+            "C7",
+            "C8"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C3",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "Z2"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C3",
+            "C5",
+            "C6",
+            "C7",
+            "C8"
+          ]
+        }
+      ]
+    },
+    "bounded_true": {
+      "success": true,
+      "message": "The first-order optimality measure is less than `tol`.",
+      "nfev": 5,
+      "residual_calls": 0,
+      "optimality": 7.318590178329032e-13,
+      "boundary_count": 4,
+      "attempts": [],
+      "seconds": 0.001590588130056858,
+      "observed_rmse": 0.4452108930510553,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "Z2"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C5",
+            "C6",
+            "C7",
+            "C8"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "Z2"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C2",
+            "C5",
+            "C6",
+            "C7",
+            "C8"
+          ]
+        }
+      ]
+    }
+  }
+}

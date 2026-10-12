@@ -1,0 +1,21 @@
+# Task 1 read-only saved-result analysis. No sampling or fitting.
+[study]
+worlds = 50
+seed = 10029
+baseline = "varying"
+reported_weeks = [0, 103]
+score_weeks = [7, 103]
+burn_in = 8
+
+[generator]
+n_time_steps = 104
+carryover_family = "geometric"
+saturation_family = "michaelis_menten"
+rw_baseline_std_range = [0.0, 0.093]
+
+[methods]
+enabled = ["advi", "mcmc"]
+
+[score]
+relative = 0.10
+absolute = 0.01

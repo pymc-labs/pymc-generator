@@ -1,0 +1,19 @@
+{
+  "adaptation": "draw_diag",
+  "chains": 2,
+  "compile_seconds": 2.714915973134339,
+  "configured_seed": 92002,
+  "divergences": 0,
+  "draws": 100,
+  "effective_seed": 92002,
+  "maxdepth_hits": 0,
+  "method": "nutpie",
+  "posterior_finite": true,
+  "replicate": 0,
+  "seconds": 22.878458963008597,
+  "seed": 92002,
+  "status": "completed_smoke_not_scientifically_validated",
+  "target_accept": 0.95,
+  "warmup": 100,
+  "world_id": 1
+}

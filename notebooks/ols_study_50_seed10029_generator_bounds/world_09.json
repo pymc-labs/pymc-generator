@@ -1,0 +1,234 @@
+{
+  "world_id": 9,
+  "terms": [
+    "Intercept",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "C9",
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "Z1",
+    "Z2",
+    "Z3",
+    "Z4",
+    "Z5",
+    "Z6",
+    "Z7",
+    "Z8",
+    "Z9",
+    "Z10"
+  ],
+  "fits": {
+    "bounded_estimated": {
+      "success": false,
+      "message": "The maximum number of function evaluations is exceeded.",
+      "nfev": 240,
+      "residual_calls": 12096,
+      "optimality": 0.0006696342350732872,
+      "boundary_count": 16,
+      "attempts": [
+        {
+          "start": 1,
+          "success": false,
+          "nfev": 120,
+          "cost": 8.398914082146545,
+          "message": "The maximum number of function evaluations is exceeded."
+        },
+        {
+          "start": 2,
+          "success": false,
+          "nfev": 120,
+          "cost": 8.398377522122866,
+          "message": "The maximum number of function evaluations is exceeded."
+        }
+      ],
+      "seconds": 16.296853285981342,
+      "observed_rmse": 0.681941892236301,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C9",
+            "C10",
+            "C11",
+            "C13",
+            "C14",
+            "C15",
+            "Z2",
+            "Z4",
+            "Z5",
+            "Z7",
+            "Z8",
+            "Z9"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C10",
+            "C13",
+            "C15",
+            "Z2",
+            "Z4",
+            "Z7",
+            "Z8"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C10",
+            "C11",
+            "C13",
+            "C15",
+            "Z2",
+            "Z4",
+            "Z5",
+            "Z7",
+            "Z8",
+            "Z9"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C10",
+            "C13",
+            "C15",
+            "Z2",
+            "Z4",
+            "Z7",
+            "Z8"
+          ]
+        }
+      ]
+    },
+    "bounded_true": {
+      "success": true,
+      "message": "The first-order optimality measure is less than `tol`.",
+      "nfev": 8,
+      "residual_calls": 0,
+      "optimality": 2.8989727285377853e-12,
+      "boundary_count": 9,
+      "attempts": [],
+      "seconds": 0.0028938890900462866,
+      "observed_rmse": 0.7380389837629157,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "C9",
+            "C11",
+            "C12",
+            "C13",
+            "C14",
+            "Z4",
+            "Z7",
+            "Z8",
+            "Z9"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C9",
+            "C11",
+            "C13",
+            "Z4",
+            "Z7"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "C9",
+            "C11",
+            "C13",
+            "Z4",
+            "Z7",
+            "Z8",
+            "Z9"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C5",
+            "C9",
+            "C11",
+            "C13",
+            "Z4",
+            "Z7"
+          ]
+        }
+      ]
+    }
+  }
+}

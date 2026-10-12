@@ -1,0 +1,151 @@
+{
+  "config": {
+    "diagnostics": {
+      "bfmi": 0.3,
+      "divergences": 0,
+      "ess": 400,
+      "maxdepth_hits": 0,
+      "rhat": 1.01
+    },
+    "generator": {
+      "carryover_family": "geometric",
+      "edge_budget": {
+        "cc": [
+          0,
+          0
+        ],
+        "cy": [
+          1,
+          15
+        ],
+        "dc": [
+          0,
+          0
+        ],
+        "dy": [
+          0,
+          0
+        ],
+        "dz": [
+          0,
+          0
+        ],
+        "zc": [
+          0,
+          0
+        ],
+        "zy": [
+          0,
+          10
+        ],
+        "zz": [
+          0,
+          0
+        ]
+      },
+      "l_max": 8,
+      "n_covariates": 10,
+      "n_covariates_active_range": [
+        3,
+        10
+      ],
+      "n_time_steps": 104,
+      "n_treatments": 15,
+      "n_treatments_active_range": [
+        5,
+        15
+      ],
+      "rw_baseline_std_range": [
+        0.0,
+        0.0
+      ],
+      "saturation_family": "michaelis_menten"
+    },
+    "methods": {
+      "advi": {
+        "draws": 4000,
+        "seeds": [
+          93001,
+          93002
+        ],
+        "steps": 20000
+      },
+      "enabled": [
+        "ols",
+        "advi",
+        "mcmc"
+      ],
+      "mcmc": {
+        "adaptation": "draw_diag",
+        "chains": 4,
+        "draws": 1000,
+        "maxdepth": 10,
+        "sampler": "nutpie",
+        "seed": 92001,
+        "target_accept": 0.95,
+        "warmup": 1000
+      },
+      "ols": {
+        "max_nfev": 120,
+        "seed": 2026,
+        "starts": 2
+      }
+    },
+    "pairing": {
+      "coupling_manifest": "notebooks/media_smoothing_comparison/manifest.json",
+      "media_smoothness_beta": 4.0,
+      "mode": "matched"
+    },
+    "score": {
+      "absolute": 0.01,
+      "relative": 0.1
+    },
+    "study": {
+      "baseline": "constant",
+      "burn_in": 8,
+      "reported_weeks": [
+        0,
+        103
+      ],
+      "score_weeks": [
+        7,
+        103
+      ],
+      "seed": 10029,
+      "worlds": 2
+    }
+  },
+  "environment": {
+    "packages": {
+      "arviz": "1.3.0",
+      "h5netcdf": "1.8.1",
+      "h5py": "3.16.0",
+      "numpy": "2.4.6",
+      "nutpie": "0.16.11",
+      "pymc": "6.3.2",
+      "pymc-generator": "0.0.2",
+      "pytensor": "3.3.3",
+      "scipy": "1.18.1",
+      "xarray": "2026.9.0"
+    },
+    "python": "3.13.12"
+  },
+  "expected_outputs": [
+    "validation.json"
+  ],
+  "inputs": {
+    "base-batch": "f6e86f5506c3d9e43e983dd87f667ca1f713745a78d837c2ec334fe30c10af9e",
+    "base-manifest": "25dfc6d2763d912d4b7e0baa4eec338170d340259e572f5f3e3c5e3ef524ca9f",
+    "paired-arrays": "266c774d8d0825acb16bd73afb9669ffeabbfcce818d5d2ee3d468c7711822ec",
+    "paired-manifest": "c841d1ccdc68cfd1f91f5f700677cbe01d5595d23322b02d86e003b0af767cb2",
+    "paired-report": "802e2fbc170822933374287df81953114d6a129b1225721bd95e5ce3f0abaa02",
+    "paired-rvs": "c8daa8f3cf4b31a7c42bba52025a302720987cd68346ed125b3ab782a347cc33"
+  },
+  "schema": 1,
+  "sources": {
+    "matched-adapter": "88d25fc0f6c0637cf5c943c459c87f5ad9f9fa6a524c876d9c9acf4db5e61b02",
+    "reference-config": "04066b68eb680cc55fad6d8d2ea91230ac62243ce2247e69c7ad3f7f9c1f6c57"
+  },
+  "stage": "analyze",
+  "world_id": 1
+}

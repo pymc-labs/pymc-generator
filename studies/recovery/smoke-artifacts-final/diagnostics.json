@@ -1,0 +1,154 @@
+{
+  "constant": [
+    {
+      "generation_checkpoint": "complete",
+      "methods": {
+        "advi_1": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 7.594555421033874,
+          "warning": "short budget; optimization not certified"
+        },
+        "advi_2": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 7.26909076818265,
+          "warning": "short budget; optimization not certified"
+        },
+        "mcmc": {
+          "completed": true,
+          "diagnostic_pass": false,
+          "divergences": 0,
+          "max_rhat": 1.0563651668848446,
+          "maxdepth_hits": 0,
+          "min_bfmi": 0.6788705511726885,
+          "min_bulk_ess": 34.33044829291357,
+          "min_tail_ess": 76.91360043840176,
+          "seconds": 22.598538560094312,
+          "warning": "100 retained draws/chain cannot satisfy ESS >= 400; smoke is not recovery evidence"
+        },
+        "ols": {
+          "completed": true,
+          "note": "bounded nonlinear LS, not unconstrained OLS",
+          "optimizer_success": true,
+          "seconds": 0.33146971417590976
+        }
+      },
+      "world_id": 0
+    },
+    {
+      "generation_checkpoint": "complete",
+      "methods": {
+        "advi_1": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 7.354251787997782,
+          "warning": "short budget; optimization not certified"
+        },
+        "advi_2": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 7.544791586929932,
+          "warning": "short budget; optimization not certified"
+        },
+        "mcmc": {
+          "completed": true,
+          "diagnostic_pass": false,
+          "divergences": 0,
+          "max_rhat": 1.0615267996842412,
+          "maxdepth_hits": 0,
+          "min_bfmi": 0.792047292625974,
+          "min_bulk_ess": 34.67267577247262,
+          "min_tail_ess": 23.738343194845218,
+          "seconds": 22.878458963008597,
+          "warning": "100 retained draws/chain cannot satisfy ESS >= 400; smoke is not recovery evidence"
+        },
+        "ols": {
+          "completed": true,
+          "note": "bounded nonlinear LS, not unconstrained OLS",
+          "optimizer_success": true,
+          "seconds": 0.080005421070382
+        }
+      },
+      "world_id": 1
+    }
+  ],
+  "varying": [
+    {
+      "generation_checkpoint": "complete",
+      "methods": {
+        "advi_1": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 37.58467937796377,
+          "warning": "short budget; optimization not certified"
+        },
+        "advi_2": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 38.49036711407825,
+          "warning": "short budget; optimization not certified"
+        },
+        "mcmc": {
+          "completed": true,
+          "diagnostic_pass": false,
+          "divergences": 0,
+          "max_rhat": 1.036123266313423,
+          "maxdepth_hits": 0,
+          "min_bfmi": 0.8446625237888847,
+          "min_bulk_ess": 70.8099448956312,
+          "min_tail_ess": 56.997830160381156,
+          "seconds": 55.790880396962166,
+          "warning": "100 retained draws/chain cannot satisfy ESS >= 400; smoke is not recovery evidence"
+        }
+      },
+      "world_id": 0
+    },
+    {
+      "generation_checkpoint": "complete",
+      "methods": {
+        "advi_1": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 38.24371178611182,
+          "warning": "short budget; optimization not certified"
+        },
+        "advi_2": {
+          "completed": true,
+          "loss_finite": true,
+          "no_mcmc_diagnostics": true,
+          "posterior_finite": true,
+          "seconds": 39.33848391612992,
+          "warning": "short budget; optimization not certified"
+        },
+        "mcmc": {
+          "completed": true,
+          "diagnostic_pass": false,
+          "divergences": 0,
+          "max_rhat": 1.0868434561998939,
+          "maxdepth_hits": 68,
+          "min_bfmi": 0.8864874060202669,
+          "min_bulk_ess": 29.584272731407307,
+          "min_tail_ess": 49.81019932635735,
+          "seconds": 87.29840604006313,
+          "warning": "100 retained draws/chain cannot satisfy ESS >= 400; smoke is not recovery evidence"
+        }
+      },
+      "world_id": 1
+    }
+  ]
+}

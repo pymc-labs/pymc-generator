@@ -1,0 +1,30 @@
+{
+  "attempts": [
+    {
+      "cost": 0.09270345472373924,
+      "nfev": 39,
+      "start": 1,
+      "success": true
+    },
+    {
+      "cost": 0.09270345445039145,
+      "nfev": 47,
+      "start": 2,
+      "success": true
+    }
+  ],
+  "boundary_count": 1,
+  "configured_seed": 2027,
+  "effective_seed": 2027,
+  "method": "generator-bounded estimated-transform nonlinear least squares",
+  "nfev": 86,
+  "observed_rmse": 0.04492049020020962,
+  "optimality": 1.665431115345426e-07,
+  "optimizer_status": "`ftol` termination condition is satisfied.",
+  "replicate": 0,
+  "residual_calls": 694,
+  "seconds": 0.080005421070382,
+  "status": "completed_smoke_not_scientifically_validated",
+  "success": true,
+  "world_id": 1
+}

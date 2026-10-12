@@ -1,0 +1,11 @@
+# Deterministic fixed-primitive-RV replay of two existing media-smoothing worlds.
+# No random world draw and no inference. Paths passed explicitly at CLI.
+[study]
+worlds = 2
+seed = 10029
+baseline = "constant"
+
+[pairing]
+mode = "matched"
+media_smoothness_beta = 4.0
+coupling_manifest = "notebooks/media_smoothing_comparison/manifest.json"

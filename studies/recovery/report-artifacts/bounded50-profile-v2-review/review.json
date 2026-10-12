@@ -1,0 +1,12 @@
+{
+  "decision": "approved",
+  "evidence_sha256": "ed2ed262b390c5a673b38af1c5ada010f4650f551e62098d9971666cc0a6c014",
+  "interpretation_sha256": "ebefc14f94406efb2c0391a0035dcbc7420aa28ec9fd6f466ffa9142bd96e6db",
+  "report_manifest_sha256": "e3e962dd2a58edc78c920add5c837ecad47be7a57b56a0629b884da846e77e06",
+  "report_receipt_sha256": "04104ac6b8832d47b6031610d7fee083ddcce382f44d395b82238c96efc62b31",
+  "report_relative": "../bounded50-profile-v2",
+  "report_run_id": "041a2b4bfc17d53631ad524508fe0a6243c8bdf50df47ec3ee567a7c202562de",
+  "review_id": "031ec6a9b96dfa8e7fdd2821cc25eabcef482c87a36082c2d62e81dc30f7939b",
+  "reviewer": "Teemu S\u00e4ilynoja",
+  "schema": 1
+}

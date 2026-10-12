@@ -1,0 +1,39 @@
+# Python 3.13.12. Rebuild ONLY studies/recovery/.venv from repo root:
+# uv venv studies/recovery/.venv --python 3.13
+# uv pip install --python studies/recovery/.venv/bin/python -r studies/recovery/requirements-report.txt -e .
+-r requirements-smoke.txt
+asttokens==3.0.2
+attrs==26.1.0
+comm==0.2.3
+debugpy==1.8.22
+executing==2.3.0
+fastjsonschema==2.22.2
+ipykernel==6.29.5
+ipython==9.17.1
+ipython-pygments-lexers==1.1.1
+ipywidgets==8.1.8
+jedi==0.20.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jupyter-client==8.10.0
+jupyter-core==5.9.1
+jupyterlab-widgets==3.0.17
+matplotlib-inline==0.2.2
+nbclient==0.10.2
+nbformat==5.10.4
+nest-asyncio==1.6.0
+parso==0.8.7
+pexpect==4.9.0
+plotly==6.3.1
+prompt-toolkit==3.0.53
+psutil==7.2.2
+ptyprocess==0.7.0
+pure-eval==0.2.4
+pyzmq==27.2.0
+referencing==0.37.0
+rpds-py==2026.9.1
+stack-data==0.6.3
+tornado==6.5.10
+traitlets==5.16.1
+wcwidth==0.9.2
+widgetsnbextension==4.0.16

@@ -1,0 +1,12 @@
+{
+  "decision": "approved",
+  "evidence_sha256": "9a657354105b82edebe4f2054024d6d393820f6b5af99b78e71ff6536481e724",
+  "interpretation_sha256": "d4e2a598f084051fbe2bd80aa102a7907aa91fb9aa8449ced62e750fda60e96b",
+  "report_manifest_sha256": "ee233865a496410a45088506de8d58500698355f712497bd353299d0d7dcbf7d",
+  "report_receipt_sha256": "bb74f38de99585ea77cbf16b963dc57c171ba1e04ba5c7790b846f70f08c5078",
+  "report_relative": "../tv50-profile-v2",
+  "report_run_id": "f2dccfb682b95c9e8da4ffdc0d3f8c5f4134098468d54ef4f8c8e974cfbbffb3",
+  "review_id": "15a972d9798d4f1c7631264c77fc7fa4da317a6fb9d8658ff52db8334e405cea",
+  "reviewer": "Teemu S\u00e4ilynoja",
+  "schema": 1
+}

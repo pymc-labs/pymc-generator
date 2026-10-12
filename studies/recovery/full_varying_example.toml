@@ -1,0 +1,61 @@
+# Example only: full TV population; DO NOT EXECUTE without separate approval.
+[study]
+worlds = 50
+seed = 10029
+baseline = "varying"
+reported_weeks = [0, 103]
+score_weeks = [7, 103]
+burn_in = 8
+
+[generator]
+n_time_steps = 104
+n_treatments = 15
+n_covariates = 10
+l_max = 8
+n_treatments_active_range = [5, 15]
+n_covariates_active_range = [3, 10]
+carryover_family = "geometric"
+saturation_family = "michaelis_menten"
+rw_baseline_std_range = [0, 0.093]
+
+[generator.edge_budget]
+cy = [1, 15]
+zy = [0, 10]
+dc = [0, 0]
+dz = [0, 0]
+dy = [0, 0]
+zc = [0, 0]
+cc = [0, 0]
+zz = [0, 0]
+
+[methods]
+enabled = ["advi", "mcmc"]
+
+[methods.advi]
+steps = 20000
+draws = 4000
+seeds = [93001, 93002]
+
+[methods.mcmc]
+chains = 4
+warmup = 1000
+draws = 1000
+target_accept = 0.95
+maxdepth = 10
+seed = 92001
+sampler = "nutpie"
+adaptation = "draw_diag"
+
+[score]
+relative = 0.1
+absolute = 0.01
+
+[diagnostics]
+rhat = 1.01
+ess = 400
+bfmi = 0.3
+divergences = 0
+maxdepth_hits = 0
+
+[pairing]
+mode = "independent"

@@ -1,0 +1,19 @@
+{
+  "candidate_exact": true,
+  "fixed_primitive_rvs_checked": 56,
+  "fixed_rvs_hash": "1adc1d77d4153059866bb4eed70daef9fb72225b3a93d50b4a97a03378f49849",
+  "media_changed": true,
+  "original_exact": true,
+  "paired_target_exact": true,
+  "protected_outputs_checked": [
+    "covariates",
+    "covariate_contribution",
+    "baseline_intrinsic",
+    "outcome_noise",
+    "saturation_scale",
+    "latent_unobserved",
+    "confounding_strength"
+  ],
+  "source_hash": "f6e86f5506c3d9e43e983dd87f667ca1f713745a78d837c2ec334fe30c10af9e",
+  "world_id": 0
+}

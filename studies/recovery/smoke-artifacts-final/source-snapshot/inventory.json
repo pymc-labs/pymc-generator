@@ -1,0 +1,183 @@
+{
+  "files": {
+    "notebooks/interactive_batches_legacy/config_29.json": {
+      "bytes": 6621,
+      "sha256": "04066b68eb680cc55fad6d8d2ea91230ac62243ce2247e69c7ad3f7f9c1f6c57"
+    },
+    "notebooks/ols_reporting.py": {
+      "bytes": 333510,
+      "sha256": "bd5ae983202c83a819c5748b3a446fd426e60ffa3377abbaf4edca0782695482"
+    },
+    "pymc_generator/__init__.py": {
+      "bytes": 5773,
+      "sha256": "c0bc50714781dc09135022b1e72079e31e2e386973f5b81a9d43f81362a0c684"
+    },
+    "pymc_generator/_version.py": {
+      "bytes": 91,
+      "sha256": "9f4b8bb6a5428093d4b08d8b62ce7944ab0e27435549b2bd0c3408417b6d2a7a"
+    },
+    "pymc_generator/active_counts.py": {
+      "bytes": 21220,
+      "sha256": "772f7b46f88875279a21559985ec293e67d3cab0c26eea61e3f3e27d427a0cf7"
+    },
+    "pymc_generator/bundles.py": {
+      "bytes": 11779,
+      "sha256": "264bfb3125b0888aef41e8429f823274b93dc8499e1ed19e5bc56d78d3acdbaa"
+    },
+    "pymc_generator/cli.py": {
+      "bytes": 1988,
+      "sha256": "7001c5b08025b63832d89311441f869f9aeb2bf7d33bb3eb6fc975aac1d8079b"
+    },
+    "pymc_generator/data_generator.py": {
+      "bytes": 84138,
+      "sha256": "a00b60b4c52b8c2af7607f04cbeca81faf24a4255a51dfb4dd291f0cfb504418"
+    },
+    "pymc_generator/describe.py": {
+      "bytes": 12613,
+      "sha256": "f45c4faee9096ce61db1065dc50cc4f16bda6eaa5291b8c4b53d2d9c7b1dbbb0"
+    },
+    "pymc_generator/descriptor_analysis.py": {
+      "bytes": 65556,
+      "sha256": "9297032612aca877b65bd74bb71dd485f859f7004ff9375f66cf783a9c988d2e"
+    },
+    "pymc_generator/descriptors.py": {
+      "bytes": 61569,
+      "sha256": "46c1844e24ec876074ea8147a21d0dddc2831af9ca9ee7196255d12e315637aa"
+    },
+    "pymc_generator/diagnostics.py": {
+      "bytes": 114390,
+      "sha256": "d736ba9339a3f41ca2650c8fecc4d78b5a3f2ba2a533afd265638fdd7f247ed8"
+    },
+    "pymc_generator/mechanisms.py": {
+      "bytes": 42867,
+      "sha256": "17cc839bb0fdae21c2ece7b582f9e831e3e6694f460daa0b2e7166e14d556c02"
+    },
+    "pymc_generator/outcomes.py": {
+      "bytes": 36542,
+      "sha256": "05d708f57cd126e22672272dac5087c75e8ded563d515809fe96372da6ecfbdb"
+    },
+    "pymc_generator/presets.py": {
+      "bytes": 22855,
+      "sha256": "7da05136739ec2775f3771ab8719ccfdca1fe5263c68550e832a798ae2956326"
+    },
+    "pymc_generator/random_walk.py": {
+      "bytes": 10132,
+      "sha256": "55534585e67ca0643615fdde39ec5a21c5934668fd03869f715e6b0e2aa320b4"
+    },
+    "pymc_generator/sampler.py": {
+      "bytes": 143300,
+      "sha256": "782085efd895840066cea509dd323d1d1c7680228be7ea79d8edbb3b666b82db"
+    },
+    "pymc_generator/scenarios.py": {
+      "bytes": 9719,
+      "sha256": "eaa97045b2afbc8cc5e24711357ff3b8a1043bfc3a3180eae6d79204712c5296"
+    },
+    "pymc_generator/signal_diagnostics.py": {
+      "bytes": 38034,
+      "sha256": "47291b596c1fc533399fccb9bf1ab6984e626b835c0cba29010f4c08a7694479"
+    },
+    "pymc_generator/slots.py": {
+      "bytes": 20188,
+      "sha256": "31564849a7cf6c1ba16411a9dad780b693eb162f72168f1b0c92fa7e6accf13c"
+    },
+    "pymc_generator/symbolic_graph.py": {
+      "bytes": 56694,
+      "sha256": "d715db96eb602039b2df86cc29c92df336d57a322276f415329358005a430550"
+    },
+    "pymc_generator/trajectories.py": {
+      "bytes": 22517,
+      "sha256": "0d69cb01dc97cb01cbca01463884e08f48704fdb3c91a923d17150be846af043"
+    },
+    "pymc_generator/viz.py": {
+      "bytes": 48904,
+      "sha256": "38ab959db3d3b7d7d92b0e40ed8bfea2f76552e19349c152fcf09d4d70a97d8f"
+    },
+    "pymc_generator/world_model.py": {
+      "bytes": 81682,
+      "sha256": "52cd39b673897d3e45cd4c7f7e81c10f2b631ad96b5efa0a0df6acff8828d379"
+    },
+    "pymc_generator/world_model_template.py": {
+      "bytes": 17417,
+      "sha256": "a9b9ac5031961bcbaeaa6360eb7e6a9bcbbd34281f33c43d6b78b51507cef35d"
+    },
+    "pymc_generator/worlds.py": {
+      "bytes": 57313,
+      "sha256": "7fda7ce80856ecd070d21f914ad05a817a12015680af3692763fd60dc4745069"
+    },
+    "pyproject.toml": {
+      "bytes": 5327,
+      "sha256": "89e01b2edd1248ceefdfb62d1ce53bbe81c6260b411e11d90955de941df729cd"
+    },
+    "studies/recovery/.gitignore": {
+      "bytes": 50,
+      "sha256": "5d1b46eb5eb556c62e6cff669f2d7de0ec85f996a1ecbb60894464e7dbbfa2fe"
+    },
+    "studies/recovery/__init__.py": {
+      "bytes": 83,
+      "sha256": "b159ca4f98f3521ccdb814aedf5a4cdacc587090e7ee3b43492bbbf3831d0d58"
+    },
+    "studies/recovery/__main__.py": {
+      "bytes": 3148,
+      "sha256": "56fcd167d0006716c741bf2d7d3a8249efa870a126c71b7e909bed8b15df053b"
+    },
+    "studies/recovery/analysis.py": {
+      "bytes": 16135,
+      "sha256": "289eaf91dff444e2d18f52101804abd912b7fcb6e804f8feb0ec488d2b5ddcca"
+    },
+    "studies/recovery/artifacts.py": {
+      "bytes": 8268,
+      "sha256": "dc700cb1fc9c68dda510320d590cd6e5280864232636ad58d3c82adfa4a6cac7"
+    },
+    "studies/recovery/config.py": {
+      "bytes": 13836,
+      "sha256": "b20c89b6e60f4a75c360465364f32cc2452425cdd1ee083358c81731b7c3bc37"
+    },
+    "studies/recovery/dgp.py": {
+      "bytes": 5807,
+      "sha256": "e75d466c2fbd91b8c597c9c905e60676f958d11aae364f974094d59d432503ad"
+    },
+    "studies/recovery/matched.py": {
+      "bytes": 10170,
+      "sha256": "88d25fc0f6c0637cf5c943c459c87f5ad9f9fa6a524c876d9c9acf4db5e61b02"
+    },
+    "studies/recovery/matched_existing_example.toml": {
+      "bytes": 338,
+      "sha256": "a5782b4fe2fa7f36b72b7f68fab6d9231b8c5bf281b07d2857a8c473dfc4df42"
+    },
+    "studies/recovery/methods.py": {
+      "bytes": 9250,
+      "sha256": "4830d9d92adead348c13a4118c34b09fbea9616d635006351ab27d845ec9a065"
+    },
+    "studies/recovery/models.py": {
+      "bytes": 9278,
+      "sha256": "a21c6095d97e91365016044095fcac90ac5eed225c1b4dbd0e9e9add4b1d1591"
+    },
+    "studies/recovery/requirements-smoke.txt": {
+      "bytes": 1385,
+      "sha256": "8eeb8cd4ceeb06c2e305990ecbc2ebce90cb3bdaf6e49620d303834ac0f18868"
+    },
+    "studies/recovery/runner.py": {
+      "bytes": 9538,
+      "sha256": "027122d6bba54e1d2f643efb0bcb401618a651bb49d447b02bb26147a28cd407"
+    },
+    "studies/recovery/saved_tv_example.toml": {
+      "bytes": 399,
+      "sha256": "df37e44ce325e379adadc24298dc007bf340812656cb91d5da92070c0a41c474"
+    },
+    "studies/recovery/smoke_constant.toml": {
+      "bytes": 524,
+      "sha256": "9f79e923e1553690e7b6153e33364ee195a4e02f7f9f5a312a100d32bff72739"
+    },
+    "studies/recovery/smoke_status.py": {
+      "bytes": 6349,
+      "sha256": "4fe208c911c9dde6cd94422854ff9096b397d3be5a201b2fc3981cfcfe7e8519"
+    },
+    "studies/recovery/smoke_varying.toml": {
+      "bytes": 463,
+      "sha256": "42ebc0bf5f89f70412d337217fa59b6489df0122c39ba053e2b0c6c7c1f00267"
+    }
+  },
+  "python": "3.13.12 (main, Mar 10 2026, 18:17:38) [Clang 21.1.4 ]",
+  "scope": "Frozen before bounded same-four-world rerun; inputs original notebook/config read-only, generator .py included. No mutation after freeze.",
+  "source_count": 44
+}

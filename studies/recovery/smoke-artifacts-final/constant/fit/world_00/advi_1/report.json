@@ -1,0 +1,19 @@
+{
+  "compile_seconds": 2.6954176460858434,
+  "configured_seed": 93001,
+  "diagnostics": "Rhat/ESS do not apply to variational draws",
+  "draws": 40,
+  "effective_seed": 93001,
+  "loss_finite": true,
+  "loss_first": 13024.452072639737,
+  "loss_last": 3001.8259056143443,
+  "method": "fullrank_advi",
+  "optimization_warning": "short budget; optimization not certified",
+  "posterior_finite": true,
+  "replicate": 0,
+  "seconds": 7.594555421033874,
+  "seed": 93001,
+  "status": "completed_smoke_not_scientifically_validated",
+  "steps": 500,
+  "world_id": 0
+}

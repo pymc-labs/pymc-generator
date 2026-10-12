@@ -1,0 +1,13 @@
+# Existing 50-world bounded estimated-transform OLS, read-only report input.
+# The defaults resolve to the recorded constant-baseline 104-week generator recipe.
+[study]
+worlds = 50
+seed = 10029
+baseline = "constant"
+reported_weeks = [0, 103]
+score_weeks = [7, 103]
+burn_in = 8
+
+[score]
+relative = 0.10
+absolute = 0.01

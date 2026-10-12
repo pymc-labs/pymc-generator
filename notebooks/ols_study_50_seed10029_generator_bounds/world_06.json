@@ -1,0 +1,178 @@
+{
+  "world_id": 6,
+  "terms": [
+    "Intercept",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "C9",
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "Z1",
+    "Z2",
+    "Z3",
+    "Z4",
+    "Z5",
+    "Z6",
+    "Z7",
+    "Z8",
+    "Z9",
+    "Z10"
+  ],
+  "fits": {
+    "bounded_estimated": {
+      "success": false,
+      "message": "The maximum number of function evaluations is exceeded.",
+      "nfev": 240,
+      "residual_calls": 8676,
+      "optimality": 3.887046182424215e-06,
+      "boundary_count": 7,
+      "attempts": [
+        {
+          "start": 1,
+          "success": false,
+          "nfev": 120,
+          "cost": 0.5892342038948707,
+          "message": "The maximum number of function evaluations is exceeded."
+        },
+        {
+          "start": 2,
+          "success": false,
+          "nfev": 120,
+          "cost": 0.5934527084559785,
+          "message": "The maximum number of function evaluations is exceeded."
+        }
+      ],
+      "seconds": 2.8716157469898462,
+      "observed_rmse": 0.13379788282422653,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C9",
+            "C10",
+            "C11",
+            "C13"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C9",
+            "C10",
+            "C11"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C9",
+            "C10",
+            "C11",
+            "C13"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C9",
+            "C10",
+            "C11"
+          ]
+        }
+      ]
+    },
+    "bounded_true": {
+      "success": true,
+      "message": "The unconstrained solution is optimal.",
+      "nfev": 0,
+      "residual_calls": 0,
+      "optimality": 2.250505337642039e-12,
+      "boundary_count": 0,
+      "attempts": [],
+      "seconds": 0.0008579231798648834,
+      "observed_rmse": 0.15021688134183417,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C9",
+            "C10",
+            "C13"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C9",
+            "C10",
+            "C13"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C4",
+            "C9",
+            "C10",
+            "C13"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C9",
+            "C10",
+            "C13"
+          ]
+        }
+      ]
+    }
+  }
+}

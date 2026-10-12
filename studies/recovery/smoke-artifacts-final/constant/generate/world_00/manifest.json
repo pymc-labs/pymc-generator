@@ -1,0 +1,131 @@
+{
+  "config": {
+    "generator": {
+      "carryover_family": "geometric",
+      "edge_budget": {
+        "cc": [
+          0,
+          0
+        ],
+        "cy": [
+          1,
+          3
+        ],
+        "dc": [
+          0,
+          0
+        ],
+        "dy": [
+          0,
+          0
+        ],
+        "dz": [
+          0,
+          0
+        ],
+        "zc": [
+          0,
+          0
+        ],
+        "zy": [
+          0,
+          2
+        ],
+        "zz": [
+          0,
+          0
+        ]
+      },
+      "l_max": 8,
+      "n_covariates": 2,
+      "n_covariates_active_range": [
+        1,
+        2
+      ],
+      "n_time_steps": 104,
+      "n_treatments": 3,
+      "n_treatments_active_range": [
+        2,
+        3
+      ],
+      "rw_baseline_std_range": [
+        0.0,
+        0.0
+      ],
+      "saturation_family": "michaelis_menten"
+    },
+    "pairing": {
+      "mode": "independent"
+    },
+    "study": {
+      "baseline": "constant",
+      "burn_in": 8,
+      "reported_weeks": [
+        0,
+        103
+      ],
+      "score_weeks": [
+        7,
+        103
+      ],
+      "seed": 31001,
+      "worlds": 2
+    }
+  },
+  "environment": {
+    "packages": {
+      "arviz": "1.3.0",
+      "h5netcdf": "1.8.1",
+      "h5py": "3.16.0",
+      "numpy": "2.4.6",
+      "nutpie": "0.16.11",
+      "pymc": "6.3.2",
+      "pymc-generator": "0.0.2",
+      "pytensor": "3.3.3",
+      "scipy": "1.18.1",
+      "xarray": "2026.9.0"
+    },
+    "python": "3.13.12"
+  },
+  "expected_outputs": [
+    "dataset.npz",
+    "metadata.json"
+  ],
+  "generation_seed": 31001,
+  "inputs": {},
+  "local_world": 0,
+  "schema": 1,
+  "sources": {
+    "artifacts.py": "dc700cb1fc9c68dda510320d590cd6e5280864232636ad58d3c82adfa4a6cac7",
+    "config.py": "b20c89b6e60f4a75c360465364f32cc2452425cdd1ee083358c81731b7c3bc37",
+    "dgp.py": "e75d466c2fbd91b8c597c9c905e60676f958d11aae364f974094d59d432503ad",
+    "generator-reference-config": "04066b68eb680cc55fad6d8d2ea91230ac62243ce2247e69c7ad3f7f9c1f6c57",
+    "generator/__init__.py": "c0bc50714781dc09135022b1e72079e31e2e386973f5b81a9d43f81362a0c684",
+    "generator/_version.py": "9f4b8bb6a5428093d4b08d8b62ce7944ab0e27435549b2bd0c3408417b6d2a7a",
+    "generator/active_counts.py": "772f7b46f88875279a21559985ec293e67d3cab0c26eea61e3f3e27d427a0cf7",
+    "generator/bundles.py": "264bfb3125b0888aef41e8429f823274b93dc8499e1ed19e5bc56d78d3acdbaa",
+    "generator/cli.py": "7001c5b08025b63832d89311441f869f9aeb2bf7d33bb3eb6fc975aac1d8079b",
+    "generator/data_generator.py": "a00b60b4c52b8c2af7607f04cbeca81faf24a4255a51dfb4dd291f0cfb504418",
+    "generator/describe.py": "f45c4faee9096ce61db1065dc50cc4f16bda6eaa5291b8c4b53d2d9c7b1dbbb0",
+    "generator/descriptor_analysis.py": "9297032612aca877b65bd74bb71dd485f859f7004ff9375f66cf783a9c988d2e",
+    "generator/descriptors.py": "46c1844e24ec876074ea8147a21d0dddc2831af9ca9ee7196255d12e315637aa",
+    "generator/diagnostics.py": "d736ba9339a3f41ca2650c8fecc4d78b5a3f2ba2a533afd265638fdd7f247ed8",
+    "generator/mechanisms.py": "17cc839bb0fdae21c2ece7b582f9e831e3e6694f460daa0b2e7166e14d556c02",
+    "generator/outcomes.py": "05d708f57cd126e22672272dac5087c75e8ded563d515809fe96372da6ecfbdb",
+    "generator/presets.py": "7da05136739ec2775f3771ab8719ccfdca1fe5263c68550e832a798ae2956326",
+    "generator/random_walk.py": "55534585e67ca0643615fdde39ec5a21c5934668fd03869f715e6b0e2aa320b4",
+    "generator/sampler.py": "782085efd895840066cea509dd323d1d1c7680228be7ea79d8edbb3b666b82db",
+    "generator/scenarios.py": "eaa97045b2afbc8cc5e24711357ff3b8a1043bfc3a3180eae6d79204712c5296",
+    "generator/signal_diagnostics.py": "47291b596c1fc533399fccb9bf1ab6984e626b835c0cba29010f4c08a7694479",
+    "generator/slots.py": "31564849a7cf6c1ba16411a9dad780b693eb162f72168f1b0c92fa7e6accf13c",
+    "generator/symbolic_graph.py": "d715db96eb602039b2df86cc29c92df336d57a322276f415329358005a430550",
+    "generator/trajectories.py": "0d69cb01dc97cb01cbca01463884e08f48704fdb3c91a923d17150be846af043",
+    "generator/viz.py": "38ab959db3d3b7d7d92b0e40ed8bfea2f76552e19349c152fcf09d4d70a97d8f",
+    "generator/world_model.py": "52cd39b673897d3e45cd4c7f7e81c10f2b631ad96b5efa0a0df6acff8828d379",
+    "generator/world_model_template.py": "a9b9ac5031961bcbaeaa6360eb7e6a9bcbbd34281f33c43d6b78b51507cef35d",
+    "generator/worlds.py": "7fda7ce80856ecd070d21f914ad05a817a12015680af3692763fd60dc4745069",
+    "runner.py": "027122d6bba54e1d2f643efb0bcb401618a651bb49d447b02bb26147a28cd407"
+  },
+  "stage": "generate",
+  "world_id": 0
+}

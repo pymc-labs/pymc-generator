@@ -1,0 +1,138 @@
+{
+  "world_id": 46,
+  "terms": [
+    "Intercept",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "C9",
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "Z1",
+    "Z2",
+    "Z3",
+    "Z4",
+    "Z5",
+    "Z6",
+    "Z7",
+    "Z8",
+    "Z9",
+    "Z10"
+  ],
+  "fits": {
+    "bounded_estimated": {
+      "success": true,
+      "message": "`ftol` termination condition is satisfied.",
+      "nfev": 33,
+      "residual_calls": 417,
+      "optimality": 3.374896437571992e-05,
+      "boundary_count": 1,
+      "attempts": [
+        {
+          "start": 1,
+          "success": true,
+          "nfev": 17,
+          "cost": 0.33274110588387007,
+          "message": "`ftol` termination condition is satisfied."
+        },
+        {
+          "start": 2,
+          "success": true,
+          "nfev": 16,
+          "cost": 0.3327411061097775,
+          "message": "`ftol` termination condition is satisfied."
+        }
+      ],
+      "seconds": 0.06690320302732289,
+      "observed_rmse": 0.08918768425175419,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C8"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C8"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C8"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C8"
+          ]
+        }
+      ]
+    },
+    "bounded_true": {
+      "success": true,
+      "message": "The unconstrained solution is optimal.",
+      "nfev": 0,
+      "residual_calls": 0,
+      "optimality": 1.3379297669757761e-12,
+      "boundary_count": 0,
+      "attempts": [],
+      "seconds": 0.0003908697981387377,
+      "observed_rmse": 0.09520454130436586,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": true,
+          "world_pass": true,
+          "failing_channels": []
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": true,
+          "world_pass": true,
+          "failing_channels": []
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": true,
+          "world_pass": true,
+          "failing_channels": []
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": true,
+          "world_pass": true,
+          "failing_channels": []
+        }
+      ]
+    }
+  }
+}

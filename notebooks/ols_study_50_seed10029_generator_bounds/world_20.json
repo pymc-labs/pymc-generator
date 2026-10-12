@@ -1,0 +1,206 @@
+{
+  "world_id": 20,
+  "terms": [
+    "Intercept",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "C9",
+    "C10",
+    "C11",
+    "Z1",
+    "Z2",
+    "Z3",
+    "Z4",
+    "Z5",
+    "Z6",
+    "Z7"
+  ],
+  "fits": {
+    "bounded_estimated": {
+      "success": true,
+      "message": "`ftol` termination condition is satisfied.",
+      "nfev": 74,
+      "residual_calls": 2314,
+      "optimality": 5.284476788024588e-05,
+      "boundary_count": 7,
+      "attempts": [
+        {
+          "start": 1,
+          "success": true,
+          "nfev": 30,
+          "cost": 3.8554589385970908,
+          "message": "`ftol` termination condition is satisfied."
+        },
+        {
+          "start": 2,
+          "success": true,
+          "nfev": 44,
+          "cost": 3.855458944206058,
+          "message": "`ftol` termination condition is satisfied."
+        }
+      ],
+      "seconds": 0.6073427710216492,
+      "observed_rmse": 0.5259673601709514,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C8",
+            "C9",
+            "C11",
+            "Z1",
+            "Z3",
+            "Z4",
+            "Z5",
+            "Z6"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C8",
+            "C9",
+            "C11",
+            "Z3"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C8",
+            "C9",
+            "C11",
+            "Z1",
+            "Z3",
+            "Z4",
+            "Z5",
+            "Z6"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C8",
+            "C9",
+            "C11",
+            "Z3"
+          ]
+        }
+      ]
+    },
+    "bounded_true": {
+      "success": true,
+      "message": "The first-order optimality measure is less than `tol`.",
+      "nfev": 3,
+      "residual_calls": 0,
+      "optimality": 8.29558643999917e-13,
+      "boundary_count": 4,
+      "attempts": [],
+      "seconds": 0.0010868848767131567,
+      "observed_rmse": 0.5772849849305021,
+      "gates": [
+        {
+          "relative": 0.05,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C8",
+            "C9",
+            "C11",
+            "Z4"
+          ]
+        },
+        {
+          "relative": 0.05,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C8",
+            "C9",
+            "C11"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.005,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C8",
+            "C9",
+            "C11",
+            "Z4"
+          ]
+        },
+        {
+          "relative": 0.1,
+          "absolute": 0.01,
+          "error_gates_pass": false,
+          "world_pass": false,
+          "failing_channels": [
+            "C1",
+            "C3",
+            "C4",
+            "C5",
+            "C8",
+            "C9",
+            "C11"
+          ]
+        }
+      ]
+    }
+  }
+}
