@@ -20,6 +20,14 @@ if TYPE_CHECKING:
     from .bundles import write_scenario_bundles, write_scm_bundle
     from .data_generator import DataGenerator, load_corpus, save_corpus
     from .describe import describe_scm
+    from .descriptor_analysis import (
+        DescriptorScale,
+        bin_counts,
+        compare_descriptors,
+        nearest_worlds,
+        summarize_descriptors,
+    )
+    from .descriptors import ObservedWorlds, WorldDescriptors, world_descriptors
     from .diagnostics import DataDiagnostics, data_diagnostics
     from .outcomes import (
         OUTCOME_QUANTITIES,
@@ -69,6 +77,15 @@ _LAZY_IMPORTS = {
     # collinearity, dynamics, contributions to outcome)
     "data_diagnostics": (".diagnostics", "data_diagnostics"),
     "DataDiagnostics": (".diagnostics", "DataDiagnostics"),
+    # per-world descriptor rows and independent between-world analyses
+    "world_descriptors": (".descriptors", "world_descriptors"),
+    "WorldDescriptors": (".descriptors", "WorldDescriptors"),
+    "ObservedWorlds": (".descriptors", "ObservedWorlds"),
+    "summarize_descriptors": (".descriptor_analysis", "summarize_descriptors"),
+    "bin_counts": (".descriptor_analysis", "bin_counts"),
+    "nearest_worlds": (".descriptor_analysis", "nearest_worlds"),
+    "compare_descriptors": (".descriptor_analysis", "compare_descriptors"),
+    "DescriptorScale": (".descriptor_analysis", "DescriptorScale"),
     "describe_scm": (".describe", "describe_scm"),
     "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
@@ -93,19 +110,25 @@ __all__ = [
     "SCENARIOS",
     "SCMPrior",
     "DataDiagnostics",
+    "DescriptorScale",
     "DataGenerator",
     "SCM",
+    "ObservedWorlds",
     "OutcomeDistributions",
     "QuantityDistribution",
     "SIGNAL_METRIC_LAYOUT",
     "SIGNAL_METRIC_VERSION",
+    "WorldDescriptors",
     "__version__",
+    "bin_counts",
     "build_oracle_model",
     "build_world_model",
+    "compare_descriptors",
     "data_diagnostics",
     "describe_scm",
     "draw_worlds",
     "outcome_distributions",
+    "nearest_worlds",
     "sample_prior_predictive",
     "load_corpus",
     "make_scm_prior",
@@ -114,5 +137,7 @@ __all__ = [
     "sample_structure",
     "save_corpus",
     "write_scenario_bundles",
+    "summarize_descriptors",
+    "world_descriptors",
     "write_scm_bundle",
 ]
