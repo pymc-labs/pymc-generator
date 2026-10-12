@@ -55,10 +55,12 @@ metadata, so their values are heterogeneous rather than uniformly ndarrays.
 
 The docs are a MkDocs Material site under `docs/`. The API pages are generated
 from docstrings (mkdocstrings), the guide pages execute real Python and render
-plots inline at build time (markdown-exec), and the notebooks under
-`docs/examples/` are executed by mkdocs-jupyter, including the trajectory and
-corpus-quality showcase. The docs require the full modeling stack and a
-Jupyter kernel named `pymc-generator`:
+plots inline at build time (markdown-exec), and the notebooks in
+`docs/examples/` are executed by mkdocs-jupyter. Development notebooks live in
+`docs/examples/dev/`: `exclude_docs` in `mkdocs.yml` keeps them out of the site,
+so the build neither renders nor executes them. To publish one, move it to
+`docs/examples/` and add it to `nav`. The docs require the full modeling stack
+and a Jupyter kernel named `pymc-generator`:
 
 ```bash
 uv sync --locked --extra dev --extra docs
@@ -77,11 +79,13 @@ counters, or widget state. Clear them before committing:
   --ClearMetadataPreprocessor.enabled=True \
   --ClearMetadataPreprocessor.preserve_nb_metadata_mask='{("language_info", "name"), "kernelspec"}' \
   --ClearMetadataPreprocessor.preserve_cell_metadata_mask='{"tags"}' \
-  docs/examples/*.ipynb
+  docs/examples/*.ipynb docs/examples/dev/*.ipynb
 ```
 
-Keep cell tags: the trajectory showcase uses them for report-only execution in
-a fresh kernel without generation.
+Keep cell tags: the trajectory showcase in `docs/examples/dev/` uses them for
+report-only execution in a fresh kernel without generation. In a published
+notebook, `hide-input` removes a cell's code from the rendered page and keeps
+its outputs.
 
 A full build samples worlds and executes the recovery case study's three
 four-chain MCMC fits. Allow for their runtime and inspect their actual warnings

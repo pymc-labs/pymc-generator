@@ -8,20 +8,35 @@ read the migration notes before upgrading.
 
 ### Added
 
-- **Public trajectory showcase and corpus-quality report (#29, #31).**
-  An executable guide notebook inspects an eight-world baseline before
-  generating **100 primary 104-week simulations in 50 generation cells**.
-  Applicable parameter distributions use equal-world weights, shared bins
-  and justified recorded-prior references; unused families, unknown supports,
-  observed constants and unavailable primitive truth stay explicit.
-  Zero-period diagnostics report exact run counts/observed lengths, boundary
-  clipping, pooled/equal-world series balance and world-level prevalence.
-  The complete stored-file quality report includes mask coverage, descriptors,
-  rank/VIF screening, seeded visual samples and manual dataset selection.
-  Eight atlas and one replay examples retain exact replay/template/oracle
-  checks. Both mixed archives and 117 source-qualified model-facing CSVs/bundles
-  are mapped by the manifest; report-only execution and optional two-file
-  comparison run in a fresh kernel without data generation.
+- **Trajectory showcase as a variety tool, with a plot-first corpus report (#29, #31).**
+  The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not
+  rendered on the documentation site) generates N worlds (10 by default) from
+  one block of parameter ranges and reads only the saved shard to plot, world
+  by world:
+  channel and control counts spanning 1–10 on both axes (an integer stratified
+  design, every count equally often, no pair repeated up to 100 worlds), every
+  generation parameter on the scale its prior is drawn on, the trend parameter's
+  down/flat/up split next to the realized direction, exact-zero weeks per input
+  from 0 to 100, and each world's channel/control/baseline share of the outcome.
+  References are the configured laws at the realized N (for the shares, the
+  uniform-composition ideal) with family-wise envelopes of at least 90%, and the
+  report prints how many panels chance alone should push outside. Every active
+  input drives the outcome directly; zeros come from one flighting law tuned to
+  near-even zero counts. A `.config.json` written next to the shard holds the
+  effective configuration and the shard's SHA-256; report-only execution on any
+  valid shard degrades to observed panels when it is missing.
+  The eight-world baseline, the 8-vs-100 comparison, the archetype atlas and the
+  replay/template/oracle demonstrations were removed from the notebook.
+- **Opt-in walk-parameter truth in corpora.** `SCMPrior.record_walk_parameters=True`
+  (default `False`) stores every world's realised walk means, absolute and
+  relative standard deviations, outcome-noise scales and smoothness as float64
+  arrays (`slots.WALK_ARRAY_FIELDS`), with `diagnostics["walk_parameters"]`
+  echoing their priors (`SCMPrior.walk_parameter_metadata()`). The values come
+  from the accepted draw. They are requested ahead of the legacy outputs and never
+  gate acceptance, so every other array, label and diagnostic is unchanged.
+  `validate_corpus` checks the arrays and block together, zero padding, prior
+  supports, and the treatment level and scale identities. Corpus generation only;
+  the schema version stays 5.
 - **Richer worlds end-to-end (#27).** Ordinary generation, `sample_scm`, and
   reusable templates support all eight trajectory components and fractional
   per-input inclusion alongside richer mechanism priors. Template flags are
