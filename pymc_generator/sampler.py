@@ -57,6 +57,8 @@ from .slots import (
     TRAJECTORY_MAX_LOG_SHIFT,
     TRAJECTORY_PARAM_FIELDS,
     TRAJECTORY_PARAM_REPORTS,
+    WALK_ARRAY_FIELDS,
+    WALK_RELATIVE_MODE_FIELDS,
     SlotLayout,
 )
 from .trajectories import (
@@ -469,6 +471,13 @@ class SCMPrior:
     # Disable them for feature-only shards without changing generated worlds.
     include_identifiability_labels: bool = True
 
+    # Opt-in realised walk and outcome-noise truth: each corpus world records its
+    # walk means, absolute and relative standard deviations and smoothness (see
+    # WALK_ARRAY_FIELDS) plus diagnostics["walk_parameters"]. Corpus generation
+    # only; the extra draw outputs lead the legacy names, so every existing array
+    # and diagnostic stays identical.
+    record_walk_parameters: bool = False
+
     # -- Prior-conditioning hyperprior ------------------------------------
     # When enabled, each CELL draws a narrowed prior interval per conditioned
     # quantity (stage-1 concrete numpy, like the rest of the structure):
@@ -692,6 +701,47 @@ class SCMPrior:
         if self.rw_baseline_std_sigma is None:
             return self.rw_std_sigma
         return self.rw_baseline_std_sigma
+
+    def walk_parameter_metadata(self) -> dict[str, Any]:
+        """The ``diagnostics["walk_parameters"]`` echo of the walk and noise priors.
+
+        ``fields`` lists, sorted, the walk arrays a corpus generated with
+        ``record_walk_parameters=True`` carries: every
+        :data:`~pymc_generator.slots.WALK_ARRAY_FIELDS` entry, minus the relative
+        baseline/noise draws under ``outcome_std_mode="absolute"``. The relative
+        std ranges are ``None`` in absolute mode and the absolute HalfNormal
+        scales ``None`` in relative mode; ``rw_baseline_std_sigma`` is
+        :attr:`rw_baseline_std_sigma_effective`. Every value is JSON-native, so
+        the block round-trips through ``save_corpus`` / ``load_corpus`` unchanged.
+        """
+        relative = self.outcome_std_mode == "relative"
+
+        def _bounds(value: Any) -> list[float]:
+            lo, hi = value
+            return [float(lo), float(hi)]
+
+        return {
+            "fields": sorted(
+                key for key in WALK_ARRAY_FIELDS if relative or key not in WALK_RELATIVE_MODE_FIELDS
+            ),
+            "outcome_std_mode": str(self.outcome_std_mode),
+            "rw_positive_mean_range": _bounds(self.rw_positive_mean_range),
+            "rw_treatment_std_range": _bounds(self.rw_treatment_std_range),
+            "rw_covariate_mean_range": _bounds(self.rw_covariate_mean_range),
+            "rw_std_sigma": float(self.rw_std_sigma),
+            "rw_baseline_mean_range": _bounds(self.rw_baseline_mean_range),
+            "rw_baseline_std_range": _bounds(self.rw_baseline_std_range) if relative else None,
+            "rw_outcome_std_range": _bounds(self.rw_outcome_std_range) if relative else None,
+            "rw_baseline_std_sigma": (
+                None if relative else float(self.rw_baseline_std_sigma_effective)
+            ),
+            "rw_outcome_std_sigma": None if relative else float(self.rw_outcome_std_sigma),
+            "rw_smoothness_alpha": float(self.rw_smoothness_alpha),
+            "rw_smoothness_beta": float(self.rw_smoothness_beta),
+            "rw_smoothness_max_weeks": int(self.rw_smoothness_max_weeks),
+            "baseline_floor": None if self.baseline_floor is None else float(self.baseline_floor),
+            "baseline_floor_scope": str(self.baseline_floor_scope),
+        }
 
     @property
     def n_query(self) -> int:
@@ -1334,6 +1384,10 @@ class SCMPrior:
             raise ValueError(f"n_treatment_shocks must be >= 0, got {self.n_treatment_shocks}")
         if not isinstance(self.include_identifiability_labels, bool):
             raise ValueError("include_identifiability_labels must be a bool")
+        if not isinstance(self.record_walk_parameters, bool):
+            raise ValueError(
+                f"record_walk_parameters must be a bool, got {self.record_walk_parameters!r}"
+            )
         try:
             shock_len_lo, shock_len_hi = self.treatment_shock_length_range
         except (TypeError, ValueError):
@@ -2289,6 +2343,57 @@ _CORPUS_TRAJECTORY_NAMES = (
 # unshocked pair used (they alias it when nothing is wired); without shocks they
 # lead, aliasing ``treatments`` / ``outcome`` when nothing is wired.
 _CORPUS_NATURAL_NAMES = ("treatments_natural", "outcome_natural")
+# Sources of the opt-in walk arrays (``SCMPrior.record_walk_parameters``). Means
+# and absolute standard deviations are existing ``param_*`` reports. No report
+# exposes a relative draw, so its primitive uniform is requested by name; a
+# degenerate range builds no random variable and records the range's constant.
+# Smoothness is the cell's concrete structure draw.
+_WALK_REPORTS = {
+    "walk_treatment_mean": "param_rw_c_mean",
+    "walk_treatment_std": "param_rw_c_std",
+    "walk_covariate_mean": "param_rw_z_mean",
+    "walk_covariate_std": "param_rw_z_std",
+    "walk_baseline_mean": "param_rw_b_mean",
+    "walk_baseline_std": "param_rw_b_std",
+    "outcome_noise_std": "param_rw_y_std",
+}
+_WALK_RELATIVE_DRAWS = {
+    "walk_treatment_std_relative": ("rw_c_std", "rw_treatment_std_range"),
+    "walk_baseline_std_relative": ("rw_b_std_rel", "rw_baseline_std_range"),
+    "outcome_noise_std_relative": ("rw_y_std_rel", "rw_outcome_std_range"),
+}
+_WALK_SMOOTHNESS = {
+    "walk_treatment_smoothness": "smoothness_c",
+    "walk_covariate_smoothness": "smoothness_z",
+    "walk_baseline_smoothness": "smoothness_b",
+    "walk_latent_smoothness": "smoothness_d",
+}
+
+
+def _walk_sources(
+    cfg: SCMPrior,
+    fields: dict[str, tuple[tuple[str, ...], type[np.generic]]],
+    structural: dict,
+    active_sizes: dict[str, int],
+) -> dict[str, str | np.ndarray]:
+    """One cell's source per recorded walk array: a draw name or concrete values.
+
+    ``active_sizes`` maps each slot axis to the cell's active count; per-task
+    fields hold one value.
+    """
+    sources: dict[str, str | np.ndarray] = {}
+    for key, (axes, _) in fields.items():
+        if key in _WALK_REPORTS:
+            sources[key] = _WALK_REPORTS[key]
+        elif key in _WALK_SMOOTHNESS:
+            sources[key] = np.asarray(structural[_WALK_SMOOTHNESS[key]], dtype=np.float64)
+        else:
+            name, range_name = _WALK_RELATIVE_DRAWS[key]
+            lo, hi = (float(bound) for bound in getattr(cfg, range_name))
+            size = active_sizes[axes[1]] if len(axes) == 2 else 1
+            # world_model._uniform builds exactly this constant when lo == hi.
+            sources[key] = name if lo != hi else np.full(size, lo, dtype=np.float64)
+    return sources
 
 
 def _pack_prior_cond(prior_cond: dict[str, tuple[float, float]]) -> np.ndarray:
@@ -2468,6 +2573,15 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 )
         for key, (axes, dtype) in mechanism_fields.items():
             corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
+    # Optional realised walk block: zero-filled, so inactive slots stay padding.
+    walk_metadata = cfg.walk_parameter_metadata() if cfg.record_walk_parameters else None
+    walk_fields = {
+        key: spec
+        for key, spec in WALK_ARRAY_FIELDS.items()
+        if walk_metadata is not None and key in walk_metadata["fields"]
+    }
+    for key, (axes, dtype) in walk_fields.items():
+        corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
     # Treatment normalization retains the original float64 reduction order.
     # Other accepted outputs can be cast directly into their final storage.
     treatment_raw = np.zeros((n_tasks, n_time_steps, n_treatments_max), dtype=np.float64)
@@ -2585,6 +2699,18 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             if requested_reports
             else ()
         )
+        # Recorded walk truth joins the same accepted draw ahead of the audit
+        # reports. It never gates acceptance, so recording keeps every draw.
+        walk_sources: dict[str, str | np.ndarray] = {}
+        if walk_fields:
+            active_sizes = {
+                "treatment": n_treatments_active,
+                "covariate": n_covariates_active,
+                "latent": n_latent_active,
+            }
+            walk_sources = _walk_sources(cfg, walk_fields, structural, active_sizes)
+        walk_names = tuple(entry for entry in walk_sources.values() if isinstance(entry, str))
+        leading_names = walk_names + audit_names
         # Per-input component flags (cell structure, stored per row like the
         # carryover family). Schedule keys exist only when schedules are enabled.
         component_flags: dict[str, np.ndarray] = {}
@@ -2663,13 +2789,13 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 else:
                     draw_names = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
                 rng_reference_names = draw_names
-                draw_names = audit_names + draw_names
+                draw_names = leading_names + draw_names
                 drawn_b = draw_worlds(
                     model,
                     draw_names,
                     draw_seed,
                     draws=n_req,
-                    rng_reference_names=rng_reference_names if audit_names else None,
+                    rng_reference_names=rng_reference_names if leading_names else None,
                 )
             except _RETRYABLE_DRAW_ERRORS as exc:
                 if not _is_retryable_draw_failure(exc):
@@ -2703,7 +2829,7 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                     cell_rejected += 1
                     continue
                 realism_arrays = (
-                    {name: drawn[name] for name in rng_reference_names} if audit_names else drawn
+                    {name: drawn[name] for name in rng_reference_names} if leading_names else drawn
                 )
 
                 if trajectory_schedules:
@@ -2779,6 +2905,15 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 ]
                 if mechanism_fields:
                     corpus["sat_family"][row, :n_treatments_active] = structural["sat_family"]
+                for key, walk_source in walk_sources.items():
+                    walk_value = np.ravel(
+                        drawn[walk_source] if isinstance(walk_source, str) else walk_source
+                    )
+                    if len(walk_fields[key][0]) == 1:
+                        corpus[key][row] = walk_value.item()
+                    else:
+                        width = walk_value.size
+                        corpus[key][row, :width] = walk_value
                 if trajectory_metadata:
                     corpus["treatment_components"][row, :n_treatments_active] = component_flags[
                         "treatment"
@@ -2969,6 +3104,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             "supports": {q: list(s["support"]) for q, s in spec.items()},
             "width_ranges": {q: list(s["width_range"]) for q, s in spec.items()},
         }
+    if walk_metadata is not None:
+        diagnostics["walk_parameters"] = walk_metadata
 
     corpus["outcome_norm"][:] = outcome_norm
     corpus["outcome_scale"][:] = outcome_scale
