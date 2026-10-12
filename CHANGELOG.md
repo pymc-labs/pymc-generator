@@ -8,6 +8,29 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Richer mechanism priors (#25): validated per-family
+  `SCMPrior.saturation_prior_ranges`, opt-in `mm_scale_prior="log_uniform"`,
+  and treatment/control reference-contribution priors. Drawn targets determine
+  `beta` / `rho_zy` at parameter-only reference inputs rather than a statistic
+  of a realized series. Targets are nominal, before edge gates and control
+  floors; treatment references are post-carryover. Generation, the reusable
+  template, oracle, replay and world audits share these semantics. Optional
+  corpus diagnostics preserve the effective prior settings; world and bundle
+  descriptions record drawn targets and inputs. Numerical validation rejects
+  overflowing or underflowing derived coefficients (including interior draws
+  of zero-inclusive targets), subnormal or zero reference inputs and
+  responses, zero MM denominators and conditioning widths that float32
+  `prior_cond` labels cannot resolve; runtime reference-domain failures raise
+  the same named error in single worlds and corpora, never a silent redraw.
+  Treatment coefficients use the shared response at the actual reference
+  input; opt-in Hill/logistic responses use stable evaluation, log-uniform MM
+  scales stay inside their configured bounds, and opt-in descriptions keep
+  significant digits. Defaults retain the former shape supports, uniform MM
+  law, graph arithmetic, RNG consumption, seeded numerical arrays and
+  description number formatting; descriptions additionally state the effective
+  `mm_scale_prior`.
+  Documentation clarifies that geometric carryover sum-normalizes kernel
+  weights, not the data; outputs stay in input units.
 - Composable per-input trajectories (#24). Every treatment and covariate can
   carry, independently per input, any subset of eight components — the existing
   `hf` noise and `pulse`s, `onset` / `offset` / `flighting` on/off gates,
@@ -157,6 +180,14 @@ read the migration notes before upgrading.
 
 ### Changed — migration notes
 
+- **`pymc_generator.mechanisms.SATURATION_PRIOR_RANGES` removed (breaking).**
+  Saturation shape supports are configuration, not module state: read
+  `SCMPrior().saturation_prior_ranges` (or a config's own mapping) instead.
+  Importing the old constant raises `ImportError`. Enabled prior conditioning
+  additionally rejects width lower bounds at or below `8 * eps32 * max|support|`,
+  which float32 corpus labels cannot resolve; with conditioning disabled, only
+  explicitly configured width ranges are checked.
+
 - **Domain-neutral vocabulary (breaking).** The public API and the persisted
   corpus now use scientific node names instead of marketing ones. This renames
   identifiers only: no distribution, coefficient, seed, sampler setting or
@@ -271,6 +302,9 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- Reusable world-model templates compile only the structure inputs their
+  requested outputs reach, so a single-treatment template no longer fails with
+  an unused-input error. Templates that already compiled draw identical arrays.
 - Initial release hardening used locked uv environments for development, CI,
   documentation, and build tooling, with a tested Python 3.13 default and a
   3.12/3.13 CI matrix. At that stage all 153 previously locked dependency versions

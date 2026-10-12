@@ -289,13 +289,16 @@ then parameters and noise (as a PyMC model). This mirrors the design principle:
 
 === "Stage 2 — parameters & noise (a PyMC model)"
 
-    `build_world_model` assembles one `pm.Model` in which **every continuous
-    quantity is a random variable**: edge coefficients (`pm.Uniform`), random-walk
-    means/stds and innovations, mechanism shapes, and treatment/covariate texture. Every graph
-    output is a `pm.Deterministic`, so a single **`pm.draw`** returns the
-    parameters, the series, and the full decomposition jointly. Candidate draws
-    are run through the [realism filter](#the-realism-filter); the first accepted
-    draw is kept.
+    `build_world_model` assembles one `pm.Model` with primitive priors on
+    coefficients, random-walk means/stds and innovations, mechanism shapes,
+    and treatment/covariate texture. With optional
+    [reference-contribution priors](../reference/config.md#reference-contribution-priors),
+    contribution targets are random variables and the corresponding outcome
+    coefficients are derived deterministically. In opt-in log-uniform MM mode,
+    the primitive draw is the logarithm of the scale. Every graph output is a
+    `pm.Deterministic`, so a single **`pm.draw`** returns the parameters, the
+    series, and the full decomposition jointly. Candidate draws are run through
+    the [realism filter](#the-realism-filter); the first accepted draw is kept.
 
 Everything is driven by **one numpy RNG** seeded from `cfg.seed`, so `(cfg, seed)`
 reproduces a world bit-for-bit.
@@ -353,6 +356,15 @@ deliberate, and they bound what a model trained on this data can learn.
   anchor's value is that it reads no moment at all. The same pinned scale is
   used for every decomposition variant. Trajectory components stay out of it
   too, so a doubled treatment runs at twice its κ-relative level.
+- **Mechanism priors are configurable.** Saturation shape supports live on
+  `SCMPrior.saturation_prior_ranges`; MM scales can be log-uniform. Optional
+  reference-contribution targets derive outcome coefficients at parameter-only
+  inputs, before graph edge gates (and, for controls, absorbing floors).
+  Defaults preserve the legacy priors and same-seed numerical output.
+- **Carryover preserves input units.** Geometric carryover calls
+  `pymc_marketing` `geometric_adstock(normalize=True)`: the kernel weights sum
+  to one, but the data are not rescaled to `[0, 1]`. This makes a held input
+  its post-carryover value after the kernel fills; cold-start zeros still matter.
 - **Carryover burn-in.** Worlds simulate `n_time_steps + carryover_burn_in` weeks and
   report the last `n_time_steps`, so the reported window sees real history.
   `carryover_burn_in` is either `0` (off — the raw `SCMPrior` default, with

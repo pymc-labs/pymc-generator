@@ -13,7 +13,6 @@ import json
 
 import numpy as np
 
-from .mechanisms import SATURATION_PRIOR_RANGES
 from .worlds import (
     CARRYOVER_NAMES,
     SATURATION_NAMES,
@@ -21,26 +20,29 @@ from .worlds import (
     edges_with_coeffs,
     mechanism_label,
     node_status,
+    parameter_text,
     treatment_role,
 )
+
+#: Rendered shape parameters of each nonlinear family: ``(label, params key)``.
+_SATURATION_SHAPES: dict[str, tuple[tuple[str, str], ...]] = {
+    "hill": (("slope", "hill_slope"), ("kappa_mult", "hill_kappa_mult")),
+    "logistic": (("lam", "logistic_lam"),),
+    "michaelis_menten": (("kappa_mult", "mm_kappa_mult"),),
+    "tanh": (("c", "tanh_c"),),
+    "root": (("alpha", "root_alpha"),),
+}
 
 
 def _saturation_description(params: dict, k: int, family: str) -> str:
     """Render only the shape parameters used by a saturation family."""
-    if family == "hill":
-        return (
-            f"hill(slope={params['hill_slope'][k]:.2f},"
-            f"kappa_mult={params['hill_kappa_mult'][k]:.2f})"
-        )
-    if family == "logistic":
-        return f"logistic(lam={params['logistic_lam'][k]:.2f})"
-    if family == "michaelis_menten":
-        return f"michaelis_menten(kappa_mult={params['mm_kappa_mult'][k]:.2f})"
-    if family == "tanh":
-        return f"tanh(c={params['tanh_c'][k]:.2f})"
-    if family == "root":
-        return f"root(alpha={params['root_alpha'][k]:.2f})"
-    return family
+    if family not in _SATURATION_SHAPES:
+        return family
+    fields = ",".join(
+        f"{label}={parameter_text(params, params[key][k])}"
+        for label, key in _SATURATION_SHAPES[family]
+    )
+    return f"{family}({fields})"
 
 
 def _treatment_lines(g: dict, params: dict) -> list[str]:
@@ -51,7 +53,7 @@ def _treatment_lines(g: dict, params: dict) -> list[str]:
         ad = CARRYOVER_NAMES[int(params["carryover_family"][k])]
         bits = [
             f"C{k + 1}: role={treatment_role(g, k)}",
-            f"beta={params['beta'][k]:.2f}",
+            f"beta={parameter_text(params, params['beta'][k])}",
             f"carryover={ad}"
             + (f"(alpha={params['carryover_alpha'][k]:.2f})" if ad == "geometric" else "")
             + (
@@ -65,6 +67,12 @@ def _treatment_lines(g: dict, params: dict) -> list[str]:
             f"hf_sigma={params['hf_sigma'][k]:.2f}",
             f"pulse(p={params['pulse_prob'][k]:.2f},amp={params['pulse_amp'][k]:.2f})",
         ]
+        if "treatment_reference_contribution" in params:
+            bits.append(
+                f"reference(contribution={float(params['treatment_reference_contribution'][k])!r},"
+                f"input={float(params['treatment_reference_input'][k])!r},"
+                "post-carryover,pre-gate)"
+            )
         lines.append("  " + "  ".join(bits))
     return lines
 
@@ -81,6 +89,12 @@ def _covariate_lines(g: dict, params: dict) -> list[str]:
             f"pulse(p={params['covariate_pulse_prob'][m]:.2f},"
             f"amp={params['covariate_pulse_amp'][m]:.2f},centred)",
         ]
+        if "covariate_reference_contribution" in params:
+            bits.append(
+                f"reference(contribution={float(params['covariate_reference_contribution'][m])!r},"
+                f"input={float(params['covariate_reference_input'][m])!r},"
+                f"rho_zy={float(params['rho_zy'][m])!r},pre-gate,pre-floor)"
+            )
         lines.append("  " + "  ".join(bits))
     return lines
 
@@ -142,7 +156,7 @@ def describe_scm(world: SCM) -> str:
     f.write("Edge census: " + "  ".join(f"{et}={n}" for et, n in sorted(counts.items())) + "\n\n")
     f.write("Active edges (with drawn coefficients):\n")
     for et, src, dst, coef in edges:
-        f.write(f"  [{et}] {src} -> {dst}   coef={coef:+.3f}\n")
+        f.write(f"  [{et}] {src} -> {dst}   coef={parameter_text(params, coef, '+.3f')}\n")
     status = node_status(g)
     n_iso = sum(s == "isolated" for s in status.values())
     f.write("\nNode connectivity (connected = directed path to Y; isolated = no\n")
@@ -163,11 +177,18 @@ def describe_scm(world: SCM) -> str:
         spec = cfg.prior_cond_spec()
         f.write("Prior conditioning (ACE): narrowed per-cell prior intervals\n")
         f.write("  (mechanism shape params above were drawn from these):\n")
+        # Validated opt-in widths can sit seven digits below their support, so
+        # opt-in intervals print exactly, like the reference records.
+        exact = params.get("mechanism_priors_enabled", False)
+
+        def _interval(value: float) -> str:
+            return repr(float(value)) if exact else f"{value:.3f}"
+
         for q, (lo, width) in prior_cond.items():
             s_lo, s_hi = spec[q]["support"]
             f.write(
-                f"  {q}: U({lo:.3f}, {lo + width:.3f})  width={width:.3f}  "
-                f"support=({s_lo}, {s_hi})\n"
+                f"  {q}: U({_interval(lo)}, {_interval(lo + width)})  "
+                f"width={_interval(width)}  support=({s_lo}, {s_hi})\n"
             )
         f.write("\n")
     f.write(f"Texture prior ({_texture_label(params)}):\n")
@@ -183,7 +204,27 @@ def describe_scm(world: SCM) -> str:
     )
     f.write(f"  beta_additive_range={cfg.beta_additive_range}\n")
     f.write("  saturation prior ranges: ")
-    f.write(json.dumps(SATURATION_PRIOR_RANGES) + "\n\n")
+    f.write(
+        json.dumps(
+            {
+                family: {name: [float(x) for x in bounds] for name, bounds in parameters.items()}
+                for family, parameters in cfg.saturation_prior_ranges.items()
+            }
+        )
+        + "\n"
+    )
+    f.write(f"  mm_scale_prior={cfg.mm_scale_prior}\n")
+    if cfg.treatment_reference_contribution_range is not None:
+        f.write(
+            f"  treatment_reference_contribution_range={cfg.treatment_reference_contribution_range}"
+            f"  treatment_reference_multiplier={cfg.treatment_reference_multiplier}\n"
+        )
+    if cfg.covariate_reference_contribution_range is not None:
+        f.write(
+            f"  covariate_reference_contribution_range={cfg.covariate_reference_contribution_range}"
+            f"  covariate_reference_scale={cfg.covariate_reference_scale}\n"
+        )
+    f.write("\n")
     f.write("Structural equations (vector-valued; active parents only):\n")
     for symbol, equation in world.equations.items():
         f.write(f"  {symbol}: {equation}\n")
@@ -230,6 +271,7 @@ def world_to_dot(world: SCM) -> str:
         f.write(f'  D{j + 1} [label="D{j + 1}\\n(latent_unobserved)"];\n')
     f.write('  B [label="B\\n(baseline)"];\n  Y [label="Y\\n(outcome)"];\n')
     for et, src, dst, coef in edges_with_coeffs(g, params):
-        f.write(f'  {src} -> {dst} [label="{coef:+.2f}", comment="{et}"];\n')
+        label = parameter_text(params, coef, "+.2f")
+        f.write(f'  {src} -> {dst} [label="{label}", comment="{et}"];\n')
     f.write("  B -> Y;\n}\n")
     return f.getvalue()
