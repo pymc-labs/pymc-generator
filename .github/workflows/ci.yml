@@ -68,7 +68,15 @@ jobs:
           enable-cache: true
       - name: Install locked development dependencies
         run: uv sync --locked --extra dev
+      - name: Check out main for the reproduction golden test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ce068d598fc0438b511c265ef09d7ba33354cb48
+          path: .baseline/ce068d5
+          persist-credentials: false
       - name: Run gated statistical tests
+        env:
+          PYMC_GENERATOR_BASELINE_TREE: ${{ github.workspace }}/.baseline/ce068d5
         run: uv run --no-sync pytest tests/ --runslow -m slow
 
   build:
