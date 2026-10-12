@@ -1294,8 +1294,8 @@ def world_descriptors(
     ``max - min <= 4 * eps * max|x|``, its steps are constant (a linear ramp)
     when their range is at most ``8 * eps * max|x|``, and its mean is zero when
     ``|mean| <= (min(T, 32) * eps + T * eps64) * max|x|`` (input rounding plus
-    float64 summation error) and it takes both signs. Constants give
-    ``level_to_variation = inf``,
+    float64 summation error) and it takes both signs. Nonzero constants give
+    ``level_to_variation = inf`` (an all-zero series has none: it is undefined),
     ``cv = 0``, roughness and spike 0, and undefined ACF and correlations; ramps
     give roughness and spike 0 and undefined differenced statistics. No absolute
     epsilon is applied, and each series is rescaled exactly by a power of two
