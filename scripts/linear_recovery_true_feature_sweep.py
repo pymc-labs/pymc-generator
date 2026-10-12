@@ -143,10 +143,24 @@ def _scheduled_attempt(config, attempt, phase):
     _strict_frozen(attempt, rows[i], "attempt")
 
 
-def resolved_generation_config(config, attempt, *, phase="science"):
-    """Bind every retained generator axis before generation, detecting default drift."""
+# SCMPrior fields added after the configuration was frozen. Each must hold the
+# listed value, which leaves generated data unchanged; any other drift still fails.
+_POST_FREEZE_NEUTRAL_FIELDS = {"record_walk_parameters": False}
+
+
+def _frozen_view(prior):
+    """The live prior as canonical JSON, without post-freeze fields at their neutral value."""
     from dataclasses import asdict
 
+    view = json.loads(canonical_json(asdict(prior)))
+    for key, neutral in _POST_FREEZE_NEUTRAL_FIELDS.items():
+        if key in view and view[key] == neutral:
+            del view[key]
+    return view
+
+
+def resolved_generation_config(config, attempt, *, phase="science"):
+    """Bind every retained generator axis before generation, detecting default drift."""
     from pymc_generator import make_scm_prior
 
     cfg = validate_config(config)
@@ -164,31 +178,26 @@ def resolved_generation_config(config, attempt, *, phase="science"):
         rw_baseline_std_range=tuple(pop["rw_baseline_std_range"]),
         baseline_floor=pop["baseline_floor"],
     )
-    actual = json.loads(canonical_json(asdict(prior)))
-    _strict_frozen(actual, expected, "resolved generation config")
+    _strict_frozen(_frozen_view(prior), expected, "resolved generation config")
     return expected
 
 
 def generate_configured_world(config, attempt, *, phase="science"):
-    from dataclasses import asdict
-
     resolved = resolved_generation_config(config, attempt, phase=phase)
     world = generate_world(
         attempt,
         n_time_steps=resolved["n_time_steps"],
         carryover_burn_in=resolved["carryover_burn_in"],
     )
-    _strict_frozen(json.loads(canonical_json(asdict(world.cfg))), resolved, "sampled config")
+    _strict_frozen(_frozen_view(world.cfg), resolved, "sampled config")
     if world.seed != attempt["world_seed"]:
         raise ValueError("sampled seed mismatch")
     return world
 
 
 def analyze_configured_world(world, config, attempt, *, phase="science"):
-    from dataclasses import asdict
-
     resolved = resolved_generation_config(config, attempt, phase=phase)
-    _strict_frozen(json.loads(canonical_json(asdict(world.cfg))), resolved, "sampled config")
+    _strict_frozen(_frozen_view(world.cfg), resolved, "sampled config")
     if world.seed != attempt["world_seed"]:
         raise ValueError("sampled seed mismatch")
     study = config["study"]
