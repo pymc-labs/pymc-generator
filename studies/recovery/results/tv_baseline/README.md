@@ -2,6 +2,8 @@
 
 This directory republishes the **existing, approved** 50-world TV-NUTS and 50-world constant-baseline bounded least-squares scientific results as a 97-week (7–103) compact numerical snapshot, independent analysis and **executed, ordinary-output Jupyter report**. It is not a new generated/fitted run, and does not approve a new report. The two baseline/outcome regimes and objectives differ: **never compare their percentages as a method ranking.** No ADVI50 results are claimed; the PR1 tiny smoke fits are engineering evidence only.
 
+The three PR previews in `screenshots/` are exact decoded PNG outputs from `report.ipynb`: recovery gates (cell index 5, output 2), pattern failures (cell 10, output 0), and the explicitly selected TV world 0 / C2 contribution example (cell 12, output 0). They are saved figure outputs, not live Jupyter screenshots or recomputed results. Source notebook SHA256: `85a080fdd58ab5b9e29c38b03586b9d41da74b804c0057d95112725b98ea9da7`.
+
 | File | Purpose |
 |---|---|
 | `historical-config.json` | Original full 106-field DGP prior; constant batch, matched TV baseline-only intervention, bounded optimization, TV-NUTS and reconstruction settings; original batch input hashes and the exact 10%/1% gate. |
