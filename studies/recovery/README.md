@@ -45,9 +45,9 @@ For varying baseline use `example_varying.toml`, a distinct NEW root and **only*
 
 ```sh
 P=studies/recovery/.venv/bin/python
-studies/recovery/.venv/bin/ruff check studies/recovery/*.py tests/test_recovery_pipeline.py
-studies/recovery/.venv/bin/ruff format --check studies/recovery/*.py tests/test_recovery_pipeline.py
-$P -m pytest -p no:cacheprovider tests/test_recovery_pipeline.py -q
+studies/recovery/.venv/bin/ruff check studies/recovery/*.py
+studies/recovery/.venv/bin/ruff format --check studies/recovery/*.py
+$P -m pytest -p no:cacheprovider studies/recovery/test_pipeline.py -q
 ```
 
 The `run-artifacts/` tree is ignored, derived and may include notebook JSON; **do not lint the whole `studies/recovery/` directory after runtime**, which would incorrectly lint generated notebook code. The scoped Ruff commands above check every shipped study Python source plus the self-contained tests regardless of generated artifacts. Unit tests perform no generation or inference. Real fitting is an explicit, separately budgeted operator gate, not an ordinary test.

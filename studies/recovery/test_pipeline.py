@@ -15,7 +15,7 @@ from studies.recovery.config import ContractError, StudyConfig
 from studies.recovery.reporting import _channels, _fit_labels, create_report, read_report
 from studies.recovery.runner import _fit_identity, _world_identity, generate
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 STUDY = ROOT / "studies/recovery"
 
 
