@@ -219,9 +219,10 @@ is **absorbed** — "the negative effect cannot be bigger than the rest" — whi
 the columns still telescope exactly, so the identity is untouched. Measured on a
 stress fixture: 112 negative non-treatment weeks under `"intercept"` become 0 under
 `"non_treatment"`, with 111 weeks sitting exactly at the floor and identity error
-1.8e-15. Where the floor does not bind, every column equals the linear split and
-the persisted corpus is byte-identical. The price: a column is no longer linear
-in its node where the floor binds.
+1.8e-15. Where the floor does not bind, every column equals the linear split up
+to float64 rounding of the telescoped difference (the default `"intercept"` scope
+keeps the literal product). The price: a column is no longer linear in its node
+where the floor binds.
 
 !!! warning "Outcome itself is never censored — and cannot be strictly guaranteed"
     With `scope="non_treatment"` every term of the outcome **mean** is non-negative

@@ -132,8 +132,8 @@ def describe_scm(world: SCM) -> str:
 
     Sections: title + purpose, sizes, edge budget, edge census, active edges
     with drawn coefficients, node connectivity, per-treatment mechanism +
-    texture, prior ranges, vector-valued structural equations, exact replay
-    inputs, decomposition-identity error, and per-direct-treatment signal metrics.
+    texture, prior ranges, vector-valued structural equations, primitive-bound
+    replay provenance, decomposition-identity error, and per-direct-treatment signal metrics.
     """
     g, params, cfg = world.g, world.params, world.cfg
     edges = edges_with_coeffs(g, params)
@@ -230,7 +230,9 @@ def describe_scm(world: SCM) -> str:
         f.write(f"  {symbol}: {equation}\n")
     f.write("\nExact replay audit:\n")
     f.write(
-        "  world.params is build_symbolic_graph-ready, including any full-horizon shock schedule.\n"
+        "  world.replay() recomputes every forward array from world.primitive_parameters.\n"
+        "  Exact replay requires accepted provenance from sample_scm in the same numerical environment.\n"
+        "  world.params holds inspection/intervention inputs, not exact replay provenance.\n"
     )
     f.write(
         "  world.equation_parameters is the sparse executed-parameter audit; "

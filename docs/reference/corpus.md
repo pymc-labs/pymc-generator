@@ -22,44 +22,74 @@ facade (which adds batching, schema validation, and save-on-generate).
 
 ## Schema versions and migration
 
-New corpora use integer `diagnostics["schema_version"] = 3`. `save_corpus`
-accepts only the current version and vocabulary. `load_corpus` supports:
+New corpora use integer `diagnostics["schema_version"] = 5`. Saving and loading
+require this version. Versionless archives and versions 1–4 are rejected with a
+clear schema-version error, as are malformed and future versions. There is no
+automatic migration: pre-v5 archives cannot reconstruct realised rich-world
+truth. Renaming keys or changing a version stamp is not a migration.
 
-- **v1:** unstamped shards with all six historical dimension keys below.
-- **v2:** explicitly stamped shards with the historical edge order
-  `cy, dc, dz, db, zb, zc, cc, zz`.
-- **v3:** the current vocabulary.
+Default draw stability concerns numerical/model arrays, not cross-version
+metadata or archive-byte identity: the v5 stamp changes every saved corpus.
 
-Loading v1/v2 migrates metadata in memory; it does not rewrite the file,
-reorder graph slots, cast arrays, or regenerate values. Missing or malformed
-versions, future versions, partial/mixed dimension vocabularies, conflicting
-edge names, and unrecognized v2 edge orders are rejected.
+Base arrays retain their existing storage dtypes and packed graph positions.
+The optional trajectory and mechanism blocks add the realised truth below.
+Call `DataGenerator.validate_corpus` after loading for full shape, numerical,
+padding, schedule and decomposition validation.
 
-Call `DataGenerator.validate_corpus` after loading when full shape, numerical,
-and decomposition validation is required.
+### Realised trajectory fields
 
-### Historical dimension names
+When `SCMPrior.trajectory_metadata_enabled` is true, all fields in
+`TRAJECTORY_ARRAY_FIELDS` accompany `diagnostics["trajectory"]`. The six existing
+flag/activity/level-envelope arrays retain `uint8` / `float32` storage.
+Additional keys follow `trajectory_{input}_{component}_{leaf}`, where `input`
+is `treatment` or `covariate`:
 
-| v1 key | Current key |
-| --- | --- |
-| `K_active` | `n_treatments_active` |
-| `M_active` | `n_covariates_active` |
-| `J_active` | `n_latent_active` |
-| `active_c_mask` | `treatment_active_mask` |
-| `active_m_mask` | `covariate_active_mask` |
-| `active_j_mask` | `latent_active_mask` |
+| Component | Leaves | dtype |
+| --- | --- | --- |
+| `hf` | `sigma` | `float64` |
+| `pulse` | `amp`, `prob` | `float64` |
+| `onset` / `offset` | `start` / `stop` | `int64` |
+| `flighting` | `period`, `on_weeks`, `phase` | `int64` |
+| `level_jump` | `week` | `int64` |
+| treatment `level_jump` | `factor`, `log_factor` | `float64` |
+| covariate `level_jump` | `size` | `float64` |
+| `seasonal` | `amplitude`, `period`, `phase` | `float64` |
+| `trend` | `change` | `float64` |
 
-### Historical outcome-edge names
+Jump leaves have `(task, input_jump, input)` axes; other leaves have
+`(task, input)` axes. `diagnostics["trajectory"]["jump_counts"]` records
+role-specific jump sizes, and `parameter_fields` records the canonical field
+inventory. Unselected components and inactive inputs have zero padding.
+The validator checks event domains and reconstructs the stored gate and
+level-envelope arrays from these leaves.
+Selected seasonal periods/amplitudes, signed trend changes and covariate jump
+sizes retain their existing `CORPUS_STORAGE_MAX` primitive magnitude bound despite
+float64 truth storage; the bound does not cap conditionally scaled texture or
+derived anchors.
 
-The two outcome blocks keep their original positions in packed `g`.
-Their names change from `db` to `dy` and `zb` to `zy` in `edge_types`,
-`edge_base_rates`, `edge_marginals`, and `edge_budget`. The diagnostic
-`min_dead_channels` becomes `min_no_direct_effect_treatments`.
+### Realised mechanism fields
 
-The Python API uses only the new names: `g_dy`, `g_zy`, `delta_dy`, `rho_zy`,
-`dy_coeff_range`, and `zy_coeff_range`. Old keyword arguments and graph-dict
-aliases are not supported. These edges enter outcome `Y`, not the parentless
-intercept `B`.
+Opt-in mechanism priors add `MECHANISM_ARRAY_FIELDS` and
+`diagnostics["mechanism_priors"]["parameter_fields"]`: `sat_family` (`uint8`),
+`mechanism_saturation_scale`, `beta`, `rho_zy`, `hill_slope`, `hill_kappa_mult`,
+`logistic_lam`, `mm_kappa_mult`, `tanh_c`, and `root_alpha` (all `float64`).
+Treatment fields have `(task, treatment)` axes; `rho_zy` has `(task, covariate)`.
+All active treatment slots retain shape draws, including unused response families.
+
+Enabled reference priors add `{treatment,covariate}_reference_contribution`
+and `_reference_input`; treatment references also add
+`treatment_reference_response`, the actual response used to derive `beta`.
+These are `float64` on their role's task/node axes. Inactive padding is zero.
+Reference responses and targets retain the generator's numerical values rather
+than recomputing steep response curves from rounded feature arrays.
+Treatment coefficient consistency is checked against the target divided by that response,
+with bounded float64 rounding and no erasure of nonzero values; a subnormal
+coefficient's rounded product need not recover its target to the same precision.
+Reference-derived coefficients retain the generator's finite float32-magnitude
+limit despite float64 truth storage. A zero coefficient is allowed only for
+an original zero target, never because a nonzero target's quotient underflowed.
+Default recipes omit the entire mechanism block. Keeping new continuous truth
+in float64 preserves supported positive values below float32's nonzero range.
 
 ## Timing telemetry is not persisted
 

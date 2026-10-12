@@ -26,6 +26,11 @@ and parameters raise `ValueError`. Equal bounds fix a parameter exactly and
 consume no random draw. The defaults are the former module-constant ranges;
 each configuration owns its mapping.
 
+Schema-v5 validation applies the same domain limits to persisted primitive
+shape supports and realised values, even for an unused family. Derived reference
+and saturation anchors are not primitive shape endpoints and are not capped by
+this rule; their float64 storage preserves legitimate parameter amplification.
+
 Shape parameters are uniform on their configured ranges, except that
 `mm_scale_prior="log_uniform"` opts into
 
@@ -103,12 +108,18 @@ series. Each enabled target prior takes precedence over `beta_additive_range`
 or `zy_coeff_range`, respectively; those raw ranges remain validated.
 `None` retains the corresponding raw-coefficient prior. Relative outcome noise
 still scales with `sqrt(sum((g_cy * beta)**2))`, now using the **derived beta**,
-not the reference target. Reference scalars are validated even when unused,
-but changing an unused scalar introduces no graph or RNG changes.
+not the reference target. Arithmetic rescaling and a final mantissa/exponent
+product preserve representable tiny and subnormal absolute standard deviations,
+with exact zero for zero amplitudes and no coefficient or noise floor.
+The analytic pullback uses the bounded coefficient direction to avoid rounding
+or overflowing an intermediate gradient. Reference
+scalars are validated even when unused, but changing an unused scalar introduces
+no graph or RNG changes.
 
 Impossible reference configurations raise field-specific errors: the
-reference response must be normal (not subnormal) and representable, nonzero targets must
-not derive zero float64 coefficients, and coefficient support must fit the
+ideal treatment-response support must be normal and representable (actual rounded
+positive treatment responses may be subnormal), nonzero targets must not derive
+zero float64 coefficients, and coefficient support must fit the
 float32 corpus-storage maximum. Target supports containing zero are checked at
 their smallest nonzero float64 draw, not only at their endpoints. There is no
 silent clamping of targets or coefficients. With treatment targets enabled, the
@@ -120,10 +131,27 @@ reference-input products, including those from an oracle's supplied
 coefficient that still leaves this domain through rounding raises the same
 named `ValueError` in `sample_scm` and in corpus generation; corpus generation
 never resamples it. Opt-in mechanism settings use numerically stable,
-mathematically equivalent Hill/logistic evaluation; the legacy default graph
-and arithmetic remain unchanged. Descriptions and DOT graphs of opt-in worlds
+mathematically equivalent evaluation of every saturation family (Hill, logistic,
+Michaelis–Menten, tanh and root). Defaults keep pymc-marketing's library graphs,
+their rounding and their random-stream order. The opt-in MM, tanh and root forms
+retain their unit forward curves and use analytic pullbacks that avoid
+tiny-denominator squares or indeterminate saturated derivatives. The stable
+relative-noise norm above applies whenever an opt-in mechanism setting is active;
+default recipes keep `std * sqrt(sum((g_cy * beta)**2))` and its rounding, so
+raw-coefficient ranges reaching subnormal noise products need such a setting for
+extended-range arithmetic. Descriptions and DOT graphs of opt-in worlds
 print saturation shape parameters, `beta` and edge coefficients with four
 significant digits, and conditioning intervals exactly.
+
+The normal-input requirement is treatment-only. Covariate reference inputs can
+be positive subnormal values when their derived coefficient remains representable;
+schema-v5 truth preserves those inputs, targets and nonzero subnormal responses.
+
+Subnormal logistic unit responses retain the complete half-argument through final
+float64 rounding. Exact binary midpoint comparisons preserve even half-ULP cases,
+so a large admitted coefficient cannot amplify a response erased by intermediate
+rounding. Outside this smallest-response boundary, the existing `expm1` law and
+rounding are unchanged.
 
 ```python exec="1" source="block" result="text"
 import numpy as np
@@ -164,13 +192,19 @@ in log-uniform mode its free MM variable is `mm_kappa_mult_log`, while
 are deterministic and the corresponding `*_reference_contribution` variables
 are the primitive priors.
 
-Non-default effective mechanism settings add
-`diagnostics["mechanism_priors"]` to corpora with all configured shapes, MM
-distribution and reference settings. This optional metadata survives
-`save_corpus` / `load_corpus`; it does not add arrays or change the schema
-version. Default arrays and diagnostic inventory are unchanged. Enabling a
-new prior can change PyMC stream assignment at the same seed; stream alignment
-between different configurations is not promised.
+Non-default effective mechanism settings add `diagnostics["mechanism_priors"]`
+and a declared `parameter_fields` inventory to schema-v5 corpora. Alongside the
+configured shapes, MM distribution and reference settings, the corpus retains
+float64 realised shapes, `beta`, `rho_zy`, and the exact response anchor.
+Enabled reference priors also store their targets and actual inputs; treatment
+references retain the response used to derive `beta`. These arrays and metadata
+survive `save_corpus` / `load_corpus`; default recipes omit the block.
+See [schema-v5 fields](corpus.md#schema-versions-and-migration).
+Enabling any opt-in mechanism setting rewires the graph (stable curves, derived
+`beta` / `rho_zy`, the log-uniform MM primitive). That changes the order in
+which PyMC's draw walk reaches random variables, and therefore their streams,
+so other draws generally change at the same seed; see
+[randomness and seeds](#randomness-and-seeds).
 
 ### Carryover normalization
 
@@ -202,7 +236,7 @@ cfg = make_scm_prior(            # the diverse preset already sets these
     covariate_pulse_prob_range=(0.0, 0.25),
     covariate_pulse_amp_range=(0.5, 3.0),
 )
-smooth = make_scm_prior(         # pre-texture controls, byte-identical corpora
+smooth = make_scm_prior(         # pre-texture numerical behavior, not archive-byte identity
     n_treatments=4, n_covariates=2, n_latent=1,
     covariate_hf_sigma_range=(0.0, 0.0),
     covariate_pulse_prob_range=(0.0, 0.0),
@@ -244,9 +278,10 @@ parameter-only anchor regardless of pulses.) Centring holds in
 expectation conditional on the drawn parameters, not as the temporal mean of
 every finite path.
 
-All three default to `(0.0, 0.0)` on a raw `SCMPrior`: no term enters the graph,
-the parameters degenerate to constants, and the corpus is byte-identical to one
-generated before the mechanism existed.
+All three default to `(0.0, 0.0)` on a raw `SCMPrior`: no term enters the graph
+and the parameters degenerate to constants. Leaving these controls disabled
+preserves the same-environment numerical/model arrays, not cross-schema
+metadata or archive-byte identity.
 
 ## Composable input trajectories
 
@@ -349,14 +384,16 @@ number in `[0, 1]` (`bool` is rejected).
 | `seasonal` | `treatment_seasonal_inclusion_prob` | `covariate_seasonal_inclusion_prob` | `0.0` | `0.3` / `0.35` |
 | `trend` | `treatment_trend_inclusion_prob` | `covariate_trend_inclusion_prob` | `0.0` | `0.3` / `0.3` |
 
-- `1.0` puts the component on every input and `0.0` on none; neither draws
-  anything. Components combine freely: one input can launch late, run in
+- `1.0` puts the component on every input and `0.0` on none; neither samples
+  a random inclusion flag. Components combine freely: one input can launch late, run in
   flights and trend at once.
-- A component an input does not carry is **not wired** for it: it adds exactly
-  nothing, and a gate or level component no input of the cell carries creates
-  no random variable. The `hf` / `pulse` magnitude and noise variables exist
-  whenever their range is live, as before, but reach only the inputs that carry
-  them.
+- A component an input does not carry adds exactly nothing. Ordinary active-size
+  cell construction omits gate/level priors when no input carries the component;
+  reusable templates keep cfg-admitted priors wired and drawn even for all-off
+  cells, with effects neutralized by runtime flags. Legacy `hf` / `pulse`
+  magnitude and noise variables retain their existing construction/draw
+  contract; their forward effects reach only carrying inputs. Explicit
+  provenance/audit requests can still sample unused variables.
 - `hf` and `pulse` keep their texture ranges as on/off switches: their
   **effective** probability is `0` whenever `*_hf_sigma_range[1] == 0` /
   `*_pulse_prob_range[1] == 0` (as on a raw `SCMPrior`), whatever the knob says.
@@ -485,9 +522,11 @@ $e^{S + R}\prod_e f_e^{\mathbf{1}[t \ge \tau_e]}$.
 - `covariate_trend_change_range: tuple[float, float] = (-1.0, 1.0)` — the same in
   covariate units.
 
-Like every float configuration range, these must be representable in float32;
-the integer flighting period range is bounded by `n_time_steps` instead, once
-flighting can be included.
+Float range bounds must be finite and capped in magnitude by the existing
+float32 corpus-storage maximum. Schema-v5 realised continuous trajectory truth
+is retained in float64, including valid sub-float32 values; existing feature
+dtypes are unchanged. The integer flighting period range is bounded by
+`n_time_steps` instead, once flighting can be included.
 
 ### Rules across components
 
@@ -540,9 +579,13 @@ also outputs, over the reported window:
 - `treatments_natural`, `outcome_natural` — the schedule-free realism
   references.
 
-Component parameters are model variables such as `treatment_onset_frac` or
-`covariate_flighting_period`; each exists only in cells where some input carries
-its component, and a degenerate range is a constant, not a variable.
+Gate/level component parameters are model variables such as
+`treatment_onset_frac` or `covariate_flighting_period`. Ordinary active-size
+cell models wire their priors only where some input carries the component;
+degenerate ranges are constants, not random variables. Reusable templates
+keep cfg-admitted gate/level priors wired even when the current cell's flags
+are all off, so flags can change without recompilation. Runtime flags
+neutralize the forward effects, not those prior draws.
 
 ### Presets
 
@@ -598,11 +641,31 @@ at `76`.
 
 ### Randomness and seeds
 
-- **Defaults draw nothing new.** With every schedule probability at `0.0` and
-  `hf` / `pulse` at `1.0`, no random variable, numpy draw or corpus key is
-  added: same-seed corpora, `sample_scm` worlds, bundle data files and template
-  draws are bit-identical to those generated before these knobs existed
-  (`recipe.json` additionally lists the new `SCMPrior` fields at their defaults).
+PyMC assigns random streams by position. A compiled draw collects the random
+variables its requested outputs reach in a right-first depth-first walk, and
+the *i*-th one draws from stream *i* of `SeedSequence(s).spawn(n)`, where `s` is
+drawn from `numpy.random.default_rng(seed)`. When a draw names a stream
+reference, the variables that reference reaches come first, in its walk order;
+the rest follow in the order the full walk meets them. A variable's stream
+therefore follows the graph upstream of those outputs, not its name or creation
+order; that decides which same-seed draws a change can keep.
+
+**With every new feature off, main's draws are reproduced.** Schedule
+probabilities at `0.0`, `hf` / `pulse` at `1.0`, no opt-in mechanism setting and
+independent active counts build main's graphs, arithmetic and stream order: in
+the same environment a fixed seed reproduces main's corpora (including their raw
+candidate draws), `sample_scm` worlds, `DataGenerator` batches, fixed-point
+oracle evaluations and template draws byte for byte.
+`tests/test_main_reproduction.py` checks this against main, and
+`tests/test_rng_owner_contract.py` pins main's stream owners by name. This does
+not promise cross-version metadata/archive identity: schema v5 changes the
+version stamp and saved corpus bytes, and `recipe.json` lists the new
+`SCMPrior` fields at their defaults.
+
+Isolation holds where the walk cannot change:
+
+- **Defaults draw nothing new.** These controls add no random variable, numpy
+  draw or corpus key while they stay at their defaults.
 - **Fractional flags consume no main-RNG state.** Probabilities of exactly `0`
   or `1` draw nothing. Fractional ones draw `stream.random(n) < p` from child
   streams spawned, once per cell, off the corpus's numpy generator — one fixed
@@ -611,30 +674,62 @@ at `76`.
   support masks drawn from that generator, each component's flags do not depend
   on any other component's probability, and raising one probability at a fixed
   seed only adds inputs to the set that carries it.
-- **Wiring a component changes that cell's other draws.** A cell whose realised
-  wiring matches the default — no schedule component on any input, and `hf` /
-  `pulse` on every input whose range is live — draws exactly what the default
-  config draws. Once a cell's wiring differs, the random variables its outputs
-  reach, and the order a compiled draw visits them (which is what assigns
-  random streams), can change: at the same seed, that cell's legacy parameters,
-  innovations and other components generally change too. Stream stability under
-  enabling is tracked in
-  [#28](https://github.com/pymc-labs/pymc-generator/issues/28).
+- **Uncarried schedule components reach no stream.** An ordinary active-size
+  cell or a `sample_scm` world in which no input carries a schedule component
+  (onset, offset, flighting, level jump, seasonal, trend), and whose `hf` /
+  `pulse` are on every input whose range is live, builds none of those
+  components' variables and keeps the default draws exactly. Its schedule audit
+  outputs cannot reorder the legacy streams: corpus generation requests them
+  ahead of the legacy names (with shocks, the natural pair takes the place of
+  the unshocked pair it aliases), so the walk reaches them last, and
+  `sample_scm` leaves them out of its stream reference.
+- **Template flags are data.** Inside one compiled template a per-cell flag
+  selects a component's effect at run time. Turning any component on or off for
+  any input of any cell leaves every random variable's draw byte-identical;
+  only that component's effect changes.
+- **Leading audit outputs keep legacy streams.** Outputs requested ahead of
+  the legacy names are walked last, so variables only they reach are appended.
+
+Isolation does not hold, by this layout:
+
+- **Wiring a component moves later streams.** Once some input of an ordinary
+  cell or `sample_scm` world carries a schedule component, its variables join
+  the walk mid-way: every variable discovered after them takes a different
+  stream, including other components' variables and legacy parameters and
+  innovations.
+- **Partial texture moves later streams.** `hf` / `pulse` variables are always
+  built. Removing texture from an input through which the walk first reaches a
+  texture variable (fractional inclusion or a zero range) deletes ranks the same
+  way, so its later draws change.
+- **Mechanism priors rewire the graph.** See [mechanism priors](#mechanism-priors).
+- **Templates keep admitted priors wired.** Cfg-admitted gate/level priors stay
+  reachable and drawn even for an all-off cell, so admitting a component
+  reseeds every cell of the shard, even cells whose flags are all 0. A template
+  promises no draw identity with an ordinary (pruned) cell, or with a template
+  that never admitted the component. Legacy `hf` / `pulse` variables retain
+  their existing random-draw contract; switching their flags off does not
+  promise to eliminate those prior draws.
 - **Corpus alignment needs matching acceptance.** Cell `c` of two configs lines
   up only while every earlier cell consumed the same main-RNG draws — one draw
   seed per top-up round and one support-mask draw per candidate that passes the
   realism filter — that is, while their acceptance counts match.
+- **Stratified active counts shift the corpus stream.** See
+  [seeds and randomness](#seeds-and-randomness) under active-count coverage.
+
+A name-keyed stream layout would isolate these draws as well, but it would
+change every feature-enabled seeded output and cost an extra model build per
+such cell; PyMC's layout is kept
+([#28](https://github.com/pymc-labs/pymc-generator/issues/28)).
 
 ### Limits
 
-- **Corpus generation only, for now.** `sample_scm` raises `ValueError` for any
-  config with `trajectory_metadata_enabled`, so single-world extraction,
-  `describe_scm`, bundles, replay and `SCM.oracle_model` are not available for
-  these configs — generate corpora with `sample_prior_predictive` or
-  `DataGenerator`. The experimental template path (`world_model_template`)
-  rejects schedule components and any `hf` / `pulse` inclusion probability other
-  than `1.0` on a live texture range. Both are planned in
-  [#27](https://github.com/pymc-labs/pymc-generator/issues/27).
+- **End-to-end support.** Ordinary generation, `sample_scm`, descriptions,
+  bundles, `SCM.replay()` and the fixed-input oracle support every component
+  and fractional per-input inclusion. The reusable template takes flags as
+  per-cell data inputs; it still excludes unrelated treatment shocks,
+  prior-conditioning intervals and non-fixed confounding-strength ranges.
+  Equal seeds do not align padded template and active-size ordinary RV draws:
+  compare their forward values at the same concrete inputs.
 - **κ anchors exclude the components.** `saturation_scale` stays parameter-only:
   a doubled treatment runs at twice its κ-relative level, and gates, seasonality
   and trends move a treatment along its response curve rather than re-centring
@@ -705,8 +800,12 @@ for treatments. So:
 - the columns still sum **exactly** to the total, so the decomposition identity
   is untouched (measured identity error 1.8e-15);
 - where the floor does not bind, every column equals the linear split
-  ($g^{zy}_m \rho_m Z_m$) and the persisted corpus is byte-identical to the
-  unfloored one.
+  ($g^{zy}_m \rho_m Z_m$) up to float64 rounding of the telescoped difference
+  $(A^{(i-1)} + x) - A^{(i-1)}$, whose error grows with
+  $\lvert A^{(i-1)}\rvert / \lvert x\rvert$; float32 storage usually absorbs it,
+  but byte identity with the unfloored corpus is not guaranteed. The default
+  `"intercept"` scope keeps every covariate column the literal product
+  $(g^{zy}_m \rho_m) Z_m$ on the reported covariate.
 
 The cost is that a per-node column is **no longer linear in its node** where the
 floor binds: a linear MMM's $\rho_m Z_m$ term cannot reproduce the absorbed
@@ -966,18 +1065,19 @@ The allocation covers the cells of one generation call.
 - **Independent is the legacy draw.** Each cell draws `n_treatments_active`,
   `n_covariates_active` and `n_latent_active` from the corpus RNG in that
   order, exactly as before these fields existed, and nothing is spawned.
-  Same-seed corpora, diagnostics, saved shards, `sample_scm` worlds and template
-  payloads and draws are bit-identical to those generated before
-  (`recipe.json` additionally lists the two fields at their defaults).
+  Same-seed active counts, structures, draw seeds and model-array draws are
+  unchanged by leaving these allocation controls at their defaults.
+  Metadata and saved shards are not promised byte-identical across schema
+  versions; `recipe.json` additionally lists the two fields at their defaults.
 - **Stratified changes the corpus at the same seed.** Before the first cell,
   the allocation draws one integer seed from the corpus RNG for its own stream
   and draws only from that stream: one permutation of the grid and one uniform
   offset for the rounding, then one permutation of the cells. Each cell then
   skips its treatment and covariate draws and draws only its latent count, so
   every later corpus-RNG draw (graphs, structures, draw seeds, support masks,
-  the validation split) shifts. This RNG layout does not allow aligning a
-  stratified corpus with the independent one
-  ([#28](https://github.com/pymc-labs/pymc-generator/issues/28)).
+  the validation split) shifts. Stratified and independent corpora therefore do
+  not align at the same seed; this is a property of the sequential corpus RNG
+  (see [randomness and seeds](#randomness-and-seeds)).
 - A cell that exhausts the realism filter raises `RuntimeError` naming its
   `n_treatments_active`, `n_covariates_active` and `n_latent_active`, so a
   combination the prior cannot realise is identified directly.

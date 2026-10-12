@@ -19,6 +19,7 @@ from pymc_generator.slots import (
     TRAJECTORY_ARRAY_FIELDS,
     TRAJECTORY_COMPONENTS,
     TRAJECTORY_INPUTS,
+    TRAJECTORY_PARAM_FIELDS,
     SlotLayout,
 )
 from pymc_generator.trajectories import GATE_COMPONENTS, LEVEL_COMPONENTS
@@ -104,14 +105,12 @@ def _renormalized(corpus):
 
 
 def _attach_trajectory_block(legacy):
-    """``legacy`` plus a synthetic trajectory block that satisfies every rule.
+    """Attach explicit component primitives and independently computed schedules.
 
-    A direct treatment's ``treatment_raw`` feeds the recomputed signal labels, so
-    it stays untouched: a gated direct treatment is switched off exactly under
-    its held shock, which overrides the gate. The other inputs follow
-    :func:`_on_weeks`; their series are zeroed on off-weeks and the treatment
-    normalizations recomputed, and nothing else the validator checks reads
-    those entries.
+    A gated direct treatment is off exactly under its held shock, represented
+    by one long flighting cycle. Other inputs use launch/stop weeks and a
+    four-on/four-off cycle. Non-direct series are zeroed on their off-weeks;
+    direct treatment values and their signal labels remain untouched.
     """
     corpus = dict(legacy)
     n_time = legacy["treatment_raw"].shape[1]
@@ -124,6 +123,47 @@ def _attach_trajectory_block(legacy):
                     flags[n, i, TRAJECTORY_COMPONENTS.index(name)] = 1
         flags[~active] = 0
         corpus[f"{input_type}_components"] = flags
+        dimensions = {
+            "task": active.shape[0],
+            input_type: active.shape[1],
+            f"{input_type}_jump": 1,
+        }
+        for key, (axes, dtype) in TRAJECTORY_PARAM_FIELDS.items():
+            if key.startswith(f"trajectory_{input_type}_"):
+                corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
+        for component, values in {
+            "hf": {"sigma": 0.1},
+            "pulse": {"amp": 0.2, "prob": 0.2},
+            "onset": {"start": n_time // 4},
+            "offset": {"stop": 3 * n_time // 4},
+            "flighting": {"period": 8, "on_weeks": 4, "phase": 0},
+            "level_jump": {
+                "week": n_time // 2,
+                **(
+                    {"factor": 1.2, "log_factor": np.log(1.2)}
+                    if input_type == "treatment"
+                    else {"size": 0.2}
+                ),
+            },
+            "seasonal": {"amplitude": 0.5, "period": 13.0, "phase": 0.0},
+            "trend": {"change": 0.25},
+        }.items():
+            selected = flags[..., TRAJECTORY_COMPONENTS.index(component)] == 1
+            for field, value in values.items():
+                key = f"trajectory_{input_type}_{component}_{field}"
+                if corpus[key].ndim == 3:
+                    corpus[key][:] = np.where(selected[:, None, :], value, 0)
+                else:
+                    corpus[key][:] = np.where(selected, value, 0)
+    direct_flighting = _direct(legacy) & _carries(corpus, "treatment", ("flighting",))
+    for task, slot in np.argwhere(direct_flighting):
+        off = np.flatnonzero(legacy["treatment_shock_mask"][task, :, slot])
+        start, length = int(off[0]), len(off)
+        corpus["trajectory_treatment_flighting_period"][task, slot] = n_time
+        corpus["trajectory_treatment_flighting_on_weeks"][task, slot] = n_time - length
+        corpus["trajectory_treatment_flighting_phase"][task, slot] = (
+            n_time - length - start
+        ) % n_time
 
     shocked = legacy["treatment_shock_mask"] == 1
     gated = _carries(corpus, "treatment", GATE_COMPONENTS)[:, None, :]
@@ -136,7 +176,7 @@ def _attach_trajectory_block(legacy):
         "covariate": _on_weeks(corpus["covariate_components"], n_time),
     }
     held = {"treatment": shocked, "covariate": False}
-    level = (0.5 * np.sin(2.0 * np.pi * np.arange(n_time) / 13.0) + 0.25).astype(np.float32)
+    weeks = np.arange(n_time)
     for input_type, series_key, shift_key in (
         ("treatment", "treatment_raw", "treatment_log_level_shift"),
         ("covariate", "covariates", "covariate_level_shift"),
@@ -149,14 +189,24 @@ def _attach_trajectory_block(legacy):
         corpus[series_key] = np.where(
             activity | held[input_type], legacy[series_key], np.float32(0.0)
         )
-        levelled = _carries(corpus, input_type, LEVEL_COMPONENTS)
-        corpus[shift_key] = np.where(levelled[:, None, :], level[None, :, None], np.float32(0.0))
+        flags = corpus[f"{input_type}_components"]
+        seasonal = (flags[..., TRAJECTORY_COMPONENTS.index("seasonal")] == 1)[:, None, :]
+        trend = (flags[..., TRAJECTORY_COMPONENTS.index("trend")] == 1)[:, None, :]
+        jumps = (flags[..., TRAJECTORY_COMPONENTS.index("level_jump")] == 1)[:, None, :]
+        jump_size = np.log(1.2) if input_type == "treatment" else 0.2
+        corpus[shift_key] = (
+            seasonal * (0.5 * np.sin(2.0 * np.pi * weeks[None, :, None] / 13.0))
+            + trend * (0.25 * weeks[None, :, None] / (n_time - 1))
+            + jumps * jump_size * (weeks[None, :, None] >= n_time // 2)
+        ).astype(np.float32)
 
     corpus = _renormalized(corpus)
 
     corpus["diagnostics"] = dict(legacy["diagnostics"])
     corpus["diagnostics"]["trajectory"] = {
         "components": list(TRAJECTORY_COMPONENTS),
+        "parameter_fields": list(TRAJECTORY_PARAM_FIELDS),
+        "jump_counts": {"treatment": 1, "covariate": 1},
         "inclusion_probs": {
             input_type: dict.fromkeys(TRAJECTORY_COMPONENTS, 0.5)
             for input_type in TRAJECTORY_INPUTS
@@ -307,13 +357,6 @@ def _zeroable_gated(corpus, input_type):
     if input_type == "treatment":
         mask &= ~_direct(corpus)
     return _first(mask)
-
-
-def _switch_off(corpus, input_type, index):
-    """Copy of ``corpus`` with an input switched off at ``index`` and its series zeroed there."""
-    series_key = "treatment_raw" if input_type == "treatment" else "covariates"
-    edited = _replace(corpus, f"{input_type}_activity", index, 0)
-    return _renormalized(_replace(edited, series_key, index, 0.0))
 
 
 REJECTED_ARRAYS = (
@@ -608,7 +651,13 @@ def test_trajectory_arrays_follow_their_schema(trajectory_corpus, key):
     errors = DataGenerator.validate_corpus({**trajectory_corpus, key: stored[..., :-1]})
     assert any(error.startswith(f"Shape mismatch for {key}:") for error in errors), errors
 
-    wrong = np.dtype(np.int8 if stored.dtype == np.uint8 else np.float64)
+    wrong = np.dtype(
+        np.int8
+        if stored.dtype == np.uint8
+        else np.float32
+        if stored.dtype == np.float64
+        else np.float64
+    )
     errors = DataGenerator.validate_corpus({**trajectory_corpus, key: stored.astype(wrong)})
     assert f"{key} has dtype {wrong}, expected {stored.dtype}" in errors
 
@@ -665,7 +714,21 @@ def test_gated_inputs_keep_two_on_weeks_in_the_support_window(trajectory_corpus,
         & (trajectory_corpus["support_mask"][task] == 1)
     )
     assert len(on) > keep
-    edited = _switch_off(trajectory_corpus, input_type, (task, on[keep:], slot))
+    start = int(on[0])
+    n_time = trajectory_corpus[activity_key].shape[1]
+    active_window = np.zeros(n_time, dtype=np.uint8)
+    active_window[start : start + keep] = 1
+    edited = _replace(trajectory_corpus, activity_key, (task, slice(None), slot), active_window)
+    series_key = "treatment_raw" if input_type == "treatment" else "covariates"
+    series = edited[series_key][task, :, slot].copy()
+    series[active_window == 0] = 0.0
+    edited = _renormalized(_replace(edited, series_key, (task, slice(None), slot), series))
+    for field, value in {
+        "period": n_time,
+        "on_weeks": keep,
+        "phase": (n_time - start) % n_time,
+    }.items():
+        edited = _replace(edited, f"trajectory_{input_type}_flighting_{field}", (task, slot), value)
     expected = (
         []
         if keep == 2
@@ -686,9 +749,14 @@ def test_exact_inclusion_probabilities_accept_matching_flags(
     key = f"{input_type}_components"
     edited = dict(trajectory_corpus)
     edited[key] = trajectory_corpus[key].copy()
-    # pulse has no array-level consequence, so only the diagnostics follow it.
+    # Texture truth follows the selected flags even though the series need not
+    # be re-evaluated for a schema-only corruption fixture.
     pulse = TRAJECTORY_COMPONENTS.index("pulse")
     edited[key][..., pulse] = _active(trajectory_corpus, input_type) & bool(probability)
+    for field, value in (("amp", 0.2), ("prob", 0.2)):
+        edited[f"trajectory_{input_type}_pulse_{field}"] = np.where(
+            _active(trajectory_corpus, input_type) & bool(probability), value, 0.0
+        )
     edited["diagnostics"] = copy.deepcopy(trajectory_corpus["diagnostics"])
     trajectory = edited["diagnostics"]["trajectory"]
     trajectory.update(_recomputed_prevalence(edited))

@@ -428,16 +428,18 @@ PRE_V4_ARRAY_NAMES: dict[str, str] = {
 }
 
 
-def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
-    """Write the historical vocabulary independently of the reader's mapping."""
+def _write_legacy_shard(path, corpus, version):
+    """Write actual historical vocabulary independently of the current reader."""
     import json
+
+    legacy_version = 1 if version is None else version
 
     diagnostics = {
         key: value
         for key, value in corpus["diagnostics"].items()
         if key not in {"schema_version", "timing"}
     }
-    if version < 3:
+    if legacy_version < 3:
         diagnostics["edge_types"] = ["cy", "dc", "dz", "db", "zb", "zc", "cc", "zz"]
         for field in ("edge_base_rates", "edge_marginals", "edge_budget"):
             values = diagnostics.get(field)
@@ -446,19 +448,19 @@ def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
                     {"dy": "db", "zy": "zb"}.get(key, key): value for key, value in values.items()
                 }
         diagnostics["min_dead_channels"] = diagnostics.pop("min_no_direct_effect_treatments")
-    else:
+    elif legacy_version == 3:
         diagnostics["min_no_direct_effect_channels"] = diagnostics.pop(
             "min_no_direct_effect_treatments"
         )
-    for old, new in (
-        ("carryover_kernel_version", "adstock_kernel_version"),
-        ("carryover_kernel_semantics", "adstock_kernel_semantics"),
-    ):
-        if old in diagnostics:
-            diagnostics[new] = diagnostics.pop(old)
-    if version in (2, 3):
+    if legacy_version < 4:
+        for old, new in (
+            ("carryover_kernel_version", "adstock_kernel_version"),
+            ("carryover_kernel_semantics", "adstock_kernel_semantics"),
+        ):
+            if old in diagnostics:
+                diagnostics[new] = diagnostics.pop(old)
+    if version is not None:
         diagnostics["schema_version"] = version
-    diagnostics.update(diagnostics_overrides or {})
     payload = {"diagnostics": np.array(json.dumps(diagnostics))}
     for key, value in corpus.items():
         if key == "diagnostics":
@@ -468,50 +470,31 @@ def _write_legacy_shard(path, corpus, version, *, diagnostics_overrides=None):
                 payload[f"identifiability__{label}"] = array
         else:
             payload[key] = value
-    for new, old in PRE_V4_ARRAY_NAMES.items():
-        if new in payload:
-            payload[old] = payload.pop(new)
-    if version == 1:
-        for old, new in LEGACY_CORPUS_KEYS_V1.items():
+    if legacy_version < 4:
+        for new, old in PRE_V4_ARRAY_NAMES.items():
+            if new in payload:
+                payload[old] = payload.pop(new)
+    if legacy_version == 1:
+        for old, new in {
+            "K_active": "n_treatments_active",
+            "M_active": "n_covariates_active",
+            "J_active": "n_latent_active",
+            "active_c_mask": "treatment_active_mask",
+            "active_m_mask": "covariate_active_mask",
+            "active_j_mask": "latent_active_mask",
+        }.items():
             payload[old] = payload.pop(new)
     np.savez_compressed(path, **payload)
 
 
-@pytest.mark.parametrize("version", (1, 2, 3))
-def test_load_corpus_migrates_legacy_metadata_without_changing_arrays(tmp_path, corpus, version):
+@pytest.mark.parametrize("version", (None, 1, 2, 3, 4), ids=("versionless", "v1", "v2", "v3", "v4"))
+def test_load_corpus_rejects_pre_v5_archives_without_fabricating_truth(tmp_path, corpus, version):
     path = tmp_path / f"v{version}.npz"
     _write_legacy_shard(path, corpus, version)
-    loaded = pg.load_corpus(path)
-
-    assert set(loaded) == set(corpus)
-    for key, value in corpus.items():
-        if isinstance(value, np.ndarray):
-            np.testing.assert_array_equal(loaded[key], value, err_msg=key)
-    for key, value in corpus["identifiability"].items():
-        np.testing.assert_array_equal(loaded["identifiability"][key], value, err_msg=key)
-    assert loaded["diagnostics"] == {
-        key: value for key, value in corpus["diagnostics"].items() if key != "timing"
-    }
-    assert DataGenerator.validate_corpus(loaded) == []
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "reason"),
-    (
-        ("edge_types", ["cy", "dc", "dz", "zb", "db", "zc", "cc", "zz"], "edge order"),
-        ("edge_types", list(EDGE_TYPES_EXTENDED), "edge order"),
-        ("edge_base_rates", {"db": 0.5, "dy": 0.2}, "mixes"),
-        ("edge_marginals", {"zb": 0.5, "zy": 0.2}, "mixes"),
-        ("edge_budget", {"db": 1, "dy": 1}, "mixes"),
-        ("edge_budget", [], "mapping"),
-        ("min_no_direct_effect_channels", 7, "conflicting"),
-    ),
-)
-def test_v2_migration_rejects_ambiguous_metadata(tmp_path, corpus, field, value, reason):
-    path = tmp_path / "ambiguous-v2.npz"
-    _write_legacy_shard(path, corpus, 2, diagnostics_overrides={field: value})
-    with pytest.raises(ValueError, match=reason):
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="schema_version"):
         pg.load_corpus(path)
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize(
@@ -537,19 +520,8 @@ def test_current_schema_rejects_legacy_edge_names_at_every_boundary(tmp_path, co
         pg.load_corpus(path)
 
 
-def test_load_corpus_rejects_a_shard_mixing_both_vocabularies(tmp_path, corpus):
-    path = tmp_path / "mixed.npz"
-    _write_legacy_shard(path, corpus, 1)
-    with np.load(path, allow_pickle=False) as data:
-        payload = {key: data[key] for key in data.files}
-    payload["n_treatments_active"] = payload["K_active"]
-    np.savez_compressed(path, **payload)
-    with pytest.raises(ValueError, match="mixes v1 and v2 dimension keys"):
-        pg.load_corpus(path)
-
-
 def test_new_corpora_are_stamped_and_free_of_v1_keys(corpus):
-    assert corpus["diagnostics"]["schema_version"] == CORPUS_SCHEMA_VERSION
+    assert corpus["diagnostics"]["schema_version"] == 5
     assert not set(corpus) & set(LEGACY_CORPUS_KEYS_V1)
 
 
