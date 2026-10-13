@@ -16,7 +16,7 @@ from types import FunctionType
 
 import numpy as np
 import pytensor
-from pytensor import clone_replace
+from pytensor.graph.replace import clone_replace
 from template_vs_per_world import CORPUS_NAMES
 
 from pymc_generator import symbolic_graph as sg
