@@ -1,0 +1,8 @@
+Running as unit: wayfinder61-continuation.scope; invocation ID: ad5fc01d9dac42cbb525b2bf89c2e841
+{"arm": "0-dynamic-r0", "start_epoch": 1791924946.2946866, "reserved_s": 937.7054359912872, "status": "pass", "exit_code": 0, "elapsed_s": 161.36397790908813}
+{"arm": "3-ordinary-r0", "start_epoch": 1791925107.659324, "reserved_s": 776.3407940864563, "status": "pass", "exit_code": 0, "elapsed_s": 81.59174418449402}
+{"arm": "3-dynamic-r0", "start_epoch": 1791925189.2516263, "reserved_s": 694.7484817504883, "status": "pass", "exit_code": 0, "elapsed_s": 160.78996419906616}
+{"arm": "3-specialized-r0", "start_epoch": 1791925350.0422676, "reserved_s": 533.9578459262848, "status": "pass", "exit_code": 0, "elapsed_s": 126.54036784172058}
+{"arm": "3-specialized-r1", "start_epoch": 1791925476.5834153, "reserved_s": 407.4167037010193, "status": "pass", "exit_code": 0, "elapsed_s": 128.2245991230011}
+{"arm": "3-dynamic-r1", "start_epoch": 1791925604.8093052, "reserved_s": 279.19087839126587, "status": "pass", "exit_code": 0, "elapsed_s": 159.16346740722656}
+{"arm": "3-ordinary-r1", "start_epoch": 1791925763.9737594, "reserved_s": 120.02637720108032, "status": "pass", "exit_code": 0, "elapsed_s": 80.19113039970398}

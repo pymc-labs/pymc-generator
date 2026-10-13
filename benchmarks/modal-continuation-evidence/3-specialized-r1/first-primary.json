@@ -1,0 +1,38 @@
+{
+  "label": "first",
+  "method": "specialized",
+  "workload": 3,
+  "cells": 2,
+  "draws": 1,
+  "candidates": 2,
+  "accepted": 2,
+  "rejected": 0,
+  "logical_ids": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      0
+    ]
+  ],
+  "stages": {
+    "build_s": 1.8150019831955433,
+    "compile_s": 14.76826072880067,
+    "draw_s": 0.4574873801320791,
+    "invariants_and_hash_s": 0.0013723650481551886,
+    "acceptance_and_packing_s": 0.0011292861308902502,
+    "normalization_and_diagnostics_s": 0.013277448946610093
+  },
+  "generation_s": 17.058193302014843,
+  "validation_s": 0.016029010992497206,
+  "persistence_s": 0.005206342088058591,
+  "readback_s": 0.021182344993576407,
+  "persisted_bytes": 71868,
+  "pipeline_s": 17.100611000088975,
+  "memory": {
+    "self_peak_rss_kib": 414188,
+    "scope_peak_bytes": 545206272
+  }
+}

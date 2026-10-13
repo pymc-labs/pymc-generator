@@ -1,0 +1,94 @@
+{
+  "status": "pass",
+  "memory": {
+    "self_peak_rss_kib": 567196,
+    "scope_peak_bytes": 566026240
+  },
+  "elapsed_s": 153.12107643205673,
+  "executions": [
+    {
+      "cell": 0,
+      "draws": 1,
+      "diagnostic": false,
+      "seed": 298624104,
+      "seconds": 0.2681348789483309
+    },
+    {
+      "cell": 1,
+      "draws": 1,
+      "diagnostic": false,
+      "seed": 1655306858,
+      "seconds": 0.2656991700641811
+    },
+    {
+      "cell": 0,
+      "draws": 1,
+      "diagnostic": true,
+      "seed": 298624104,
+      "seconds": 0.25800495804287493
+    },
+    {
+      "cell": 1,
+      "draws": 1,
+      "diagnostic": true,
+      "seed": 1655306858,
+      "seconds": 0.2634637909941375
+    },
+    {
+      "cell": 0,
+      "draws": 10,
+      "diagnostic": false,
+      "seed": 298624104,
+      "seconds": 2.6371277351863682
+    },
+    {
+      "cell": 1,
+      "draws": 10,
+      "diagnostic": false,
+      "seed": 1655306858,
+      "seconds": 2.627546518109739
+    },
+    {
+      "cell": 0,
+      "draws": 10,
+      "diagnostic": true,
+      "seed": 298624104,
+      "seconds": 2.621886796085164
+    },
+    {
+      "cell": 1,
+      "draws": 10,
+      "diagnostic": true,
+      "seed": 1655306858,
+      "seconds": 2.5684232539497316
+    },
+    {
+      "cell": 0,
+      "draws": 100,
+      "diagnostic": false,
+      "seed": 298624104,
+      "seconds": 23.357296141795814
+    },
+    {
+      "cell": 1,
+      "draws": 100,
+      "diagnostic": false,
+      "seed": 1655306858,
+      "seconds": 24.515066377120093
+    },
+    {
+      "cell": 0,
+      "draws": 100,
+      "diagnostic": true,
+      "seed": 298624104,
+      "seconds": 26.28398541593924
+    },
+    {
+      "cell": 1,
+      "draws": 100,
+      "diagnostic": true,
+      "seed": 1655306858,
+      "seconds": 26.274679326917976
+    }
+  ]
+}
