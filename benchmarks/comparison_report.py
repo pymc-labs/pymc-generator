@@ -55,7 +55,7 @@ def main():
         "readback_and_revalidation_s",
     ]
     with (ROOT / "comparison-summary.csv").open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     ledger = json.loads((EVIDENCE / "budget-final.json").read_text())
