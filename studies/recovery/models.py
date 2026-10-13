@@ -1,4 +1,4 @@
-"""Generator-support oracle likelihoods extracted read-only from ols_reporting.py."""
+"""Generator-support oracle likelihoods for the direct-effect geometric/MM study."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .config import ContractError
 def baseline_geometry(
     horizon: int, burn: int, start: int, max_width: int, a: float = 2, b: float = 2
 ):
-    """Exactly integrate the generator's centered/smoothed 112-week walk and width."""
+    """Exactly integrate the generator's centered/smoothed (horizon + burn)-week walk and width."""
     full = horizon + burn
     widths = np.arange(1, min(full, max_width) + 1)
     edges = np.r_[0, (widths[:-1] + 0.5) / max_width, 1]

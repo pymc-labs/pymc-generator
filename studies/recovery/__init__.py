@@ -1,1 +1,1 @@
-"""Read-only study contracts and analysis; execution adapters are a later task."""
+"""Configurable recovery study: generation, fitting, native analysis and static reports."""

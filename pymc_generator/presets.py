@@ -56,7 +56,10 @@ def _for_inputs(**fields: Any) -> dict[str, Any]:
 
 
 def _flighting_periods(window: int, duty_lo: float) -> tuple[int, int] | None:
-    """The widest preset period range (within 4..13) keeping >= 2 on-weeks in ``window``."""
+    """The widest ``(min(4, hi), hi)`` period range keeping >= 2 on-weeks in ``window``.
+
+    ``hi <= min(13, window // 2)``; windows under 8 weeks give ``(2, 2)`` or ``(3, 3)``.
+    """
     p_hi = min(13, window // 2)
     while p_hi >= 2:
         p_lo = min(4, p_hi)

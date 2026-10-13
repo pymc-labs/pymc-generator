@@ -180,7 +180,7 @@ def _check_compatible(
         fields_differing = [
             f.name
             for f in fields(FeatureDefinition)
-            if getattr(first_left, f.name) != getattr(first_right, f.name)
+            if f.compare and getattr(first_left, f.name) != getattr(first_right, f.name)
         ]
         raise ValueError(
             f"descriptor definitions differ between the {labels[0]} and the {labels[1]} for "
