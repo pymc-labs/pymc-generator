@@ -1,0 +1,13 @@
+{"event": "manifest_complete", "elapsed_s": 0.6012016690801829, "configurations": 12, "seed_sets": 3, "structures": 180, "planned_primary_candidates": 5940, "primary_candidates_executed": 0}
+{"event": "model_build_start", "elapsed_s": 0.6013672919943929, "method": "dynamic", "workload": 0, "repeat": 0}
+{"event": "model_build_complete", "elapsed_s": 4.780366108985618, "seconds": 4.178889279952273}
+{"event": "compile_start", "elapsed_s": 4.780436372151598, "cache": "empty isolated directory", "mode": "FAST_COMPILE"}
+{"event": "compile_complete", "elapsed_s": 36.17759467707947, "seconds": 31.39703203807585}
+{"event": "diagnostic_draw_start", "elapsed_s": 36.177674639970064, "cell": 0, "draws": 1, "seed": 1191790332}
+{"event": "diagnostic_draw_complete", "elapsed_s": 36.396563857095316, "cell": 0, "seconds": 0.21878254786133766, "draws": 1}
+{"event": "diagnostic_draw_start", "elapsed_s": 36.3966484030243, "cell": 1, "draws": 1, "seed": 1245328708}
+{"event": "diagnostic_draw_complete", "elapsed_s": 36.60995416203514, "cell": 1, "seconds": 0.21319605689495802, "draws": 1}
+{"event": "diagnostic_draw_start", "elapsed_s": 36.61002890695818, "cell": 0, "draws": 1, "seed": 1191790332}
+{"event": "diagnostic_draw_complete", "elapsed_s": 36.826030197087675, "cell": 0, "seconds": 0.21589549304917455, "draws": 1}
+{"event": "same_mode_intervening_task_replay_pass", "elapsed_s": 36.826223550131544, "fields": 24}
+{"event": "raw_array_readback_pass", "elapsed_s": 36.83199995197356, "sha256": "2af0cf1e49b47b1643804d5aa305e80fa469fa6513ac912df6ef74fd5dae3fb7"}

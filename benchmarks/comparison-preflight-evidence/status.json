@@ -1,0 +1,6 @@
+{
+  "status": "preflight_pass_only",
+  "diagnostic_draws": 3,
+  "primary_candidates": 0,
+  "remaining": "specialized prototype, controlled-input equivalence, all-method replay, invariants, identical acceptance, corpus normalization/validation, full bounded comparison"
+}
