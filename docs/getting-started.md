@@ -155,7 +155,7 @@ pg.write_scm_bundle(scm, "my_world/")
 #   true_components.csv    the full additive decomposition truth
 #   description.txt        the world's story
 #   dag.dot / dag.png      the causal graph
-#   timeseries.png  decomposition.png  channels.png
+#   timeseries.png  decomposition.png  treatments.png
 ```
 
 Or generate the full five-scenario inspection set from the command line:

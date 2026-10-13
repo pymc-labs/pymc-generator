@@ -10,7 +10,7 @@ maximum node counts, with every structural choice as a ``pm.Data`` input:
 
 * the ``g`` edge blocks and the per-node activity masks,
 * the carryover / saturation family ids,
-* the random-walk kernel widths.
+* the random-walk kernel widths and opt-in trajectory inclusion flags.
 
 That model compiles once per shard and then draws every cell by swapping those
 inputs. The cost is a denser graph — all candidate edges wired, all mechanism
@@ -33,10 +33,13 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 from pymc.pytensorf import convert_data
+from pytensor.graph import ancestors
 
 from .random_walk import walk_width_index
-from .sampler import SCMPrior
-from .symbolic_graph import build_symbolic_graph
+from .sampler import SATURATION_FAMILY_KEYS, SCMPrior
+from .slots import TRAJECTORY_COMPONENTS, TRAJECTORY_INPUTS
+from .symbolic_graph import build_symbolic_graph, inactive_zero
+from .trajectories import SCHEDULE_COMPONENTS, structural_key, trajectory_params
 from .world_model import (
     _apply_outcome_std_scale,
     _confounded_treatment_eps,
@@ -50,8 +53,8 @@ from .world_model import (
     _walk_priors,
 )
 
-#: The structural ``pm.Data`` slots compiled as positional draw-function inputs,
-#: in the order :func:`build_cell_inputs` emits them.
+#: The base structural ``pm.Data`` slots compiled as positional draw inputs.
+#: Config-admitted trajectory flags follow them in canonical component order.
 TEMPLATE_STRUCTURE_INPUT_NAMES: tuple[str, ...] = (
     "g_cy",
     "g_dc",
@@ -78,7 +81,8 @@ def check_template_supported(cfg: SCMPrior) -> None:
 
     Treatment shocks and prior conditioning both add per-world structure that is
     still baked into the graph, and a non-degenerate confounding range would need
-    its own input slot. Recipes using them must stay on the per-world path.
+    its own input slot. Composable trajectories and per-input texture inclusion
+    are supported through optional runtime flags.
     """
     if cfg.n_treatment_shocks:
         raise ValueError("template generation does not support treatment shocks yet")
@@ -91,6 +95,22 @@ def check_template_supported(cfg: SCMPrior) -> None:
                 "template generation requires a fixed confounding_strength; "
                 f"got range {cfg.confounding_strength_range}"
             )
+
+
+def _trajectory_input_names(cfg: SCMPrior) -> tuple[str, ...]:
+    """Runtime flags only for admitted schedules and fractional texture."""
+    probs = cfg.trajectory_inclusion_probs()
+    sizes = {"treatment": cfg.layout.n_treatments, "covariate": cfg.layout.n_covariates}
+    return tuple(
+        structural_key(input_type, component)
+        for input_type in TRAJECTORY_INPUTS
+        for component in TRAJECTORY_COMPONENTS
+        if sizes[input_type] > 0
+        and (
+            (component in SCHEDULE_COMPONENTS and probs[input_type][component] > 0.0)
+            or 0.0 < probs[input_type][component] < 1.0
+        )
+    )
 
 
 def _pad_to(values, width: int, dtype: str) -> np.ndarray:
@@ -142,6 +162,18 @@ def build_cell_inputs(
         "rw_width_c": _pad_to(_widths("smoothness_c"), n_treatments, "int64"),
         "rw_width_b": _widths("smoothness_b"),
     }
+    if cfg.treatment_reference_contribution_range is not None:
+        # Synthetic slots must stay inside the validated coefficient support.
+        padding_family = next(
+            i
+            for i, family in enumerate(SATURATION_FAMILY_KEYS)
+            if cfg.saturation_family_probs[family] > 0.0
+        )
+        payload["sat_family"][len(structural["sat_family"]) :] = padding_family
+    for name in _trajectory_input_names(cfg):
+        input_type = "covariate" if name.startswith("use_covariate_") else "treatment"
+        width = n_covariates if input_type == "covariate" else n_treatments
+        payload[name] = _pad_to(structural[name], width, "float64")
     # ``pm.Data`` normalizes integer arrays (int64 -> int32), so route the payload
     # through the same conversion; otherwise the compiled function rejects these
     # arrays for risking a precision loss.
@@ -151,22 +183,24 @@ def build_cell_inputs(
 def sample_cell_structures(cfg: SCMPrior, rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
     """Draw all structures up front, using active node counts for prior shapes.
 
-    Production instead interleaves each structure with draw-seed and support-mask
-    sampling. After the first cell these RNG schedules differ, so equal initial
-    seeds do not select the same sequence of production DAGs.
+    Active counts follow ``cfg.active_count_allocation`` through the same
+    helpers as production, so a stratified config covers the treatment ×
+    covariate grid here exactly as it does in a corpus. Production instead
+    interleaves each structure with draw-seed and support-mask sampling. After
+    the first cell these RNG schedules differ, so equal initial seeds do not
+    select the same sequence of production DAGs.
     """
+    from .active_counts import draw_active_counts, plan_active_counts
     from .sampler import _slice_g_active, sample_g_additive
     from .world_model import sample_structure
 
     layout = cfg.layout
+    plan = plan_active_counts(cfg, rng)
     cells: list[dict[str, np.ndarray]] = []
-    for _ in range(cfg.n_cells):
-        tr = cfg.n_treatments_active_range_effective
-        cv = cfg.n_covariates_active_range_effective
-        lt = cfg.n_latent_active_range_effective
-        n_treatments_active = int(rng.integers(tr[0], tr[1] + 1))
-        n_covariates_active = int(rng.integers(cv[0], cv[1] + 1))
-        n_latent_active = int(rng.integers(lt[0], lt[1] + 1))
+    for cell in range(cfg.n_cells):
+        n_treatments_active, n_covariates_active, n_latent_active = draw_active_counts(
+            cfg, rng, plan, cell
+        )
         g = sample_g_additive(
             rng,
             cfg,
@@ -210,7 +244,8 @@ def build_world_model_template(
     specs = _uniform_prior_specs(cfg, n_treatments, n_covariates, n_latent, None)
 
     with pm.Model() as model:
-        data = {name: pm.Data(name, init_inputs[name]) for name in TEMPLATE_STRUCTURE_INPUT_NAMES}
+        input_names = TEMPLATE_STRUCTURE_INPUT_NAMES + _trajectory_input_names(cfg)
+        data = {name: pm.Data(name, init_inputs[name]) for name in input_names}
         g_data = {
             key: data[key]
             for key in ("g_cy", "g_dc", "g_dz", "g_dy", "g_zy", "g_zc", "g_cc", "g_zz")
@@ -220,9 +255,18 @@ def build_world_model_template(
         }
 
         # Smoothness reaches the graph as a kernel-width index rather than a
-        # float, which is what keeps the walk operators out of the compiled
-        # structure. Texture flags stay concrete: they gate whole terms, and the
-        # supported configs enable them uniformly across treatments and covariates.
+        # float. Constant texture inclusion stays concrete, so defaults build no
+        # additional flag inputs or switches.
+        probs = cfg.trajectory_inclusion_probs()
+        sizes = {"treatment": n_treatments, "covariate": n_covariates}
+        flags = {
+            structural_key(input_type, component): data.get(
+                structural_key(input_type, component),
+                np.full(sizes[input_type], probs[input_type][component] == 1.0),
+            )
+            for input_type in TRAJECTORY_INPUTS
+            for component in TRAJECTORY_COMPONENTS
+        }
         rw = _walk_priors(
             cfg,
             {},
@@ -242,12 +286,14 @@ def build_world_model_template(
             specs,
             rw,
             c_level,
+            g=g_data,
             carryover_family=data["carryover_family"],
             sat_family=data["sat_family"],
-            use_hf=_texture_flag(cfg.treatment_hf_sigma_range, n_treatments),
-            use_pulse=_texture_flag(cfg.treatment_pulse_prob_range, n_treatments),
-            use_covariate_hf=_texture_flag(cfg.covariate_hf_sigma_range, n_covariates),
-            use_covariate_pulse=_texture_flag(cfg.covariate_pulse_prob_range, n_covariates),
+            use_hf=flags["use_hf"],
+            use_pulse=flags["use_pulse"],
+            use_covariate_hf=flags["use_covariate_hf"],
+            use_covariate_pulse=flags["use_covariate_pulse"],
+            dynamic_family=True,
         )
         _apply_outcome_std_scale(cfg, rw, g_data["g_cy"], params["beta"])
 
@@ -260,6 +306,16 @@ def build_world_model_template(
             params["covariate_pulse_prob"],
         )
         confounding_strength = _confounded_treatment_eps(cfg, eps)
+        trajectory = trajectory_params(
+            cfg,
+            flags,
+            n_treatments,
+            n_covariates,
+            n_time_steps,
+            dynamic_flags=True,
+        )
+        if trajectory is not None:
+            params["trajectory"] = trajectory
 
         graph = build_symbolic_graph(
             g_data,
@@ -279,18 +335,38 @@ def build_world_model_template(
         out_names = tuple(outputs)
         for name in out_names:
             pm.Deterministic(name, outputs[name])
-        param_names = _register_param_reports(params, rw, c_level, confounding_strength)
+        report_params = params
+        if trajectory is not None:
+            # Reports zero padded nodes without altering the parameter operands
+            # used by the graph (e.g. periods must stay positive under switches).
+            report_trajectory = {}
+            for input_type, spec in trajectory.items():
+                active_flag = active_data[f"active_{input_type}"]
+                report_trajectory[input_type] = {
+                    key: (
+                        value
+                        if key == "use"
+                        else {
+                            field: (
+                                leaf
+                                if field == "count"
+                                else inactive_zero(active_flag, pt.as_tensor_variable(leaf))
+                            )
+                            for field, leaf in value.items()
+                        }
+                    )
+                    for key, value in spec.items()
+                }
+            report_params = {**params, "trajectory": report_trajectory}
+        param_names = _register_param_reports(
+            report_params,
+            rw,
+            c_level,
+            confounding_strength,
+            cfg=cfg,
+        )
 
     return model, out_names, param_names
-
-
-def _texture_flag(value_range: tuple[float, float], n_nodes: int) -> np.ndarray:
-    """Whether a texture term is enabled anywhere in this config.
-
-    The flag gates a whole additive term in the graph, so it must be concrete.
-    A config whose upper bound is zero can never produce the term.
-    """
-    return np.full(n_nodes, float(value_range[1]) > 0.0)
 
 
 @dataclass(frozen=True)
@@ -326,13 +402,26 @@ def compile_template_draw_fn(
     model: pm.Model,
     out_names: tuple[str, ...],
     *,
-    input_names: tuple[str, ...] = TEMPLATE_STRUCTURE_INPUT_NAMES,
+    input_names: tuple[str, ...] | None = None,
     mode: str = "FAST_COMPILE",
 ) -> TemplateDrawFn:
-    """Compile the template's draw function with structure as positional inputs."""
+    """Compile with only structure inputs reached by the requested outputs."""
+    if input_names is None:
+        input_names = TEMPLATE_STRUCTURE_INPUT_NAMES + tuple(
+            name
+            for input_type in TRAJECTORY_INPUTS
+            for component in TRAJECTORY_COMPONENTS
+            if (name := structural_key(input_type, component)) in model.named_vars
+        )
     with model:
         out_vars = [model[name] for name in out_names]
         input_vars = [model[name] for name in input_names]
+    # One-slot graphs have no C->C / Z->Z recursion, and parameter-only draws
+    # may read no structure at all. Do not pass absent dependencies to compile.
+    reached = set(ancestors(out_vars))
+    inputs = [(name, var) for name, var in zip(input_names, input_vars) if var in reached]
+    input_names = tuple(name for name, _ in inputs)
+    input_vars = [var for _, var in inputs]
     fn, ordered_rngs = _get_cached_draw_fn(
         model,
         out_vars,

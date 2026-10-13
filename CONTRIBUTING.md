@@ -55,15 +55,18 @@ metadata, so their values are heterogeneous rather than uniformly ndarrays.
 
 The docs are a MkDocs Material site under `docs/`. The API pages are generated
 from docstrings (mkdocstrings), the guide pages execute real Python and render
-plots inline at build time (markdown-exec), and both notebooks under
-`docs/examples/` are executed by mkdocs-jupyter. The docs require the full
-modeling stack and a Jupyter kernel named `pymc-generator`:
+plots inline at build time (markdown-exec), and the notebooks in
+`docs/examples/` are executed by mkdocs-jupyter. Development notebooks live in
+`docs/examples/dev/`: `exclude_docs` in `mkdocs.yml` keeps them out of the site,
+so the build neither renders nor executes them. To publish one, move it to
+`docs/examples/` and add it to `nav`. The docs require the full modeling stack
+and a Jupyter kernel named `pymc-generator`:
 
 ```bash
 uv sync --locked --extra dev --extra docs
-uv run --no-sync python -m ipykernel install --user --name pymc-generator
-uv run --no-sync mkdocs serve            # http://127.0.0.1:8000
-uv run --no-sync mkdocs build --strict   # fails on documentation build warnings
+.venv/bin/python -m ipykernel install --prefix "$PWD/.venv" --name pymc-generator
+.venv/bin/python -m mkdocs serve            # http://127.0.0.1:8000
+.venv/bin/python -m mkdocs build --strict   # fails on documentation build warnings
 ```
 
 Edit the `.ipynb` files directly: they are the canonical sources, not generated
@@ -71,12 +74,18 @@ copies of Python string literals. Commit source cells without outputs, execution
 counters, or widget state. Clear them before committing:
 
 ```bash
-uv run --no-sync jupyter nbconvert --to notebook --inplace \
+.venv/bin/python -m nbconvert --to notebook --inplace \
   --ClearOutputPreprocessor.enabled=True \
   --ClearMetadataPreprocessor.enabled=True \
   --ClearMetadataPreprocessor.preserve_nb_metadata_mask='{("language_info", "name"), "kernelspec"}' \
-  docs/examples/*.ipynb
+  --ClearMetadataPreprocessor.preserve_cell_metadata_mask='{"tags"}' \
+  docs/examples/*.ipynb docs/examples/dev/*.ipynb
 ```
+
+Keep cell tags: the trajectory showcase in `docs/examples/dev/` uses them for
+report-only execution in a fresh kernel without generation. In a published
+notebook, `hide-input` removes a cell's code from the rendered page and keeps
+its outputs.
 
 A full build samples worlds and executes the recovery case study's three
 four-chain MCMC fits. Allow for their runtime and inspect their actual warnings
@@ -90,6 +99,38 @@ locked environment. Timing diagnostics are excluded from persisted shards.
 RNG draw order is deliberate: disabled features consume no RNG. Changes to
 draw order, numerical dependencies, or generation semantics require explicit
 evidence and migration notes; cross-platform bitwise equality is not promised.
+
+With every opt-in feature off, generation must reproduce main at `ce068d5` byte
+for byte. The slow test `tests/test_main_reproduction.py` runs
+`tests/_golden_probe.py` once against main's package tree and once against the
+checkout, with the same interpreter and dependencies, and compares the dtype,
+shape and bytes of every array its features-off matrix records: seeded corpora
+(with their raw candidate batches), `sample_scm` worlds, fixed-point oracle
+evaluations, `DataGenerator` batches and template draws. Main's tree comes from
+`PYMC_GENERATOR_BASELINE_TREE`, a checkout
+of `ce068d598fc0438b511c265ef09d7ba33354cb48` (CI makes one). A value that is set
+but unusable fails the test: no `pymc_generator/`, this checkout, or any file
+differing from `ce068d5`'s pinned blob ids. Unset, the test writes `ce068d5`'s
+`pymc_generator/` blobs from the clone's git objects; a shallow clone needs
+`git fetch origin ce068d598fc0438b511c265ef09d7ba33354cb48` first. Without the
+commit, or outside a git checkout such as an sdist, it skips. Run it with
+`uv run --no-sync pytest tests/test_main_reproduction.py --runslow -m slow`.
+
+The fast `tests/test_rng_owner_contract.py` requires this tree to reseed random
+variables in main's order — PyMC assigns streams by discovery order, so this is
+the platform-independent part of the contract — for every carryover × saturation
+pair of a probe cell (corpus cell, `sample_scm` world and texture-off
+`sample_scm` world), a shock corpus and three template layouts, and checks that
+the measured order is the list a real draw reseeds. The orders live in the generated
+`tests/_rng_owner_baseline.py`. Regenerate it only from a checkout of main at
+`$MAIN`, from a neutral directory, then confirm this tree still reproduces it
+(the diff must be empty):
+
+```bash
+cd /tmp && OUT="$REPO/tests/_rng_owner_baseline.py"
+PYTHONPATH="$MAIN" "$REPO/.venv/bin/python" "$REPO/tests/_rng_owners.py" > "$OUT"
+PYTHONPATH="$REPO" "$REPO/.venv/bin/python" "$REPO/tests/_rng_owners.py" | diff - "$OUT"
+```
 
 For scientific or numerical changes, compare representative generated arrays
 before and after, record dependency versions and seeds, and explain any intended

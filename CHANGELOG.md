@@ -6,6 +6,370 @@ read the migration notes before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
+  The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not
+  rendered on the documentation site) generates N worlds (10 by default) from
+  one block of parameter ranges and reads only the saved shard to plot, world
+  by world:
+  channel and control counts spanning 1–10 on both axes (an integer stratified
+  design, every count equally often, no pair repeated up to 100 worlds), every
+  generation parameter on the scale its prior is drawn on, the trend parameter's
+  down/flat/up split next to the realized direction, exact-zero weeks per input
+  from 0 to 100, and each world's channel/control/baseline share of the outcome.
+  References are the configured laws at the realized N (for the shares, the
+  uniform-composition ideal) with family-wise envelopes of at least 90%, and the
+  report prints how many panels chance alone should push outside. Every active
+  input drives the outcome directly; zeros come from one flighting law tuned to
+  near-even zero counts. A `.config.json` written next to the shard holds the
+  effective configuration and the shard's SHA-256; report-only execution on any
+  valid shard degrades to observed panels when it is missing.
+- **Opt-in walk-parameter truth in corpora.** `SCMPrior.record_walk_parameters=True`
+  (default `False`) stores every world's realised walk means, absolute and
+  relative standard deviations, outcome-noise scales and smoothness as float64
+  arrays (`slots.WALK_ARRAY_FIELDS`), with `diagnostics["walk_parameters"]`
+  echoing their priors (`SCMPrior.walk_parameter_metadata()`). The values come
+  from the accepted draw. They are requested ahead of the legacy outputs and never
+  gate acceptance, so every other array, label and diagnostic is unchanged.
+  `validate_corpus` checks the arrays and block together, zero padding, prior
+  supports, and the treatment level and scale identities. Corpus generation only;
+  the schema version stays 5.
+- **Richer worlds end-to-end (#27).** Ordinary generation, `sample_scm`, and
+  reusable templates support all eight trajectory components and fractional
+  per-input inclusion alongside richer mechanism priors. Template flags are
+  per-cell inputs; padded schedule outputs are zero. Natural-path response
+  evaluation uses the same dynamic families. Dynamic parent sums keep the n-ary
+  addition and its random-stream order; a Python-backend-only rewrite splits
+  additions wider than the backend's 32-operand limit, so large templates still
+  run under `FAST_COMPILE`.
+- **Exact SCM replay.** `SCM.primitive_parameters` exposes defensive copies of
+  the accepted primitive prior draw and raw full-horizon innovations.
+  `SCM.replay()` rebuilds and executes the generator at those runtime-bound
+  values, preserving its transform arithmetic even at steep Hill knees.
+  Nested trajectory parameters and schedule-aware equation audits are retained
+  in each sampled world. Fixed-input oracles consume already-scheduled inputs
+  without applying schedules again; their existing latent-mode and burn-in
+  qualifications remain unchanged.
+  Generated descriptions point to primitive-bound replay rather than derived
+  inspection/intervention parameters.
+- **Corpus schema v5 (breaking).** New continuous trajectory leaves and opt-in
+  mechanism shapes, coefficients, reference targets/inputs/responses and exact
+  saturation anchors are float64; integer event metadata is int64. Existing
+  feature/schedule dtypes remain unchanged. Optional blocks declare their field
+  inventories and role-specific jump counts; validation checks domains,
+  zero padding, schedule reconstruction and reference consistency.
+  Reference checks preserve correctly rounded nonzero subnormal coefficients
+  instead of requiring their rounded products to recover targets exactly.
+  `load_corpus` now rejects every pre-v5 or versionless archive with a clear
+  version error, rather than migrating or zero-filling missing truth.
+- **Richer-prior numerical domains.** Under opt-in mechanism priors, rescaled
+  relative-noise norms and final mantissa/exponent products retain representable
+  tiny and subnormal amplitudes without floors or premature rounding; default
+  recipes keep `std * sqrt(sum((g_cy * beta)**2))`. Their analytic pullbacks avoid
+  tiny-scale denominator squares and gradient-product rounding. Bounded logistic
+  evaluation and support
+  bounds preserve subnormal lambda products even when an input/reference ratio
+  overflows. Under opt-in mechanism priors, relative tanh and root responses rescue
+  underflowed/overflowed ratios before bounded/concave evaluation, and MM retains
+  representable responses and complete weighted shape derivatives across
+  denominator overflow and subnormal products; default recipes keep the
+  pymc-marketing library graphs.
+  Hill and logistic pullbacks combine the incoming cotangent, relative factors
+  and exponential tail before exponentiation, retaining finite complete
+  posterior derivatives without changing the forward curves.
+  Hill's stabilized log-sum denominator is explicit at the declared PyTensor
+  minimum while preserving the locked-runtime forward rounding.
+  Subnormal logistic responses retain the complete half-argument and exact binary
+  midpoint comparisons, preventing double rounding from erasing a response that
+  admitted coefficients can amplify. Outside that smallest-response boundary,
+  the existing `expm1` law and rounding are unchanged.
+  Persisted primitive shapes, seasonal periods/amplitudes, signed trend changes,
+  covariate jump sizes, raw coefficients and reference recipes retain their
+  admitted domains without capping larger derived anchors. Reference
+  validation rejects nonzero target erasure. Default-array stability is not a
+  cross-schema metadata or archive-byte identity promise.
+  Corpus and oracle guides use the current `covariates`, `latent_unobserved`
+  and `outcome` API identifiers.
+- **Controllable coverage of active treatment × covariate counts (#26).**
+  `SCMPrior.active_count_allocation` keeps independent per-cell draws
+  (`"independent"`, the default) or, with `"stratified"`, allocates a corpus's
+  cells over the grid of the effective `n_treatments_active` ×
+  `n_covariates_active` ranges by `active_count_weights` (rows are treatment
+  counts, columns covariate counts; `None` is uniform);
+  `SCMPrior.active_count_grid` and `active_count_weight_matrix()` expose the
+  grid and the validated weights. Every combination gets an exact rational
+  target: zero for zero weight; at least one cell for each positive weight
+  once `n_cells` reaches their number, at most one below it; otherwise its
+  share of the remaining cells. Counts round the targets down or up by
+  systematic sampling in a random order, so they sum to `n_cells`, each
+  count's expectation is its target, whole-number targets are met exactly, and
+  uniform weights keep counts within one of each other and cover the whole
+  grid once `n_cells` reaches its size; the allocated combinations are then
+  shuffled over the cells. Latent counts stay independent per-cell draws.
+  Weights are nested lists or tuples (arrays are rejected; use `.tolist()`).
+  Both fields are validated in either mode (weight errors name the expected
+  grid shape); the weights are used only when stratified.
+  `sample_prior_predictive(n=)` and `DataGenerator.generate` allocate over the
+  re-derived cell count and keep every generated cell. `iter_batches`
+  allocates each batch on its own, so with non-uniform weights the union
+  follows the weights only when no batch's coverage floor or cap moves a
+  target off its plain quota `n_cells·w/Σw`; in practice that needs many more
+  cells per batch than positive-weight combinations, and more still for
+  skewed weights. The cell-level validation split stays a
+  random subset of cells, and `sample_scm` (one world, every node active)
+  ignores the allocation. The experimental template path
+  (`world_model_template.sample_cell_structures`) allocates through the same
+  helpers, checks the allocation, active ranges and weights itself, and one
+  compiled template serves every combination. A cell that
+  exhausts the realism filter now names its active counts in the
+  `RuntimeError`.
+- Stratified corpora carry `diagnostics["active_count_coverage"]`: the
+  allocation, both grid axes, the weights, and per-combination `n_cells` /
+  `n_worlds` counted from the stored masks after any `n=` truncation.
+  `validate_corpus` checks its keys, axes and weights, recounts it exactly from
+  `treatment_active_mask` / `covariate_active_mask` / `cell_id`, requires every
+  task inside the grid, and checks that the cell counts round the targets of
+  the recorded weights. The new public
+  `pymc_generator.active_count_coverage(corpus, prior=None)` reports the same
+  counts for any corpus, with unreached combinations shown as zeros; it reads
+  the grid from `prior` when given, otherwise from the stored block, so
+  independent corpora need `prior=`. **Schema and RNG impact:** no schema-version
+  bump — the block is optional. Stratified allocation seeds its own stream
+  with one draw from the corpus RNG and skips the per-cell treatment and
+  covariate draws, so at the same seed it changes every later structure draw
+  (see *Seeds and randomness* under active-count coverage; #28). For #26 in
+  isolation before this end-to-end v5 cutover,
+  default same-seed corpora, diagnostics, saved shards, `sample_scm` worlds and
+  template payloads and draws were bit-identical to before;
+  `write_scenario_bundles`' `recipe.json` lists the two new `SCMPrior` fields
+  at their defaults.
+- Richer mechanism priors (#25): validated per-family
+  `SCMPrior.saturation_prior_ranges`, opt-in `mm_scale_prior="log_uniform"`,
+  and treatment/control reference-contribution priors. Drawn targets determine
+  `beta` / `rho_zy` at parameter-only reference inputs rather than a statistic
+  of a realized series. Targets are nominal, before edge gates and control
+  floors; treatment references are post-carryover. Generation, the reusable
+  template, oracle, replay and world audits share these semantics. Optional
+  corpus diagnostics preserve the effective prior settings; world and bundle
+  descriptions record drawn targets and inputs. Numerical validation rejects
+  overflowing or erased nonzero derived coefficients (including interior draws
+  of zero-inclusive targets), nonpositive reference inputs/responses, subnormal
+  treatment reference inputs, nonnormal ideal treatment-response support, zero
+  MM denominators and conditioning widths that float32
+  `prior_cond` labels cannot resolve; runtime reference-domain failures raise
+  the same named error in single worlds and corpora, never a silent redraw.
+  Treatment coefficients use the shared response at the actual reference
+  input; opt-in Hill, logistic, Michaelis–Menten, tanh and root responses use
+  stable evaluation, log-uniform MM
+  scales stay inside their configured bounds, and opt-in descriptions keep
+  significant digits. Defaults retain the former shape supports, uniform MM
+  law, graph arithmetic, RNG consumption, seeded numerical arrays and
+  description number formatting; descriptions additionally state the effective
+  `mm_scale_prior`.
+  Documentation clarifies that geometric carryover sum-normalizes kernel
+  weights, not the data; outputs stay in input units.
+- Composable per-input trajectories (#24). Every treatment and covariate can
+  carry, independently per input, any subset of eight components — the existing
+  `hf` noise and `pulse`s, `onset` / `offset` / `flighting` on/off gates,
+  `level_jump`s, a `seasonal` sinusoid and a `trend` — each with its own
+  per-cell inclusion probability (`{treatment,covariate}_<component>_inclusion_prob`;
+  `hf` / `pulse` default to `1.0`, the rest to `0.0`) and priors on `SCMPrior`
+  (`*_onset_frac_range`, `*_offset_frac_range`, `*_flighting_period_weeks_range`,
+  `*_flighting_duty_range`, `*_level_jump_count`,
+  `treatment_level_jump_factor_range`, `covariate_level_jump_size_range`,
+  `*_seasonal_amplitude_range`, `*_seasonal_period_weeks_range`,
+  `treatment_trend_log_change_range`, `covariate_trend_change_range`), plus
+  `trajectory_inclusion_probs()`, `trajectory_components_enabled` and
+  `trajectory_metadata_enabled`. Covariates compose additively and stay signed;
+  treatments compose additively in log-level (multiplicatively on the series),
+  stay `>= 0`, are exactly
+  `0.0` on off-weeks outside shocks and double exactly under a factor-2 jump.
+  Every decomposition variant shares the schedule, so the identities are
+  unchanged, and shocks still override it. Validation keeps at least two
+  on-weeks of every gated input inside each task's support prefix, requires a
+  full flighting period inside the reported window
+  (`*_flighting_period_weeks_range[1] <= n_time_steps`) so every flighting input
+  switches off in it, bounds a treatment's log-level swing at
+  `TRAJECTORY_MAX_LOG_SHIFT = 3.0` (about ×20; inclusive, with a `1e-12`
+  relative tolerance so a swing of exactly 3.0 on paper passes despite
+  rounding), and requires the summed level reach to fit float32 corpus storage
+  (`rw_positive_mean_range[1] * exp(swing)` for treatments,
+  `max|rw_covariate_mean_range|` plus the included covariate level terms for
+  covariates); with schedule components the corpus also rejects any draw that
+  would not survive the float32 cast, instead of storing `inf`.
+  With schedules enabled, the realism filter's CV and spike checks read the
+  schedule-free natural path (a scheduled treatment may also clear the CV floor
+  on its own schedule); finiteness and non-negative outcome stay on the actual
+  series. `make_scm_prior(trajectories=...)` adds `"composable"` (every
+  component at moderate prevalence, with wider input level and variation
+  priors) and the eight archetypes in `presets.TRAJECTORY_ARCHETYPES`
+  (`always_on_spikes`, `periodic_on_off`, `delayed_start`, `ramp_up`,
+  `decay_to_zero`, `level_doubling`, `seasonal`, `trend`); their gate windows,
+  flighting periods and seasonal period follow `n_time_steps` / `query_frac`
+  (with the same `n_query` rounding `SCMPrior` uses, e.g. for a float32 value),
+  and an infeasible horizon raises `ValueError` before `**overrides` apply
+  (they cannot rescue it; set the trajectory knobs directly instead), naming the
+  next longer horizon at which the complete config validates (a bounded search:
+  100,000 horizons and at most 1,000 full validations; feasibility is not
+  monotone in the horizon) and attaching the config's own validation error at
+  the requested horizon, if any, as `__cause__`.
+  The default `"texture"` is unchanged.
+- Corpora from configs that set any `*_inclusion_prob` away from its default
+  (`SCMPrior.trajectory_metadata_enabled`) carry six optional arrays —
+  `treatment_components` / `covariate_components` flags, `treatment_activity` /
+  `covariate_activity` gate schedules and `treatment_log_level_shift` /
+  `covariate_level_shift` — and `diagnostics["trajectory"]` (component layout,
+  effective inclusion probabilities, realised prevalence over active inputs and
+  its denominators). `validate_corpus` checks the block end to end:
+  co-presence, shapes and dtypes, binary flags and activity, zero padding,
+  per-cell constant flags, activity `1` / shift `0.0` on active inputs without
+  a gate / level component and, conversely, at least one off-week in the window
+  and at least two on-weeks in the task's support window for any gated input,
+  week 0 off under `onset` and the last week off under `offset`;
+  `treatment_raw == 0` on activity-off weeks outside shocks and
+  `covariates == 0` on covariate off-weeks; the layout; the inclusion echo,
+  where an echo of exactly `0.0` or `1.0` requires prevalence `0` or `1`; and
+  an exact prevalence recomputation. It also gains one
+  global rule, `treatment_raw >= 0`, which every corpus the generator produced
+  before already satisfies, so no existing corpus is newly rejected.
+  **Schema and RNG impact:** the block initially used optional v4 arrays;
+  #27 now adds realised component truth under schema v5 (see above).
+  Default trajectory knobs introduce no schedule priors or per-cell switches.
+  Fractional inclusion flags draw from
+  child streams spawned off the corpus RNG and consume none of its state, but a
+  cell that wires a component generally reaches different PyMC random streams,
+  so its other draws change at the same seed (PyMC assigns streams by discovery
+  order; see the randomness docs, #28), and corpora of two configs stay aligned
+  only while their acceptance counts match.
+  #27 extends this support to `sample_scm`, descriptions, bundles, exact replay,
+  fixed-input oracles and the experimental template, including fractional
+  per-input `hf` / `pulse` inclusion.
+- Compare worlds with each other. `world_descriptors` turns a corpus, a list of
+  `SCM` worlds or observed datasets (`ObservedWorlds`) into one row of named,
+  mask-aware statistics per world — level-to-variation, CV, zero fraction,
+  roughness, spikes, autocorrelation and pairwise correlation in levels and
+  differences, reduced across the active nodes of each role — with explicit
+  valid/ineligible/undefined status and optional, unobservable contribution
+  shares. Four independent functions analyse those rows:
+  `summarize_descriptors` (distributions per stratum), `bin_counts` (worlds and
+  distinct generation cells per explicit region), `nearest_worlds` (similarity
+  on a reference-fitted `DescriptorScale`, with self, same-cell and stratum
+  exclusions) and `compare_descriptors` (midrank percentiles and distribution
+  shifts against a reference). Post-hoc only: no generation, RNG or schema
+  change, and no information, significance or optimality claims.
+- **Main-reproduction guards (#28).** The slow
+  `tests/test_main_reproduction.py` compares, byte for byte in the same
+  environment, a features-off matrix against main `ce068d5`: 35 corpus
+  configurations (with raw candidate draws), 9 `sample_scm` worlds at two
+  seeds, fixed-point oracle evaluations for 5 worlds in both latent modes,
+  `DataGenerator` batches and 9 template layouts; CI's slow job checks main out
+  for it.
+  The fast `tests/test_rng_owner_contract.py` pins main's random-stream owner
+  order by RV name for every carryover × saturation pair, shocks, templates,
+  texture-off worlds and inert schedules, and checks that this is the order a
+  real draw reseeds; `tests/test_trajectories.py` restores the corpus owner
+  contract #27 removed.
+  `tests/test_control_identity.py` pins every covariate column as the literal
+  `(g_zy * rho_zy) * Z` on the reported covariates, and the outcome as reading
+  exactly that Z, with and without trajectory components.
+- Reusable posterior-oracle sampling (`sample_oracle`, `build_oracle_template`,
+  `compile_oracle`, `OracleSamplingConfig`). Oracle templates expose all
+  compatible changing inputs as named `pm.Data`, support one Nutpie/Numba
+  compilation across compatible fits, fail closed on structural changes, and
+  emit posterior-free data/template/compile receipts. Because those inputs are
+  runtime data, features-off oracle evaluations match main `ce068d5` to
+  floating-point rounding rather than byte for byte (the main-reproduction test
+  allows a 1e-10 relative tolerance for them only).
+
+### Changed — migration notes
+
+- **Feature-enabled same-seed outputs can differ from the #27 pre-release (#28).**
+  Restoring main's default graphs also affects feature-enabled configurations
+  that use no opt-in mechanism setting — composable trajectories, fractional
+  texture inclusion and active-count allocation — which return to main's
+  saturation arithmetic, relative-noise product and stream order. Every
+  template, including mechanism-prior templates, returns to main's parent-sum
+  order and summation. `sample_scm` worlds can draw different streams where
+  their stream reference or request changed: worlds that admit a schedule
+  component (all such worlds without shocks; with shocks, those whose inputs
+  carry one) and worlds that leave a texture innovation unused (a texture range
+  at zero, or `hf` / `pulse` inclusion below 1). Their seeded draws differ from
+  the #27 branch. Opt-in mechanism-prior ordinary corpora and oracles are
+  unchanged, and so are their other `sample_scm` worlds. With every feature
+  off, ordinary corpora (including raw candidate draws), `sample_scm` worlds,
+  `DataGenerator` batches and template draws reproduce main `ce068d5` byte for
+  byte in the same environment; fixed-point oracle evaluations match it to
+  rounding once Oracle inputs are runtime data (reusable Oracle sampling).
+- **Template throughput returns to main's (#28).** The #27 dot-product parent
+  sums cut template candidate time by roughly 30% but changed every template
+  draw; restoring main's n-ary sums restores main's speed.
+- **`pymc_generator.mechanisms.SATURATION_PRIOR_RANGES` removed (breaking).**
+  Saturation shape supports are configuration, not module state: read
+  `SCMPrior().saturation_prior_ranges` (or a config's own mapping) instead.
+  Importing the old constant raises `ImportError`. Enabled prior conditioning
+  additionally rejects width lower bounds at or below `8 * eps32 * max|support|`,
+  which float32 corpus labels cannot resolve; with conditioning disabled, only
+  explicitly configured width ranges are checked.
+
+### Fixed
+
+- **`sample_scm` with a texture term off keeps main's leftover streams (#28).**
+  #27 appended every primitive random variable to the world's draw request.
+  PyMC's draw walk reaches the last-requested names first and appends streams
+  the reference does not reach in that order, so the streams main gave unused
+  texture innovations and unused-family shape parameters moved: with any texture
+  range at zero — including `SCMPrior()` defaults — `SCM.exogenous` and
+  `SCM.params` differed from main while `SCM.data` did not. Primitives main never
+  requested now lead the request. The golden test's `sample_scm` section and the
+  owner contract now include texture-off worlds.
+- **`sample_scm` keeps default streams while admitted schedule components are
+  carried by no input (#28).** The world's stream reference listed the schedule
+  audit outputs (`treatment_activity` … `outcome_natural`) among the legacy
+  outputs. Without treatment shocks, admitting a schedule component that no
+  input carries therefore reassigned many random streams (7–19 of 39 in
+  measured worlds). Those outputs are now left out of the reference, so
+  variables only they reach are appended — the effect corpus generation gets by
+  requesting them first. Nothing changes with every feature off; feature-enabled
+  worlds that admit a schedule component can differ from the #27 pre-release
+  (see the migration note).
+- **Template parent sums reproduce main again (#28).** #27 replaced the
+  template's n-ary parent sums with `pt.dot`. PyMC's draw walk then reached
+  coefficients before parents and reassigned 9 of 39 random streams in the
+  measured layout, and the accumulation order changed by ulps, so every template
+  draw differed from main; mechanism-prior templates changed their parent-sum
+  order and rounding too. The n-ary sums are restored; to keep large templates
+  running, Python-backend compilation splits only Elemwise additions wider than
+  its 32-operand limit, which could not run before.
+- **Default relative outcome noise is main's literal product again (#28).**
+  Unless an opt-in mechanism setting is active, `rw_b_std` and `rw_y_std` are
+  `std * sqrt(sum((g_cy * beta)**2))` in generation, templates and both oracle
+  modes. The #27 mantissa/exponent product differed from it by up to 3 ulp in
+  measured worlds and was opaque to the canonicalizer that flattens the baseline
+  walk's scale, so every relative-noise world drifted in its noise, baseline and
+  outcome. It now
+  applies only under opt-in mechanism settings; raw ranges reaching subnormal
+  noise products need such a setting to keep extended-range arithmetic.
+- **Default MM, tanh and root saturation reproduce main again (#28).** The #27
+  scalar ops had replaced the default library graphs. MM's node visited its
+  reference and kappa before its input, so PyMC assigned different random streams
+  and whole same-seed worlds changed whenever an MM treatment's input reached an
+  undrawn variable; the opaque node also blocked the library's fold of the
+  downstream gate into the quotient (1–2 ulp). tanh evaluated `(x/r)/c` instead
+  of the canonicalized `x/(r·c)` (1–3 ulp), and root's scalar op rounded its
+  power 1–4 ulp differently under the Numba backend (ulp counts from measured
+  worlds); inside oracle graphs the opaque root node and its analytic pullback
+  also changed contributions, densities and gradients in both backends (sampled
+  corpora were unaffected).
+  Defaults are the library graphs again; the scalar ops are now
+  `stable_michaelis_menten_kappa_relative`, `stable_tanh_kappa_relative` and
+  `stable_root_kappa_relative` in the new `mechanisms.STABLE_SATURATION_FAMILIES`,
+  selected with the stable Hill and logistic forms only when an opt-in mechanism
+  setting is active.
+- Reusable world-model templates compile only the structure inputs their
+  requested outputs reach, so a single-treatment template no longer fails with
+  an unused-input error. Templates that already compiled draw identical arrays.
+
 ## [0.0.2] - 2026-09-18
 
 ### Added
