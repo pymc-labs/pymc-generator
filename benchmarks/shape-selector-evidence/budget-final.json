@@ -1,0 +1,8 @@
+{
+  "start_epoch": 1791932009,
+  "recorded_epoch": 1791932520.651289,
+  "elapsed_including_preflight_execution_and_report_s": 511.65128898620605,
+  "full_deadline": 1791932609,
+  "status": "completed_diagnostic_not_adopted_distribution",
+  "retained_bytes_before_final_ledger": 11443
+}

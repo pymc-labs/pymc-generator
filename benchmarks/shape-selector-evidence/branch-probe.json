@@ -1,0 +1,78 @@
+{
+  "shapes": [
+    "plain",
+    "seasonal",
+    "trend",
+    "flighting",
+    "onset",
+    "offset",
+    "level_jump"
+  ],
+  "executed": {
+    "eager": [
+      [
+        1,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        1,
+        4
+      ],
+      [
+        1,
+        5
+      ],
+      [
+        1,
+        6
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        2
+      ],
+      [
+        0,
+        3
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        0,
+        5
+      ],
+      [
+        0,
+        6
+      ]
+    ],
+    "lazy": [
+      [
+        0,
+        2
+      ]
+    ]
+  },
+  "explanation": "two slots, seven branches, second slot inactive; lazy executes only selected active branch"
+}

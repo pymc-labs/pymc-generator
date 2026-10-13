@@ -1,0 +1,287 @@
+{
+  "status": "pass",
+  "shapes": [
+    "plain",
+    "seasonal",
+    "trend",
+    "flighting",
+    "onset",
+    "offset",
+    "level_jump"
+  ],
+  "compile_s": {
+    "eager": 25.146247040014714,
+    "lazy": 1.7156921250279993
+  },
+  "compile_count_per_method": 1,
+  "slots": 25,
+  "weeks": 108,
+  "correctness_cases": 512,
+  "branch_probe": {
+    "eager": [
+      [
+        1,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        1,
+        4
+      ],
+      [
+        1,
+        5
+      ],
+      [
+        1,
+        6
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        2
+      ],
+      [
+        0,
+        3
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        0,
+        5
+      ],
+      [
+        0,
+        6
+      ]
+    ],
+    "lazy": [
+      [
+        0,
+        2
+      ]
+    ]
+  },
+  "timings": [
+    {
+      "case": "all_seasonal",
+      "repeat": 0,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.3219801939558238,
+      "milliseconds_per_call": 10.327970265279873
+    },
+    {
+      "case": "all_seasonal",
+      "repeat": 0,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.7319560551550239,
+      "milliseconds_per_call": 5.7184066808986245
+    },
+    {
+      "case": "all_seasonal",
+      "repeat": 1,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.724689353024587,
+      "milliseconds_per_call": 5.661635570504586
+    },
+    {
+      "case": "all_seasonal",
+      "repeat": 1,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.293867324013263,
+      "milliseconds_per_call": 10.108338468853617
+    },
+    {
+      "case": "all_seasonal",
+      "repeat": 2,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.303835237864405,
+      "milliseconds_per_call": 10.186212795815663
+    },
+    {
+      "case": "all_seasonal",
+      "repeat": 2,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.7462308339308947,
+      "milliseconds_per_call": 5.829928390085115
+    },
+    {
+      "case": "all_trend",
+      "repeat": 0,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.319157904945314,
+      "milliseconds_per_call": 10.305921132385265
+    },
+    {
+      "case": "all_trend",
+      "repeat": 0,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.5871148209553212,
+      "milliseconds_per_call": 4.586834538713447
+    },
+    {
+      "case": "all_trend",
+      "repeat": 1,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.5695712710730731,
+      "milliseconds_per_call": 4.449775555258384
+    },
+    {
+      "case": "all_trend",
+      "repeat": 1,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.3593940939754248,
+      "milliseconds_per_call": 10.620266359183006
+    },
+    {
+      "case": "all_trend",
+      "repeat": 2,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.3287053750827909,
+      "milliseconds_per_call": 10.380510742834304
+    },
+    {
+      "case": "all_trend",
+      "repeat": 2,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.5631344709545374,
+      "milliseconds_per_call": 4.399488054332323
+    },
+    {
+      "case": "mixed_full",
+      "repeat": 0,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.2999072431121022,
+      "milliseconds_per_call": 10.155525336813298
+    },
+    {
+      "case": "mixed_full",
+      "repeat": 0,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.5467581187840551,
+      "milliseconds_per_call": 4.271547803000431
+    },
+    {
+      "case": "mixed_full",
+      "repeat": 1,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.5615747419651598,
+      "milliseconds_per_call": 4.387302671602811
+    },
+    {
+      "case": "mixed_full",
+      "repeat": 1,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.2935747201554477,
+      "milliseconds_per_call": 10.106052501214435
+    },
+    {
+      "case": "mixed_full",
+      "repeat": 2,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.3142912769690156,
+      "milliseconds_per_call": 10.267900601320434
+    },
+    {
+      "case": "mixed_full",
+      "repeat": 2,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.5804841329809278,
+      "milliseconds_per_call": 4.535032288913499
+    },
+    {
+      "case": "mixed_counts",
+      "repeat": 0,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.4209783629048616,
+      "milliseconds_per_call": 11.101393460194231
+    },
+    {
+      "case": "mixed_counts",
+      "repeat": 0,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.4853856230620295,
+      "milliseconds_per_call": 3.7920751801721053
+    },
+    {
+      "case": "mixed_counts",
+      "repeat": 1,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.4546568440273404,
+      "milliseconds_per_call": 3.552006593963597
+    },
+    {
+      "case": "mixed_counts",
+      "repeat": 1,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.338880507973954,
+      "milliseconds_per_call": 10.460003968546516
+    },
+    {
+      "case": "mixed_counts",
+      "repeat": 2,
+      "method": "eager",
+      "calls": 128,
+      "seconds": 1.3324390379711986,
+      "milliseconds_per_call": 10.409679984149989
+    },
+    {
+      "case": "mixed_counts",
+      "repeat": 2,
+      "method": "lazy",
+      "calls": 128,
+      "seconds": 0.44923155289143324,
+      "milliseconds_per_call": 3.509621506964322
+    }
+  ],
+  "pytensor_version": "3.2.4",
+  "mode": "Python VMLinker(lazy=True), fast_compile; instrumented probe optimizer=None",
+  "elapsed_s": 78.31744600902312,
+  "self_peak_rss_kib": 120484,
+  "scope_peak_bytes": 199847936,
+  "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+  "scope": "deterministic shape application only; excludes random walks, parameter generation, adstock/saturation, causal graph, acceptance and persistence"
+}
