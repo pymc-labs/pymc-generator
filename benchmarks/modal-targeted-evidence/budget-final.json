@@ -1,0 +1,9 @@
+{
+  "start_epoch": 1791923652,
+  "report_epoch": 1791924509.7896066,
+  "elapsed_including_preflight_failures_diagnostics_and_report_s": 857.7896065711975,
+  "full_deadline": 1791924552,
+  "execution_deadline": 1791924432,
+  "status": "stopped_partial_no_further_execution",
+  "retained_evidence_bytes_before_final_ledger": 8508187
+}

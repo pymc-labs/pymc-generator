@@ -1,0 +1,21 @@
+{"event": "group_start", "elapsed_s": 0.2113160809967667, "label": "first", "cells": 2, "draws": 1}
+{"event": "build", "elapsed_s": 5.0876512648537755, "method": "dynamic", "cell": 0}
+{"event": "compile", "elapsed_s": 37.54347991780378, "method": "dynamic", "cell": 0}
+{"event": "draw", "elapsed_s": 37.79538598586805, "method": "dynamic", "cell": 0, "draws": 1, "diagnostic": false, "seed": 1191790332, "seconds": 0.251762273022905}
+{"event": "draw", "elapsed_s": 38.04976014792919, "method": "dynamic", "cell": 1, "draws": 1, "diagnostic": false, "seed": 1245328708, "seconds": 0.2529928768053651}
+{"event": "validation", "elapsed_s": 38.0669995888602, "errors": []}
+{"event": "draw", "elapsed_s": 38.33976009185426, "method": "dynamic", "cell": 0, "draws": 1, "diagnostic": true, "seed": 1191790332, "seconds": 0.257581704063341}
+{"event": "draw", "elapsed_s": 38.59391824086197, "method": "dynamic", "cell": 1, "draws": 1, "diagnostic": true, "seed": 1245328708, "seconds": 0.2533585310447961}
+{"event": "group_complete", "elapsed_s": 38.59492310183123, "label": "first", "method": "dynamic", "workload": 0, "cells": 2, "draws": 1, "candidates": 2, "accepted": 2, "rejected": 0, "logical_ids": [[0, 0], [1, 0]], "stages": {"build_s": 4.875703064026311, "compile_s": 32.45564875891432, "draw_s": 0.5047551498282701, "invariants_and_hash_s": 0.0010686421301215887, "acceptance_and_packing_s": 0.0011088859755545855, "normalization_and_diagnostics_s": 0.009471632074564695}, "generation_s": 37.84908170183189, "validation_s": 0.006617591017857194, "persistence_s": 0.004541218047961593, "readback_s": 0.010129671078175306, "persisted_bytes": 34459, "pipeline_s": 37.870370181975886, "memory": {"self_peak_rss_kib": 533512, "scope_peak_bytes": 537989120}, "replay_s": 0.5125189530663192, "replay_pass": true}
+{"event": "group_start", "elapsed_s": 38.595012238947675, "label": "group10", "cells": 2, "draws": 10}
+{"event": "draw", "elapsed_s": 41.149431770900264, "method": "dynamic", "cell": 0, "draws": 10, "diagnostic": false, "seed": 1191790332, "seconds": 2.553807979915291}
+{"event": "draw", "elapsed_s": 43.675645807990804, "method": "dynamic", "cell": 1, "draws": 10, "diagnostic": false, "seed": 1245328708, "seconds": 2.5178066219668835}
+{"event": "validation", "elapsed_s": 43.74476669402793, "errors": []}
+{"event": "draw", "elapsed_s": 46.3215761508327, "method": "dynamic", "cell": 0, "draws": 10, "diagnostic": true, "seed": 1191790332, "seconds": 2.518542458070442}
+{"event": "draw", "elapsed_s": 48.82663069386035, "method": "dynamic", "cell": 1, "draws": 10, "diagnostic": true, "seed": 1245328708, "seconds": 2.5036276602186263}
+{"event": "group_complete", "elapsed_s": 48.83112446288578, "label": "group10", "method": "dynamic", "workload": 0, "cells": 2, "draws": 10, "candidates": 20, "accepted": 20, "rejected": 0, "logical_ids": [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6], [0, 7], [0, 8], [0, 9], [1, 0], [1, 1], [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 9]], "stages": {"build_s": 0.0, "compile_s": 0.0, "draw_s": 5.071614601882175, "invariants_and_hash_s": 0.002573976991698146, "acceptance_and_packing_s": 0.012835628120228648, "normalization_and_diagnostics_s": 0.028746458003297448, "replay_s": 0.0}, "generation_s": 5.116778057999909, "validation_s": 0.03299167682416737, "persistence_s": 0.016925839940086007, "readback_s": 0.040738821029663086, "persisted_bytes": 239083, "pipeline_s": 5.207434395793825, "memory": {"self_peak_rss_kib": 533512, "scope_peak_bytes": 537989120}, "replay_s": 5.0249667330645025, "replay_pass": true}
+{"event": "group_start", "elapsed_s": 48.83122574794106, "label": "group100", "cells": 2, "draws": 100}
+{"event": "draw", "elapsed_s": 74.2392840788234, "method": "dynamic", "cell": 0, "draws": 100, "diagnostic": false, "seed": 1191790332, "seconds": 25.40703835710883}
+{"event": "draw", "elapsed_s": 99.83067429601215, "method": "dynamic", "cell": 1, "draws": 100, "diagnostic": false, "seed": 1245328708, "seconds": 25.54048902913928}
+{"event": "validation", "elapsed_s": 100.46961073786952, "errors": []}
+{"event": "draw", "elapsed_s": 126.25310961785726, "method": "dynamic", "cell": 0, "draws": 100, "diagnostic": true, "seed": 1191790332, "seconds": 25.322079504141584}

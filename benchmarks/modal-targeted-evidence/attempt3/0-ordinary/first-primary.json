@@ -1,0 +1,38 @@
+{
+  "label": "first",
+  "method": "ordinary",
+  "workload": 0,
+  "cells": 2,
+  "draws": 1,
+  "candidates": 2,
+  "accepted": 2,
+  "rejected": 0,
+  "logical_ids": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      0
+    ]
+  ],
+  "stages": {
+    "build_s": 0.9999268280807883,
+    "compile_s": 2.7378420850727707,
+    "draw_s": 0.024779727216809988,
+    "invariants_and_hash_s": 0.0011137707624584436,
+    "acceptance_and_packing_s": 0.0010447779204696417,
+    "normalization_and_diagnostics_s": 0.0069373969454318285
+  },
+  "generation_s": 3.9632923619356006,
+  "validation_s": 0.009112274972721934,
+  "persistence_s": 0.0043670309241861105,
+  "readback_s": 0.01433346001431346,
+  "persisted_bytes": 34536,
+  "pipeline_s": 3.991105127846822,
+  "memory": {
+    "self_peak_rss_kib": 339428,
+    "scope_peak_bytes": 335409152
+  }
+}

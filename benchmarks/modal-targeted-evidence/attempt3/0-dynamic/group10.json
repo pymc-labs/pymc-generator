@@ -1,0 +1,113 @@
+{
+  "label": "group10",
+  "method": "dynamic",
+  "workload": 0,
+  "cells": 2,
+  "draws": 10,
+  "candidates": 20,
+  "accepted": 20,
+  "rejected": 0,
+  "logical_ids": [
+    [
+      0,
+      0
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      0,
+      3
+    ],
+    [
+      0,
+      4
+    ],
+    [
+      0,
+      5
+    ],
+    [
+      0,
+      6
+    ],
+    [
+      0,
+      7
+    ],
+    [
+      0,
+      8
+    ],
+    [
+      0,
+      9
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      1,
+      3
+    ],
+    [
+      1,
+      4
+    ],
+    [
+      1,
+      5
+    ],
+    [
+      1,
+      6
+    ],
+    [
+      1,
+      7
+    ],
+    [
+      1,
+      8
+    ],
+    [
+      1,
+      9
+    ]
+  ],
+  "stages": {
+    "build_s": 0.0,
+    "compile_s": 0.0,
+    "draw_s": 5.071614601882175,
+    "invariants_and_hash_s": 0.002573976991698146,
+    "acceptance_and_packing_s": 0.012835628120228648,
+    "normalization_and_diagnostics_s": 0.028746458003297448,
+    "replay_s": 0.0
+  },
+  "generation_s": 5.116778057999909,
+  "validation_s": 0.03299167682416737,
+  "persistence_s": 0.016925839940086007,
+  "readback_s": 0.040738821029663086,
+  "persisted_bytes": 239083,
+  "pipeline_s": 5.207434395793825,
+  "memory": {
+    "self_peak_rss_kib": 533512,
+    "scope_peak_bytes": 537989120
+  },
+  "replay_s": 5.0249667330645025,
+  "replay_pass": true
+}
