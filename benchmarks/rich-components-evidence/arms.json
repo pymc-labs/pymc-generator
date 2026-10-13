@@ -1,0 +1,34 @@
+[
+  {
+    "arm": "baseline",
+    "start_epoch": 1791931781.339363,
+    "reserved_s": 511.66077041625977,
+    "status": "pass",
+    "exit_code": 0,
+    "elapsed_s": 34.44617247581482
+  },
+  {
+    "arm": "rich_legacy",
+    "start_epoch": 1791931815.786911,
+    "reserved_s": 477.2133939266205,
+    "status": "pass",
+    "exit_code": 0,
+    "elapsed_s": 42.97311592102051
+  },
+  {
+    "arm": "rich_random",
+    "start_epoch": 1791931858.7612436,
+    "reserved_s": 434.23903822898865,
+    "status": "pass",
+    "exit_code": 0,
+    "elapsed_s": 74.11619472503662
+  },
+  {
+    "arm": "rich_all",
+    "start_epoch": 1791931932.8781688,
+    "reserved_s": 360.1219630241394,
+    "status": "pass",
+    "exit_code": 0,
+    "elapsed_s": 52.95979833602905
+  }
+]
