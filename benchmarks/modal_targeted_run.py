@@ -76,7 +76,7 @@ def main():
         harness_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
         python=sys.version, versions={n:importlib.metadata.version(n) for n in ['pymc','pytensor','numpy','scipy']},
         mode='FAST_COMPILE', floatX=pytensor.config.floatX,
-        cxx=pytensor.config.cxx, cache=pytensor.config.base_compiledir,
+        cxx=str(pytensor.config.cxx), cache=str(pytensor.config.base_compiledir),
         affinity=sorted(os.sched_getaffinity(0)),
         thread_settings={k:os.environ.get(k) for k in ['OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMBA_NUM_THREADS','NUMEXPR_NUM_THREADS']},
         memory=memory()))

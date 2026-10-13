@@ -1,0 +1,7 @@
+Running as unit: wayfinder61-comparison.scope; invocation ID: 93c6c0ecbc6848e98eb183f69b33c4a2
+{"arm": "0-ordinary", "start_epoch": 1791923824.2261786, "reserved_s": 150, "status": "partial_or_failed", "exit_code": 1, "elapsed_s": 6.34719705581665}
+{"arm": "0-dynamic", "start_epoch": 1791923830.5739143, "reserved_s": 150, "status": "partial_or_failed", "exit_code": 1, "elapsed_s": 4.020345211029053}
+{"arm": "0-specialized", "start_epoch": 1791923834.594703, "reserved_s": 150, "status": "partial_or_failed", "exit_code": 1, "elapsed_s": 4.0826029777526855}
+{"arm": "3-ordinary", "start_epoch": 1791923838.677778, "reserved_s": 150, "status": "partial_or_failed", "exit_code": 1, "elapsed_s": 4.066335916519165}
+{"arm": "3-dynamic", "start_epoch": 1791923842.7446089, "reserved_s": 150, "status": "partial_or_failed", "exit_code": 1, "elapsed_s": 4.074884414672852}
+{"arm": "3-specialized", "start_epoch": 1791923846.8200247, "reserved_s": 150, "status": "partial_or_failed", "exit_code": 1, "elapsed_s": 4.02377986907959}

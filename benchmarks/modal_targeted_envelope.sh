@@ -5,9 +5,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export ROOT
 export START_EPOCH=1791923652 RUN_DEADLINE=1791924432 FULL_DEADLINE=1791924552
-export DEST="$ROOT/benchmarks/modal-targeted-evidence"
+# Explicit second attempt after metadata serialization failure, within the SAME
+# absolute reservation. Original evidence and budget are never reset.
+test -f "$ROOT/benchmarks/modal-targeted-evidence/budget.json"
+export DEST="$ROOT/benchmarks/modal-targeted-evidence/attempt2"
 mkdir "$DEST" # refuse reuse
-printf '{"start_epoch":%s,"run_deadline":%s,"full_deadline":%s,"reserved_seconds":900,"status":"reserved","memory_max_bytes":2147483648,"scratch_max_bytes":268435456}\n' "$START_EPOCH" "$RUN_DEADLINE" "$FULL_DEADLINE" > "$DEST/budget.json"
 unshare --user --map-root-user --mount bash <<'INNER'
 set -euo pipefail
 scratch=$(mktemp -d)
