@@ -60,6 +60,16 @@ def test_all_advertises_the_diagnostics_entry_points():
     assert {"data_diagnostics", "DataDiagnostics"} <= set(pg.__all__)
 
 
+def test_all_advertises_oracle_sampling_entry_points():
+    assert {
+        "OracleSamplingConfig",
+        "OracleHealthCriteria",
+        "OracleSamplingReceipt",
+        "OracleSamplingResult",
+        "sample_oracle",
+    } <= set(pg.__all__)
+
+
 def test_import_is_light():
     # importing the package must not pull the heavy modeling / plotting stack.
     code = (

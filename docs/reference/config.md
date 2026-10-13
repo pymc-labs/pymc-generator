@@ -654,8 +654,10 @@ order; that decides which same-seed draws a change can keep.
 probabilities at `0.0`, `hf` / `pulse` at `1.0`, no opt-in mechanism setting and
 independent active counts build main's graphs, arithmetic and stream order: in
 the same environment a fixed seed reproduces main's corpora (including their raw
-candidate draws), `sample_scm` worlds, `DataGenerator` batches, fixed-point
-oracle evaluations and template draws byte for byte.
+candidate draws), `sample_scm` worlds, `DataGenerator` batches and template draws
+byte for byte. Fixed-point oracle evaluations agree with main's to floating-point
+rounding: reusable Oracle templates bind world inputs as named runtime data, which
+PyTensor no longer constant-folds into the graph.
 `tests/test_main_reproduction.py` checks this against main, and
 `tests/test_rng_owner_contract.py` pins main's stream owners by name. This does
 not promise cross-version metadata/archive identity: schema v5 changes the

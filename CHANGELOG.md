@@ -306,6 +306,12 @@ read the migration notes before upgrading.
   public `build_world_model`, `sample_structure`, `sample_prior_cond`, and `draw_worlds`.
 - A plug-in posterior oracle with sampled or analytically marginalized Gaussian
   outcome-side latents. It is a reference model, not a universal recovery bound.
+  Oracle templates expose all compatible changing inputs as named `pm.Data`,
+  support one Nutpie/Numba compilation across compatible fits, fail closed on
+  structural changes, and emit posterior-free data/template/compile receipts.
+  Because those inputs are runtime data, features-off oracle evaluations match
+  main `ce068d5` to floating-point rounding rather than byte for byte (the
+  main-reproduction test allows a 1e-10 relative tolerance for them only).
 - Configurable intercept/non-media floors, control shocks and centered pulses,
   direct-null channel floors, baseline/channel innovation confounding, and held-spend
   interventions that retain ordinary adstock carryover.
@@ -346,8 +352,9 @@ read the migration notes before upgrading.
   the #27 branch. Opt-in mechanism-prior ordinary corpora and oracles are
   unchanged, and so are their other `sample_scm` worlds. With every feature
   off, ordinary corpora (including raw candidate draws), `sample_scm` worlds,
-  `DataGenerator` batches, fixed-point oracle evaluations and template draws
-  reproduce main `ce068d5` byte for byte in the same environment.
+  `DataGenerator` batches and template draws reproduce main `ce068d5` byte for
+  byte in the same environment; fixed-point oracle evaluations match it to
+  rounding once Oracle inputs are runtime data (reusable Oracle sampling).
 - **Template throughput returns to main's (#28).** The #27 dot-product parent
   sums cut template candidate time by roughly 30% but changed every template
   draw; restoring main's n-ary sums restores main's speed.
