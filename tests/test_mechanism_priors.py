@@ -17,7 +17,9 @@ import pymc as pm
 import pytensor
 import pytensor.tensor as pt
 import pytest
+from pymc_marketing.mmm import transformers as _pmm
 from pytensor.graph.replace import clone_replace
+from pytensor.xtensor import as_xtensor
 
 import pymc_generator as pg
 import pymc_generator.world_model as world_model
@@ -1421,7 +1423,7 @@ def _decimal_unit_response_and_gradients(family, x, reference, shape, weight=1.0
 def test_tiny_shape_responses_and_gradients_match_decimal(family, mode):
     x, r, shape = pt.dvectors("x", "reference", "shape")
     parameter = "kappa_mult" if family == "michaelis_menten" else "c"
-    response = mechanisms.SATURATION_FAMILIES[family](x, r, **{parameter: shape})
+    response = mechanisms.STABLE_SATURATION_FAMILIES[family](x, r, **{parameter: shape})
     gradients = pytensor.grad(response.sum(), [x, r, shape])
     evaluate = pytensor.function([x, r, shape], [response, *gradients], mode=mode)
 
@@ -1497,7 +1499,7 @@ def test_relative_curves_preserve_complete_values_and_weighted_gradients(family,
     }[family]
     x, r, shape, weight = pt.dvectors("x", "reference", "shape", "weight")
     parameter = {"michaelis_menten": "kappa_mult", "tanh": "c", "root": "alpha"}[family]
-    response = mechanisms.SATURATION_FAMILIES[family](x, r, **{parameter: shape})
+    response = mechanisms.STABLE_SATURATION_FAMILIES[family](x, r, **{parameter: shape})
     gradients = pytensor.grad((weight * response).sum(), [x, r, shape])
     evaluate = pytensor.function([x, r, shape, weight], [response, *gradients], mode=mode)
     expected = np.array(
@@ -1518,7 +1520,7 @@ def test_root_clipping_preserves_unrepresentable_and_weight_rescued_positive_der
     small = float(np.nextafter(0.0, 1.0))
     x = pt.dvector("x")
     r, alpha, weight = pt.dscalars("reference", "alpha", "weight")
-    response = mechanisms.root_kappa_relative(x, r, alpha=alpha)
+    response = mechanisms.stable_root_kappa_relative(x, r, alpha=alpha)
     unit_derivative = pytensor.grad(response.sum(), x)
     weighted_derivative = pytensor.grad(weight * response.sum(), x)
     evaluate = pytensor.function(
@@ -1543,7 +1545,7 @@ def test_root_clipping_preserves_unrepresentable_and_weight_rescued_positive_der
 def test_weighted_mm_relative_pullback_retains_finite_shape_and_reference_derivatives(mode):
     small = float(np.nextafter(0.0, 1.0))
     x, r, kappa = pt.dvector("x"), pt.dscalar("reference"), pt.dscalar("kappa")
-    response = mechanisms.michaelis_menten_kappa_relative(x, r, kappa_mult=kappa)
+    response = mechanisms.stable_michaelis_menten_kappa_relative(x, r, kappa_mult=kappa)
     gradients = pytensor.grad(1e-10 * response.sum(), [r, kappa])
     evaluate = pytensor.function([x, r, kappa], [response, *gradients], mode=mode)
     expected = _decimal_unit_response_and_gradients(
@@ -1557,21 +1559,51 @@ def test_weighted_mm_relative_pullback_retains_finite_shape_and_reference_deriva
         np.testing.assert_allclose(observed, float(independent), rtol=2e-12, atol=0.0)
 
 
+_LIBRARY_SHAPE = {"michaelis_menten": "kappa_mult", "tanh": "c", "root": "alpha"}
+
+
+def _library_unit_curve(family, x, reference, shape):
+    """pymc-marketing's own transformer on a time column, with main's reference guard."""
+    safe_reference = pt.maximum(reference, 1e-8)
+    if family == "michaelis_menten":
+        curve = _pmm.michaelis_menten(
+            as_xtensor(x, dims=("time",)), alpha=1.0, lam=shape * safe_reference
+        )
+    elif family == "tanh":
+        curve = _pmm.tanh_saturation(as_xtensor(x / safe_reference, dims=("time",)), b=1.0, c=shape)
+    else:
+        ratio = pt.maximum(x / safe_reference, 0.0)
+        curve = _pmm.root_saturation(as_xtensor(ratio, dims=("time",)), alpha=shape)
+    return curve.values
+
+
 @pytest.mark.parametrize("family", ("michaelis_menten", "tanh", "root"))
 @pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
 def test_relative_curves_keep_regular_library_values_exact(family, mode):
-    x, r, shape = pt.dvector("x"), pt.dscalar("reference"), pt.dscalar("shape")
-    parameter = {"michaelis_menten": "kappa_mult", "tanh": "c", "root": "alpha"}[family]
-    response = mechanisms.SATURATION_FAMILIES[family](x, r, **{parameter: shape})
-    if family == "michaelis_menten":
-        library = mechanisms.michaelis_menten(x, 1.0, shape * r)
-    elif family == "tanh":
-        library = mechanisms.tanh_saturation(x / r, 1.0, shape)
-    else:
-        library = mechanisms.root_saturation(pt.maximum(x / r, 0.0), shape)
-    evaluate = pytensor.function([x, r, shape], [response, library], mode=mode)
-    observed, expected = evaluate(np.array([0.0, 0.25, 1.0, 2.0, 10.0]), 3.0, 0.6)
-    np.testing.assert_array_equal(observed, expected)
+    # Seeded corpora reproduce the library's rounding, alone and once the
+    # generator scales the response (a gate times beta lets the canonicalizer fold
+    # the scale into the library quotient). Random inputs separate re-associated
+    # quotients and scalar powers that a few round inputs would hide.
+    x, r, shape, scale = pt.dvector("x"), *pt.dscalars("reference", "shape", "scale")
+    default = mechanisms.SATURATION_FAMILIES[family](x, r, **{_LIBRARY_SHAPE[family]: shape})
+    library = _library_unit_curve(family, x, r, shape)
+    # Separate functions: one graph could merge the two sides into one node.
+    observed = pytensor.function([x, r, shape, scale], [default, scale * default], mode=mode)
+    expected = pytensor.function([x, r, shape, scale], [library, scale * library], mode=mode)
+    rng = np.random.default_rng(28)
+    values = np.concatenate([[0.0], rng.uniform(-1.0, 12.0, 4095)])
+    references = np.concatenate([rng.uniform(1e-12, 1e-8, 12), rng.uniform(1e-3, 8.0, 52)])
+    for reference, shape_value, scale_value in zip(
+        references, rng.uniform(0.2, 2.0, 64), rng.uniform(0.5, 2.0, 64), strict=True
+    ):
+        got = observed(values, reference, shape_value, scale_value)
+        want = expected(values, reference, shape_value, scale_value)
+        for context, observed_value, expected_value in zip(("alone", "scaled"), got, want):
+            assert observed_value.tobytes() == expected_value.tobytes(), (
+                context,
+                reference,
+                shape_value,
+            )
 
 
 @pytest.mark.parametrize(
@@ -1949,30 +1981,60 @@ def test_shape_only_opt_in_uses_stable_curves_in_world_template_and_oracle():
 
 
 @pytest.mark.parametrize(
-    ("family", "shapes", "legacy"),
+    ("family", "shapes", "inputs", "reference"),
     (
-        (
-            "hill",
-            {"hill_slope": np.array([3.0]), "hill_kappa_mult": np.array([1e3])},
-            lambda x, r: mechanisms.hill_kappa_relative(x, r, slope=3.0, kappa_mult=1e3),
-        ),
-        (
-            "logistic",
-            {"logistic_lam": np.array([1e-6])},
-            lambda x, r: mechanisms.logistic_kappa_relative(x, r, lam=1e-6),
-        ),
+        # Cancellation far below kappa / at tiny lam.
+        ("hill", {"hill_slope": 3.0, "hill_kappa_mult": 1e3}, [0.0, 0.5, 1.0, 2.0], 1.0),
+        ("logistic", {"logistic_lam": 1e-6}, [0.0, 0.5, 1.0, 2.0], 1.0),
+        # lambda + x overflows the library denominator: 1e308 / inf = 0, not 0.5.
+        ("michaelis_menten", {"mm_kappa_mult": 1.0}, [0.0, 1.0, 1e308], 1e308),
+        # reference * c overflows the library quotient: tanh(x / inf) = 0.
+        ("tanh", {"tanh_c": 1e10}, [0.0, 1e300], 1e300),
+        # x / reference underflows to 0 before the library power.
+        ("root", {"root_alpha": 0.5}, [0.0, 1e-300, 2.0], 1e24),
     ),
+    ids=("hill", "logistic", "michaelis_menten", "tanh", "root"),
 )
-def test_unflagged_saturation_keeps_legacy_curves_bit_for_bit(family, shapes, legacy):
-    # Defaults must keep the legacy arithmetic; at these cancelling inputs the
-    # stable forms differ, so equality cannot hold vacuously.
-    x = pt.as_tensor_variable(np.array([0.0, 0.5, 1.0, 2.0]))
-    r = pt.as_tensor_variable(np.float64(1.0))
-    params = {"sat_family": np.array([SATURATION_FAMILY_KEYS.index(family)]), **shapes}
-    expected = legacy(x, r).eval()
-    np.testing.assert_array_equal(_saturate_col(x, r, params, 0).eval(), expected)
-    stable = _saturate_col(x, r, {**params, "mechanism_priors_enabled": True}, 0).eval()
-    assert not np.array_equal(stable, expected)
+@pytest.mark.parametrize("dynamic_family", (False, True), ids=("concrete", "switch"))
+def test_unflagged_saturation_keeps_legacy_curves_bit_for_bit(
+    family, shapes, inputs, reference, dynamic_family
+):
+    # Defaults keep the library arithmetic and opt-in mechanism priors select the
+    # stable form, on the ordinary graph's concrete family and on the template's
+    # switch over every family. Inputs, shapes and (for the switch) the family id
+    # are symbolic, as in the generator, so constant folding cannot choose the
+    # rounding; at these inputs the two forms differ, so neither equality holds
+    # vacuously.
+    x, r = pt.dvector("x"), pt.dscalar("reference")
+    shape_inputs = {field: pt.dvector(field) for field in SHAPE_FIELDS}
+    shape_values = {field: np.array([shapes.get(field, 1.0)]) for field in SHAPE_FIELDS}
+    family_id = SATURATION_FAMILY_KEYS.index(family)
+    sat_family = pt.lvector("sat_family") if dynamic_family else np.array([family_id])
+    params = {"sat_family": sat_family, **shape_inputs}
+    kwargs = {SHAPE_FIELDS[field][1]: shape_inputs[field][0] for field in shapes}
+    outputs = (
+        _saturate_col(x, r, params, 0, dynamic_family=dynamic_family),
+        _saturate_col(
+            x, r, {**params, "mechanism_priors_enabled": True}, 0, dynamic_family=dynamic_family
+        ),
+        mechanisms.SATURATION_FAMILIES[family](x, r, **kwargs),
+        mechanisms.STABLE_SATURATION_FAMILIES[family](x, r, **kwargs),
+    )
+    symbolic = [x, r, *shape_inputs.values()]
+    values = [np.asarray(inputs), reference, *shape_values.values()]
+    if dynamic_family:
+        symbolic.append(sat_family)
+        values.append(np.array([family_id]))
+    with np.errstate(all="ignore"):
+        unflagged, flagged, legacy, stable = (
+            pytensor.function(symbolic, output, mode="FAST_COMPILE", on_unused_input="ignore")(
+                *values
+            )
+            for output in outputs
+        )
+    assert unflagged.tobytes() == legacy.tobytes()
+    assert flagged.tobytes() == stable.tobytes()
+    assert not np.array_equal(stable, legacy)
 
 
 @pytest.mark.parametrize(
