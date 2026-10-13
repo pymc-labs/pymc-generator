@@ -796,6 +796,8 @@ ORACLE_CONFIG_TOPOLOGY_FIELDS = (
     # Mechanism-prior law and stable saturation-family selection.
     "mm_scale_prior",
     "mechanism_priors_enabled",
+    # Whether prior intervals are runtime data or folded constant supports.
+    "prior_conditioning",
 )
 ORACLE_CONFIG_FIXED_NUMERIC_FIELDS = (
     "carryover_alpha_range",

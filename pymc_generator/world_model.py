@@ -1797,11 +1797,15 @@ def build_oracle_model(
                 ),
             )
 
+        # Runtime (rebindable) bounds only where a narrowed interval can arrive:
+        # constant supports keep PyTensor's folded, tail-preserving gradients.
+        conditioned = cfg.prior_conditioning or prior_cond is not None
+
         def _oracle_spec(key: str):
             name, lo, hi, shape = specs[key]
-            if key == "carryover_alpha" and lo != hi:
+            if conditioned and key == "carryover_alpha" and lo != hi:
                 lo, hi = prior_bounds["carryover_alpha"]
-            elif key == "hill_slope" and lo != hi:
+            elif conditioned and key == "hill_slope" and lo != hi:
                 lo, hi = prior_bounds["hill_shape"]
             return name, lo, hi, shape
 
