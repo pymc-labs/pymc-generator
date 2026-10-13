@@ -27,23 +27,37 @@ between the generative and oracle builders so they cannot drift.
 from __future__ import annotations
 
 from collections.abc import Callable
+from math import frexp
 from typing import Any, Literal, cast
 
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
+from pytensor.compile.builders import OpFromGraph
+from pytensor.gradient import disconnected_grad
+from pytensor.link.numba.dispatch.basic import numba_njit, register_funcify_and_cache_key
+from pytensor.raise_op import CheckAndRaise
+from pytensor.scalar import ScalarOp, upgrade_to_float64
+from pytensor.tensor.elemwise import Elemwise
 from pytensor.tensor.sharedvar import SharedVariable
 
-from . import mechanisms
 from .random_walk import _kernel_width, _walk_basis, walk_width_index
-from .sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
+from .sampler import (
+    CARRYOVER_FAMILY_KEYS,
+    CORPUS_STORAGE_MAX,
+    SATURATION_FAMILY_KEYS,
+    SCMPrior,
+    _ReferenceRepresentabilityError,
+)
 from .signal_diagnostics import admitted_response_support_weeks
 from .symbolic_graph import (
     _carryover_col,
+    _reference_levels,
     _saturate_col,
     _walk_column,
     build_symbolic_graph,
 )
+from .trajectories import sample_component_flags, trajectory_params
 
 # Compiling a draw function costs seconds, so repeated batches from the SAME
 # model (realism-filter top-up rounds) reuse one. The cache lives on the model
@@ -202,10 +216,10 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
     def _smooth(n: int) -> np.ndarray:
         return rng.beta(cfg.rw_smoothness_alpha, cfg.rw_smoothness_beta, size=n)
 
-    hf_on = float(cfg.treatment_hf_sigma_range[1]) > 0.0
-    pulse_on = float(cfg.treatment_pulse_prob_range[1]) > 0.0
-    covariate_hf_on = float(cfg.covariate_hf_sigma_range[1]) > 0.0
-    covariate_pulse_on = float(cfg.covariate_pulse_prob_range[1]) > 0.0
+    # Per-input component inclusion. Probabilities of 0 or 1 (the defaults:
+    # all-or-none legacy texture) draw nothing; fractional ones draw from child
+    # streams spawned off ``rng`` without touching its bit-generator state.
+    flags = sample_component_flags(cfg, n_treatments, n_covariates, rng)
     return {
         "carryover_family": ad_fam.astype(int),
         "sat_family": sat_fam.astype(int),
@@ -213,10 +227,7 @@ def sample_structure(g_active: dict, cfg: SCMPrior, rng: np.random.Generator) ->
         "smoothness_z": _smooth(n_covariates),
         "smoothness_c": _smooth(n_treatments),
         "smoothness_b": _smooth(1),
-        "use_hf": np.full(n_treatments, hf_on),
-        "use_pulse": np.full(n_treatments, pulse_on),
-        "use_covariate_hf": np.full(n_covariates, covariate_hf_on),
-        "use_covariate_pulse": np.full(n_covariates, covariate_pulse_on),
+        **flags,
     }
 
 
@@ -262,6 +273,115 @@ def _uniform(name: str, lo: Any, hi: Any, shape):
         if lo == hi:
             return pt.as_tensor_variable(np.full(shape, lo, dtype="float64"))
     return pm.Uniform(name, lo, hi, shape=shape)
+
+
+def _log_uniform(name: str, lo: float, hi: float, shape):
+    """A log-scale Uniform primitive, or the exact original-scale fixed value.
+
+    ``exp`` of the rounded logarithmic bounds can land an ulp outside
+    ``[lo, hi]``; the deterministic is clipped back onto the configured support.
+    """
+    lo, hi = float(lo), float(hi)
+    if lo == hi:
+        return _uniform(name, lo, hi, shape)
+    log_lo, log_hi = float(np.log(lo)), float(np.log(hi))
+    if log_lo >= log_hi:
+        raise ValueError(
+            "mm_scale_prior='log_uniform' requires distinct logarithmic bounds in "
+            "saturation_prior_ranges['michaelis_menten']['kappa_mult']"
+        )
+    log_value = _uniform(f"{name}_log", log_lo, log_hi, shape)
+    return pm.Deterministic(name, pt.clip(pt.exp(log_value), lo, hi))
+
+
+def _mechanism_prior(cfg: SCMPrior, spec: tuple[str, float, float, Any]):
+    """Draw one shape prior using the same law in every model builder."""
+    if spec[0] == "mm_kappa_mult" and cfg.mm_scale_prior == "log_uniform":
+        return _log_uniform(*spec)
+    return _uniform(*spec)
+
+
+def _checked_reference_coefficient(value, target, field: str):
+    """Keep actual derived loadings inside the validated numerical domain."""
+    return CheckAndRaise(
+        _ReferenceRepresentabilityError,
+        f"{field} requires finite float64 coefficients that preserve nonzero "
+        "targets and fit the float32 corpus storage maximum",
+    )(
+        value,
+        pt.all(
+            ~(pt.isnan(value) | pt.isinf(value))
+            & pt.le(pt.abs(value), CORPUS_STORAGE_MAX)
+            & (pt.eq(target, 0.0) | pt.neq(value, 0.0))
+        ),
+    )
+
+
+def _derive_reference_coefficients(
+    cfg: SCMPrior,
+    params: dict[str, Any],
+    n_treatments: int,
+    *,
+    saturation_scale,
+    dynamic_family: bool = False,
+) -> None:
+    """Replace raw outcome loadings with parameter-only target-derived loadings.
+
+    Treatments target the shared physical response at a post-carryover input,
+    before the edge gate. Evaluating the actual reference input avoids rounding
+    differences amplified by steep curves. Controls target the nominal linear
+    term before its edge gate or an absorbing non-treatment floor.
+    """
+    if cfg.mechanism_priors_enabled:
+        params["mechanism_priors_enabled"] = True
+    if cfg.treatment_reference_contribution_range is not None:
+        scale = pt.as_tensor_variable(saturation_scale)
+        reference = _treatment_reference_input(cfg, scale)
+        params["treatment_reference_input"] = reference
+        response = pt.stack(
+            [
+                _saturate_col(
+                    reference[k : k + 1], scale[k], params, k, dynamic_family=dynamic_family
+                )[0]
+                for k in range(n_treatments)
+            ]
+        )
+        params["treatment_reference_response"] = response
+        target = params["treatment_reference_contribution"]
+        params["beta"] = pm.Deterministic(
+            "beta",
+            _checked_reference_coefficient(
+                target / response, target, "treatment_reference_contribution_range"
+            ),
+        )
+    if cfg.covariate_reference_contribution_range is not None:
+        target = params["covariate_reference_contribution"]
+        # PyTensor rewrites division by a constant into this product; making it
+        # explicit keeps validation and generation on the same arithmetic.
+        inverse_scale = 1.0 / float(cfg.covariate_reference_scale)
+        params["rho_zy"] = pm.Deterministic(
+            "rho_zy",
+            _checked_reference_coefficient(
+                target * inverse_scale,
+                target,
+                "covariate_reference_contribution_range",
+            ),
+        )
+
+
+def _treatment_reference_input(cfg: SCMPrior, saturation_scale):
+    """The actual parameter-only reference input, rejected if not positive and finite."""
+    reference_input = float(cfg.treatment_reference_multiplier) * saturation_scale
+    return CheckAndRaise(
+        _ReferenceRepresentabilityError,
+        "treatment_reference_multiplier * saturation_scale must produce a finite "
+        "positive treatment_reference_input",
+    )(
+        reference_input,
+        pt.all(
+            pt.gt(reference_input, 0.0) & ~(pt.isnan(reference_input) | pt.isinf(reference_input))
+        ),
+    )
 
 
 def _treatment_shock_schedule(
@@ -605,12 +725,14 @@ def _scm_params(
     rw: dict[str, dict],
     c_level,
     *,
+    g,
     carryover_family,
     sat_family,
     use_hf,
     use_pulse,
     use_covariate_hf,
     use_covariate_pulse,
+    dynamic_family: bool = False,
 ) -> dict[str, Any]:
     """Every continuous SCM parameter, in the LOCKED RV creation order.
 
@@ -623,7 +745,7 @@ def _scm_params(
     draw here changes every generated world.
     """
     pulse_prob = _uniform(*specs["pulse_prob"])
-    return {
+    params: dict[str, Any] = {
         "l_max": cfg.l_max,
         # Concrete structural constant, not a draw: it clips the intercept walk.
         "baseline_floor": cfg.baseline_floor,
@@ -635,8 +757,24 @@ def _scm_params(
         "alpha_cc": _uniform(*specs["alpha_cc"]),
         "gamma_zz": _uniform(*specs["gamma_zz"]),
         "delta_dy": _uniform(*specs["delta_dy"]),
-        "rho_zy": _uniform(*specs["rho_zy"]),
-        "beta": _uniform(*specs["beta"]),
+        **(
+            {"rho_zy": _uniform(*specs["rho_zy"])}
+            if cfg.covariate_reference_contribution_range is None
+            else {
+                "covariate_reference_contribution": _uniform(
+                    *specs["covariate_reference_contribution"]
+                )
+            }
+        ),
+        **(
+            {"beta": _uniform(*specs["beta"])}
+            if cfg.treatment_reference_contribution_range is None
+            else {
+                "treatment_reference_contribution": _uniform(
+                    *specs["treatment_reference_contribution"]
+                )
+            }
+        ),
         # per-node random walks and iid outcome noise
         "rw_d": rw["rw_d"],
         "rw_z": rw["rw_z"],
@@ -645,7 +783,7 @@ def _scm_params(
         "rw_y": rw["rw_y"],
         "carryover_family": carryover_family,
         "sat_family": sat_family,
-        **{name: _uniform(*specs[name]) for name in _MECHANISM_PARAM_NAMES},
+        **{name: _mechanism_prior(cfg, specs[name]) for name in _MECHANISM_PARAM_NAMES},
         # treatment texture: magnitudes relative to the treatment level; fires
         # are Bernoulli(pulse_prob)
         "hf_sigma": _uniform(*specs["hf_sigma"]) * c_level,
@@ -662,13 +800,35 @@ def _scm_params(
         # There is no stream-stable position for a live draw — reseed_rngs
         # walks collect_default_updates' graph-traversal order, not this
         # creation order — so enabling the texture deliberately reseeds every
-        # world (see tests/test_identifiability.py's two hash contracts).
+        # world (tests/test_rng_owner_contract.py pins the default owner order;
+        # docs/reference/config.md "Randomness and seeds" lists the limits).
         "covariate_hf_sigma": _uniform(*specs["covariate_hf_sigma"]) * rw["rw_z"]["std"],
         "covariate_pulse_amp": _uniform(*specs["covariate_pulse_amp"]) * rw["rw_z"]["std"],
         "covariate_pulse_prob": _uniform(*specs["covariate_pulse_prob"]),
         "use_covariate_hf": use_covariate_hf,
         "use_covariate_pulse": use_covariate_pulse,
     }
+    saturation_scale = None
+    if cfg.treatment_reference_contribution_range is not None:
+        levels = _reference_levels(
+            params,
+            g["g_zc"],
+            g["g_cc"],
+            g["g_zz"],
+            specs["beta"][3],
+            specs["rho_zy"][3],
+            use_pulse,
+            dynamic_g=dynamic_family,
+        )
+        saturation_scale = pt.maximum(pt.stack(levels), 1e-8)
+    _derive_reference_coefficients(
+        cfg,
+        params,
+        specs["beta"][3],
+        saturation_scale=saturation_scale,
+        dynamic_family=dynamic_family,
+    )
+    return params
 
 
 def _scm_eps(
@@ -692,11 +852,10 @@ def _scm_eps(
             p=pt.broadcast_to(pulse_prob, (n_time_steps_full, n_treatments)),
             shape=(n_time_steps_full, n_treatments),
         ).astype("float64"),
-        # Covariate texture noise. A disabled config still creates these RVs (the
-        # treatment texture noise behaves identically): the graph then references
-        # neither, so they reach no output, collect no RNG stream, and leave
-        # every seeded draw byte-identical — while keeping the audit schema
-        # (SCM.exogenous) the same shape for every config.
+        # Disabled configs still create these RVs, as for treatment texture.
+        # If pruned from all requested forward outputs, they receive no RNG
+        # stream. Explicit provenance/audit requests can instead sample them.
+        # Their exogenous shapes remain available regardless of configuration.
         "eps_z_hf": pm.Normal("eps_z_hf", 0.0, 1.0, shape=(n_time_steps_full, n_covariates)),
         "eps_z_pulse": pm.Bernoulli(
             "eps_z_pulse",
@@ -711,12 +870,15 @@ def _register_param_reports(
     rw: dict[str, dict],
     c_level,
     confounding_strength,
+    *,
+    cfg: SCMPrior,
 ) -> tuple[str, ...]:
-    """Register every continuous parameter as a ``param_*`` deterministic.
+    """Register realised numeric parameters as ``param_*`` deterministics.
 
-    A sampled world then carries all the concrete inputs needed to replay its
-    structural graph. Families and smoothness are concrete structure already and
-    are reported with their corresponding groups.
+    Concrete reports expose the graph inputs and derived coefficients for
+    inspection, including every present trajectory leaf except structural
+    flags and fixed jump counts. Exact arithmetic replay additionally retains
+    the joint primitive draw. Families and smoothness are concrete structure.
     """
     report_specs: dict[str, Any] = {
         # linear edge coefficients
@@ -745,6 +907,29 @@ def _register_param_reports(
         report_specs[f"{group_name}_std"] = rw[group_name]["std"]
     report_specs["treatment_level"] = c_level
     report_specs["confounding_strength"] = confounding_strength
+    if cfg.treatment_reference_contribution_range is not None:
+        report_specs["treatment_reference_contribution"] = params[
+            "treatment_reference_contribution"
+        ]
+        report_specs["treatment_reference_input"] = params["treatment_reference_input"]
+    if cfg.covariate_reference_contribution_range is not None:
+        report_specs["covariate_reference_contribution"] = params[
+            "covariate_reference_contribution"
+        ]
+        report_specs["covariate_reference_input"] = pt.full_like(
+            params["rho_zy"], float(cfg.covariate_reference_scale)
+        )
+    for input_type, spec in params.get("trajectory", {}).items():
+        for component, values in spec.items():
+            if component == "use":
+                continue
+            for field, tensor in values.items():
+                if field != "count":
+                    report_specs[f"trajectory_{input_type}_{component}_{field}"] = (
+                        pt.as_tensor_variable(tensor)
+                    )
+    if cfg.treatment_reference_contribution_range is not None:
+        report_specs["treatment_reference_response"] = params["treatment_reference_response"]
     for key, tensor in report_specs.items():
         pm.Deterministic(f"param_{key}", tensor)
     return tuple(f"param_{k}" for k in report_specs)
@@ -795,15 +980,168 @@ def _confounded_treatment_eps(cfg: SCMPrior, eps: dict[str, Any]):
     return confounding_strength
 
 
+def _scaled_product_impl(a, b, c):
+    ma, ea = frexp(a)
+    mb, eb = frexp(b)
+    mc, ec = frexp(c)
+    return np.ldexp(ma * mb * mc, ea + eb + ec)
+
+
+class _ScaledProduct(ScalarOp):
+    """Multiply three finite factors without under/overflowing intermediates."""
+
+    nin = 3
+
+    impl = staticmethod(_scaled_product_impl)
+
+    def pullback(self, inputs, outputs, grads):
+        a, b, c = inputs
+        (gz,) = grads
+        return self(gz, b, c), self(gz, a, c), self(gz, a, b)
+
+    def c_headers(self, **kwargs):
+        return ["math.h"]
+
+    def c_code(self, node, name, inputs, outputs, sub):
+        a, b, c = inputs
+        (z,) = outputs
+        return f"""{{
+            int ea, eb, ec;
+            double ma = frexp((double){a}, &ea);
+            double mb = frexp((double){b}, &eb);
+            double mc = frexp((double){c}, &ec);
+            {z} = ldexp(ma * mb * mc, ea + eb + ec);
+        }}"""
+
+    def c_code_cache_version(self):
+        return (*super().c_code_cache_version(), 1)
+
+
+@register_funcify_and_cache_key(_ScaledProduct)
+def _numba_scaled_product(op, node, **kwargs):
+    return numba_njit(_scaled_product_impl, fastmath=False), "pymc_generator.scaled_product.v1"
+
+
+_scaled_product = Elemwise(_ScaledProduct(upgrade_to_float64, name="scaled_product"))
+
+
+def _scaled_product_ratio_impl(a, b, c, d, e):
+    ma, ea = frexp(a)
+    mb, eb = frexp(b)
+    mc, ec = frexp(c)
+    md, ed = frexp(d)
+    me, ee = frexp(e)
+    return np.ldexp((ma * mb * mc) / (md * me), ea + eb + ec - ed - ee)
+
+
+class _ScaledProductRatio(ScalarOp):
+    """Combine a three-factor numerator and positive two-factor denominator."""
+
+    nin = 5
+    impl = staticmethod(_scaled_product_ratio_impl)
+
+    def pullback(self, inputs, outputs, grads):
+        a, b, c, d, e = inputs
+        (z,) = outputs
+        (gz,) = grads
+        return (
+            self(gz, b, c, d, e),
+            self(gz, a, c, d, e),
+            self(gz, a, b, d, e),
+            _scaled_product.scalar_op(-gz, z, 1.0 / d),
+            _scaled_product.scalar_op(-gz, z, 1.0 / e),
+        )
+
+    def c_headers(self, **kwargs):
+        return ["math.h"]
+
+    def c_code(self, node, name, inputs, outputs, sub):
+        a, b, c, d, e = inputs
+        (z,) = outputs
+        return f"""{{
+            int ea, eb, ec, ed, ee;
+            double ma = frexp((double){a}, &ea);
+            double mb = frexp((double){b}, &eb);
+            double mc = frexp((double){c}, &ec);
+            double md = frexp((double){d}, &ed);
+            double me = frexp((double){e}, &ee);
+            {z} = ldexp((ma * mb * mc) / (md * me), ea + eb + ec - ed - ee);
+        }}"""
+
+    def c_code_cache_version(self):
+        return (*super().c_code_cache_version(), 1)
+
+
+@register_funcify_and_cache_key(_ScaledProductRatio)
+def _numba_scaled_product_ratio(op, node, **kwargs):
+    return (
+        numba_njit(_scaled_product_ratio_impl, fastmath=False),
+        "pymc_generator.scaled_product_ratio.v1",
+    )
+
+
+_scaled_product_ratio = Elemwise(
+    _ScaledProductRatio(upgrade_to_float64, name="scaled_product_ratio")
+)
+
+
+def _amplitude_norm_parts(amplitudes):
+    # This arbitrary normalization cancels from both the norm and its direction.
+    scale = disconnected_grad(pt.maximum(pt.max(pt.abs(amplitudes)), np.finfo(np.float64).tiny))
+    scaled = amplitudes / scale
+    return scale, scaled, pt.sqrt(pt.sum(scaled**2))
+
+
+def _relative_std_pullback(inputs, outputs, grads):
+    std, amplitudes = inputs
+    (gz,) = grads
+    scale, _, norm = _amplitude_norm_parts(amplitudes)
+    safe_norm = pt.where(pt.eq(norm, 0.0), 1.0, norm)
+    # Keep the complete coefficient-direction pullback in one scalar operation:
+    # neither the absolute norm nor a tiny direction may round before rescue.
+    return [
+        _scaled_product(gz, scale, norm),
+        pt.sum(
+            _scaled_product_ratio(gz[:, None], std[:, None], amplitudes[None, :], scale, safe_norm),
+            axis=0,
+        ),
+    ]
+
+
+def _build_relative_std_product():
+    std = pt.dvector("relative_std")
+    amplitudes = pt.dvector("amplitudes")
+    scale, _, norm = _amplitude_norm_parts(amplitudes)
+    return OpFromGraph(
+        [std, amplitudes],
+        [pt.as_tensor_variable(_scaled_product(std, scale, norm))],
+        inline=True,
+        pullback=_relative_std_pullback,
+        name="relative_std_product",
+    )
+
+
+_relative_std_product = _build_relative_std_product()
+
+
 def _apply_outcome_std_scale(
     cfg: SCMPrior, rw: dict[str, dict], g_cy: np.ndarray, beta, *, prefix: str = ""
 ) -> None:
     """Convert relative outcome scales to their parameter-only absolute amplitudes.
 
-    ``g_cy`` is concrete per world, so the anchor
-    ``sqrt(sum((g_cy * beta)**2))`` depends only on structural and continuous
-    parameters. It cannot depend on innovations without making the prior
-    undefined independently of the noise it generates.
+    The anchor ``sqrt(sum((g_cy * beta)**2))`` depends only on structural and
+    continuous parameters. It cannot depend on innovations without making the
+    prior undefined independently of the noise it generates.
+
+    Default recipes emit that product literally: generation, templates and both
+    oracle modes keep its rounding and the canonicalizer's flattening of the
+    baseline walk's scale. Opt-in mechanism priors, whose derived coefficients can
+    be tiny or subnormal, use ``_relative_std_product`` instead: scaling before
+    squaring preserves tiny nonzero amplitudes, the minimum-normal arithmetic scale
+    keeps its reciprocal finite without flooring the norm, and mantissa/exponent
+    multiplication defers subnormal rounding to the final standard deviation. Its
+    analytic pullback uses the bounded coefficient direction so a tiny intermediate
+    derivative cannot round before the normalization cancels.
     """
     if cfg.outcome_std_mode == "absolute":
         return
@@ -812,11 +1150,19 @@ def _apply_outcome_std_scale(
             f"outcome_std_mode must be 'relative' or 'absolute', got {cfg.outcome_std_mode!r}"
         )
     g_cy_t = pt.as_tensor_variable(g_cy)
-    treatment_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
+    if not cfg.mechanism_priors_enabled:
+        treatment_amplitude = pt.sqrt(pt.sum((g_cy_t * beta) ** 2))
+        for group_name in ("rw_b", "rw_y"):
+            rw[group_name]["std"] = pm.Deterministic(
+                f"{prefix}{group_name}_std",
+                rw[group_name]["std"] * treatment_amplitude,
+            )
+        return
+    amplitudes = g_cy_t * beta
     for group_name in ("rw_b", "rw_y"):
         rw[group_name]["std"] = pm.Deterministic(
             f"{prefix}{group_name}_std",
-            rw[group_name]["std"] * treatment_amplitude,
+            _relative_std_product(rw[group_name]["std"], amplitudes),
         )
 
 
@@ -870,17 +1216,16 @@ def _uniform_prior_specs(
     n_latent: int,
     prior_cond: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, tuple[str, float, float, Any]]:
-    """``{param: (name, lo, hi, shape)}`` for every ``pm.Uniform`` prior.
+    """``{param: (name, lo, hi, shape)}`` for continuous bounded primitive priors.
 
-    THE single definition of the uniform prior ranges — both the generative
-    draw (:func:`build_world_model`) and the posterior oracle
-    (:func:`build_oracle_model`) create their RVs as ``_uniform(*spec)`` from
-    this table, so the priors cannot drift between the two. Also resolves the
-    prior-conditioning narrowing (``prior_cond``) for the conditioned set.
-    Sizes follow the :class:`SCMPrior` vocabulary (``n_treatments`` treatment
-    treatments / ``n_covariates`` covariates / ``n_latent`` hidden confounders).
+    Both generative and oracle builders use this table with :func:`_uniform`
+    or :func:`_mechanism_prior`, so supports and distribution laws cannot drift.
+    Also resolves the prior-conditioning narrowing (``prior_cond``) for the
+    conditioned set. Sizes follow the :class:`SCMPrior` vocabulary
+    (``n_treatments`` treatments / ``n_covariates`` covariates / ``n_latent``
+    hidden confounders).
     """
-    spr = mechanisms.SATURATION_PRIOR_RANGES
+    spr = cfg.saturation_prior_ranges
     n_t, n_c, n_l = n_treatments, n_covariates, n_latent
     carryover_alpha_range = cfg.carryover_alpha_range
     hill_shape_range = spr["hill"]["slope"]
@@ -891,7 +1236,7 @@ def _uniform_prior_specs(
         if "hill_shape" in prior_cond:
             lo, width = prior_cond["hill_shape"]
             hill_shape_range = (lo, lo + width)
-    return {
+    specs: dict[str, tuple[str, float, float, Any]] = {
         # linear edge coefficients
         "w_dc": ("w_dc", cfg.dc_coeff_range[0], cfg.dc_coeff_range[1], (n_l, n_t)),
         "u_dz": ("u_dz", cfg.dz_coeff_range[0], cfg.dz_coeff_range[1], (n_l, n_c)),
@@ -970,6 +1315,23 @@ def _uniform_prior_specs(
             n_c,
         ),
     }
+    if cfg.treatment_reference_contribution_range is not None:
+        lo, hi = cfg.treatment_reference_contribution_range
+        specs["treatment_reference_contribution"] = (
+            "treatment_reference_contribution",
+            lo,
+            hi,
+            n_t,
+        )
+    if cfg.covariate_reference_contribution_range is not None:
+        lo, hi = cfg.covariate_reference_contribution_range
+        specs["covariate_reference_contribution"] = (
+            "covariate_reference_contribution",
+            lo,
+            hi,
+            n_c,
+        )
+    return specs
 
 
 def build_world_model(
@@ -1030,6 +1392,7 @@ def build_world_model(
             specs,
             rw,
             c_level,
+            g=g_active,
             carryover_family=structural["carryover_family"],
             sat_family=structural["sat_family"],
             use_hf=structural["use_hf"],
@@ -1053,6 +1416,12 @@ def build_world_model(
             params["covariate_pulse_prob"],
         )
         confounding_strength = _confounded_treatment_eps(cfg, eps)
+        # Composable trajectory components: RVs only for components some input
+        # of this cell carries; absent (None) when no schedule component is
+        # enabled, which leaves the graph exactly as before.
+        trajectory = trajectory_params(cfg, structural, n_treatments, n_covariates, n_time_steps)
+        if trajectory is not None:
+            params["trajectory"] = trajectory
 
         graph = build_symbolic_graph(
             g_active,
@@ -1095,7 +1464,13 @@ def build_world_model(
             elif existing is not output:
                 raise ValueError(f"graph output {name!r} collides with a different model variable")
 
-        param_names = _register_param_reports(params, rw, c_level, confounding_strength)
+        param_names = _register_param_reports(
+            params,
+            rw,
+            c_level,
+            confounding_strength,
+            cfg=cfg,
+        )
 
     return model, out_names, param_names
 
@@ -1156,9 +1531,12 @@ def build_oracle_model(
     Returns
     -------
     pm.Model
-        In marginal mode, free RVs are the outcome-side priors (``beta``,
-        live mechanism shapes, ``delta_dy``, ``rho_zy``, and walk parameters)
-        without latent walk innovations. Deterministics ``contributions``
+        In marginal mode, free RVs are the outcome-side priors (raw ``beta`` /
+        ``rho_zy`` or their enabled reference-contribution targets, live mechanism
+        shapes, ``delta_dy``, and walk parameters) without latent walk innovations.
+        Reference-enabled ``beta`` / ``rho_zy`` and log-scale MM shape values
+        are deterministic transforms of those genuine primitive priors.
+        Deterministics ``contributions``
         (n_time_steps, n_treatments) and ``outcome_mu`` (n_time_steps,) remain;
         ``outcome_mu`` is ``E[outcome | theta]`` and excludes latent walk
         realizations. Sampled mode additionally has ``eps_d`` / ``eps_b`` and
@@ -1176,8 +1554,11 @@ def build_oracle_model(
        universal upper bound on recovery: it omits input-likelihood information
        that another method may use. Marginalizing over graphs is out of scope.
     2. **Plug-in conditioning on the observed inputs**: ``treatments`` and
-       ``covariates`` enter as data (constants). The information they carry
-       about latent latent_unobserved through ``p(C | D)`` / ``p(Z | D)`` is not modeled
+       ``covariates`` enter as data (constants).
+       Trajectory gates, levels and texture are already baked into those
+       inputs, as are treatment shocks; none is applied a second time.
+       The information they carry about latent latent_unobserved through
+       ``p(C | D)`` / ``p(Z | D)`` is not modeled
        — including baseline information encoded through the treatment–baseline
        correlation (rho, configured here as confounding strength). In sampled
        mode latent_unobserved is inferred from the outcome residual via ``D -> Y`` only; in
@@ -1384,7 +1765,7 @@ def build_oracle_model(
             support = (
                 cfg.carryover_alpha_range
                 if quantity == "carryover_alpha"
-                else mechanisms.SATURATION_PRIOR_RANGES["hill"]["slope"]
+                else cfg.saturation_prior_ranges["hill"]["slope"]
             )
             raw = None if prior_cond is None else prior_cond.get(quantity)
             if raw is None:
@@ -1454,10 +1835,21 @@ def build_oracle_model(
             include=("d", "b", "y"),
             width_indices={"rw_d": width_d, "rw_b": width_b},
         )
-        beta = _uniform(*specs["beta"])
-        _apply_outcome_std_scale(cfg, rw, g_cy, beta)
+        outcome_params: dict[str, Any] = {}
+        if cfg.treatment_reference_contribution_range is None:
+            outcome_params["beta"] = _uniform(*specs["beta"])
+            _apply_outcome_std_scale(cfg, rw, g_cy, outcome_params["beta"])
+        else:
+            outcome_params["treatment_reference_contribution"] = _uniform(
+                *specs["treatment_reference_contribution"]
+            )
         delta_dy = _uniform(*specs["delta_dy"])
-        rho_zy = _uniform(*specs["rho_zy"])
+        if cfg.covariate_reference_contribution_range is None:
+            outcome_params["rho_zy"] = _uniform(*specs["rho_zy"])
+        else:
+            outcome_params["covariate_reference_contribution"] = _uniform(
+                *specs["covariate_reference_contribution"]
+            )
         mech: dict[str, Any] = {}
         for name in mech_names:
             point_quantity: str | None = (
@@ -1477,21 +1869,39 @@ def build_oracle_model(
                     ),
                 )
             else:
-                mech[name] = _uniform(*_oracle_spec(name))
+                mech[name] = _mechanism_prior(cfg, _oracle_spec(name))
         mech_params: dict[str, Any] = {
             "l_max": cfg.l_max,
             "carryover_family": structural["carryover_family"],
             "sat_family": structural["sat_family"],
             **{name: np.zeros(n_treatments) for name in _MECHANISM_PARAM_NAMES},
             **mech,
+            **outcome_params,
         }
+        # Reference-derived loadings read the runtime saturation scale, so a
+        # compiled oracle rebinding `saturation_scale_data` re-derives them.
+        saturation_scale_t = pm.Data("saturation_scale_data", saturation_scale)
+        _derive_reference_coefficients(
+            cfg, mech_params, n_treatments, saturation_scale=saturation_scale_t
+        )
+        beta, rho_zy = mech_params["beta"], mech_params["rho_zy"]
+        if cfg.treatment_reference_contribution_range is not None:
+            _apply_outcome_std_scale(cfg, rw, g_cy, beta)
+            pm.Deterministic(
+                "treatment_reference_input",
+                mech_params["treatment_reference_input"],
+            )
+        if cfg.covariate_reference_contribution_range is not None:
+            pm.Deterministic(
+                "covariate_reference_input",
+                pt.full_like(rho_zy, float(cfg.covariate_reference_scale)),
+            )
 
         # Every world-varying numerical input is a named shared variable.  These
         # names are part of the reusable compiled-oracle contract.
         channels_t = pm.Data("channels_data", treatments)
         controls_t = pm.Data("controls_data", covariates)
         sales_t = pm.Data("sales_data", outcome)
-        saturation_scale_t = pm.Data("saturation_scale_data", saturation_scale)
         g_cy_t = pm.Data("g_cy_data", g_cy)
         g_db_t = pm.Data("g_db_data", g_dy)
         g_zb_t = pm.Data("g_zb_data", g_zy)
@@ -1500,13 +1910,11 @@ def build_oracle_model(
         # response-history prefix; this is unrelated to sampler tune/warmup draws.
 
         # Treatment response on the OBSERVED treatment: the same carryover /
-        # saturation code as generation.  Shapes are structural and therefore
-        # cannot be changed through with_data.
+        # κ-relative saturation code as generation. Trajectories and held-level
+        # shocks are already baked into the observed inputs, so no input schedule
+        # parameters or tensors belong in this outcome-side model. Shapes are
+        # structural and therefore cannot be changed through with_data.
         treatments_t = channels_t
-
-        # Treatment response on the OBSERVED treatment: the same carryover / κ-relative
-        # saturation code as generation. Held-level windows are already baked
-        # into the observed treatment matrix, so no schedule tensors are needed.
         contrib_cols = []
         for k in range(n_treatments):
             ad_obs = _carryover_col(treatments_t[:, k], mech_params, k)
@@ -1542,8 +1950,8 @@ def build_oracle_model(
                 covariance = covariance + (loading**2) * pt.take(
                     pt.as_tensor_variable(_walk_gram_stack()), width_d[j], axis=0
                 )
-            # The floor only guards the float64 covariance factorization; it
-            # is too small to provide material likelihood information.
+            # This 1e-12 diagonal guard stabilizes covariance factorization.
+            # Its 1e-6 SD can be material when outcome units are small.
             covariance = covariance + 1e-12 * pt.eye(rows.size, dtype="float64")
             pm.MvNormal(
                 "outcome",

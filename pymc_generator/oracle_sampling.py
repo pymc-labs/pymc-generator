@@ -793,6 +793,9 @@ ORACLE_CONFIG_TOPOLOGY_FIELDS = (
     "outcome_std_mode",
     "baseline_floor",
     "baseline_floor_scope",
+    # Mechanism-prior law and stable saturation-family selection.
+    "mm_scale_prior",
+    "mechanism_priors_enabled",
 )
 ORACLE_CONFIG_FIXED_NUMERIC_FIELDS = (
     "carryover_alpha_range",
@@ -824,6 +827,12 @@ ORACLE_CONFIG_FIXED_NUMERIC_FIELDS = (
     "covariate_hf_sigma_range",
     "covariate_pulse_prob_range",
     "covariate_pulse_amp_range",
+    # Mechanism shape supports and reference-contribution parameterization.
+    "saturation_prior_ranges",
+    "treatment_reference_contribution_range",
+    "treatment_reference_multiplier",
+    "covariate_reference_contribution_range",
+    "covariate_reference_scale",
 )
 # Shock metadata is validated at the oracle builder seam but does not create an
 # Oracle RV.  It is still pinned in the template contract so changing the
@@ -1126,9 +1135,7 @@ def _dynamic_payload(world: Any, names: set[str]) -> dict[str, np.ndarray]:
         if quantity == "carryover_alpha":
             support = cfg.carryover_alpha_range
         else:
-            from . import mechanisms
-
-            support = mechanisms.SATURATION_PRIOR_RANGES["hill"]["slope"]
+            support = cfg.saturation_prior_ranges["hill"]["slope"]
         if quantity in prior:
             raw = prior[quantity]
             if not isinstance(raw, (tuple, list, np.ndarray)) or len(raw) != 2:

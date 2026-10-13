@@ -18,11 +18,19 @@ from __future__ import annotations
 
 import time
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
 
+from .active_counts import (
+    ACTIVE_COUNT_ALLOCATIONS,
+    active_count_weight_matrix,
+    draw_active_counts,
+    plan_active_counts,
+    summarize_active_count_coverage,
+)
 from .signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
@@ -35,13 +43,31 @@ from .slots import (
     CORPUS_SCHEMA_VERSION,
     EDGE_BASE_RATES,
     EDGE_TYPES_EXTENDED,
+    MECHANISM_ARRAY_FIELDS,
+    MECHANISM_REFERENCE_FIELDS,
     N_COVARIATES_DEMO,
     N_LATENT_DEMO,
     N_TIME_STEPS_DEMO,
     N_TREATMENTS_DEMO,
     PRIOR_COND_LAYOUT,
     PRIOR_COND_QUANTITIES,
+    TRAJECTORY_ARRAY_FIELDS,
+    TRAJECTORY_COMPONENTS,
+    TRAJECTORY_INPUTS,
+    TRAJECTORY_MAX_LOG_SHIFT,
+    TRAJECTORY_PARAM_FIELDS,
+    TRAJECTORY_PARAM_REPORTS,
+    WALK_ARRAY_FIELDS,
+    WALK_RELATIVE_MODE_FIELDS,
     SlotLayout,
+)
+from .trajectories import (
+    GATE_COMPONENTS,
+    SCHEDULE_COMPONENTS,
+    TEXTURE_COMPONENTS,
+    min_on_weeks,
+    structural_key,
+    summarize_component_prevalence,
 )
 
 #: Canonical categorical orders for treatment-response mechanism family ids.
@@ -78,6 +104,17 @@ def _default_saturation_family_probs() -> dict[str, float]:
     )
 
 
+def _default_saturation_prior_ranges() -> dict[str, dict[str, tuple[float, float]]]:
+    """Legacy shape supports, independently configurable for every prior."""
+    return {
+        "hill": {"slope": (1.0, 3.0), "kappa_mult": (0.7, 1.5)},
+        "logistic": {"lam": (0.5, 3.0)},
+        "michaelis_menten": {"kappa_mult": (0.7, 1.5)},
+        "tanh": {"c": (0.3, 1.5)},
+        "root": {"alpha": (0.3, 0.9)},
+    }
+
+
 #: Maximum draw rounds per cell before giving up (post-filter top-up loop).
 MAX_TOPUPS_PER_CELL = 8
 
@@ -93,9 +130,10 @@ PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
 #: configuration validation unbounded.
 MAX_QUERY_HORIZON_SEARCH_STEPS = 1_000_000
 
-#: Every series and parameter array in the corpus is persisted as float32 (see
-#: the cast block at the end of ``_generate_corpus_additive``), so this is the
-#: largest magnitude the schema can actually hold.
+#: Existing series and base features retain float32 storage, so this is the
+#: largest magnitude they can hold. Schema-v5 float64 truth keeps the same bound
+#: for primitive shapes, raw and reference-derived outcome loadings, reference
+#: recipes and selected unscaled trajectory primitives (see docs/reference/corpus.md).
 CORPUS_STORAGE_DTYPE = np.float32
 CORPUS_STORAGE_MAX = float(np.finfo(CORPUS_STORAGE_DTYPE).max)
 
@@ -147,6 +185,50 @@ def _reject_unrepresentable_bounds(name: str, value: object, lo: float, hi: floa
             )
 
 
+#: Relative slack for treatment coefficient bounds: the runtime response takes
+#: a few rounding steps (input product, anchor division) this support
+#: calculation does not replay. Hill widens it by its condition number.
+_ROUNDING_MARGIN = 1.0 + 8.0 * float(np.finfo(np.float64).eps)
+
+
+def _smallest_nonzero_uniform_magnitude(lo: float, hi: float) -> float | None:
+    """Smallest nonzero ``|q|`` a float64 ``U(lo, hi)`` draw can produce.
+
+    A draw is ``lo + (hi - lo) * u`` with ``u`` on the ``2**-53`` grid, so a
+    support containing zero yields nonzero values far below either endpoint.
+    Near zero the sum is a multiple of the finer quantum of its two terms;
+    cancellation against ``lo`` needs a grid step within a factor two of it.
+    ``None`` means the support is exactly zero.
+    """
+    magnitudes = [abs(x) for x in (lo, hi) if x != 0.0]
+    if lo < hi and lo <= 0.0 <= hi:
+        step = (hi - lo) * 2.0**-53
+        magnitudes.append(step)
+        if lo != 0.0 and step <= 2.0 * abs(lo):
+            magnitudes.append(float(np.spacing(abs(lo))) / 2.0)
+    if not magnitudes:
+        return None
+    return max(min(magnitudes), float(np.nextafter(0.0, 1.0)))
+
+
+def _prior_cond_storage_resolution(support) -> float:
+    """Narrowest conditioning width float32 ``prior_cond`` labels resolve.
+
+    Storing an endpoint moves it by at most half a float32 spacing at the
+    support's magnitude; wider intervals keep that under 1/16 of their width.
+    """
+    return 8 * float(np.finfo(np.float32).eps) * max(abs(float(x)) for x in support)
+
+
+class _ReferenceRepresentabilityError(ValueError):
+    """A drawn reference input or derived coefficient left its validated domain.
+
+    Configuration validation bounds both on parameter support; this runtime
+    check is the backstop for residual rounding. It is never retried, because
+    resampling would silently truncate the configured target prior.
+    """
+
+
 #: Frame that marks an exception as having escaped a node PyTensor was
 #: evaluating. Every linker funnels its ``except Exception`` through
 #: ``pytensor.link.utils.raise_with_op``, which re-raises the ORIGINAL
@@ -176,6 +258,8 @@ def _is_retryable_draw_failure(exc: BaseException) -> bool:
     predicate latent_unobserved BOTH that the failure is numeric AND that it escaped a
     node PyTensor was evaluating (rather than our own call frames around it).
     """
+    if isinstance(exc, _ReferenceRepresentabilityError):
+        return False
     if not isinstance(exc, _RETRYABLE_DRAW_ERRORS):
         return False
     tb = exc.__traceback__
@@ -191,8 +275,8 @@ def _is_retryable_draw_failure(exc: BaseException) -> bool:
 class SCMPrior:
     """Corpus generation knobs + prior-range constants for the additive SCM.
 
-    Supports variable-size DAGs via padding to max sizes. Each cell draws
-    random active counts (n_treatments_active, n_covariates_active,
+    Supports variable-size DAGs via padding to max sizes. Each cell gets
+    active counts (n_treatments_active, n_covariates_active,
     n_latent_active) from configured ranges. Inactive nodes are zero-padded and
     masked via treatment_active_mask / covariate_active_mask /
     latent_active_mask.
@@ -202,6 +286,10 @@ class SCMPrior:
             treatments / observed covariates / hidden confounders).
         n_treatments_active_range / ...: per-cell active-count ranges; inactive
             nodes are zero-padded to the sizes above and masked.
+        active_count_allocation / active_count_weights: how cells cover the
+            grid of active treatment × covariate counts — independent uniform
+            draws per cell (default) or a weighted stratified allocation (see
+            :mod:`pymc_generator.active_counts`).
 
     Prefer building configs through
     :func:`pymc_generator.presets.make_scm_prior`, which pins the
@@ -229,6 +317,14 @@ class SCMPrior:
     n_treatments_active_range: tuple[int, int] = (4, 20)
     n_covariates_active_range: tuple[int, int] = (2, 10)
     n_latent_active_range: tuple[int, int] = (1, 5)
+    # How cells cover the (n_treatments_active, n_covariates_active) grid of
+    # the effective ranges above. "independent" draws both counts per cell;
+    # "stratified" allocates the cells over the grid by ``active_count_weights``
+    # (rows: treatment counts, columns: covariate counts; None = uniform), see
+    # :mod:`pymc_generator.active_counts`. Latent counts are always drawn per
+    # cell. Weights are validated in both modes and used only when stratified.
+    active_count_allocation: Literal["independent", "stratified"] = "independent"
+    active_count_weights: Sequence[Sequence[float]] | None = None
 
     # -- prior-range constants -------------------------------------------
     # Per-treatment treatment-response mechanism priors (realized as PyMC
@@ -242,6 +338,10 @@ class SCMPrior:
     saturation_family_probs: dict[str, float] = field(
         default_factory=_default_saturation_family_probs
     )
+    saturation_prior_ranges: dict[str, dict[str, tuple[float, float]]] = field(
+        default_factory=_default_saturation_prior_ranges
+    )
+    mm_scale_prior: Literal["uniform", "log_uniform"] = "uniform"
     # Weibull carryover prior ranges
     weibull_lam_range: tuple[float, float] = (2.0, 8.0)
     weibull_k_range: tuple[float, float] = (1.5, 4.0)
@@ -261,6 +361,13 @@ class SCMPrior:
     dy_coeff_range: tuple[float, float] = (0.15, 0.45)  # D->Y loadings
     zy_coeff_range: tuple[float, float] = (0.1, 0.4)  # Z->Y loadings
     beta_additive_range: tuple[float, float] = (0.5, 2.0)  # treatment effects
+    # Nominal input contributions before edge gates and any absorbing floor.
+    # Treatment references are post-carryover, relative to the parameter-only
+    # saturation anchor; signed covariates use a fixed positive input scale.
+    treatment_reference_contribution_range: tuple[float, float] | None = None
+    treatment_reference_multiplier: float = 1.0
+    covariate_reference_contribution_range: tuple[float, float] | None = None
+    covariate_reference_scale: float = 1.0
     # Random-walk and outcome-noise priors.
     rw_covariate_mean_range: tuple[float, float] = (-1.0, 1.0)  # covariate drive (Z)
     rw_positive_mean_range: tuple[float, float] = (0.5, 3.0)  # treatments
@@ -312,9 +419,9 @@ class SCMPrior:
     # are scale-free like the treatment factors; unlike the treatment pulse, the
     # covariate pulse is CENTRED (``amp * (fire - prob)``), because a covariate is
     # signed and its level is identified by ``rw_z_mean`` alone.
-    # Defaults are inert: no graph term, the magnitudes degenerate to constants
-    # (no parameter RV, no RNG consumed) and corpora stay byte-identical to the
-    # pre-texture format. make_scm_prior enables them.
+    # Defaults are inert: no graph term, magnitude/probability priors are
+    # constants and consume no RNG. Same-environment model arrays are stable,
+    # not archive bytes across schemas. make_scm_prior enables these controls.
     covariate_hf_sigma_range: tuple[float, float] = (0.0, 0.0)
     covariate_pulse_prob_range: tuple[float, float] = (0.0, 0.0)
     covariate_pulse_amp_range: tuple[float, float] = (0.0, 0.0)
@@ -348,9 +455,9 @@ class SCMPrior:
     #       covariate effect is then credited only down to the floor and the excess
     #       is absorbed, so the whole mean function of outcome is >= 0 by
     #       construction (treatment contributions are already >= 0). Per-node columns
-    #       become the telescoping differences each node caused — exact, and
-    #       identical to the linear split wherever the floor does not bind, but
-    #       no longer linear in the node where it does.
+    #       become the telescoping differences each node caused — exact in sum, and
+    #       equal to the linear split up to float64 rounding wherever the floor does
+    #       not bind, but no longer linear in the node where it does.
     baseline_floor_scope: Literal["intercept", "non_treatment"] = "intercept"
     carryover_burn_in: int = 0
 
@@ -365,6 +472,13 @@ class SCMPrior:
     # Disable them for feature-only shards without changing generated worlds.
     include_identifiability_labels: bool = True
 
+    # Opt-in realised walk and outcome-noise truth: each corpus world records its
+    # walk means, absolute and relative standard deviations and smoothness (see
+    # WALK_ARRAY_FIELDS) plus diagnostics["walk_parameters"]. Corpus generation
+    # only; the extra draw outputs lead the legacy names, so every existing array
+    # and diagnostic stays identical.
+    record_walk_parameters: bool = False
+
     # -- Prior-conditioning hyperprior ------------------------------------
     # When enabled, each CELL draws a narrowed prior interval per conditioned
     # quantity (stage-1 concrete numpy, like the rest of the structure):
@@ -372,8 +486,9 @@ class SCMPrior:
     # and stage 2 draws that cell's parameter as pm.Uniform(lo, lo + w)
     # instead of the global support. The draws are recorded in the corpus
     # under the ``prior_cond`` key (see PRIOR_COND_LAYOUT) so consumers can
-    # expose them as conditioning features. False (default) => byte-identical
-    # unconditioned corpora (the interval draws consume no RNG when disabled).
+    # expose them as conditioning features. False retains same-environment
+    # unconditioned numerical arrays; interval draws consume no RNG when
+    # disabled, but archive bytes can change across schemas.
     prior_conditioning: bool = False
     # Per-quantity (w_lo, w_hi) overrides; keys must be in
     # PRIOR_COND_QUANTITIES. None => PRIOR_COND_DEFAULT_WIDTH_RANGES.
@@ -404,6 +519,106 @@ class SCMPrior:
     # active count. Such treatments can still affect Y through C->C paths.
     # Zero leaves the graph-sampling RNG schedule unchanged.
     min_no_direct_effect_treatments: int = 0
+
+    # -- Composable per-input trajectories ----------------------------------
+    # Every treatment and covariate carries, independently per input, any subset
+    # of TRAJECTORY_COMPONENTS on top of its walk (see pymc_generator.trajectories
+    # and docs/reference/config.md). Each component has an inclusion probability:
+    # per cell, each input carries it with that probability (a concrete structural
+    # draw like the mechanism families). hf/pulse default to 1.0 — the legacy
+    # all-or-none texture, still switched off by their (0, 0) ranges — and every
+    # schedule component to 0.0, so defaults build byte-identical worlds. The
+    # component priors below are read only when the component can be included.
+    treatment_hf_inclusion_prob: float = 1.0
+    treatment_pulse_inclusion_prob: float = 1.0
+    treatment_onset_inclusion_prob: float = 0.0
+    treatment_offset_inclusion_prob: float = 0.0
+    treatment_flighting_inclusion_prob: float = 0.0
+    treatment_level_jump_inclusion_prob: float = 0.0
+    treatment_seasonal_inclusion_prob: float = 0.0
+    treatment_trend_inclusion_prob: float = 0.0
+    covariate_hf_inclusion_prob: float = 1.0
+    covariate_pulse_inclusion_prob: float = 1.0
+    covariate_onset_inclusion_prob: float = 0.0
+    covariate_offset_inclusion_prob: float = 0.0
+    covariate_flighting_inclusion_prob: float = 0.0
+    covariate_level_jump_inclusion_prob: float = 0.0
+    covariate_seasonal_inclusion_prob: float = 0.0
+    covariate_trend_inclusion_prob: float = 0.0
+    # Gate forms. onset: off before week floor(u*T), u ~ U(range), burn-in included.
+    # offset: off from week floor(u*T) on. flighting: on for the first
+    # W = clip(floor(duty*P + 0.5), 1, P - 1) of every P weeks (P ~ DiscreteUniform,
+    # duty ~ U, random phase).
+    treatment_onset_frac_range: tuple[float, float] = (0.05, 0.25)
+    covariate_onset_frac_range: tuple[float, float] = (0.05, 0.25)
+    treatment_offset_frac_range: tuple[float, float] = (0.6, 0.9)
+    covariate_offset_frac_range: tuple[float, float] = (0.6, 0.9)
+    treatment_flighting_period_weeks_range: tuple[int, int] = (4, 13)
+    covariate_flighting_period_weeks_range: tuple[int, int] = (4, 13)
+    treatment_flighting_duty_range: tuple[float, float] = (0.3, 0.8)
+    covariate_flighting_duty_range: tuple[float, float] = (0.3, 0.8)
+    # Level forms. Jumps: `count` held steps per input, one in each of `count`
+    # disjoint slots of weeks [1, T). A treatment step multiplies its series by a
+    # log-uniform factor; a covariate step adds a signed size (covariate units).
+    treatment_level_jump_count: int = 1
+    covariate_level_jump_count: int = 1
+    treatment_level_jump_factor_range: tuple[float, float] = (0.5, 2.0)
+    covariate_level_jump_size_range: tuple[float, float] = (-1.0, 1.0)
+    # Seasonal A*sin(2*pi*t/P + phi), phase ~ U(0, 2*pi). Treatment amplitude is
+    # in log-level (the series is multiplied by exp(A*sin)); covariate amplitude
+    # is in covariate units.
+    treatment_seasonal_amplitude_range: tuple[float, float] = (0.1, 0.5)
+    covariate_seasonal_amplitude_range: tuple[float, float] = (0.2, 1.0)
+    treatment_seasonal_period_weeks_range: tuple[float, float] = (52.0, 52.0)
+    covariate_seasonal_period_weeks_range: tuple[float, float] = (52.0, 52.0)
+    # Trend B*max(t, 0)/(T-1): zero through burn-in and reported week 0, B at the
+    # last week. Treatment B is a log-level change, covariate B a level change.
+    treatment_trend_log_change_range: tuple[float, float] = (-1.0, 1.0)
+    covariate_trend_change_range: tuple[float, float] = (-1.0, 1.0)
+
+    def trajectory_inclusion_probs(self) -> dict[str, dict[str, float]]:
+        """Effective per-input inclusion probability of every trajectory component.
+
+        ``{input: {component: p}}`` in the canonical ``TRAJECTORY_INPUTS`` /
+        ``TRAJECTORY_COMPONENTS`` order. ``hf`` and ``pulse`` are 0.0 whenever
+        their texture range disables the term (``*_hf_sigma_range[1] == 0`` /
+        ``*_pulse_prob_range[1] == 0``), whatever their inclusion knob says.
+        """
+        ranges = {"hf": "hf_sigma_range", "pulse": "pulse_prob_range"}
+        out: dict[str, dict[str, float]] = {}
+        for input_type in TRAJECTORY_INPUTS:
+            probs: dict[str, float] = {}
+            for component in TRAJECTORY_COMPONENTS:
+                p = float(getattr(self, f"{input_type}_{component}_inclusion_prob"))
+                if component in ranges and not (
+                    float(getattr(self, f"{input_type}_{ranges[component]}")[1]) > 0.0
+                ):
+                    p = 0.0
+                probs[component] = p
+            out[input_type] = probs
+        return out
+
+    @property
+    def trajectory_components_enabled(self) -> bool:
+        """Whether any schedule component (gate or level form) can be included."""
+        return any(
+            float(getattr(self, f"{input_type}_{component}_inclusion_prob")) > 0.0
+            for input_type in TRAJECTORY_INPUTS
+            for component in SCHEDULE_COMPONENTS
+        )
+
+    @property
+    def trajectory_metadata_enabled(self) -> bool:
+        """Whether corpora carry the optional trajectory arrays and diagnostics.
+
+        True when any trajectory inclusion knob departs from its default: a
+        schedule component can be included, or an hf/pulse probability is not 1.
+        """
+        return self.trajectory_components_enabled or any(
+            float(getattr(self, f"{input_type}_{component}_inclusion_prob")) != 1.0
+            for input_type in TRAJECTORY_INPUTS
+            for component in TEXTURE_COMPONENTS
+        )
 
     @property
     def layout(self) -> SlotLayout:
@@ -436,40 +651,140 @@ class SCMPrior:
         return (lo, hi)
 
     @property
+    def active_count_grid(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Active treatment and covariate counts spanned by the effective ranges."""
+        tr = self.n_treatments_active_range_effective
+        cv = self.n_covariates_active_range_effective
+        return tuple(range(tr[0], tr[1] + 1)), tuple(range(cv[0], cv[1] + 1))
+
+    def active_count_weight_matrix(self) -> np.ndarray:
+        """Validated ``active_count_weights`` over :attr:`active_count_grid` (ones if None).
+
+        The active ranges are checked first, as :meth:`validate` does, so callers
+        that skip :meth:`validate` (the template path) get the same errors.
+        """
+        self._validate_active_ranges()
+        return active_count_weight_matrix(self.active_count_weights, *self.active_count_grid)
+
+    def _validate_active_ranges(self) -> None:
+        """Validate the variable-size DAG ranges (called by :meth:`validate`).
+
+        The upper bound may exceed the padded size and is intentionally clamped,
+        but both declared bounds must still be ordered integers.
+        """
+        for range_name, size_name in (
+            ("n_treatments_active_range", "n_treatments"),
+            ("n_covariates_active_range", "n_covariates"),
+            ("n_latent_active_range", "n_latent"),
+        ):
+            value = getattr(self, range_name)
+            try:
+                lo, hi = value
+            except (TypeError, ValueError):
+                raise ValueError(f"{range_name} must be an integer (lo, hi) pair, got {value!r}")
+            if (
+                isinstance(lo, (bool, np.bool_))
+                or isinstance(hi, (bool, np.bool_))
+                or not isinstance(lo, (int, np.integer))
+                or not isinstance(hi, (int, np.integer))
+                or not 1 <= lo <= hi
+            ):
+                raise ValueError(
+                    f"{range_name} must have integer bounds satisfying 1 <= lo <= hi, got {value!r}"
+                )
+            size = getattr(self, size_name)
+            if lo > size:
+                raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
+
+    @property
     def rw_baseline_std_sigma_effective(self) -> float:
         """Baseline walk scale, following the shared walk scale unless overridden."""
         if self.rw_baseline_std_sigma is None:
             return self.rw_std_sigma
         return self.rw_baseline_std_sigma
 
+    def walk_parameter_metadata(self) -> dict[str, Any]:
+        """The ``diagnostics["walk_parameters"]`` echo of the walk and noise priors.
+
+        ``fields`` lists, sorted, the walk arrays a corpus generated with
+        ``record_walk_parameters=True`` carries: every
+        :data:`~pymc_generator.slots.WALK_ARRAY_FIELDS` entry, minus the relative
+        baseline/noise draws under ``outcome_std_mode="absolute"``. The relative
+        std ranges are ``None`` in absolute mode and the absolute HalfNormal
+        scales ``None`` in relative mode; ``rw_baseline_std_sigma`` is
+        :attr:`rw_baseline_std_sigma_effective`. Every value is JSON-native, so
+        the block round-trips through ``save_corpus`` / ``load_corpus`` unchanged.
+        """
+        relative = self.outcome_std_mode == "relative"
+
+        def _bounds(value: Any) -> list[float]:
+            lo, hi = value
+            return [float(lo), float(hi)]
+
+        return {
+            "fields": sorted(
+                key for key in WALK_ARRAY_FIELDS if relative or key not in WALK_RELATIVE_MODE_FIELDS
+            ),
+            "outcome_std_mode": str(self.outcome_std_mode),
+            "rw_positive_mean_range": _bounds(self.rw_positive_mean_range),
+            "rw_treatment_std_range": _bounds(self.rw_treatment_std_range),
+            "rw_covariate_mean_range": _bounds(self.rw_covariate_mean_range),
+            "rw_std_sigma": float(self.rw_std_sigma),
+            "rw_baseline_mean_range": _bounds(self.rw_baseline_mean_range),
+            "rw_baseline_std_range": _bounds(self.rw_baseline_std_range) if relative else None,
+            "rw_outcome_std_range": _bounds(self.rw_outcome_std_range) if relative else None,
+            "rw_baseline_std_sigma": (
+                None if relative else float(self.rw_baseline_std_sigma_effective)
+            ),
+            "rw_outcome_std_sigma": None if relative else float(self.rw_outcome_std_sigma),
+            "rw_smoothness_alpha": float(self.rw_smoothness_alpha),
+            "rw_smoothness_beta": float(self.rw_smoothness_beta),
+            "rw_smoothness_max_weeks": int(self.rw_smoothness_max_weeks),
+            "baseline_floor": None if self.baseline_floor is None else float(self.baseline_floor),
+            "baseline_floor_scope": str(self.baseline_floor_scope),
+        }
+
     @property
     def n_query(self) -> int:
         return _n_query(self.n_time_steps, self.query_frac)
+
+    @property
+    def mechanism_priors_enabled(self) -> bool:
+        """Whether effective mechanism priors depart from the legacy path."""
+        defaults = _default_saturation_prior_ranges()
+        changed_shapes = any(
+            tuple(bounds) != defaults[family][name]
+            for family, parameters in self.saturation_prior_ranges.items()
+            for name, bounds in parameters.items()
+        )
+        return (
+            changed_shapes
+            or self.mm_scale_prior != "uniform"
+            or self.treatment_reference_contribution_range is not None
+            or self.covariate_reference_contribution_range is not None
+        )
 
     def prior_cond_spec(self) -> dict[str, dict[str, tuple[float, float]]]:
         """Effective ``{quantity: {"support": (lo, hi), "width_range": (w_lo, w_hi)}}``.
 
         Quantities iterate in the LOCKED ``PRIOR_COND_QUANTITIES`` order (the
         order both the interval RNG draws and the ``prior_cond`` columns
-        follow). Supports come from the same constants the unconditioned
+        follow). Supports come from the same config ranges the unconditioned
         priors use — ``carryover_alpha_range`` for the geometric carryover decay,
-        ``SATURATION_PRIOR_RANGES["hill"]["slope"]`` for the Hill shape — so
+        ``saturation_prior_ranges["hill"]["slope"]`` for the Hill shape — so
         the conditioned interval is nested in the exact global prior by
         construction. Width ranges default to
         :data:`PRIOR_COND_DEFAULT_WIDTH_RANGES`, overridable per quantity via
         ``prior_cond_width_ranges``.
         """
-        # Deferred: mechanisms pulls the pytensor / pymc-marketing stack.
-        from .mechanisms import SATURATION_PRIOR_RANGES
-
         supports: dict[str, tuple[float, float]] = {
             "carryover_alpha": (
                 float(self.carryover_alpha_range[0]),
                 float(self.carryover_alpha_range[1]),
             ),
             "hill_shape": (
-                float(SATURATION_PRIOR_RANGES["hill"]["slope"][0]),
-                float(SATURATION_PRIOR_RANGES["hill"]["slope"][1]),
+                float(self.saturation_prior_ranges["hill"]["slope"][0]),
+                float(self.saturation_prior_ranges["hill"]["slope"][1]),
             ),
         }
         widths = {**PRIOR_COND_DEFAULT_WIDTH_RANGES, **(self.prior_cond_width_ranges or {})}
@@ -481,6 +796,105 @@ class SCMPrior:
             for q in PRIOR_COND_QUANTITIES
         }
 
+    def _validate_reference_coefficients(self) -> None:
+        """Bound derived coefficients using parameter support, not realized inputs.
+
+        Control bounds replay the runtime ``q * fl(1 / scale)`` exactly; treatment
+        bounds divide by the smallest admitted reference response with a rounding
+        margin. Supports containing zero are checked at their smallest nonzero draw.
+        """
+        if self.covariate_reference_contribution_range is not None:
+            lo, hi = (float(x) for x in self.covariate_reference_contribution_range)
+            # Generation multiplies by this reciprocal, exactly as validated here;
+            # Python float arithmetic overflows to inf without a NumPy warning.
+            inverse_scale = 1.0 / float(self.covariate_reference_scale)
+            smallest = _smallest_nonzero_uniform_magnitude(lo, hi)
+            largest_coefficient = max(abs(lo), abs(hi)) * inverse_scale
+            if not np.isfinite(inverse_scale) or largest_coefficient > CORPUS_STORAGE_MAX:
+                raise ValueError(
+                    "covariate_reference_contribution_range / covariate_reference_scale "
+                    "requires a coefficient exceeding the float32 corpus storage maximum"
+                )
+            if smallest is not None and smallest * inverse_scale == 0.0:
+                raise ValueError(
+                    "covariate_reference_contribution_range / covariate_reference_scale "
+                    "requires a nonzero coefficient that underflows in float64"
+                )
+        if self.treatment_reference_contribution_range is None:
+            return
+        lo, hi = (float(x) for x in self.treatment_reference_contribution_range)
+        smallest = _smallest_nonzero_uniform_magnitude(lo, hi)
+        multiplier = float(self.treatment_reference_multiplier)
+        if multiplier * 1e-8 < np.finfo(np.float64).tiny:
+            raise ValueError(
+                "treatment_reference_multiplier * the minimum saturation_scale=1e-8 "
+                "must produce a normal positive treatment_reference_input in float64"
+            )
+        ranges = self.saturation_prior_ranges
+        hill_kappa_hi = float(ranges["hill"]["kappa_mult"][1])
+        hill_slope = float(ranges["hill"]["slope"][1 if hill_kappa_hi >= multiplier else 0])
+        hill_ratio = multiplier / hill_kappa_hi
+        hill_log_ratio = (
+            np.log(hill_ratio)
+            if np.finfo(float).tiny <= hill_ratio <= np.finfo(float).max
+            else np.log(multiplier) - np.log(hill_kappa_hi)
+        )
+        # The runtime ratio carries a few ulps of rounding; steep slopes and deep
+        # tails amplify it in the response.
+        eps = float(np.finfo(np.float64).eps)
+        with np.errstate(over="ignore"):
+            hill_condition = 4.0 * hill_slope + 2.0 * abs(hill_slope * hill_log_ratio) + 8.0
+            margins = {"hill": float(np.exp(hill_condition * eps))}
+        root_alpha = float(ranges["root"]["alpha"][1 if multiplier < 1.0 else 0])
+        # Saturation can intentionally be almost flat. Underflow means its
+        # requested target cannot be represented by a finite supported beta.
+        with np.errstate(over="ignore", under="ignore"):
+            lower_response = {
+                "linear": multiplier,
+                "hill": float(np.exp(-np.logaddexp(0.0, -hill_slope * hill_log_ratio))),
+                "logistic": float(
+                    np.tanh((float(ranges["logistic"]["lam"][0]) * multiplier) / 2.0)
+                ),
+                "michaelis_menten": multiplier
+                / (multiplier + float(ranges["michaelis_menten"]["kappa_mult"][1])),
+                "tanh": float(np.tanh(multiplier / float(ranges["tanh"]["c"][1]))),
+                "root": multiplier**root_alpha,
+            }
+        root_alpha_max = float(ranges["root"]["alpha"][1 if multiplier >= 1.0 else 0])
+        upper_response = {
+            "linear": multiplier,
+            "root": multiplier**root_alpha_max,
+        }
+        for family, response in lower_response.items():
+            if self.saturation_family_probs[family] <= 0.0:
+                continue
+            # linear has no shape parameters, so name its family probability.
+            source = (
+                "saturation_family_probs['linear']"
+                if family == "linear"
+                else f"saturation_prior_ranges[{family!r}]"
+            )
+            margin = margins.get(family, _ROUNDING_MARGIN)
+            largest_coefficient = np.inf
+            # Subnormal responses carry too few significant bits for any margin.
+            if np.isfinite(response) and response >= np.finfo(np.float64).tiny:
+                with np.errstate(over="ignore"):
+                    largest_coefficient = float(np.float64(hi) / response * margin)
+            if largest_coefficient > CORPUS_STORAGE_MAX:
+                raise ValueError(
+                    "treatment_reference_contribution_range with "
+                    f"treatment_reference_multiplier={multiplier!r} and "
+                    f"{source} requires an unrepresentable reference response or a "
+                    "coefficient exceeding the float32 corpus storage maximum"
+                )
+            largest_response = upper_response.get(family, 1.0) * margin
+            if smallest is not None and np.float64(smallest) / largest_response == 0.0:
+                raise ValueError(
+                    "treatment_reference_contribution_range with "
+                    f"treatment_reference_multiplier={multiplier!r} and "
+                    f"{source} requires a nonzero coefficient that underflows in float64"
+                )
+
     def validate(self) -> None:
         def _integer(name: str, value, *, minimum: int) -> None:
             if (
@@ -491,12 +905,16 @@ class SCMPrior:
                 raise ValueError(f"{name} must be an integer >= {minimum}, got {value!r}")
 
         def _finite_real(name: str, value, *, positive: bool = False, nonnegative: bool = False):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError):
+                numeric = np.nan
             if (
                 isinstance(value, (bool, np.bool_))
                 or not isinstance(value, (int, float, np.integer, np.floating))
-                or not np.isfinite(value)
-                or (positive and value <= 0)
-                or (nonnegative and value < 0)
+                or not np.isfinite(numeric)
+                or (positive and numeric <= 0)
+                or (nonnegative and numeric < 0)
             ):
                 domain = "positive" if positive else "nonnegative" if nonnegative else "finite"
                 raise ValueError(f"{name} must be a {domain} real scalar, got {value!r}")
@@ -571,19 +989,21 @@ class SCMPrior:
 
         def _finite_range(
             name: str,
+            value: Any = ...,
             *,
             minimum: float | None = None,
             maximum: float | None = None,
             minimum_exclusive: bool = False,
             reason: str | None = None,
         ) -> tuple[float, float]:
-            value = getattr(self, name)
+            if value is ...:
+                value = getattr(self, name)
             try:
                 lo, hi = value
                 if isinstance(lo, (bool, np.bool_)) or isinstance(hi, (bool, np.bool_)):
                     raise TypeError
                 lo, hi = float(lo), float(hi)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 raise ValueError(f"{name} must be a finite (lo, hi) pair, got {value!r}")
             valid_min = minimum is None or (lo > minimum if minimum_exclusive else lo >= minimum)
             if not (
@@ -599,6 +1019,86 @@ class SCMPrior:
                 raise ValueError(message)
             _reject_unrepresentable_bounds(name, value, lo, hi)
             return lo, hi
+
+        defaults = _default_saturation_prior_ranges()
+        if not isinstance(self.saturation_prior_ranges, dict) or set(
+            self.saturation_prior_ranges
+        ) != set(defaults):
+            raise ValueError(
+                f"saturation_prior_ranges must have exactly families {tuple(defaults)}"
+            )
+        for family, parameters in defaults.items():
+            configured = self.saturation_prior_ranges[family]
+            if not isinstance(configured, dict) or set(configured) != set(parameters):
+                raise ValueError(
+                    f"saturation_prior_ranges[{family!r}] must have exactly parameters "
+                    f"{tuple(parameters)}"
+                )
+            for parameter, bounds in configured.items():
+                name = f"saturation_prior_ranges[{family!r}][{parameter!r}]"
+                try:
+                    lo, hi = bounds
+                except (TypeError, ValueError):
+                    raise ValueError(f"{name} must be a finite (lo, hi) pair, got {bounds!r}")
+                _finite_real(name, lo, positive=True)
+                _finite_real(name, hi, positive=True)
+                _finite_range(
+                    name,
+                    value=bounds,
+                    minimum=0.0,
+                    minimum_exclusive=True,
+                    maximum=1.0 if family == "root" else None,
+                )
+        if not isinstance(self.mm_scale_prior, str) or self.mm_scale_prior not in (
+            "uniform",
+            "log_uniform",
+        ):
+            raise ValueError("mm_scale_prior must be 'uniform' or 'log_uniform'")
+        mm_lo, mm_hi = (
+            float(x) for x in self.saturation_prior_ranges["michaelis_menten"]["kappa_mult"]
+        )
+        if (
+            self.mm_scale_prior == "log_uniform"
+            and mm_lo < mm_hi
+            and (np.log(mm_lo) >= np.log(mm_hi))
+        ):
+            raise ValueError(
+                "saturation_prior_ranges['michaelis_menten']['kappa_mult'] "
+                "bounds collapse in log space under mm_scale_prior='log_uniform'"
+            )
+        if mm_lo * 1e-8 == 0.0:
+            raise ValueError(
+                "saturation_prior_ranges['michaelis_menten']['kappa_mult'] lower bound "
+                "times the minimum saturation_scale=1e-8 must be positive in float64; "
+                "otherwise a zero treatment input evaluates 0/0"
+            )
+        for name in ("treatment_reference_multiplier", "covariate_reference_scale"):
+            _finite_real(name, getattr(self, name), positive=True)
+            _reject_unrepresentable_bounds(
+                name, getattr(self, name), float(getattr(self, name)), float(getattr(self, name))
+            )
+        for name in (
+            "treatment_reference_contribution_range",
+            "covariate_reference_contribution_range",
+        ):
+            bounds = getattr(self, name)
+            if bounds is None:
+                continue
+            try:
+                lo, hi = bounds
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be None or a finite (lo, hi) pair, got {bounds!r}")
+            _finite_real(name, lo)
+            _finite_real(name, hi)
+            if any(float(endpoint) == 0.0 and endpoint != 0.0 for endpoint in (lo, hi)):
+                raise ValueError(f"{name} nonzero bounds must remain nonzero in float64")
+            _finite_range(
+                name,
+                minimum=0.0 if name == "treatment_reference_contribution_range" else None,
+            )
+            if name == "treatment_reference_contribution_range" and float(hi) <= 0.0:
+                raise ValueError(f"{name} must have an upper bound > 0")
+        self._validate_reference_coefficients()
 
         _finite_range("carryover_alpha_range", minimum=0.0, maximum=1.0)
         _finite_range("weibull_lam_range", minimum=0.0, minimum_exclusive=True)
@@ -685,7 +1185,15 @@ class SCMPrior:
                     f"{PRIOR_COND_QUANTITIES}, got {unknown}"
                 )
         if self.prior_conditioning or self.prior_cond_width_ranges is not None:
+            # Disabled conditioning only checks the widths it was given.
+            checked = (
+                PRIOR_COND_QUANTITIES
+                if self.prior_conditioning
+                else tuple(self.prior_cond_width_ranges or ())
+            )
             for q, cond_spec in self.prior_cond_spec().items():
+                if q not in checked:
+                    continue
                 s_lo, s_hi = cond_spec["support"]
                 w_lo, w_hi = cond_spec["width_range"]
                 if not 0.0 < w_lo <= w_hi <= s_hi - s_lo:
@@ -693,6 +1201,14 @@ class SCMPrior:
                         f"prior conditioning for {q!r} needs "
                         f"0 < w_lo <= w_hi <= support width; got width range "
                         f"({w_lo}, {w_hi}) against support ({s_lo}, {s_hi})"
+                    )
+                resolution = _prior_cond_storage_resolution((s_lo, s_hi))
+                # Only enabled conditioning writes float32 prior_cond labels.
+                if self.prior_conditioning and w_lo <= resolution:
+                    raise ValueError(
+                        f"prior conditioning for {q!r} needs prior_cond_width_ranges with "
+                        f"a lower bound above {resolution:.3g}, the narrowest width float32 "
+                        f"prior_cond labels resolve for support ({s_lo}, {s_hi})"
                     )
         # Prior-shift eval: legacy edge-rate overrides
         if self.edge_rate_overrides is not None:
@@ -869,6 +1385,10 @@ class SCMPrior:
             raise ValueError(f"n_treatment_shocks must be >= 0, got {self.n_treatment_shocks}")
         if not isinstance(self.include_identifiability_labels, bool):
             raise ValueError("include_identifiability_labels must be a bool")
+        if not isinstance(self.record_walk_parameters, bool):
+            raise ValueError(
+                f"record_walk_parameters must be a bool, got {self.record_walk_parameters!r}"
+            )
         try:
             shock_len_lo, shock_len_hi = self.treatment_shock_length_range
         except (TypeError, ValueError):
@@ -919,32 +1439,7 @@ class SCMPrior:
                 "n_treatment_shocks * max treatment_shock_length must be <= n_time_steps, got "
                 f"{self.n_treatment_shocks} * {shock_len_hi} > {self.n_time_steps}"
             )
-        # Validate variable-size DAG ranges. The upper bound may exceed the
-        # padded size and is intentionally clamped, but both declared bounds
-        # must still be ordered integers.
-        for range_name, size_name in (
-            ("n_treatments_active_range", "n_treatments"),
-            ("n_covariates_active_range", "n_covariates"),
-            ("n_latent_active_range", "n_latent"),
-        ):
-            value = getattr(self, range_name)
-            try:
-                lo, hi = value
-            except (TypeError, ValueError):
-                raise ValueError(f"{range_name} must be an integer (lo, hi) pair, got {value!r}")
-            if (
-                isinstance(lo, (bool, np.bool_))
-                or isinstance(hi, (bool, np.bool_))
-                or not isinstance(lo, (int, np.integer))
-                or not isinstance(hi, (int, np.integer))
-                or not 1 <= lo <= hi
-            ):
-                raise ValueError(
-                    f"{range_name} must have integer bounds satisfying 1 <= lo <= hi, got {value!r}"
-                )
-            size = getattr(self, size_name)
-            if lo > size:
-                raise ValueError(f"{size_name} ({size}) must be >= {range_name}[0] ({lo})")
+        self._validate_active_ranges()
         # The smallest cell must accommodate both the direct-null floor and
         # the mandatory direct treatment.
         if self.min_no_direct_effect_treatments:
@@ -954,6 +1449,196 @@ class SCMPrior:
                     f"min_no_direct_effect_treatments ({self.min_no_direct_effect_treatments}) must be < "
                     f"n_treatments_active_range[0] ({active_lo}) so every cell can keep at "
                     "least one direct treatment besides the direct-null ones"
+                )
+        if not isinstance(self.active_count_allocation, str) or (
+            self.active_count_allocation not in ACTIVE_COUNT_ALLOCATIONS
+        ):
+            raise ValueError(
+                "active_count_allocation must be 'independent' or 'stratified', "
+                f"got {self.active_count_allocation!r}"
+            )
+        self.active_count_weight_matrix()
+        self._validate_trajectories(_finite_range)
+
+    def _validate_trajectories(self, finite_range: Any) -> None:
+        """Validate the composable-trajectory knobs (called by :meth:`validate`).
+
+        Types, finiteness and static bounds are always checked. Rules that depend
+        on the horizon, or that would otherwise let an included component change
+        nothing, apply only while the component's inclusion probability is > 0, so
+        a disabled component's priors never constrain a config.
+        """
+        for input_type in TRAJECTORY_INPUTS:
+            for component in TRAJECTORY_COMPONENTS:
+                name = f"{input_type}_{component}_inclusion_prob"
+                value = getattr(self, name)
+                if (
+                    isinstance(value, (bool, np.bool_))
+                    or not isinstance(value, (int, float, np.integer, np.floating))
+                    or not np.isfinite(value)
+                    or not 0.0 <= value <= 1.0
+                ):
+                    raise ValueError(f"{name} must be a probability in [0, 1], got {value!r}")
+
+        def _int_pair(name: str, minimum: int) -> tuple[int, int]:
+            value = getattr(self, name)
+            try:
+                lo, hi = value
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be an integer (lo, hi) pair, got {value!r}")
+            if (
+                isinstance(lo, (bool, np.bool_))
+                or isinstance(hi, (bool, np.bool_))
+                or not isinstance(lo, (int, np.integer))
+                or not isinstance(hi, (int, np.integer))
+                or not minimum <= lo <= hi
+            ):
+                raise ValueError(
+                    f"{name} must have integer bounds satisfying {minimum} <= lo <= hi, "
+                    f"got {value!r}"
+                )
+            return int(lo), int(hi)
+
+        T = int(self.n_time_steps)
+        support_weeks = min(T - self.n_query, T // 2)
+        for x in TRAJECTORY_INPUTS:
+            prob = {
+                c: float(getattr(self, f"{x}_{c}_inclusion_prob")) for c in TRAJECTORY_COMPONENTS
+            }
+            onset_lo, onset_hi = finite_range(f"{x}_onset_frac_range", minimum=0.0, maximum=1.0)
+            if onset_hi >= 1.0:
+                raise ValueError(
+                    f"{x}_onset_frac_range has invalid bounds; a launch must fall inside "
+                    f"the reported window (hi < 1), got {getattr(self, f'{x}_onset_frac_range')!r}"
+                )
+            offset_lo, offset_hi = finite_range(
+                f"{x}_offset_frac_range", minimum=0.0, minimum_exclusive=True, maximum=1.0
+            )
+            period_range = _int_pair(f"{x}_flighting_period_weeks_range", 2)
+            duty_lo, _ = finite_range(
+                f"{x}_flighting_duty_range", minimum=0.0, minimum_exclusive=True, maximum=1.0
+            )
+            count_name = f"{x}_level_jump_count"
+            count = getattr(self, count_name)
+            if (
+                isinstance(count, (bool, np.bool_))
+                or not isinstance(count, (int, np.integer))
+                or count < 1
+            ):
+                raise ValueError(f"{count_name} must be an integer >= 1, got {count!r}")
+            if x == "treatment":
+                size_name = "treatment_level_jump_factor_range"
+                size_lo, size_hi = finite_range(size_name, minimum=0.0, minimum_exclusive=True)
+                neutral_size = size_lo == size_hi == 1.0
+                max_log_size = max(abs(float(np.log(size_lo))), abs(float(np.log(size_hi))))
+                trend_name = "treatment_trend_log_change_range"
+            else:
+                size_name = "covariate_level_jump_size_range"
+                size_lo, size_hi = finite_range(size_name)
+                neutral_size = size_lo == size_hi == 0.0
+                max_log_size = 0.0
+                trend_name = "covariate_trend_change_range"
+            _, amplitude_hi = finite_range(f"{x}_seasonal_amplitude_range", minimum=0.0)
+            finite_range(
+                f"{x}_seasonal_period_weeks_range",
+                minimum=2.0,
+                minimum_exclusive=True,
+                reason="a period of 2 weeks or less aliases to an alternation at weekly sampling",
+            )
+            trend_lo, trend_hi = finite_range(trend_name)
+
+            # An included component must be able to change something.
+            if prob["onset"] > 0.0 and int(np.floor(onset_lo * T)) < 1:
+                raise ValueError(
+                    f"{x}_onset_frac_range lower bound {onset_lo} launches at week "
+                    f"floor({onset_lo}*{T}) = 0 for some draws; an included onset must delay "
+                    "the input by at least one reported week (raise the lower bound)"
+                )
+            if prob["offset"] > 0.0 and offset_hi >= 1.0:
+                raise ValueError(
+                    f"{x}_offset_frac_range upper bound must be < 1 so an included offset "
+                    f"stops the input before the window ends, got {offset_hi}"
+                )
+            if prob["flighting"] > 0.0 and period_range[1] > T:
+                raise ValueError(
+                    f"{x}_flighting_period_weeks_range upper bound ({period_range[1]}) must "
+                    f"be <= n_time_steps ({T}): any {T} reported weeks then hold a full "
+                    "period, so every included flighting input switches off in the window"
+                )
+            if prob["level_jump"] > 0.0:
+                if count > T - 1:
+                    raise ValueError(
+                        f"{count_name} ({count}) must be <= n_time_steps - 1 ({T - 1}): "
+                        "each level jump needs its own week in [1, n_time_steps)"
+                    )
+                if neutral_size:
+                    raise ValueError(
+                        f"{x}_level_jump_inclusion_prob > 0 but {size_name} makes every "
+                        "jump a no-op — disable jumps via the inclusion probability instead"
+                    )
+            if prob["seasonal"] > 0.0 and amplitude_hi <= 0.0:
+                raise ValueError(
+                    f"{x}_seasonal_inclusion_prob > 0 but {x}_seasonal_amplitude_range has "
+                    "zero amplitude — disable seasonality via the inclusion probability instead"
+                )
+            if prob["trend"] > 0.0 and trend_lo == trend_hi == 0.0:
+                raise ValueError(
+                    f"{x}_trend_inclusion_prob > 0 but {trend_name} is identically zero — "
+                    "disable trends via the inclusion probability instead"
+                )
+
+            # Every gated input keeps >= 2 on-weeks inside the support prefix that
+            # both split types (and the validation-split repair) leave as context,
+            # whichever gate forms it ends up carrying.
+            if any(prob[c] > 0.0 for c in GATE_COMPONENTS):
+                start_hi = int(np.floor(onset_hi * T)) if prob["onset"] > 0.0 else 0
+                stop_lo = int(np.floor(offset_lo * T)) if prob["offset"] > 0.0 else T
+                window = min(stop_lo, support_weeks) - start_hi
+                worst = min_on_weeks(
+                    window, period_range if prob["flighting"] > 0.0 else None, duty_lo
+                )
+                if worst < 2:
+                    raise ValueError(
+                        f"{x} gates can leave only {max(worst, 0)} on-week(s) inside the "
+                        f"{support_weeks}-week support prefix (min(n_time_steps - n_query, "
+                        f"n_time_steps // 2)); need >= 2. The onset upper bound, offset lower "
+                        "bound, flighting periods and duty lower bound jointly decide this — "
+                        "launch earlier, stop later, shorten the flighting period, raise the "
+                        "duty or lengthen n_time_steps"
+                    )
+
+            if x == "treatment":
+                swing = 0.0
+                if prob["seasonal"] > 0.0:
+                    swing += amplitude_hi
+                if prob["trend"] > 0.0:
+                    swing += max(abs(trend_lo), abs(trend_hi))
+                if prob["level_jump"] > 0.0:
+                    swing += int(count) * max_log_size
+                # The bound is inclusive; the tolerance absorbs the rounding of a
+                # sum (e.g. 15 * 0.1) that is exactly the bound on paper.
+                if swing > TRAJECTORY_MAX_LOG_SHIFT * (1.0 + 1e-12):
+                    raise ValueError(
+                        f"treatment level components can swing the log-level by {swing!r} "
+                        f"(seasonal amplitude + |trend| + jump count * max|log factor|); the "
+                        f"bound is {TRAJECTORY_MAX_LOG_SHIFT} (a x{np.exp(TRAJECTORY_MAX_LOG_SHIFT):.0f} "
+                        "level multiplier)"
+                    )
+                # Every range endpoint is float32-representable (finite_range);
+                # the scheduled level is a product, so check its reach as well.
+                reach = float(self.rw_positive_mean_range[1]) * float(np.exp(swing))
+            else:
+                reach = float(np.max(np.abs(self.rw_covariate_mean_range)))
+                if prob["seasonal"] > 0.0:
+                    reach += amplitude_hi
+                if prob["trend"] > 0.0:
+                    reach += max(abs(trend_lo), abs(trend_hi))
+                if prob["level_jump"] > 0.0:
+                    reach += int(count) * max(abs(size_lo), abs(size_hi))
+            if reach > CORPUS_STORAGE_MAX:
+                raise ValueError(
+                    f"{x} level components can reach {reach!r}, beyond the float32 corpus "
+                    f"storage limit {CORPUS_STORAGE_MAX:.6g}; shrink the level ranges"
                 )
 
 
@@ -1392,6 +2077,41 @@ def _finalize_corpus(corpus: dict[str, Any], cfg: SCMPrior) -> dict[str, Any]:
             },
         }
     )
+    if cfg.trajectory_metadata_enabled:
+        # Realised prevalence is computed from the stored (post-truncation)
+        # flags over active input slots — the same helper validate_corpus uses.
+        diagnostics["trajectory"] = {
+            "components": list(TRAJECTORY_COMPONENTS),
+            "inclusion_probs": cfg.trajectory_inclusion_probs(),
+            "parameter_fields": list(TRAJECTORY_PARAM_FIELDS),
+            "jump_counts": {
+                input_type: int(getattr(cfg, f"{input_type}_level_jump_count"))
+                for input_type in TRAJECTORY_INPUTS
+            },
+            **summarize_component_prevalence(
+                corpus["treatment_components"],
+                corpus["covariate_components"],
+                corpus["treatment_active_mask"],
+                corpus["covariate_active_mask"],
+            ),
+        }
+    if cfg.active_count_allocation == "stratified":
+        # Realised coverage of the grid, counted from the stored
+        # (post-truncation) masks — the same helper validate_corpus uses.
+        treatment_counts, covariate_counts = cfg.active_count_grid
+        diagnostics["active_count_coverage"] = {
+            "allocation": "stratified",
+            "n_treatments_active": list(treatment_counts),
+            "n_covariates_active": list(covariate_counts),
+            "weights": cfg.active_count_weight_matrix().tolist(),
+            **summarize_active_count_coverage(
+                corpus["treatment_active_mask"],
+                corpus["covariate_active_mask"],
+                corpus["cell_id"],
+                treatment_counts,
+                covariate_counts,
+            ),
+        }
     # Wall-clock telemetry, kept apart from every other diagnostic because it is
     # the ONLY nondeterministic entry: two same-seed generations agree on every
     # array and every other key, so quarantining the clock here is what lets
@@ -1474,12 +2194,15 @@ def _warn_flat_texture(cfg: SCMPrior) -> None:
     A config with the flat (smooth-walk-only) treatment prior still generates
     but warns: its contribution targets degenerate to near-flat lines
     (measured on the reference config: ~49% of direct-treatment targets without
-    week-to-week variation; see ``signal_diagnostics``).
+    week-to-week variation; see ``signal_diagnostics``). A treatment is flat when
+    it can carry no trajectory component at all: no hf, no pulse (by range or by
+    inclusion probability) and no schedule component.
     """
-    if (
-        float(cfg.treatment_hf_sigma_range[1]) == 0.0
-        and float(cfg.treatment_pulse_prob_range[1]) == 0.0
-    ):
+    try:
+        treatment_probs = cfg.trajectory_inclusion_probs()["treatment"]
+    except (TypeError, ValueError, IndexError):
+        return  # an invalid config; validate() reports it with the precise message
+    if all(p == 0.0 for p in treatment_probs.values()):
         warnings.warn(
             "The flat (smooth-walk-only) treatment texture is "
             "deprecated: it produces near-flat contribution targets the model cannot "
@@ -1607,6 +2330,71 @@ _CORPUS_PARAM_NAMES = (
     "param_weibull_lam",
     "param_weibull_k",
 )
+# Trajectory outputs, drawn only when schedule components are enabled. They are
+# PREPENDED to the draw names: PyTensor walks the last requested output first,
+# so leading names never move the legacy RNG order (and in a cell where nothing
+# is wired they are constants or aliases of legacy outputs).
+_CORPUS_TRAJECTORY_NAMES = (
+    "treatment_activity",
+    "covariate_activity",
+    "treatment_log_level_shift",
+    "covariate_level_shift",
+)
+# Schedule-free realism references. With shocks they take the trailing slot the
+# unshocked pair used (they alias it when nothing is wired); without shocks they
+# lead, aliasing ``treatments`` / ``outcome`` when nothing is wired.
+_CORPUS_NATURAL_NAMES = ("treatments_natural", "outcome_natural")
+# Sources of the opt-in walk arrays (``SCMPrior.record_walk_parameters``). Means
+# and absolute standard deviations are existing ``param_*`` reports. No report
+# exposes a relative draw, so its primitive uniform is requested by name; a
+# degenerate range builds no random variable and records the range's constant.
+# Smoothness is the cell's concrete structure draw.
+_WALK_REPORTS = {
+    "walk_treatment_mean": "param_rw_c_mean",
+    "walk_treatment_std": "param_rw_c_std",
+    "walk_covariate_mean": "param_rw_z_mean",
+    "walk_covariate_std": "param_rw_z_std",
+    "walk_baseline_mean": "param_rw_b_mean",
+    "walk_baseline_std": "param_rw_b_std",
+    "outcome_noise_std": "param_rw_y_std",
+}
+_WALK_RELATIVE_DRAWS = {
+    "walk_treatment_std_relative": ("rw_c_std", "rw_treatment_std_range"),
+    "walk_baseline_std_relative": ("rw_b_std_rel", "rw_baseline_std_range"),
+    "outcome_noise_std_relative": ("rw_y_std_rel", "rw_outcome_std_range"),
+}
+_WALK_SMOOTHNESS = {
+    "walk_treatment_smoothness": "smoothness_c",
+    "walk_covariate_smoothness": "smoothness_z",
+    "walk_baseline_smoothness": "smoothness_b",
+    "walk_latent_smoothness": "smoothness_d",
+}
+
+
+def _walk_sources(
+    cfg: SCMPrior,
+    fields: dict[str, tuple[tuple[str, ...], type[np.generic]]],
+    structural: dict,
+    active_sizes: dict[str, int],
+) -> dict[str, str | np.ndarray]:
+    """One cell's source per recorded walk array: a draw name or concrete values.
+
+    ``active_sizes`` maps each slot axis to the cell's active count; per-task
+    fields hold one value.
+    """
+    sources: dict[str, str | np.ndarray] = {}
+    for key, (axes, _) in fields.items():
+        if key in _WALK_REPORTS:
+            sources[key] = _WALK_REPORTS[key]
+        elif key in _WALK_SMOOTHNESS:
+            sources[key] = np.asarray(structural[_WALK_SMOOTHNESS[key]], dtype=np.float64)
+        else:
+            name, range_name = _WALK_RELATIVE_DRAWS[key]
+            lo, hi = (float(bound) for bound in getattr(cfg, range_name))
+            size = active_sizes[axes[1]] if len(axes) == 2 else 1
+            # world_model._uniform builds exactly this constant when lo == hi.
+            sources[key] = name if lo != hi else np.full(size, lo, dtype=np.float64)
+    return sources
 
 
 def _pack_prior_cond(prior_cond: dict[str, tuple[float, float]]) -> np.ndarray:
@@ -1652,6 +2440,8 @@ def _additive_task_ok(
     treatment_spike_ratio: float = 50.0,
     realism_treatment: np.ndarray | None = None,
     realism_outcome: np.ndarray | None = None,
+    cv_alternative_treatment: np.ndarray | None = None,
+    storage_max: float | None = None,
 ) -> bool:
     """Single-task realism filter for the additive SCM.
 
@@ -1659,9 +2449,21 @@ def _additive_task_ok(
     arrays and non-negative actual outcome are always required.  CV and spike
     checks can use natural (unshocked) audit paths so a deliberate intervention
     is not rejected for looking unlike organic treatment.
+
+    ``cv_alternative_treatment`` (same shape as the realism treatment) offers a
+    second series per treatment for the CV floor only: a direct treatment passes
+    when either its realism series or its alternative reaches ``cv_floor``. The
+    corpus passes each scheduled treatment's own schedule applied to its natural
+    path, so an on/off gate or level component can carry the variation a
+    texture-free walk lacks, while shocks never can.
+
+    ``storage_max`` additionally rejects a draw whose arrays exceed that
+    magnitude, i.e. that would not survive the float32 corpus cast.
     """
     for a in arrays.values():
         if not np.isfinite(a).all():
+            return False
+        if storage_max is not None and np.abs(a).max(initial=0.0) > storage_max:
             return False
     if (outcome < 0).any():
         return False
@@ -1672,6 +2474,11 @@ def _additive_task_ok(
         cv = realism_treatment.std(axis=0) / (
             realism_treatment.mean(axis=0) + 1e-12
         )  # (n_treatments,)
+        if cv_alternative_treatment is not None:
+            alternative = cv_alternative_treatment.std(axis=0) / (
+                cv_alternative_treatment.mean(axis=0) + 1e-12
+            )
+            cv = np.maximum(cv, alternative)
         if cv[active].min() < cv_floor:
             return False
     outcome_med = np.median(realism_outcome)
@@ -1685,14 +2492,33 @@ def _additive_task_ok(
     return True
 
 
+def _outcome_norm_overflows(outcome: np.ndarray, support_ends: tuple[int, ...]) -> bool:
+    """Whether ``outcome / std(outcome[:end])`` overflows float32 for any support end.
+
+    A task's stored ``outcome_scale`` is the std over its support prefix, and the
+    validation-split repair can move a task to the other split type after
+    acceptance, so both prefixes must keep ``outcome_norm`` representable. The
+    check runs on the float32-rounded outcome, because storage divides the
+    stored float32 ``outcome_raw`` by its own std. A zero-std prefix is skipped:
+    storage then falls back to the full-series std.
+    """
+    stored = np.asarray(outcome).astype(np.float32).astype(np.float64)
+    peak = float(np.abs(stored).max())
+    for end in support_ends:
+        scale = float(np.std(stored[:end]))
+        if np.isfinite(scale) and scale > 0.0 and peak / scale > CORPUS_STORAGE_MAX:
+            return True
+    return False
+
+
 def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     """Generate a padded additive-SCM corpus.
 
     The public schema is documented by :func:`sample_prior_predictive`.
     Each cell shares a discrete structure; each task draws fresh continuous
     parameters and innovations. Evaluate at active sizes, then copy accepted
-    values into the preallocated maximum-size arrays. Float32 storage follows
-    the float64 generation and acceptance checks.
+    values into the preallocated maximum-size arrays. Base float32 storage
+    follows float64 acceptance checks; realised rich truth remains float64.
     """
     from .world_model import build_world_model, draw_worlds, sample_prior_cond, sample_structure
 
@@ -1717,6 +2543,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         "edge": layout.n_slots,
         "shock": cfg.n_treatment_shocks,
         "indirect_source": 3,
+        "component": len(TRAJECTORY_COMPONENTS),
+        "treatment_jump": cfg.treatment_level_jump_count,
+        "covariate_jump": cfg.covariate_level_jump_count,
     }
     corpus: dict[str, Any] = {
         key: np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
@@ -1724,6 +2553,36 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     }
     if cfg.prior_conditioning:
         corpus["prior_cond"] = np.empty((n_tasks, len(PRIOR_COND_LAYOUT)), dtype=np.float32)
+    # Optional composable-trajectory block (like prior_cond: present iff
+    # configured). Schedule outputs exist in the cell models only when a schedule
+    # component is enabled; otherwise activity is 1 and shifts are 0.
+    trajectory_metadata = cfg.trajectory_metadata_enabled
+    trajectory_schedules = cfg.trajectory_components_enabled
+    if trajectory_metadata:
+        for key, (axes, dtype) in TRAJECTORY_ARRAY_FIELDS.items():
+            corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
+    mechanism_fields = dict(MECHANISM_ARRAY_FIELDS) if cfg.mechanism_priors_enabled else {}
+    if mechanism_fields:
+        for input_type in TRAJECTORY_INPUTS:
+            if getattr(cfg, f"{input_type}_reference_contribution_range") is not None:
+                mechanism_fields.update(
+                    {
+                        key: spec
+                        for key, spec in MECHANISM_REFERENCE_FIELDS.items()
+                        if key.startswith(f"{input_type}_")
+                    }
+                )
+        for key, (axes, dtype) in mechanism_fields.items():
+            corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
+    # Optional realised walk block: zero-filled, so inactive slots stay padding.
+    walk_metadata = cfg.walk_parameter_metadata() if cfg.record_walk_parameters else None
+    walk_fields = {
+        key: spec
+        for key, spec in WALK_ARRAY_FIELDS.items()
+        if walk_metadata is not None and key in walk_metadata["fields"]
+    }
+    for key, (axes, dtype) in walk_fields.items():
+        corpus[key] = np.zeros(tuple(dimensions[axis] for axis in axes), dtype=dtype)
     # Treatment normalization retains the original float64 reduction order.
     # Other accepted outputs can be cast directly into their final storage.
     treatment_raw = np.zeros((n_tasks, n_time_steps, n_treatments_max), dtype=np.float64)
@@ -1752,17 +2611,24 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         "weibull_lam": "param_weibull_lam",
         "weibull_k": "param_weibull_k",
     }
+    for key in mechanism_fields:
+        if key != "sat_family":
+            draw_fields[key] = (
+                "saturation_scale" if key == "mechanism_saturation_scale" else f"param_{key}"
+            )
     n_evaluated = 0
     n_rejected = 0
     n_draw_failures = 0
+    # Stratified allocation fixes every cell's treatment × covariate counts up
+    # front on its own stream, seeded by one draw from ``rng``; independent
+    # allocation returns None and draws the counts per cell below, exactly as
+    # before.
+    active_count_plan = plan_active_counts(cfg, rng)
 
     for cell in range(cfg.n_cells):
-        tr = cfg.n_treatments_active_range_effective
-        cv = cfg.n_covariates_active_range_effective
-        lt = cfg.n_latent_active_range_effective
-        n_treatments_active = int(rng.integers(tr[0], tr[1] + 1))
-        n_covariates_active = int(rng.integers(cv[0], cv[1] + 1))
-        n_latent_active = int(rng.integers(lt[0], lt[1] + 1))
+        n_treatments_active, n_covariates_active, n_latent_active = draw_active_counts(
+            cfg, rng, active_count_plan, cell
+        )
         g = sample_g_additive(
             rng,
             cfg,
@@ -1802,15 +2668,85 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         # (not per draw) is key; FAST_COMPILE (the draw_worlds default) keeps
         # the one-off compile cheap.
         structural = sample_structure(g_act, cfg, rng)
-        # Prior-conditioning interval draw (per cell — one model build). Returns
-        # None and consumes NO RNG when cfg.prior_conditioning is False, so the
-        # disabled path reproduces unconditioned corpora bit-for-bit.
+        # Prior-conditioning interval draw (per cell — one model build). False
+        # returns None and consumes no RNG, preserving same-environment
+        # unconditioned numerical draws, not cross-schema archive-byte identity.
         prior_cond = sample_prior_cond(cfg, rng)
         if prior_cond is not None:
             corpus["prior_cond"][rows] = _pack_prior_cond(prior_cond)
         model, out_names, _param_names = build_world_model(
             g_act, cfg, structural, n_time_steps, prior_cond=prior_cond
         )
+        trajectory_reports = (
+            {
+                key: report
+                for key, report in TRAJECTORY_PARAM_REPORTS.items()
+                if report in _param_names
+            }
+            if trajectory_metadata
+            else {}
+        )
+        requested_reports = set(trajectory_reports.values()) | {
+            draw_fields[key] for key in mechanism_fields if key != "sat_family"
+        }
+        # Leading reports join the same accepted draw without displacing the
+        # legacy output traversal that assigns RNG streams.
+        audit_names = (
+            tuple(
+                name
+                for name in _param_names
+                if name in requested_reports and name not in _CORPUS_PARAM_NAMES
+            )
+            if requested_reports
+            else ()
+        )
+        # Recorded walk truth joins the same accepted draw ahead of the audit
+        # reports. It never gates acceptance, so recording keeps every draw.
+        walk_sources: dict[str, str | np.ndarray] = {}
+        if walk_fields:
+            active_sizes = {
+                "treatment": n_treatments_active,
+                "covariate": n_covariates_active,
+                "latent": n_latent_active,
+            }
+            walk_sources = _walk_sources(cfg, walk_fields, structural, active_sizes)
+        walk_names = tuple(entry for entry in walk_sources.values() if isinstance(entry, str))
+        leading_names = walk_names + audit_names
+        # Per-input component flags (cell structure, stored per row like the
+        # carryover family). Schedule keys exist only when schedules are enabled.
+        component_flags: dict[str, np.ndarray] = {}
+        scheduled_treatment: np.ndarray = np.zeros(n_treatments_active, dtype=bool)
+        if trajectory_metadata:
+            for input_type, n_active in (
+                ("treatment", n_treatments_active),
+                ("covariate", n_covariates_active),
+            ):
+                component_flags[input_type] = np.stack(
+                    [
+                        np.asarray(
+                            structural.get(
+                                structural_key(input_type, component),
+                                np.zeros(n_active, dtype=bool),
+                            ),
+                            dtype=np.uint8,
+                        )
+                        for component in TRAJECTORY_COMPONENTS
+                    ],
+                    axis=1,
+                )
+            schedule_columns = [TRAJECTORY_COMPONENTS.index(c) for c in SCHEDULE_COMPONENTS]
+            scheduled_treatment = np.asarray(
+                component_flags["treatment"][:, schedule_columns].any(axis=1), dtype=bool
+            )
+        trajectory_masks = {}
+        for key in trajectory_reports:
+            input_type, component_leaf = key.removeprefix("trajectory_").split("_", 1)
+            component = next(
+                name for name in TRAJECTORY_COMPONENTS if component_leaf.startswith(f"{name}_")
+            )
+            trajectory_masks[key] = (
+                component_flags[input_type][:, TRAJECTORY_COMPONENTS.index(component)] != 0
+            )
         accepted = 0
         cell_evaluated = 0
         cell_rejected = 0
@@ -1828,7 +2764,23 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 # them changes legacy draws, while a separate same-seed call
                 # produces parameters from a different joint world.
                 draw_names: tuple[str, ...]
-                if cfg.n_treatment_shocks:
+                if trajectory_schedules and cfg.n_treatment_shocks:
+                    draw_names = (
+                        _CORPUS_TRAJECTORY_NAMES
+                        + _CORPUS_PARAM_NAMES
+                        + _CORPUS_SHOCK_NAMES
+                        + _ADDITIVE_OUT_NAMES
+                        + _CORPUS_NATURAL_NAMES
+                    )
+                elif trajectory_schedules:
+                    draw_names = (
+                        _CORPUS_TRAJECTORY_NAMES
+                        + _CORPUS_NATURAL_NAMES
+                        + _CORPUS_PARAM_NAMES
+                        + _CORPUS_SHOCK_NAMES
+                        + _ADDITIVE_OUT_NAMES
+                    )
+                elif cfg.n_treatment_shocks:
                     draw_names = (
                         _CORPUS_PARAM_NAMES
                         + _CORPUS_SHOCK_NAMES
@@ -1837,13 +2789,22 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                     )
                 else:
                     draw_names = _CORPUS_PARAM_NAMES + _CORPUS_SHOCK_NAMES + _ADDITIVE_OUT_NAMES
-                drawn_b = draw_worlds(model, draw_names, draw_seed, draws=n_req)
+                rng_reference_names = draw_names
+                draw_names = leading_names + draw_names
+                drawn_b = draw_worlds(
+                    model,
+                    draw_names,
+                    draw_seed,
+                    draws=n_req,
+                    rng_reference_names=rng_reference_names if leading_names else None,
+                )
             except _RETRYABLE_DRAW_ERRORS as exc:
                 if not _is_retryable_draw_failure(exc):
                     # Not a numeric failure from inside a PyTensor node
-                    # evaluation: a bug here recurs at every seed, so retrying
-                    # only buries it under MAX_TOPUPS_PER_CELL empty rounds and
-                    # then blames the realism filter. Let it out untouched.
+                    # evaluation, or a reference-domain failure that resampling
+                    # would hide by truncating the target prior. Retrying only
+                    # buries it under MAX_TOPUPS_PER_CELL empty rounds and then
+                    # blames the realism filter. Let it out untouched.
                     raise
                 # A sporadic numeric draw failure — a hierarchical draw handed a
                 # downstream distribution an out-of-domain parameter. Retry with
@@ -1863,16 +2824,53 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 drawn = {name: drawn_b[name][b] for name in draw_names}
                 n_evaluated += 1
                 cell_evaluated += 1
+                audit_finite = all(np.isfinite(drawn[name]).all() for name in audit_names)
+                if not audit_finite:
+                    n_rejected += 1
+                    cell_rejected += 1
+                    continue
+                realism_arrays = (
+                    {name: drawn[name] for name in rng_reference_names} if leading_names else drawn
+                )
 
-                if not _additive_task_ok(
-                    treatment=drawn["treatments"],
-                    outcome=drawn["outcome"],
-                    arrays=drawn,
-                    g_cy_active=g_act["g_cy"],
-                    cv_floor=cfg.treatment_cv_floor,
-                    realism_treatment=drawn.get("treatments_unshocked"),
-                    realism_outcome=drawn.get("outcome_unshocked"),
-                ):
+                if trajectory_schedules:
+                    # Realism reads the schedule-free natural path; only a
+                    # scheduled treatment's own schedule may lift its CV.
+                    natural = drawn["treatments_natural"]
+                    cv_alternative = None
+                    if scheduled_treatment.any():
+                        cv_alternative = np.where(
+                            scheduled_treatment[None, :],
+                            drawn["treatment_activity"]
+                            * natural
+                            * np.exp(drawn["treatment_log_level_shift"]),
+                            natural,
+                        )
+                    task_ok = _additive_task_ok(
+                        treatment=drawn["treatments"],
+                        outcome=drawn["outcome"],
+                        arrays=realism_arrays,
+                        g_cy_active=g_act["g_cy"],
+                        cv_floor=cfg.treatment_cv_floor,
+                        realism_treatment=natural,
+                        realism_outcome=drawn["outcome_natural"],
+                        cv_alternative_treatment=cv_alternative,
+                        # Scheduled levels multiply texture and parent terms, so
+                        # extreme (validated) level priors can still overflow the
+                        # float32 storage; such a draw is rejected, not stored.
+                        storage_max=CORPUS_STORAGE_MAX,
+                    )
+                else:
+                    task_ok = _additive_task_ok(
+                        treatment=drawn["treatments"],
+                        outcome=drawn["outcome"],
+                        arrays=realism_arrays,
+                        g_cy_active=g_act["g_cy"],
+                        cv_floor=cfg.treatment_cv_floor,
+                        realism_treatment=drawn.get("treatments_unshocked"),
+                        realism_outcome=drawn.get("outcome_unshocked"),
+                    )
+                if not task_ok:
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -1882,6 +2880,14 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 )
                 candidate_outcome_scale = float(np.std(drawn["outcome"][support == 1]))
                 if not (np.isfinite(candidate_outcome_scale) and candidate_outcome_scale > 0.0):
+                    n_rejected += 1
+                    cell_rejected += 1
+                    continue
+                if trajectory_schedules and _outcome_norm_overflows(
+                    drawn["outcome"], (n_time_steps - n_query, n_time_steps // 2)
+                ):
+                    # outcome_norm = outcome / scale would not be representable
+                    # under either split (the validation-split repair may flip it).
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -1898,6 +2904,39 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
                 corpus["carryover_family"][row, :n_treatments_active] = structural[
                     "carryover_family"
                 ]
+                if mechanism_fields:
+                    corpus["sat_family"][row, :n_treatments_active] = structural["sat_family"]
+                for key, walk_source in walk_sources.items():
+                    walk_value = np.ravel(
+                        drawn[walk_source] if isinstance(walk_source, str) else walk_source
+                    )
+                    if len(walk_fields[key][0]) == 1:
+                        corpus[key][row] = walk_value.item()
+                    else:
+                        width = walk_value.size
+                        corpus[key][row, :width] = walk_value
+                if trajectory_metadata:
+                    corpus["treatment_components"][row, :n_treatments_active] = component_flags[
+                        "treatment"
+                    ]
+                    corpus["covariate_components"][row, :n_covariates_active] = component_flags[
+                        "covariate"
+                    ]
+                    for key, report in trajectory_reports.items():
+                        value = np.where(trajectory_masks[key], drawn[report], 0)
+                        prefix = (row, *(slice(size) for size in value.shape))
+                        corpus[key][prefix] = value
+                    if trajectory_schedules:
+                        for key, n_active in (
+                            ("treatment_activity", n_treatments_active),
+                            ("covariate_activity", n_covariates_active),
+                            ("treatment_log_level_shift", n_treatments_active),
+                            ("covariate_level_shift", n_covariates_active),
+                        ):
+                            corpus[key][row, :, :n_active] = drawn[key]
+                    else:
+                        corpus["treatment_activity"][row, :, :n_treatments_active] = 1
+                        corpus["covariate_activity"][row, :, :n_covariates_active] = 1
                 corpus["support_mask"][row] = support
                 corpus["is_future"][row] = task_split_type
                 accepted += 1
@@ -1908,7 +2947,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             # they call for opposite remedies (loosen the prior vs fix the
             # graph). Report both tallies so the reader can tell which happened.
             raise RuntimeError(
-                f"cell {cell}: only {accepted}/{cfg.draws_per_cell} tasks "
+                f"cell {cell} (n_treatments_active={n_treatments_active}, "
+                f"n_covariates_active={n_covariates_active}, n_latent_active={n_latent_active}): "
+                f"only {accepted}/{cfg.draws_per_cell} tasks "
                 f"accepted after {MAX_TOPUPS_PER_CELL} rounds — the realism filter "
                 f"rejected {cell_rejected}/{cell_evaluated} evaluated candidates, and "
                 f"{cell_draw_failures}/{MAX_TOPUPS_PER_CELL} rounds produced no "
@@ -2033,6 +3074,27 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
         # next to it and save_corpus drops the whole block.
         "timing": {"elapsed_s": float(time.perf_counter() - t_start)},
     }
+    if cfg.mechanism_priors_enabled:
+        diagnostics["mechanism_priors"] = {
+            "parameter_fields": list(mechanism_fields),
+            "saturation_prior_ranges": {
+                family: {name: [float(lo), float(hi)] for name, (lo, hi) in parameters.items()}
+                for family, parameters in cfg.saturation_prior_ranges.items()
+            },
+            "mm_scale_prior": cfg.mm_scale_prior,
+            "treatment_reference_contribution_range": (
+                [float(x) for x in cfg.treatment_reference_contribution_range]
+                if cfg.treatment_reference_contribution_range is not None
+                else None
+            ),
+            "treatment_reference_multiplier": float(cfg.treatment_reference_multiplier),
+            "covariate_reference_contribution_range": (
+                [float(x) for x in cfg.covariate_reference_contribution_range]
+                if cfg.covariate_reference_contribution_range is not None
+                else None
+            ),
+            "covariate_reference_scale": float(cfg.covariate_reference_scale),
+        }
     if cfg.prior_conditioning:
         # Self-describing .npz (as with the signal block): echo the layout,
         # the supports, and the width ranges so consumers derive feature
@@ -2043,6 +3105,8 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
             "supports": {q: list(s["support"]) for q, s in spec.items()},
             "width_ranges": {q: list(s["width_range"]) for q, s in spec.items()},
         }
+    if walk_metadata is not None:
+        diagnostics["walk_parameters"] = walk_metadata
 
     corpus["outcome_norm"][:] = outcome_norm
     corpus["outcome_scale"][:] = outcome_scale

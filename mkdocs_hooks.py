@@ -23,7 +23,13 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-_GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs_gen")
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+_GEN = os.path.join(_ROOT, "docs_gen")
+
+# Executed notebooks inherit this path while their kernels run from docs/examples.
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    path for path in (_ROOT, os.environ.get("PYTHONPATH")) if path
+)
 
 
 def _ensure_path() -> None:

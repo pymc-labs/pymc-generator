@@ -9,6 +9,10 @@ edit_uri: edit/main/docs/
 copyright: Copyright &copy; PyMC Labs — MIT licensed
 
 docs_dir: docs
+# Development notebooks stay in the repository but out of the built site, so the
+# build neither renders nor executes them (see CONTRIBUTING.md).
+exclude_docs: |
+  examples/dev/
 site_url: https://pymc-labs.github.io/pymc-generator/
 
 theme:
@@ -86,6 +90,9 @@ plugins:
       include_source: true
       ignore_h1_titles: true
       allow_errors: false
+      # Notebook cells tagged hide-input render their output without the code.
+      remove_tag_config:
+        remove_input_tags: [hide-input]
   - mkdocstrings:
       handlers:
         python:
@@ -155,8 +162,11 @@ nav:
       - Audit bundles: guide/bundles.md
       - Named scenarios: guide/scenarios.md
       - Generating a corpus: guide/corpus.md
+      - Input trajectories: guide/trajectories.md
+      - Corpus quality: guide/corpus-quality.md
       - The posterior oracle: guide/oracle.md
       - Interrogating the data: guide/data-diagnostics.md
+      - Comparing worlds: guide/world-descriptors.md
   - Examples:
       - End-to-end tour: examples/index.ipynb
       - MMM recovery case study: examples/simple-model.ipynb
@@ -173,3 +183,4 @@ nav:
       - Signal diagnostics: reference/signal.md
       - Outcome distributions: reference/outcomes.md
       - Data diagnostics: reference/diagnostics.md
+      - World descriptors: reference/descriptors.md

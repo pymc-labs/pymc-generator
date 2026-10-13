@@ -15,11 +15,14 @@ it.
 | [`build_oracle_model`](world-model.md#pymc_generator.world_model.build_oracle_model) | [World model](world-model.md) | Observed-data variant: the NUTS posterior oracle. |
 | [`sample_prior_predictive`](corpus.md) / [`DataGenerator`](corpus.md) | [Corpus generation](corpus.md) | Generate an `n_tasks`-world corpus (dict of arrays). |
 | [`save_corpus`](corpus.md) / [`load_corpus`](corpus.md) | [Corpus generation](corpus.md) | Compressed `.npz` persistence. |
+| [`active_count_coverage`](corpus.md#pymc_generator.active_counts.active_count_coverage) | [Corpus generation](corpus.md) | Cells and worlds per (active treatments, active covariates) combination of a corpus. |
 | [`describe_scm`](describe.md) | [Descriptions](describe.md) | Plain-text description of a world. |
 | [`write_scm_bundle`](bundles.md) / [`write_scenario_bundles`](bundles.md) | [Audit bundles](bundles.md) | Write auditable folders. |
 | [`SCENARIOS`](scenarios.md) | [Named scenarios](scenarios.md) | Five named audit scenarios. |
 | [`outcome_distributions`](outcomes.md#pymc_generator.outcomes.outcome_distributions) | [Outcome distributions](outcomes.md) | Pool worlds along the quantity axis: outcome and contribution magnitudes. |
 | [`data_diagnostics`](diagnostics.md#pymc_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
+| [`world_descriptors`](descriptors.md#pymc_generator.descriptors.world_descriptors) / [`ObservedWorlds`](descriptors.md#pymc_generator.descriptors.ObservedWorlds) | [World descriptors](descriptors.md) | One row of named statistics per world, for generated or observed data. |
+| [`summarize_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.summarize_descriptors) / [`bin_counts`](descriptors.md#pymc_generator.descriptor_analysis.bin_counts) / [`nearest_worlds`](descriptors.md#pymc_generator.descriptor_analysis.nearest_worlds) / [`compare_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.compare_descriptors) | [World descriptors](descriptors.md) | Independent between-world analyses: distributions, region counts, similarity, reference comparison. |
 
 ## Import surface
 
@@ -41,8 +44,15 @@ pg.SCENARIOS                 # the five named recipes
 pg.sample_prior_predictive   # a corpus (dict of numpy arrays)
 pg.DataGenerator             # a facade over corpus generation + validation
 pg.save_corpus, pg.load_corpus
+pg.active_count_coverage     # cells / worlds per active-count combination
 pg.outcome_distributions     # outcome/contribution magnitudes across worlds
 pg.data_diagnostics          # dependence / VIF / dynamics / contribution hierarchy
+pg.world_descriptors         # one row of statistics per world
+pg.ObservedWorlds            # observed datasets as worlds (series only)
+pg.summarize_descriptors     # descriptor distributions, optionally by stratum
+pg.bin_counts                # worlds per explicit descriptor region
+pg.nearest_worlds            # most similar worlds in a chosen feature space
+pg.compare_descriptors       # where one collection sits relative to another
 ```
 
 Public symbols are lazy-loaded, so `import pymc_generator` stays light — the

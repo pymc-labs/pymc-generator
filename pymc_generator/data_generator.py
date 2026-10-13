@@ -32,9 +32,12 @@ from typing import Any, TypeGuard
 
 import numpy as np
 
+from .active_counts import active_count_coverage_errors
 from .sampler import (
+    CORPUS_STORAGE_MAX,
     OUTCOME_NOISE_SEMANTICS,
     OUTCOME_NOISE_VERSION,
+    SATURATION_FAMILY_KEYS,
     SCMPrior,
     sample_prior_predictive,
 )
@@ -49,15 +52,21 @@ from .slots import (
     CORPUS_SCHEMA_VERSION,
     EDGE_TYPES_EXTENDED,
     LEGACY_CORPUS_KEYS_V1,
-    LEGACY_CORPUS_KEYS_V3,
-    LEGACY_DIAGNOSTIC_KEYS_V3,
     LEGACY_EDGE_KEYS_V2,
-    LEGACY_EDGE_TYPES_V2,
-    LEGACY_PRIOR_COND_COLUMNS_V3,
+    MECHANISM_ARRAY_FIELDS,
+    MECHANISM_PRIOR_FIELDS,
+    MECHANISM_REFERENCE_FIELDS,
     PRIOR_COND_LAYOUT,
     PRIOR_COND_QUANTITIES,
+    TRAJECTORY_ARRAY_FIELDS,
+    TRAJECTORY_COMPONENTS,
+    TRAJECTORY_INPUTS,
+    TRAJECTORY_PARAM_FIELDS,
+    WALK_ARRAY_FIELDS,
+    WALK_RELATIVE_MODE_FIELDS,
     SlotLayout,
 )
+from .trajectories import GATE_COMPONENTS, LEVEL_COMPONENTS, summarize_component_prevalence
 
 # ---------------------------------------------------------------------------
 # Schema-version and timing guards (shared by validate / save / load)
@@ -70,10 +79,10 @@ def _schema_version_error(diagnostics: object) -> str | None:
     The stamp is the whole point of versioning the format: a consumer that
     silently accepts an unknown version reads a *different* schema through the
     current vocabulary, which is exactly the failure mode a version field is
-    supposed to prevent. Reject a missing stamp too — the only version-less
-    corpora that ever existed are v1 shards, and ``load_corpus`` migrates and
-    stamps those BEFORE this check runs. ``True`` is an ``int`` in Python, so a
-    bool is refused explicitly rather than compared numerically.
+    supposed to prevent. Version-less and pre-v5 archives cannot recover realised
+    rich truth, so they are rejected rather than stamped or migrated. ``True``
+    is an ``int`` in Python, so a bool is refused explicitly rather than compared
+    numerically.
 
     All three entry points share this so they cannot drift: ``validate_corpus``
     reports the string, ``save_corpus`` and ``load_corpus`` raise it.
@@ -133,6 +142,610 @@ def _timing_error(diagnostics: dict) -> str | None:
 # ---------------------------------------------------------------------------
 # Data generator
 # ---------------------------------------------------------------------------
+
+
+def _is_finite_real(value: object) -> bool:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        return False
+    try:
+        return bool(np.isfinite(float(value)))
+    except (OverflowError, ValueError):
+        return False
+
+
+def _finite_bounds(
+    value: object, *, positive: bool = False, maximum: float | None = None
+) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    lo, hi = value
+    if not _is_finite_real(lo) or not _is_finite_real(hi):
+        return None
+    lo, hi = float(lo), float(hi)
+    if (
+        lo > hi
+        or (positive and lo <= 0.0)
+        or (maximum is not None and max(abs(lo), abs(hi)) > maximum)
+    ):
+        return None
+    return lo, hi
+
+
+def _field_inventory_matches(value: object, fields: dict) -> bool:
+    return (
+        isinstance(value, list)
+        and all(isinstance(key, str) for key in value)
+        and value == list(fields)
+    )
+
+
+def _mechanism_field_specs(
+    corpus: dict[str, Any], errors: list[str]
+) -> dict[str, tuple[tuple[str, ...], type[np.generic]]]:
+    """Resolve the recipe-gated rich mechanism block without inventing fields."""
+    diagnostics = corpus.get("diagnostics")
+    metadata = diagnostics.get("mechanism_priors") if isinstance(diagnostics, dict) else None
+    has_metadata = isinstance(diagnostics, dict) and "mechanism_priors" in diagnostics
+    possible_fields = set(MECHANISM_ARRAY_FIELDS) | set(MECHANISM_REFERENCE_FIELDS)
+    if not has_metadata and not possible_fields.intersection(corpus):
+        return {}
+    if not isinstance(metadata, dict):
+        errors.append("mechanism arrays and diagnostics mechanism_priors must be present together")
+        return {}
+    metadata_keys = {
+        "parameter_fields",
+        "saturation_prior_ranges",
+        "mm_scale_prior",
+        "treatment_reference_contribution_range",
+        "treatment_reference_multiplier",
+        "covariate_reference_contribution_range",
+        "covariate_reference_scale",
+    }
+    if set(metadata) != metadata_keys:
+        errors.append("diagnostics mechanism_priors does not match the required recipe fields")
+    fields = dict(MECHANISM_ARRAY_FIELDS)
+    for input_type in TRAJECTORY_INPUTS:
+        if metadata.get(f"{input_type}_reference_contribution_range") is not None:
+            fields.update(
+                {
+                    key: spec
+                    for key, spec in MECHANISM_REFERENCE_FIELDS.items()
+                    if key.startswith(f"{input_type}_")
+                }
+            )
+    missing = [key for key in fields if key not in corpus]
+    if missing:
+        errors.append(
+            "mechanism arrays and diagnostics mechanism_priors must be present together; "
+            f"missing {', '.join(missing)}"
+        )
+    if not _field_inventory_matches(metadata.get("parameter_fields"), fields):
+        errors.append("diagnostics mechanism_priors parameter_fields does not match the schema")
+    return fields
+
+
+def _trajectory_truth_errors(corpus: dict[str, Any]) -> list[str]:
+    """Check selected primitives and reconstruct schedules from their stored truth."""
+    errors: list[str] = []
+    n_time_steps = corpus["treatment_raw"].shape[1]
+    weeks = np.arange(n_time_steps)
+    for input_type in TRAJECTORY_INPUTS:
+        active = corpus[f"{input_type}_active_mask"] == 1
+        flags = corpus[f"{input_type}_components"]
+        prefix = f"trajectory_{input_type}_"
+
+        def carries(
+            component: str, active: np.ndarray = active, flags: np.ndarray = flags
+        ) -> np.ndarray:
+            return np.asarray(active & (flags[..., TRAJECTORY_COMPONENTS.index(component)] == 1))
+
+        def leaf(component: str, field: str, prefix=prefix) -> np.ndarray:
+            return np.asarray(corpus[f"{prefix}{component}_{field}"])
+
+        for key, (axes, _) in TRAJECTORY_PARAM_FIELDS.items():
+            if not key.startswith(prefix):
+                continue
+            component_leaf = key.removeprefix(prefix)
+            component = next(
+                name for name in TRAJECTORY_COMPONENTS if component_leaf.startswith(f"{name}_")
+            )
+            selected = carries(component)
+            if len(axes) == 3:
+                selected = np.broadcast_to(selected[:, None, :], corpus[key].shape)
+            value = corpus[key]
+            if (value[~selected] != 0).any():
+                errors.append(f"{key} has nonzero unselected-component or inactive-input padding")
+            live = value[selected]
+            field = component_leaf.removeprefix(f"{component}_")
+            if component in ("onset", "offset") or (component == "level_jump" and field == "week"):
+                if ((live < 1) | (live >= n_time_steps)).any():
+                    errors.append(f"{key} must lie in [1, n_time_steps) for selected inputs")
+            elif component == "flighting" and field == "period":
+                if ((live < 2) | (live > n_time_steps)).any():
+                    errors.append(f"{key} must lie in [2, n_time_steps] for selected inputs")
+            elif (component == "seasonal" and field == "period") or field == "factor":
+                minimum = 2.0 if component == "seasonal" else 0.0
+                if (live <= minimum).any():
+                    errors.append(f"{key} must be > {minimum:g} for selected inputs")
+            elif field in ("sigma", "amp", "prob", "amplitude"):
+                if (live < 0.0).any() or (field == "prob" and (live > 0.5).any()):
+                    errors.append(f"{key} is outside its live nonnegative domain")
+            elif component == "seasonal" and field == "phase":
+                if ((live < 0.0) | (live >= 2.0 * np.pi)).any():
+                    errors.append(f"{key} must lie in [0, 2*pi) for selected inputs")
+            unscaled_primitive = (
+                (component == "seasonal" and field in ("amplitude", "period"))
+                or (component == "trend" and field == "change")
+                or (input_type == "covariate" and component == "level_jump" and field == "size")
+            )
+            if unscaled_primitive and (np.abs(live) > CORPUS_STORAGE_MAX).any():
+                errors.append(f"{key} magnitude exceeds CORPUS_STORAGE_MAX for selected inputs")
+        selected = carries("flighting")
+        period = leaf("flighting", "period")
+        on_weeks = leaf("flighting", "on_weeks")
+        phase = leaf("flighting", "phase")
+        if (selected & ((on_weeks < 1) | (on_weeks >= period))).any():
+            errors.append(f"{prefix}flighting_on_weeks must lie in [1, period) for selected inputs")
+        if (selected & ((phase < 0) | (phase >= period))).any():
+            errors.append(f"{prefix}flighting_phase must lie in [0, period) for selected inputs")
+        selected = carries("level_jump")
+        jump_week = leaf("level_jump", "week")
+        count = jump_week.shape[1]
+        if selected.any():
+            edges = 1 + np.arange(count + 1) * (n_time_steps - 1) // count
+            valid = (jump_week >= edges[:-1][None, :, None]) & (
+                jump_week < edges[1:][None, :, None]
+            )
+            if not valid[np.broadcast_to(selected[:, None, :], valid.shape)].all():
+                errors.append(f"{prefix}level_jump_week does not match chronological jump slots")
+        if input_type == "treatment" and selected.any():
+            mask = np.broadcast_to(selected[:, None, :], jump_week.shape)
+            factor = leaf("level_jump", "factor")[mask]
+            log_factor = leaf("level_jump", "log_factor")[mask]
+            if (factor > 0.0).all() and not np.allclose(
+                log_factor,
+                np.log(factor),
+                rtol=8 * np.finfo(np.float64).eps,
+                atol=8 * np.finfo(np.float64).eps,
+            ):
+                errors.append(f"{prefix}level_jump_factor and log_factor are inconsistent")
+        if errors:
+            continue
+
+        expected_activity = np.broadcast_to(
+            active[:, None, :], corpus[f"{input_type}_activity"].shape
+        ).copy()
+        expected_activity &= ~carries("onset")[:, None, :] | (
+            weeks[None, :, None] >= leaf("onset", "start")[:, None, :]
+        )
+        expected_activity &= ~carries("offset")[:, None, :] | (
+            weeks[None, :, None] < leaf("offset", "stop")[:, None, :]
+        )
+        cycle = (weeks[None, :, None] + phase[:, None, :]) % np.where(
+            carries("flighting"), period, 1
+        )[:, None, :]
+        expected_activity &= ~carries("flighting")[:, None, :] | (cycle < on_weeks[:, None, :])
+        if not np.array_equal(corpus[f"{input_type}_activity"], expected_activity):
+            errors.append(f"{input_type}_activity does not match realised trajectory parameters")
+
+        seasonal = leaf("seasonal", "amplitude")[:, None, :] * np.sin(
+            2.0
+            * np.pi
+            * weeks[None, :, None]
+            / np.where(carries("seasonal"), leaf("seasonal", "period"), 1)[:, None, :]
+            + leaf("seasonal", "phase")[:, None, :]
+        )
+        trend = leaf("trend", "change")[:, None, :] * (
+            weeks[None, :, None] / float(n_time_steps - 1)
+        )
+        jump_size = leaf("level_jump", "log_factor" if input_type == "treatment" else "size")
+        jumps = np.einsum(
+            "ntki,nki->nti",
+            weeks[None, :, None, None] >= jump_week[:, None, :, :],
+            jump_size,
+        )
+        expected_shift = (seasonal + trend + jumps).astype(np.float32)
+        shift_key = (
+            "treatment_log_level_shift" if input_type == "treatment" else "covariate_level_shift"
+        )
+        if not np.allclose(
+            corpus[shift_key], expected_shift, rtol=8 * np.finfo(np.float32).eps, atol=2e-7
+        ):
+            errors.append(f"{shift_key} does not match realised trajectory parameters")
+    return errors
+
+
+def _rounding_tolerance(expected: np.ndarray) -> np.ndarray:
+    """Admissible float64 rounding of a derived value: 32 eps relative, at least two ulps."""
+    ulp = np.abs(expected - np.nextafter(expected, 0.0))
+    return np.asarray(np.maximum(32 * np.finfo(np.float64).eps * np.abs(expected), 2 * ulp))
+
+
+def _reference_truth_matches(actual: np.ndarray, expected: np.ndarray, target: np.ndarray) -> bool:
+    """Match admissible derived loadings without erasing nonzero targets."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        tolerance = _rounding_tolerance(expected)
+        live_match = (
+            (np.abs(actual) <= CORPUS_STORAGE_MAX)
+            & np.isfinite(expected)
+            & (actual != 0.0)
+            & (np.signbit(actual) == np.signbit(expected))
+            & (np.abs(actual - expected) <= tolerance)
+        )
+    return bool(np.where(target == 0.0, (expected == 0.0) & (actual == 0.0), live_match).all())
+
+
+def _mechanism_truth_errors(corpus: dict[str, Any], fields: dict) -> list[str]:
+    errors: list[str] = []
+    metadata = corpus["diagnostics"]["mechanism_priors"]
+    active = {
+        input_type: corpus[f"{input_type}_active_mask"] == 1 for input_type in TRAJECTORY_INPUTS
+    }
+    for key, (axes, _) in fields.items():
+        mask = active[axes[-1]]
+        if (corpus[key][~mask] != 0).any():
+            errors.append(f"{key} has nonzero inactive-{axes[-1]} padding")
+        if (
+            key in MECHANISM_PRIOR_FIELDS
+            or key.endswith("_reference_input")
+            or key == "treatment_reference_response"
+            or key == "mechanism_saturation_scale"
+        ) and (corpus[key][mask] <= 0.0).any():
+            errors.append(f"{key} must be positive for active {axes[-1]}s")
+        if (
+            key == "treatment_reference_input"
+            and (corpus[key][mask] < np.finfo(np.float64).tiny).any()
+        ):
+            errors.append(f"{key} must be normal positive float64 for active treatments")
+        if (key in MECHANISM_PRIOR_FIELDS or key in ("beta", "rho_zy")) and (
+            np.abs(corpus[key][mask]) > CORPUS_STORAGE_MAX
+        ).any():
+            errors.append(
+                f"{key} exceeds the configured primitive maximum ({CORPUS_STORAGE_MAX:.9g})"
+            )
+    if (corpus["beta"][active["treatment"]] < 0.0).any():
+        errors.append("beta must be nonnegative for active treatments")
+    if (corpus["root_alpha"][active["treatment"]] > 1.0).any():
+        errors.append("root_alpha must be <= 1 for active treatments")
+    if (corpus["sat_family"][active["treatment"]] >= len(SATURATION_FAMILY_KEYS)).any():
+        errors.append("sat_family contains an unsupported saturation family")
+    if not np.array_equal(
+        corpus["saturation_scale"], corpus["mechanism_saturation_scale"].astype(np.float32)
+    ):
+        errors.append("saturation_scale does not match the exact mechanism_saturation_scale")
+    mode = metadata.get("mm_scale_prior")
+    if not isinstance(mode, str) or mode not in ("uniform", "log_uniform"):
+        errors.append("diagnostics mechanism_priors mm_scale_prior is not supported")
+    ranges = metadata.get("saturation_prior_ranges")
+    expected_ranges: dict[str, set[str]] = {}
+    for family, parameter in MECHANISM_PRIOR_FIELDS.values():
+        expected_ranges.setdefault(family, set()).add(parameter)
+    if (
+        not isinstance(ranges, dict)
+        or set(ranges) != set(expected_ranges)
+        or any(
+            not isinstance(ranges[family], dict) or set(ranges[family]) != parameters
+            for family, parameters in expected_ranges.items()
+        )
+    ):
+        errors.append(
+            "diagnostics mechanism_priors saturation_prior_ranges does not match the schema"
+        )
+    else:
+        for key, (family, parameter) in MECHANISM_PRIOR_FIELDS.items():
+            bounds = _finite_bounds(
+                ranges[family][parameter],
+                positive=True,
+                maximum=1.0 if family == "root" else CORPUS_STORAGE_MAX,
+            )
+            if bounds is None:
+                errors.append(
+                    f"diagnostics mechanism_priors {family}.{parameter} has invalid bounds"
+                )
+            else:
+                values = corpus[key][active["treatment"]]
+                if ((values < bounds[0]) | (values > bounds[1])).any():
+                    errors.append(f"{key} is outside its declared prior support")
+                if family == "michaelis_menten":
+                    if bounds[0] * 1e-8 == 0.0:
+                        errors.append(
+                            f"diagnostics mechanism_priors {family}.{parameter} lower bound "
+                            "times the minimum saturation_scale=1e-8 must be positive in float64"
+                        )
+                    if (
+                        mode == "log_uniform"
+                        and bounds[0] < bounds[1]
+                        and np.log(bounds[0]) >= np.log(bounds[1])
+                    ):
+                        errors.append(
+                            f"diagnostics mechanism_priors {family}.{parameter} bounds "
+                            "collapse in log space under mm_scale_prior='log_uniform'"
+                        )
+    for input_type, setting in (
+        ("treatment", "treatment_reference_multiplier"),
+        ("covariate", "covariate_reference_scale"),
+    ):
+        value = metadata.get(setting)
+        if not _is_finite_real(value) or not 0.0 < value <= CORPUS_STORAGE_MAX:
+            errors.append(
+                f"diagnostics mechanism_priors {setting} must be finite, positive, "
+                f"and at most {CORPUS_STORAGE_MAX:.9g}"
+            )
+        elif (
+            input_type == "treatment"
+            and metadata.get("treatment_reference_contribution_range") is not None
+            and float(value) * 1e-8 < np.finfo(np.float64).tiny
+        ):
+            errors.append(
+                "diagnostics mechanism_priors treatment_reference_multiplier * the minimum "
+                "saturation_scale=1e-8 must produce a normal positive "
+                "treatment_reference_input in float64"
+            )
+        recipe = metadata.get(f"{input_type}_reference_contribution_range")
+        if recipe is None:
+            continue
+        bounds = _finite_bounds(recipe, maximum=CORPUS_STORAGE_MAX)
+        if bounds is None or (input_type == "treatment" and (bounds[0] < 0.0 or bounds[1] <= 0.0)):
+            errors.append(
+                f"diagnostics mechanism_priors {input_type} reference range has invalid bounds"
+            )
+        else:
+            target = corpus[f"{input_type}_reference_contribution"][active[input_type]]
+            if ((target < bounds[0]) | (target > bounds[1])).any():
+                errors.append(
+                    f"{input_type}_reference_contribution is outside its declared prior support"
+                )
+    if errors:
+        return errors
+    for input_type in TRAJECTORY_INPUTS:
+        if f"{input_type}_reference_input" not in fields:
+            continue
+        mask = active[input_type]
+        reference = corpus[f"{input_type}_reference_input"][mask]
+        target = corpus[f"{input_type}_reference_contribution"][mask]
+        if input_type == "covariate":
+            scale = float(metadata["covariate_reference_scale"])
+            if not np.array_equal(reference, np.full_like(reference, scale)):
+                errors.append("covariate_reference_input does not match its recipe scale")
+            with np.errstate(over="ignore", invalid="ignore"):
+                expected = target * (1.0 / scale)
+            if not _reference_truth_matches(corpus["rho_zy"][mask], expected, target):
+                errors.append("rho_zy does not match the covariate reference target")
+        else:
+            multiplier = float(metadata["treatment_reference_multiplier"])
+            if (
+                corpus["sat_family"][mask] == SATURATION_FAMILY_KEYS.index("michaelis_menten")
+            ).any():
+                mm_hi = float(
+                    metadata["saturation_prior_ranges"]["michaelis_menten"]["kappa_mult"][1]
+                )
+                if multiplier / (multiplier + mm_hi) < np.finfo(np.float64).tiny:
+                    errors.append(
+                        "diagnostics mechanism_priors michaelis_menten.kappa_mult with "
+                        "treatment_reference_multiplier requires a normal positive "
+                        "minimum reference response for represented MM treatments"
+                    )
+            scale = corpus["mechanism_saturation_scale"][mask]
+            expected = multiplier * scale
+            if not np.array_equal(reference, expected):
+                errors.append(
+                    "treatment_reference_input does not match its recipe multiplier and anchor"
+                )
+            response = corpus["treatment_reference_response"][mask]
+            with np.errstate(over="ignore", invalid="ignore"):
+                expected_coefficient = target / response
+            if not _reference_truth_matches(corpus["beta"][mask], expected_coefficient, target):
+                errors.append("beta does not match the treatment reference target")
+    return errors
+
+
+#: The fixed key set of ``diagnostics["walk_parameters"]``.
+_WALK_PARAMETER_KEYS = (
+    "fields",
+    "outcome_std_mode",
+    "rw_positive_mean_range",
+    "rw_treatment_std_range",
+    "rw_covariate_mean_range",
+    "rw_std_sigma",
+    "rw_baseline_mean_range",
+    "rw_baseline_std_range",
+    "rw_outcome_std_range",
+    "rw_baseline_std_sigma",
+    "rw_outcome_std_sigma",
+    "rw_smoothness_alpha",
+    "rw_smoothness_beta",
+    "rw_smoothness_max_weeks",
+    "baseline_floor",
+    "baseline_floor_scope",
+)
+
+#: Each recorded uniform draw and the echoed prior range it must lie in.
+_WALK_SUPPORTS = (
+    ("walk_treatment_mean", "rw_positive_mean_range"),
+    ("walk_treatment_std_relative", "rw_treatment_std_range"),
+    ("walk_covariate_mean", "rw_covariate_mean_range"),
+    ("walk_baseline_mean", "rw_baseline_mean_range"),
+    ("walk_baseline_std_relative", "rw_baseline_std_range"),
+    ("outcome_noise_std_relative", "rw_outcome_std_range"),
+)
+
+
+def _softplus(x: np.ndarray) -> np.ndarray:
+    """Float64 ``log(1 + exp(x))`` on the branches of PyTensor's ``Softplus``."""
+    x = np.asarray(x, dtype=np.float64)
+    with np.errstate(over="ignore"):
+        upper = np.where(x < 33.3, x + np.exp(-x), x)
+        values = np.where(x < -37.0, np.exp(x), np.where(x < 18.0, np.log1p(np.exp(x)), upper))
+    return np.asarray(values)
+
+
+def _walk_field_specs(
+    corpus: dict[str, Any], errors: list[str]
+) -> dict[str, tuple[tuple[str, ...], type[np.generic]]]:
+    """Resolve the opt-in walk block: its arrays and metadata come together.
+
+    The relative baseline/noise draws exist iff the echoed outcome-noise mode is
+    relative, and ``fields`` lists exactly the stored walk arrays, sorted.
+    """
+    diagnostics = corpus.get("diagnostics")
+    has_metadata = isinstance(diagnostics, dict) and "walk_parameters" in diagnostics
+    if not has_metadata and not set(WALK_ARRAY_FIELDS).intersection(corpus):
+        return {}
+    metadata = diagnostics.get("walk_parameters") if isinstance(diagnostics, dict) else None
+    if not isinstance(metadata, dict):
+        if has_metadata:
+            errors.append("diagnostics walk_parameters must be a mapping")
+        else:
+            errors.append(
+                "walk arrays and diagnostics walk_parameters must be present together; "
+                "missing diagnostics walk_parameters"
+            )
+        return {}
+    mode = metadata.get("outcome_std_mode")
+    if not isinstance(mode, str) or mode not in ("relative", "absolute"):
+        errors.append(
+            "diagnostics walk_parameters outcome_std_mode must be 'relative' or 'absolute'"
+        )
+        return {}
+    fields = {
+        key: spec
+        for key, spec in WALK_ARRAY_FIELDS.items()
+        if mode == "relative" or key not in WALK_RELATIVE_MODE_FIELDS
+    }
+    missing = [key for key in fields if key not in corpus]
+    if missing:
+        errors.append(
+            "walk arrays and diagnostics walk_parameters must be present together; "
+            f"missing {', '.join(missing)}"
+        )
+    unexpected = [key for key in WALK_RELATIVE_MODE_FIELDS if key in corpus and key not in fields]
+    if unexpected:
+        errors.append(
+            f"{', '.join(unexpected)} must be present iff diagnostics walk_parameters "
+            "outcome_std_mode is 'relative'"
+        )
+    inventory = metadata.get("fields")
+    if not (
+        isinstance(inventory, list)
+        and all(isinstance(key, str) for key in inventory)
+        and inventory == sorted(fields)
+    ):
+        errors.append("diagnostics walk_parameters fields does not list the stored walk arrays")
+    return fields
+
+
+def _walk_truth_errors(
+    corpus: dict[str, Any], fields: dict[str, tuple[tuple[str, ...], type[np.generic]]]
+) -> list[str]:
+    """Check the walk recipe echo, zero padding, prior supports and treatment identities."""
+    import json
+
+    errors: list[str] = []
+    diagnostics = corpus["diagnostics"]
+    metadata = diagnostics["walk_parameters"]
+    try:
+        round_trip = json.loads(json.dumps(metadata, allow_nan=False))
+    except (TypeError, ValueError):
+        round_trip = None
+    if round_trip != metadata:
+        errors.append("diagnostics walk_parameters must survive a JSON round trip unchanged")
+    if set(metadata) != set(_WALK_PARAMETER_KEYS):
+        errors.append("diagnostics walk_parameters keys do not match the schema")
+    mode = metadata["outcome_std_mode"]
+    relative = mode == "relative"
+    if diagnostics["signal"].get("outcome_std_mode") != mode:
+        errors.append(
+            "diagnostics walk_parameters outcome_std_mode does not match diagnostics signal"
+        )
+
+    relative_ranges = ("rw_baseline_std_range", "rw_outcome_std_range")
+    absolute_sigmas = ("rw_baseline_std_sigma", "rw_outcome_std_sigma")
+    for name in absolute_sigmas if relative else relative_ranges:
+        if metadata.get(name) is not None:
+            errors.append(f"diagnostics walk_parameters {name} must be None in {mode} mode")
+    supports: dict[str, tuple[float, float]] = {}
+    for name in (
+        "rw_positive_mean_range",
+        "rw_treatment_std_range",
+        "rw_covariate_mean_range",
+        "rw_baseline_mean_range",
+        *(relative_ranges if relative else ()),
+    ):
+        bounds = _finite_bounds(
+            metadata.get(name),
+            positive=name == "rw_positive_mean_range",
+            maximum=CORPUS_STORAGE_MAX,
+        )
+        if (
+            bounds is None
+            or (name.endswith("_std_range") and bounds[0] < 0.0)
+            or (name == "rw_treatment_std_range" and bounds[1] <= 0.0)
+        ):
+            errors.append(f"diagnostics walk_parameters {name} has invalid bounds")
+        else:
+            supports[name] = bounds
+    for name in (
+        "rw_std_sigma",
+        "rw_smoothness_alpha",
+        "rw_smoothness_beta",
+        *(() if relative else absolute_sigmas),
+    ):
+        value = metadata.get(name)
+        if not (_is_finite_real(value) and float(value) > 0.0):
+            errors.append(f"diagnostics walk_parameters {name} must be finite and positive")
+    max_weeks = metadata.get("rw_smoothness_max_weeks")
+    if isinstance(max_weeks, bool) or not isinstance(max_weeks, int) or max_weeks < 1:
+        errors.append("diagnostics walk_parameters rw_smoothness_max_weeks must be an int >= 1")
+    floor = metadata.get("baseline_floor")
+    if floor is not None and not _is_finite_real(floor):
+        errors.append("diagnostics walk_parameters baseline_floor must be None or finite")
+    scope = metadata.get("baseline_floor_scope")
+    if not isinstance(scope, str) or scope not in ("intercept", "non_treatment"):
+        errors.append("diagnostics walk_parameters baseline_floor_scope is not supported")
+
+    active = {
+        "treatment": corpus["treatment_active_mask"] == 1,
+        "covariate": corpus["covariate_active_mask"] == 1,
+        "latent": corpus["latent_active_mask"] == 1,
+    }
+    every_task = np.ones(corpus["treatment_raw"].shape[0], dtype=bool)
+    live: dict[str, np.ndarray] = {}
+    for key, (axes, _) in fields.items():
+        slots = active[axes[1]] if len(axes) == 2 else every_task
+        live[key] = corpus[key][slots]
+        if len(axes) == 2 and (corpus[key][~slots] != 0.0).any():
+            errors.append(f"{key} has nonzero inactive-{axes[1]} padding")
+        if key.endswith(("_std", "_std_relative")) and (live[key] < 0.0).any():
+            errors.append(f"{key} must be nonnegative")
+        if key.endswith("_smoothness") and ((live[key] < 0.0) | (live[key] > 1.0)).any():
+            errors.append(f"{key} must lie in [0, 1]")
+    for key, name in _WALK_SUPPORTS:
+        if key in fields and name in supports:
+            lo, hi = supports[name]
+            if ((live[key] < lo) | (live[key] > hi)).any():
+                errors.append(f"{key} is outside diagnostics walk_parameters {name}")
+
+    # The treatment walk's level is softplus(mean) and its relative draw scales
+    # it, exactly as the world model builds them.
+    level = corpus["treatment_level"][active["treatment"]]
+    with np.errstate(over="ignore", invalid="ignore"):
+        anchor = _softplus(live["walk_treatment_mean"])
+        expected_level = anchor.astype(np.float32)
+        level_error = np.abs(level.astype(np.float64) - expected_level.astype(np.float64))
+        level_ulp = np.spacing(np.maximum(np.abs(level), np.abs(expected_level)))
+        expected_std = live["walk_treatment_std_relative"] * anchor
+        std_error = np.abs(live["walk_treatment_std"] - expected_std)
+        std_tolerance = _rounding_tolerance(expected_std)
+    if not (level_error <= level_ulp).all():
+        errors.append("treatment_level is not float32(softplus(walk_treatment_mean)) within 1 ulp")
+    if not (np.isfinite(expected_std) & (std_error <= std_tolerance)).all():
+        errors.append(
+            "walk_treatment_std does not match walk_treatment_std_relative * "
+            "softplus(walk_treatment_mean)"
+        )
+    return errors
 
 
 @dataclass
@@ -296,6 +909,49 @@ class DataGenerator:
             if key not in corpus:
                 errors.append(f"Missing required key: {key}")
 
+        # Rich arrays and their recipe metadata are atomic optional blocks.
+        diagnostics = corpus.get("diagnostics")
+        trajectory_parts = {key: key in corpus for key in TRAJECTORY_ARRAY_FIELDS}
+        trajectory_parts["diagnostics trajectory"] = (
+            isinstance(diagnostics, dict) and "trajectory" in diagnostics
+        )
+        has_trajectory = all(trajectory_parts.values())
+        if any(trajectory_parts.values()) and not has_trajectory:
+            missing = ", ".join(part for part, present in trajectory_parts.items() if not present)
+            errors.append(
+                "trajectory arrays and diagnostics trajectory must be present together; "
+                f"missing {missing}"
+            )
+        mechanism_fields = _mechanism_field_specs(corpus, errors)
+        walk_fields = _walk_field_specs(corpus, errors)
+        jump_counts: dict[str, int] = {}
+        if has_trajectory and isinstance(diagnostics, dict):
+            trajectory_diagnostics = diagnostics["trajectory"]
+            if not isinstance(trajectory_diagnostics, dict):
+                errors.append("diagnostics trajectory must be a mapping")
+            else:
+                if not _field_inventory_matches(
+                    trajectory_diagnostics.get("parameter_fields"), TRAJECTORY_PARAM_FIELDS
+                ):
+                    errors.append(
+                        "diagnostics trajectory parameter_fields does not match the schema"
+                    )
+                counts = trajectory_diagnostics.get("jump_counts")
+                if not isinstance(counts, dict) or set(counts) != set(TRAJECTORY_INPUTS):
+                    errors.append("diagnostics trajectory jump_counts must map both input roles")
+                else:
+                    for input_type, count in counts.items():
+                        if (
+                            isinstance(count, (bool, np.bool_))
+                            or not isinstance(count, (int, np.integer))
+                            or count < 1
+                        ):
+                            errors.append(
+                                f"diagnostics trajectory jump_counts {input_type} must be an integer >= 1"
+                            )
+                        else:
+                            jump_counts[input_type] = int(count)
+
         signal_label_keys = ("signal_metrics", "signal_metric_valid")
         if any(key in corpus for key in signal_label_keys):
             errors.append("signal labels must live under the identifiability metadata block")
@@ -363,10 +1019,18 @@ class DataGenerator:
             "edge": layout.n_slots,
             "shock": n_treatment_shocks,
             "indirect_source": 3,
+            "component": len(TRAJECTORY_COMPONENTS),
         }
+        for input_type, count in jump_counts.items():
+            dimensions[f"{input_type}_jump"] = count
+        array_fields = dict(CORPUS_ARRAY_FIELDS)
+        if has_trajectory:
+            array_fields.update(TRAJECTORY_ARRAY_FIELDS)
+        array_fields.update(mechanism_fields)
+        array_fields.update(walk_fields)
         field_specs = {
             key: (tuple(dimensions[axis] for axis in axes), dtype)
-            for key, (axes, dtype) in CORPUS_ARRAY_FIELDS.items()
+            for key, (axes, dtype) in array_fields.items()
         }
         if "prior_cond" in corpus:
             field_specs["prior_cond"] = ((n_tasks, len(PRIOR_COND_LAYOUT)), np.float32)
@@ -436,11 +1100,18 @@ class DataGenerator:
                     errors.append(f"identifiability.{key} has unsupported dtype {value.dtype}")
                 elif not np.isfinite(value).all():
                     errors.append(f"identifiability.{key} contains NaN or Inf")
+        unknown_fields = set(corpus) - set(field_specs) - {"diagnostics", "identifiability"}
+        if unknown_fields and not errors:
+            errors.append(f"Unrecognized corpus fields: {sorted(unknown_fields)}")
 
         positive_outcome_scale = (corpus["outcome_scale"] > 0.0).all()
         if not positive_outcome_scale:
             errors.append("outcome_scale must be positive")
         treatment_raw = corpus["treatment_raw"].astype(np.float64)
+        # Treatments are nonnegative by construction: softplus levels under
+        # nonnegative envelopes, nonnegative held shock levels, zero off-weeks.
+        if (treatment_raw < 0.0).any():
+            errors.append("treatment_raw must be nonnegative")
         expected_treatment_means = treatment_raw.mean(axis=1)
         if not np.allclose(
             corpus["treatment_means"], expected_treatment_means, rtol=1e-6, atol=1e-7
@@ -484,7 +1155,6 @@ class DataGenerator:
                 errors.append(f"{key} is not binary")
 
         short_n_query = None
-        diagnostics = corpus.get("diagnostics")
         if isinstance(diagnostics, dict) and isinstance(diagnostics.get("signal"), dict):
             candidate = diagnostics.get("short_horizon_n_query")
             if (
@@ -690,7 +1360,7 @@ class DataGenerator:
             cell_ids, np.arange(len(cell_ids), dtype=cell_ids.dtype)
         ):
             errors.append("cell_id must contain contiguous nonnegative ids")
-        cell_level_keys = (
+        cell_level_keys: tuple[str, ...] = (
             "g",
             "treatment_active_mask",
             "covariate_active_mask",
@@ -701,6 +1371,10 @@ class DataGenerator:
             "treatment_active",
             "is_val",
         )
+        if has_trajectory:
+            cell_level_keys += ("treatment_components", "covariate_components")
+        if mechanism_fields:
+            cell_level_keys += ("sat_family",)
         for cell in cell_ids:
             in_cell = corpus["cell_id"] == cell
             for key in cell_level_keys:
@@ -749,6 +1423,12 @@ class DataGenerator:
                             or not np.isfinite(support).all()
                             or not np.isfinite(width_range).all()
                             or support[0] >= support[1]
+                            or support[0] < 0.0
+                            or (quantity == "carryover_alpha" and support[1] > 1.0)
+                            or (
+                                quantity == "hill_shape"
+                                and (support[0] == 0.0 or support[1] > CORPUS_STORAGE_MAX)
+                            )
                             or not 0.0 < width_range[0] <= width_range[1] <= support[1] - support[0]
                         ):
                             errors.append(f"diagnostics prior_cond {quantity} bounds are invalid")
@@ -797,6 +1477,18 @@ class DataGenerator:
                 mask, (np.arange(width)[None, :] < count[:, None]).astype(np.uint8)
             ):
                 errors.append(f"{key} does not match its active prefix mask")
+        # The optional stratified-coverage block must recount exactly from the
+        # masks just checked, and its cells must round the allocation targets
+        # of its own weights.
+        if isinstance(diagnostics, dict) and "active_count_coverage" in diagnostics:
+            errors.extend(
+                active_count_coverage_errors(
+                    diagnostics["active_count_coverage"],
+                    active_treatment,
+                    active_covariate,
+                    corpus["cell_id"],
+                )
+            )
 
         inactive_c, inactive_m, inactive_j = (
             active_treatment == 0,
@@ -838,6 +1530,137 @@ class DataGenerator:
                 errors.append(f"{key} has nonzero inactive-latent_unobserved padding")
         if (corpus["saturation_scale"][active_treatment == 1] <= 0.0).any():
             errors.append("saturation_scale must be positive for active treatments")
+
+        if has_trajectory:
+            # Component flags are per input (constant within a cell, checked with
+            # the cell-level keys above). On an active input, no gate form means
+            # always on and no level form means no shift; an off-week zeroes the
+            # observed series, except where a held treatment shock overrides it.
+            # Conversely, config validation guarantees that an included gate form
+            # switches its input off at least once yet keeps 2 on-weeks inside the
+            # support window, that an onset launches at week >= 1, and that an
+            # offset stops by the last week.
+            gate_columns = [TRAJECTORY_COMPONENTS.index(name) for name in GATE_COMPONENTS]
+            level_columns = [TRAJECTORY_COMPONENTS.index(name) for name in LEVEL_COMPONENTS]
+            in_support = corpus["support_mask"][:, :, None] == 1
+            flags_binary = True
+            for input_type, inactive, activity_key, shift_key in (
+                ("treatment", inactive_c, "treatment_activity", "treatment_log_level_shift"),
+                ("covariate", inactive_m, "covariate_activity", "covariate_level_shift"),
+            ):
+                flags_key = f"{input_type}_components"
+                flags, activity = corpus[flags_key], corpus[activity_key]
+                # Both have already been validated as uint8.
+                if (flags > 1).any():
+                    flags_binary = False
+                    errors.append(f"{flags_key} is not binary")
+                if (activity > 1).any():
+                    errors.append(f"{activity_key} is not binary")
+                if (flags[inactive] != 0).any():
+                    errors.append(f"{flags_key} has nonzero inactive-{input_type} padding")
+                for key in (activity_key, shift_key):
+                    if _padded_nonzero(corpus[key], inactive):
+                        errors.append(f"{key} has nonzero inactive-{input_type} padding")
+                gated = flags[..., gate_columns].any(axis=-1)
+                if _padded_nonzero(activity != 1, ~inactive & ~gated):
+                    errors.append(
+                        f"{activity_key} must be 1 for active {input_type}s "
+                        "without a gate component"
+                    )
+                gated &= ~inactive
+                on_weeks = activity != 0
+                if (gated & on_weeks.all(axis=1)).any():
+                    errors.append(
+                        f"{activity_key} never switches off for an active {input_type} "
+                        "with a gate component"
+                    )
+                if (gated & ((on_weeks & in_support).sum(axis=1) < 2)).any():
+                    errors.append(
+                        f"{activity_key} keeps fewer than 2 on-weeks inside the support window "
+                        f"for an active {input_type} with a gate component"
+                    )
+                for component, week, label in (
+                    ("onset", 0, "week 0"),
+                    ("offset", -1, "the last week"),
+                ):
+                    carried = ~inactive & (flags[..., TRAJECTORY_COMPONENTS.index(component)] != 0)
+                    if (carried & on_weeks[:, week, :]).any():
+                        errors.append(
+                            f"{activity_key} must be 0 at {label} for an active {input_type} "
+                            f"with an {component} component"
+                        )
+                unshifted = ~inactive & ~flags[..., level_columns].any(axis=-1)
+                if _padded_nonzero(corpus[shift_key], unshifted):
+                    errors.append(
+                        f"{shift_key} must be 0 for active {input_type}s without a level component"
+                    )
+            treatment_off = (corpus["treatment_activity"] == 0) & (shock_mask == 0)
+            if (corpus["treatment_raw"][treatment_off] != 0).any():
+                errors.append(
+                    "treatment_raw must be 0 on treatment_activity off-weeks outside shocks"
+                )
+            if (corpus["covariates"][corpus["covariate_activity"] == 0] != 0).any():
+                errors.append("covariates must be 0 on covariate_activity off-weeks")
+            trajectory_diagnostics = diagnostics["trajectory"]
+            if not isinstance(trajectory_diagnostics, dict):
+                errors.append("diagnostics trajectory must be a mapping")
+            else:
+                trajectory_layout: Any = trajectory_diagnostics.get("components")
+                try:
+                    normalized_trajectory_layout = list(trajectory_layout)
+                except TypeError:
+                    normalized_trajectory_layout = None
+                if normalized_trajectory_layout != list(TRAJECTORY_COMPONENTS):
+                    errors.append(
+                        "diagnostics trajectory components do not match the canonical layout"
+                    )
+                inclusion_probs: Any = trajectory_diagnostics.get("inclusion_probs")
+                inclusion_valid = (
+                    isinstance(inclusion_probs, dict)
+                    and set(inclusion_probs) == set(TRAJECTORY_INPUTS)
+                    and all(
+                        isinstance(probs, dict)
+                        and set(probs) == set(TRAJECTORY_COMPONENTS)
+                        and all(
+                            isinstance(prob, (float, np.floating)) and 0.0 <= prob <= 1.0
+                            for prob in probs.values()
+                        )
+                        for probs in inclusion_probs.values()
+                    )
+                )
+                if not inclusion_valid:
+                    errors.append(
+                        "diagnostics trajectory inclusion_probs must map every input and "
+                        "component to a float in [0, 1]"
+                    )
+                # Recounting non-binary flags would only restate the error above.
+                if flags_binary:
+                    recounted = summarize_component_prevalence(
+                        corpus["treatment_components"],
+                        corpus["covariate_components"],
+                        active_treatment,
+                        active_covariate,
+                    )
+                    for key in ("prevalence", "n_inputs"):
+                        if not _diagnostic_equal(trajectory_diagnostics.get(key), recounted[key]):
+                            errors.append(
+                                f"diagnostics trajectory {key} does not match recomputation"
+                            )
+                    # An exact echo pins the flags: generation draws none at
+                    # probability 0 and flags every active input at probability 1.
+                    if inclusion_valid:
+                        for input_type in TRAJECTORY_INPUTS:
+                            prevalence = recounted["prevalence"][input_type]
+                            counted = recounted["n_inputs"][input_type] > 0
+                            for component in TRAJECTORY_COMPONENTS:
+                                prob = inclusion_probs[input_type][component]
+                                if (prob == 0.0 and prevalence[component] != 0.0) or (
+                                    prob == 1.0 and counted and prevalence[component] != 1.0
+                                ):
+                                    errors.append(
+                                        "diagnostics trajectory inclusion_probs contradict the "
+                                        f"stored {input_type}_components for {component}"
+                                    )
 
         graph = layout.unpack(corpus["g"])
         treatment_present = ~inactive_c
@@ -1031,6 +1854,12 @@ class DataGenerator:
         # This corpus-level invariant enforces beta_additive_range >= 0 downstream.
         if (corpus["treatment_contribution_raw"] < 0).any():
             errors.append("treatment_contribution_raw contains negative values")
+        if not errors and has_trajectory:
+            errors.extend(_trajectory_truth_errors(corpus))
+        if not errors and mechanism_fields:
+            errors.extend(_mechanism_truth_errors(corpus, mechanism_fields))
+        if not errors and walk_fields:
+            errors.extend(_walk_truth_errors(corpus, walk_fields))
 
         return errors
 
@@ -1057,7 +1886,7 @@ def save_corpus(corpus: dict[str, Any], path: str | Path) -> None:
     if legacy:
         raise ValueError(
             f"corpus uses pre-v{CORPUS_SCHEMA_VERSION} symbolic dimension keys {legacy}; "
-            f"rename them to {[LEGACY_CORPUS_KEYS_V1[k] for k in legacy]}"
+            f"regenerate the corpus under schema_version={CORPUS_SCHEMA_VERSION}"
         )
     if any(key.startswith("identifiability__") for key in corpus):
         raise ValueError("top-level corpus keys may not use the reserved identifiability__ prefix")
@@ -1169,76 +1998,6 @@ def load_corpus(path: str | Path) -> dict[str, Any]:
         if not isinstance(diagnostics, dict):
             raise ValueError(f"corpus {path} diagnostics JSON must contain an object")
         corpus["diagnostics"] = diagnostics
-
-    # Only versionless shards with the complete v1 vocabulary may migrate.
-    outdated = {old: new for old, new in LEGACY_CORPUS_KEYS_V1.items() if old in corpus}
-    if outdated:
-        clashes = sorted(new for new in outdated.values() if new in corpus)
-        if clashes:
-            raise ValueError(f"corpus {path} mixes v1 and v2 dimension keys: {clashes}")
-        diagnostics = corpus.get("diagnostics")
-        if not isinstance(diagnostics, dict):
-            raise ValueError(f"corpus {path}: diagnostics must carry the schema version")
-        if "schema_version" in diagnostics:
-            raise ValueError(f"corpus {path}: stamped corpora may not use legacy dimension keys")
-        if set(outdated) != set(LEGACY_CORPUS_KEYS_V1):
-            raise ValueError(f"corpus {path}: incomplete legacy dimension keys")
-        for old, new in outdated.items():
-            corpus[new] = corpus.pop(old)
-        diagnostics["schema_version"] = 2
-
-    diagnostics = corpus.get("diagnostics")
-    if isinstance(diagnostics, dict) and type(diagnostics.get("schema_version")) is int:
-        if diagnostics["schema_version"] == 2:
-            if diagnostics.get("edge_types") != list(LEGACY_EDGE_TYPES_V2):
-                raise ValueError(f"corpus {path}: unrecognized v2 edge order")
-            for field in ("edge_base_rates", "edge_marginals", "edge_budget"):
-                values = diagnostics.get(field)
-                if values is None:
-                    continue
-                if not isinstance(values, dict):
-                    raise ValueError(f"corpus {path}: v2 {field} must be a mapping")
-                if any(key in values for key in LEGACY_EDGE_KEYS_V2.values()):
-                    raise ValueError(f"corpus {path}: {field} mixes v2 and v3 edge names")
-                diagnostics[field] = {
-                    LEGACY_EDGE_KEYS_V2.get(key, key): value for key, value in values.items()
-                }
-            if "min_dead_channels" in diagnostics:
-                if "min_no_direct_effect_channels" in diagnostics:
-                    raise ValueError(f"corpus {path}: conflicting direct-null floor names")
-                diagnostics["min_no_direct_effect_channels"] = diagnostics.pop("min_dead_channels")
-            diagnostics["edge_types"] = list(EDGE_TYPES_EXTENDED)
-            diagnostics["schema_version"] = 3
-
-    # v3 -> v4: the marketing vocabulary becomes domain-neutral. Arrays keep
-    # their contents, dtypes, shapes and packed graph positions; only the keys
-    # move, so this migration is lossless and order-independent.
-    diagnostics = corpus.get("diagnostics")
-    if isinstance(diagnostics, dict) and diagnostics.get("schema_version") == 3:
-        clashes = sorted(
-            new for old, new in LEGACY_CORPUS_KEYS_V3.items() if old in corpus and new in corpus
-        )
-        if clashes:
-            raise ValueError(f"corpus {path} mixes v3 and v4 array names: {clashes}")
-        for old, new in LEGACY_CORPUS_KEYS_V3.items():
-            if old in corpus:
-                corpus[new] = corpus.pop(old)
-        for old, new in LEGACY_DIAGNOSTIC_KEYS_V3.items():
-            if old in diagnostics:
-                if new in diagnostics:
-                    raise ValueError(f"corpus {path}: diagnostics mixes v3 and v4 name {new!r}")
-                diagnostics[new] = diagnostics.pop(old)
-        layout = diagnostics.get("prior_cond_layout")
-        if isinstance(layout, list):
-            diagnostics["prior_cond_layout"] = [
-                LEGACY_PRIOR_COND_COLUMNS_V3.get(column, column) for column in layout
-            ]
-        quantities = diagnostics.get("prior_cond_quantities")
-        if isinstance(quantities, list):
-            diagnostics["prior_cond_quantities"] = [
-                "carryover_alpha" if q == "adstock_alpha" else q for q in quantities
-            ]
-        diagnostics["schema_version"] = CORPUS_SCHEMA_VERSION
 
     version_problem = _schema_version_error(corpus.get("diagnostics"))
     if version_problem is not None:

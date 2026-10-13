@@ -1304,6 +1304,10 @@ def test_oracle_config_classification_covers_builder_accesses_and_is_disjoint():
         "_walk_priors",
         "build_oracle_model",
         "_validate_oracle_treatment_shocks",
+        "_mechanism_prior",
+        "_derive_reference_coefficients",
+        "_treatment_reference_input",
+        "_apply_outcome_std_scale",
     }
     tree = ast.parse(Path(world_model.__file__).read_text())
     inventory = _cfg_access_inventory(tree, seam)
@@ -1456,6 +1460,13 @@ def test_every_fixed_numeric_config_field_changes_signature(field):
     else:
         if isinstance(value, tuple):
             changed_value = tuple(float(item) + 0.1 for item in value)
+        elif isinstance(value, dict):
+            changed_value = {
+                family: {
+                    name: tuple(float(b) + 0.1 for b in bounds) for name, bounds in params.items()
+                }
+                for family, params in value.items()
+            }
         elif value is None:
             changed_value = 0.1
         else:
@@ -1569,6 +1580,42 @@ def test_generated_oracle_prior_interval_graph_restores_without_stale_data():
     # changes in this A -> B -> A walk.
     assert values[1] != pytest.approx(values[0])
     assert values[2] == pytest.approx(values[0])
+
+
+def test_generated_oracle_reference_input_follows_rebound_saturation_scale():
+    cfg = pg.make_scm_prior(
+        n_time_steps=20,
+        n_treatments=2,
+        n_covariates=1,
+        n_latent=1,
+        n_cells=2,
+        treatment_reference_contribution_range=(0.5, 1.5),
+        treatment_reference_multiplier=1.7,
+    )
+    world_a = pg.sample_scm(cfg, seed=3, max_eps_draws=4)
+    world_b = copy.deepcopy(world_a)
+    world_b.data["saturation_scale"] = 2.0 * np.asarray(world_a.data["saturation_scale"])
+
+    template = pg.build_oracle_template(world_a, latent="marginal")
+    dynamic_names = set(template.data_contract or ()) - set(oracle.ORACLE_SHARED_DATA_NAMES)
+    reference_input = template.model.compile_fn(
+        template.model["treatment_reference_input"], inputs=[], on_unused_input="ignore"
+    )
+    values = []
+    for world in (world_a, world_b, world_a):
+        payload = oracle._oracle_payload(
+            world,
+            np.asarray(template.observed_indices, dtype="int64"),
+            dynamic_names=dynamic_names,
+        )
+        oracle.pm.set_data(payload, model=template.model)
+        values.append(np.asarray(reference_input({})))
+
+    # The recorded reference input (and the loadings derived from it) must use
+    # the bound saturation scale, not the template world's constants.
+    np.testing.assert_allclose(values[0], 1.7 * np.asarray(world_a.data["saturation_scale"]))
+    np.testing.assert_allclose(values[1], 2.0 * values[0])
+    np.testing.assert_allclose(values[2], values[0])
 
 
 def test_generated_oracle_marginal_walk_graph_restores_without_stale_data():
