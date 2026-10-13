@@ -52,7 +52,7 @@ for f in sorted(os.listdir(out)):
 | `dag.dot` / `dag.png` | The causal graph (matplotlib render — no graphviz needed) |
 | `timeseries.png` | Model-input series |
 | `decomposition.png` | Every true effect on Y + reconstruction check |
-| `channels.png` | Per-treatment observed level vs true contribution (indexed) |
+| `treatments.png` | Per-treatment observed level vs true contribution (indexed) |
 
 Every column of `true_components.csv` except `week`, `outcome_reconstructed` and
 the `latent_unobserved_*` / `treatment_base_*` diagnostics is an additive term of
@@ -85,7 +85,7 @@ from scm_docs import world, viz_html
 import pymc_generator as pg
 
 print(viz_html(pg.viz.plot_treatments, world(1, 0),
-         caption="channels.png — each channel's spend (grey) and true contribution (color), divided by its absolute mean. Zero-mean series retain raw values and are labelled."))
+         caption="treatments.png — each treatment's input (grey) and true contribution (color), divided by its absolute mean. Zero-mean series retain raw values and are labelled."))
 ```
 
 ## The five-scenario inspection set

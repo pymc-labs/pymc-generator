@@ -1,0 +1,326 @@
+{
+  "active_count_allocation": "independent",
+  "active_count_weights": null,
+  "baseline_floor": null,
+  "baseline_floor_scope": "intercept",
+  "beta_additive_range": [
+    0.5,
+    2.0
+  ],
+  "carryover_alpha_range": [
+    0.2,
+    0.8
+  ],
+  "carryover_burn_in": 8,
+  "carryover_family_probs": {
+    "geometric": 1.0,
+    "none": 0.0,
+    "weibull": 0.0
+  },
+  "cc_base_rate": 0.15,
+  "cc_coeff_range": [
+    0.05,
+    0.3
+  ],
+  "confounding_strength_range": null,
+  "covariate_flighting_duty_range": [
+    0.3,
+    0.8
+  ],
+  "covariate_flighting_inclusion_prob": 0.0,
+  "covariate_flighting_period_weeks_range": [
+    4,
+    13
+  ],
+  "covariate_hf_inclusion_prob": 1.0,
+  "covariate_hf_sigma_range": [
+    0.1,
+    0.5
+  ],
+  "covariate_level_jump_count": 1,
+  "covariate_level_jump_inclusion_prob": 0.0,
+  "covariate_level_jump_size_range": [
+    -1.0,
+    1.0
+  ],
+  "covariate_offset_frac_range": [
+    0.6,
+    0.9
+  ],
+  "covariate_offset_inclusion_prob": 0.0,
+  "covariate_onset_frac_range": [
+    0.05,
+    0.25
+  ],
+  "covariate_onset_inclusion_prob": 0.0,
+  "covariate_pulse_amp_range": [
+    0.4,
+    1.2
+  ],
+  "covariate_pulse_inclusion_prob": 1.0,
+  "covariate_pulse_prob_range": [
+    0.0,
+    0.2
+  ],
+  "covariate_reference_contribution_range": [
+    -0.2,
+    0.2
+  ],
+  "covariate_reference_scale": 2.0,
+  "covariate_seasonal_amplitude_range": [
+    0.2,
+    1.0
+  ],
+  "covariate_seasonal_inclusion_prob": 0.0,
+  "covariate_seasonal_period_weeks_range": [
+    52.0,
+    52.0
+  ],
+  "covariate_trend_change_range": [
+    -1.0,
+    1.0
+  ],
+  "covariate_trend_inclusion_prob": 0.0,
+  "dc_coeff_range": [
+    0.1,
+    0.5
+  ],
+  "draws_per_cell": 1,
+  "dy_coeff_range": [
+    0.15,
+    0.45
+  ],
+  "dz_base_rate": 0.3,
+  "dz_coeff_range": [
+    0.1,
+    0.5
+  ],
+  "edge_budget": {
+    "cc": [
+      0,
+      0
+    ],
+    "cy": [
+      1,
+      2
+    ],
+    "dc": [
+      0,
+      0
+    ],
+    "dy": [
+      0,
+      0
+    ],
+    "dz": [
+      0,
+      0
+    ],
+    "zc": [
+      0,
+      0
+    ],
+    "zy": [
+      0,
+      1
+    ],
+    "zz": [
+      0,
+      0
+    ]
+  },
+  "edge_rate_overrides": null,
+  "include_identifiability_labels": true,
+  "l_max": 8,
+  "min_no_direct_effect_treatments": 0,
+  "mm_scale_prior": "log_uniform",
+  "n_cells": 2,
+  "n_covariates": 1,
+  "n_covariates_active_range": [
+    1,
+    1
+  ],
+  "n_latent": 1,
+  "n_latent_active_range": [
+    1,
+    1
+  ],
+  "n_time_steps": 32,
+  "n_treatment_shocks": 0,
+  "n_treatments": 2,
+  "n_treatments_active_range": [
+    2,
+    2
+  ],
+  "outcome_std_mode": "relative",
+  "p_long_horizon": 0.5,
+  "prior_cond_width_ranges": null,
+  "prior_conditioning": false,
+  "query_frac": 0.25,
+  "record_walk_parameters": false,
+  "rw_baseline_mean_range": [
+    3.0,
+    7.0
+  ],
+  "rw_baseline_std_range": [
+    0.0,
+    0.045
+  ],
+  "rw_baseline_std_sigma": null,
+  "rw_covariate_mean_range": [
+    -1.0,
+    1.0
+  ],
+  "rw_outcome_std_range": [
+    0.015,
+    0.035
+  ],
+  "rw_outcome_std_sigma": 0.25,
+  "rw_positive_mean_range": [
+    0.5,
+    3.0
+  ],
+  "rw_smoothness_alpha": 2.0,
+  "rw_smoothness_beta": 2.0,
+  "rw_smoothness_max_weeks": 12,
+  "rw_std_sigma": 1.0,
+  "rw_treatment_std_range": [
+    0.15,
+    0.8
+  ],
+  "saturation_family_probs": {
+    "hill": 0.0,
+    "linear": 0.0,
+    "logistic": 0.0,
+    "michaelis_menten": 1.0,
+    "root": 0.0,
+    "tanh": 0.0
+  },
+  "saturation_prior_ranges": {
+    "hill": {
+      "kappa_mult": [
+        0.7,
+        1.5
+      ],
+      "slope": [
+        1.0,
+        3.0
+      ]
+    },
+    "logistic": {
+      "lam": [
+        0.5,
+        3.0
+      ]
+    },
+    "michaelis_menten": {
+      "kappa_mult": [
+        0.7,
+        1.5
+      ]
+    },
+    "root": {
+      "alpha": [
+        0.3,
+        0.9
+      ]
+    },
+    "tanh": {
+      "c": [
+        0.3,
+        1.5
+      ]
+    }
+  },
+  "seed": 0,
+  "treatment_cv_floor": 0.08,
+  "treatment_flighting_duty_range": [
+    0.3,
+    0.8
+  ],
+  "treatment_flighting_inclusion_prob": 0.0,
+  "treatment_flighting_period_weeks_range": [
+    4,
+    13
+  ],
+  "treatment_hf_inclusion_prob": 1.0,
+  "treatment_hf_sigma_range": [
+    0.08,
+    0.4
+  ],
+  "treatment_level_jump_count": 1,
+  "treatment_level_jump_factor_range": [
+    0.5,
+    2.0
+  ],
+  "treatment_level_jump_inclusion_prob": 0.0,
+  "treatment_offset_frac_range": [
+    0.6,
+    0.9
+  ],
+  "treatment_offset_inclusion_prob": 0.0,
+  "treatment_onset_frac_range": [
+    0.05,
+    0.25
+  ],
+  "treatment_onset_inclusion_prob": 0.0,
+  "treatment_pulse_amp_range": [
+    0.4,
+    1.5
+  ],
+  "treatment_pulse_inclusion_prob": 1.0,
+  "treatment_pulse_prob_range": [
+    0.0,
+    0.2
+  ],
+  "treatment_reference_contribution_range": [
+    0.6,
+    1.5
+  ],
+  "treatment_reference_multiplier": 1.0,
+  "treatment_seasonal_amplitude_range": [
+    0.1,
+    0.5
+  ],
+  "treatment_seasonal_inclusion_prob": 0.0,
+  "treatment_seasonal_period_weeks_range": [
+    52.0,
+    52.0
+  ],
+  "treatment_shock_length_range": [
+    2,
+    2
+  ],
+  "treatment_shock_level_range": [
+    0.0,
+    0.0
+  ],
+  "treatment_trend_inclusion_prob": 0.0,
+  "treatment_trend_log_change_range": [
+    -1.0,
+    1.0
+  ],
+  "val_cell_frac": 0.2,
+  "weibull_k_range": [
+    1.5,
+    4.0
+  ],
+  "weibull_lam_range": [
+    2.0,
+    8.0
+  ],
+  "zc_base_rate": 0.3,
+  "zc_coeff_range": [
+    0.05,
+    0.3
+  ],
+  "zy_coeff_range": [
+    0.1,
+    0.4
+  ],
+  "zz_base_rate": 0.1,
+  "zz_coeff_range": [
+    -0.2,
+    0.2
+  ]
+}

@@ -1,0 +1,788 @@
+{
+  "original_full_dgp": {
+    "n_time_steps": 104,
+    "n_treatments": 15,
+    "n_covariates": 10,
+    "n_latent": 1,
+    "n_cells": 2,
+    "draws_per_cell": 1,
+    "val_cell_frac": 0.2,
+    "query_frac": 0.25,
+    "p_long_horizon": 0.5,
+    "treatment_cv_floor": 0.08,
+    "l_max": 8,
+    "seed": 29,
+    "n_treatments_active_range": [
+      5,
+      15
+    ],
+    "n_covariates_active_range": [
+      3,
+      10
+    ],
+    "n_latent_active_range": [
+      1,
+      1
+    ],
+    "active_count_allocation": "stratified",
+    "active_count_weights": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "carryover_alpha_range": [
+      0.2,
+      0.8
+    ],
+    "carryover_family_probs": {
+      "none": 0.0,
+      "geometric": 1.0,
+      "weibull": 0.0
+    },
+    "saturation_family_probs": {
+      "linear": 0.0,
+      "hill": 0.0,
+      "logistic": 0.0,
+      "michaelis_menten": 1.0,
+      "tanh": 0.0,
+      "root": 0.0
+    },
+    "saturation_prior_ranges": {
+      "hill": {
+        "slope": [
+          1.0,
+          3.0
+        ],
+        "kappa_mult": [
+          0.7,
+          1.5
+        ]
+      },
+      "logistic": {
+        "lam": [
+          0.5,
+          3.0
+        ]
+      },
+      "michaelis_menten": {
+        "kappa_mult": [
+          0.05,
+          20.0
+        ]
+      },
+      "tanh": {
+        "c": [
+          0.3,
+          1.5
+        ]
+      },
+      "root": {
+        "alpha": [
+          0.3,
+          0.9
+        ]
+      }
+    },
+    "mm_scale_prior": "log_uniform",
+    "weibull_lam_range": [
+      2.0,
+      8.0
+    ],
+    "weibull_k_range": [
+      1.5,
+      4.0
+    ],
+    "dz_base_rate": 0.3,
+    "zc_base_rate": 0.3,
+    "cc_base_rate": 0.15,
+    "zz_base_rate": 0.1,
+    "dc_coeff_range": [
+      0.1,
+      0.5
+    ],
+    "dz_coeff_range": [
+      0.1,
+      0.5
+    ],
+    "zc_coeff_range": [
+      0.05,
+      0.3
+    ],
+    "cc_coeff_range": [
+      0.05,
+      0.3
+    ],
+    "zz_coeff_range": [
+      -0.2,
+      0.2
+    ],
+    "dy_coeff_range": [
+      0.15,
+      0.45
+    ],
+    "zy_coeff_range": [
+      0.1,
+      0.4
+    ],
+    "beta_additive_range": [
+      0.5,
+      2.0
+    ],
+    "treatment_reference_contribution_range": [
+      0.5,
+      2.0
+    ],
+    "treatment_reference_multiplier": 1.0,
+    "covariate_reference_contribution_range": [
+      -0.3,
+      0.3
+    ],
+    "covariate_reference_scale": 2.0,
+    "rw_covariate_mean_range": [
+      -3.0,
+      3.0
+    ],
+    "rw_positive_mean_range": [
+      0.1,
+      8.0
+    ],
+    "rw_baseline_mean_range": [
+      3.0,
+      8.0
+    ],
+    "rw_std_sigma": 1.5,
+    "rw_baseline_std_sigma": 1.0,
+    "rw_outcome_std_sigma": 0.25,
+    "outcome_std_mode": "relative",
+    "rw_baseline_std_range": [
+      0.0,
+      0.0
+    ],
+    "rw_outcome_std_range": [
+      0.01,
+      0.028
+    ],
+    "rw_smoothness_alpha": 2.0,
+    "rw_smoothness_beta": 2.0,
+    "rw_smoothness_max_weeks": 26,
+    "confounding_strength_range": null,
+    "rw_treatment_std_range": [
+      0.1,
+      1.2
+    ],
+    "treatment_hf_sigma_range": [
+      0.08,
+      0.6
+    ],
+    "treatment_pulse_prob_range": [
+      0.0,
+      0.25
+    ],
+    "treatment_pulse_amp_range": [
+      0.4,
+      2.5
+    ],
+    "covariate_hf_sigma_range": [
+      0.1,
+      0.8
+    ],
+    "covariate_pulse_prob_range": [
+      0.0,
+      0.25
+    ],
+    "covariate_pulse_amp_range": [
+      0.5,
+      3.0
+    ],
+    "baseline_floor": null,
+    "baseline_floor_scope": "intercept",
+    "carryover_burn_in": 8,
+    "n_treatment_shocks": 0,
+    "treatment_shock_length_range": [
+      2,
+      2
+    ],
+    "treatment_shock_level_range": [
+      0.0,
+      0.0
+    ],
+    "include_identifiability_labels": true,
+    "prior_conditioning": false,
+    "prior_cond_width_ranges": null,
+    "edge_rate_overrides": null,
+    "edge_budget": {
+      "cy": [
+        1,
+        15
+      ],
+      "dc": [
+        0,
+        0
+      ],
+      "dz": [
+        0,
+        0
+      ],
+      "dy": [
+        0,
+        0
+      ],
+      "zy": [
+        0,
+        10
+      ],
+      "zc": [
+        0,
+        0
+      ],
+      "cc": [
+        0,
+        0
+      ],
+      "zz": [
+        0,
+        0
+      ]
+    },
+    "min_no_direct_effect_treatments": 0,
+    "treatment_hf_inclusion_prob": 0.9,
+    "treatment_pulse_inclusion_prob": 0.7,
+    "treatment_onset_inclusion_prob": 0.15,
+    "treatment_offset_inclusion_prob": 0.1,
+    "treatment_flighting_inclusion_prob": 0.2,
+    "treatment_level_jump_inclusion_prob": 0.2,
+    "treatment_seasonal_inclusion_prob": 0.3,
+    "treatment_trend_inclusion_prob": 0.3,
+    "covariate_hf_inclusion_prob": 0.9,
+    "covariate_pulse_inclusion_prob": 0.6,
+    "covariate_onset_inclusion_prob": 0.1,
+    "covariate_offset_inclusion_prob": 0.1,
+    "covariate_flighting_inclusion_prob": 0.15,
+    "covariate_level_jump_inclusion_prob": 0.3,
+    "covariate_seasonal_inclusion_prob": 0.35,
+    "covariate_trend_inclusion_prob": 0.3,
+    "treatment_onset_frac_range": [
+      0.052884615384615384,
+      0.12980769230769232
+    ],
+    "covariate_onset_frac_range": [
+      0.052884615384615384,
+      0.12980769230769232
+    ],
+    "treatment_offset_frac_range": [
+      0.6009615384615384,
+      0.9086538461538461
+    ],
+    "covariate_offset_frac_range": [
+      0.6009615384615384,
+      0.9086538461538461
+    ],
+    "treatment_flighting_period_weeks_range": [
+      4,
+      13
+    ],
+    "covariate_flighting_period_weeks_range": [
+      4,
+      13
+    ],
+    "treatment_flighting_duty_range": [
+      0.3,
+      0.8
+    ],
+    "covariate_flighting_duty_range": [
+      0.3,
+      0.8
+    ],
+    "treatment_level_jump_count": 1,
+    "covariate_level_jump_count": 1,
+    "treatment_level_jump_factor_range": [
+      0.5,
+      2.0
+    ],
+    "covariate_level_jump_size_range": [
+      -1.0,
+      1.0
+    ],
+    "treatment_seasonal_amplitude_range": [
+      0.1,
+      0.5
+    ],
+    "covariate_seasonal_amplitude_range": [
+      0.2,
+      1.0
+    ],
+    "treatment_seasonal_period_weeks_range": [
+      52.0,
+      52.0
+    ],
+    "covariate_seasonal_period_weeks_range": [
+      52.0,
+      52.0
+    ],
+    "treatment_trend_log_change_range": [
+      -1.0,
+      1.0
+    ],
+    "covariate_trend_change_range": [
+      -1.0,
+      1.0
+    ]
+  },
+  "constant_generation": {
+    "worlds": 50,
+    "cells_per_batch": 2,
+    "draws_per_cell": 1,
+    "batch_seeds": [
+      10029,
+      10030,
+      10031,
+      10032,
+      10033,
+      10034,
+      10035,
+      10036,
+      10037,
+      10038,
+      10039,
+      10040,
+      10041,
+      10042,
+      10043,
+      10044,
+      10045,
+      10046,
+      10047,
+      10048,
+      10049,
+      10050,
+      10051,
+      10052,
+      10053
+    ],
+    "source_batch_sha256": {
+      "batch_00.npz": "f6e86f5506c3d9e43e983dd87f667ca1f713745a78d837c2ec334fe30c10af9e",
+      "batch_01.npz": "0201839847f7e2d4b5ac62385282bb45f4ce2e8a1381359815939b8d058d2062",
+      "batch_02.npz": "1d9d7899322348a91490601f32457db03a42055ca120e010e41a79dc63478a5f",
+      "batch_03.npz": "44b8aa0d05f7a2eec31f0bde02832e17490da1b70761e7608f31bbb9468b7a75",
+      "batch_04.npz": "95534b915d2f4427bc399c33558340bac0acc3f023e178454596ae1a0a1f4044",
+      "batch_05.npz": "9d860a9aa82bad924a6c0d2295d0c3163a6428f1cd5652d89ff5f52177dfb0f6",
+      "batch_06.npz": "eff4cb2c0d61debb522ac821c673f8f657e2860e30aa523043e307d83493ebbf",
+      "batch_07.npz": "86cabadaccc316dd0b9e6dfb155207d3c9a3b9c10ad2af1fb6666bb55ba5cc25",
+      "batch_08.npz": "a7a4d6d96431192106e93c22d5893ffbd2a3a0f562dee77a8fb94ec4ddc191c2",
+      "batch_09.npz": "e78976c1ad9f9ae727c67ab48445996cbfaf3411a2947a37e8f12b20ee22bdb3",
+      "batch_10.npz": "25550078814d70ecaaf1d82c0df95261636078c939450dfa9c6a30c9ea19c0b9",
+      "batch_11.npz": "4c0e31279bc5e40fb2c9ad224342112807f6fcdf2973f8af5d103551d167c71c",
+      "batch_12.npz": "c447b06508cc3358338d2ec29e96bcd7a89d10e9cfb82850936599a6258ee78b",
+      "batch_13.npz": "dc0e90dccec8b74153b8cc48ba756e3ebbcf837d7c08985d8327a7886253c225",
+      "batch_14.npz": "86284d85c9bdb52f7ecb65b18c805ba3864fc3fe51211154471966474a474a33",
+      "batch_15.npz": "e0fc6e6ac575e3e7caec8fa80da7b99457e1d7690235a803b3890d5bec214d14",
+      "batch_16.npz": "630bb9036394c6402d805d0b2fed12691a0cabbc2f05550ebf78fe2917dec278",
+      "batch_17.npz": "0fc7601ad941d6003513a164d2fff27a5f3ff9b12176bac55a9719231b796b30",
+      "batch_18.npz": "c04d8be3e3efb75d08ee85899653a32ba4115b575cbb9f850c69828f3c26e235",
+      "batch_19.npz": "45c2744dfe8a75a804db9f2e66feb9b1f84d2d6b5a8fe7a9a90dbbf38511a965",
+      "batch_20.npz": "6f4accbaee113646f26089e9f9eb840fd517aac400ab94b4943e294dbbc1dd85",
+      "batch_21.npz": "4f7dd2a23d01bea1646afc6db4ae5aba6d05605857f7a3e6d07df610706b97b2",
+      "batch_22.npz": "ba8f284c07b2ff9984e17927e909661f1b41babf13ab5d1967e84307f1f8c64e",
+      "batch_23.npz": "28fbbf7d9b2eb70dccaea6477f48419371889303ef7e84a606f680d1ff48bcb9",
+      "batch_24.npz": "9df6d2edb99136bf93a9857c942fcfc9fc486d8b245577cf9d56eff396370d9e"
+    }
+  },
+  "matched_tv_intervention": {
+    "baseline_std_range": [
+      0.0,
+      0.093
+    ],
+    "smoothness_beta_prior": [
+      2.0,
+      2.0
+    ],
+    "full_horizon": 112,
+    "reported_window": [
+      8,
+      112
+    ],
+    "fit_window": [
+      15,
+      112
+    ],
+    "max_smoothing_width": 26,
+    "baseline_floor": null,
+    "confounding_strength": 0,
+    "matched": "Preserve inputs, graph, parameters, baseline level and observation-noise realization; independently draw baseline scale, smoothness and innovations from generator prior.",
+    "seeds": [
+      91001,
+      91002,
+      91003,
+      91004,
+      91005,
+      91006,
+      91007,
+      91008,
+      91009,
+      91010,
+      91011,
+      91012,
+      91013,
+      91014,
+      91015,
+      91016,
+      91017,
+      91018,
+      91019,
+      91020,
+      91021,
+      91022,
+      91023,
+      91024,
+      91025,
+      91026,
+      91027,
+      91028,
+      91029,
+      91030,
+      91031,
+      91032,
+      91033,
+      91034,
+      91035,
+      91036,
+      91037,
+      91038,
+      91039,
+      91040,
+      91041,
+      91042,
+      91043,
+      91044,
+      91045,
+      91046,
+      91047,
+      91048,
+      91049,
+      91050
+    ]
+  },
+  "bounded_fit": {
+    "bounds": {
+      "intercept": [
+        3.0,
+        8.0
+      ],
+      "alpha": [
+        0.2,
+        0.8
+      ],
+      "kappa": [
+        0.05,
+        20.0
+      ],
+      "amplitude": [
+        0.5,
+        2.0
+      ],
+      "control_reference": [
+        -0.3,
+        0.3
+      ],
+      "control_reference_scale": 2.0
+    },
+    "source_sha256": "a09ed88c9697c42093b7a1311e8450fdf3d34000101324fc3aa0d53a48194743",
+    "starts": 2,
+    "max_nfev_per_start": 120,
+    "initialization": "midpoint shapes + seeded random shapes; data-only bounded-linear weights",
+    "seed": 2026,
+    "objective": "observed-outcome unweighted squared residuals, scaled by outcome SD; not Bayesian likelihood or MAP",
+    "oracle_information": "graph and generator reference anchors; true alpha/kappa only for fixed-transform variant",
+    "fit_weeks": [
+      7,
+      103
+    ]
+  },
+  "tv_nuts_fit": {
+    "sampler": "nutpie",
+    "adaptation": "draw_diag",
+    "chains": 4,
+    "tune": 1000,
+    "draws": 1000,
+    "target_accept": 0.95,
+    "maxdepth": 10,
+    "seeds": [
+      92001,
+      92002,
+      92003,
+      92004,
+      92005,
+      92006,
+      92007,
+      92008,
+      92009,
+      92010,
+      92011,
+      92012,
+      92013,
+      92014,
+      92015,
+      92016,
+      92017,
+      92018,
+      92019,
+      92020,
+      92021,
+      92022,
+      92023,
+      92024,
+      92025,
+      92026,
+      92027,
+      92028,
+      92029,
+      92030,
+      92031,
+      92032,
+      92033,
+      92034,
+      92035,
+      92036,
+      92037,
+      92038,
+      92039,
+      92040,
+      92041,
+      92042,
+      92043,
+      92044,
+      92045,
+      92046,
+      92047,
+      92048,
+      92049,
+      92050
+    ],
+    "baseline_inference": "Exact marginalization of Gaussian walk and discrete Beta-induced width prior; conditional posterior path reconstruction."
+  },
+  "historical_model_text_sha256": "a5e3755123f3b30b3c510308ba12437ff328d52833aa88e7a271eba84a91d0d7",
+  "tv_conditional_baseline_reconstruction_seeds": [
+    93001,
+    93002,
+    93003,
+    93004,
+    93005,
+    93006,
+    93007,
+    93008,
+    93009,
+    93010,
+    93011,
+    93012,
+    93013,
+    93014,
+    93015,
+    93016,
+    93017,
+    93018,
+    93019,
+    93020,
+    93021,
+    93022,
+    93023,
+    93024,
+    93025,
+    93026,
+    93027,
+    93028,
+    93029,
+    93030,
+    93031,
+    93032,
+    93033,
+    93034,
+    93035,
+    93036,
+    93037,
+    93038,
+    93039,
+    93040,
+    93041,
+    93042,
+    93043,
+    93044,
+    93045,
+    93046,
+    93047,
+    93048,
+    93049,
+    93050
+  ],
+  "tv_predictive_noise_seeds": [
+    94001,
+    94002,
+    94003,
+    94004,
+    94005,
+    94006,
+    94007,
+    94008,
+    94009,
+    94010,
+    94011,
+    94012,
+    94013,
+    94014,
+    94015,
+    94016,
+    94017,
+    94018,
+    94019,
+    94020,
+    94021,
+    94022,
+    94023,
+    94024,
+    94025,
+    94026,
+    94027,
+    94028,
+    94029,
+    94030,
+    94031,
+    94032,
+    94033,
+    94034,
+    94035,
+    94036,
+    94037,
+    94038,
+    94039,
+    94040,
+    94041,
+    94042,
+    94043,
+    94044,
+    94045,
+    94046,
+    94047,
+    94048,
+    94049,
+    94050
+  ],
+  "gate": {
+    "relative": 0.1,
+    "absolute": 0.01,
+    "diagnostic_rhat_lt": 1.01,
+    "ess_gt_eq": 400,
+    "bfmi_gt_eq": 0.3,
+    "max_divergences": 0,
+    "max_depth_hits": 0
+  },
+  "scored_weeks_inclusive": [
+    7,
+    103
+  ]
+}

@@ -62,6 +62,8 @@ from .slots import (
     TRAJECTORY_COMPONENTS,
     TRAJECTORY_INPUTS,
     TRAJECTORY_PARAM_FIELDS,
+    WALK_ARRAY_FIELDS,
+    WALK_RELATIVE_MODE_FIELDS,
     SlotLayout,
 )
 from .trajectories import GATE_COMPONENTS, LEVEL_COMPONENTS, summarize_component_prevalence
@@ -355,11 +357,16 @@ def _trajectory_truth_errors(corpus: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _rounding_tolerance(expected: np.ndarray) -> np.ndarray:
+    """Admissible float64 rounding of a derived value: 32 eps relative, at least two ulps."""
+    ulp = np.abs(expected - np.nextafter(expected, 0.0))
+    return np.asarray(np.maximum(32 * np.finfo(np.float64).eps * np.abs(expected), 2 * ulp))
+
+
 def _reference_truth_matches(actual: np.ndarray, expected: np.ndarray, target: np.ndarray) -> bool:
     """Match admissible derived loadings without erasing nonzero targets."""
     with np.errstate(over="ignore", invalid="ignore"):
-        ulp = np.abs(expected - np.nextafter(expected, 0.0))
-        tolerance = np.maximum(32 * np.finfo(np.float64).eps * np.abs(expected), 2 * ulp)
+        tolerance = _rounding_tolerance(expected)
         live_match = (
             (np.abs(actual) <= CORPUS_STORAGE_MAX)
             & np.isfinite(expected)
@@ -531,6 +538,213 @@ def _mechanism_truth_errors(corpus: dict[str, Any], fields: dict) -> list[str]:
                 expected_coefficient = target / response
             if not _reference_truth_matches(corpus["beta"][mask], expected_coefficient, target):
                 errors.append("beta does not match the treatment reference target")
+    return errors
+
+
+#: The fixed key set of ``diagnostics["walk_parameters"]``.
+_WALK_PARAMETER_KEYS = (
+    "fields",
+    "outcome_std_mode",
+    "rw_positive_mean_range",
+    "rw_treatment_std_range",
+    "rw_covariate_mean_range",
+    "rw_std_sigma",
+    "rw_baseline_mean_range",
+    "rw_baseline_std_range",
+    "rw_outcome_std_range",
+    "rw_baseline_std_sigma",
+    "rw_outcome_std_sigma",
+    "rw_smoothness_alpha",
+    "rw_smoothness_beta",
+    "rw_smoothness_max_weeks",
+    "baseline_floor",
+    "baseline_floor_scope",
+)
+
+#: Each recorded uniform draw and the echoed prior range it must lie in.
+_WALK_SUPPORTS = (
+    ("walk_treatment_mean", "rw_positive_mean_range"),
+    ("walk_treatment_std_relative", "rw_treatment_std_range"),
+    ("walk_covariate_mean", "rw_covariate_mean_range"),
+    ("walk_baseline_mean", "rw_baseline_mean_range"),
+    ("walk_baseline_std_relative", "rw_baseline_std_range"),
+    ("outcome_noise_std_relative", "rw_outcome_std_range"),
+)
+
+
+def _softplus(x: np.ndarray) -> np.ndarray:
+    """Float64 ``log(1 + exp(x))`` on the branches of PyTensor's ``Softplus``."""
+    x = np.asarray(x, dtype=np.float64)
+    with np.errstate(over="ignore"):
+        upper = np.where(x < 33.3, x + np.exp(-x), x)
+        values = np.where(x < -37.0, np.exp(x), np.where(x < 18.0, np.log1p(np.exp(x)), upper))
+    return np.asarray(values)
+
+
+def _walk_field_specs(
+    corpus: dict[str, Any], errors: list[str]
+) -> dict[str, tuple[tuple[str, ...], type[np.generic]]]:
+    """Resolve the opt-in walk block: its arrays and metadata come together.
+
+    The relative baseline/noise draws exist iff the echoed outcome-noise mode is
+    relative, and ``fields`` lists exactly the stored walk arrays, sorted.
+    """
+    diagnostics = corpus.get("diagnostics")
+    has_metadata = isinstance(diagnostics, dict) and "walk_parameters" in diagnostics
+    if not has_metadata and not set(WALK_ARRAY_FIELDS).intersection(corpus):
+        return {}
+    metadata = diagnostics.get("walk_parameters") if isinstance(diagnostics, dict) else None
+    if not isinstance(metadata, dict):
+        if has_metadata:
+            errors.append("diagnostics walk_parameters must be a mapping")
+        else:
+            errors.append(
+                "walk arrays and diagnostics walk_parameters must be present together; "
+                "missing diagnostics walk_parameters"
+            )
+        return {}
+    mode = metadata.get("outcome_std_mode")
+    if not isinstance(mode, str) or mode not in ("relative", "absolute"):
+        errors.append(
+            "diagnostics walk_parameters outcome_std_mode must be 'relative' or 'absolute'"
+        )
+        return {}
+    fields = {
+        key: spec
+        for key, spec in WALK_ARRAY_FIELDS.items()
+        if mode == "relative" or key not in WALK_RELATIVE_MODE_FIELDS
+    }
+    missing = [key for key in fields if key not in corpus]
+    if missing:
+        errors.append(
+            "walk arrays and diagnostics walk_parameters must be present together; "
+            f"missing {', '.join(missing)}"
+        )
+    unexpected = [key for key in WALK_RELATIVE_MODE_FIELDS if key in corpus and key not in fields]
+    if unexpected:
+        errors.append(
+            f"{', '.join(unexpected)} must be present iff diagnostics walk_parameters "
+            "outcome_std_mode is 'relative'"
+        )
+    inventory = metadata.get("fields")
+    if not (
+        isinstance(inventory, list)
+        and all(isinstance(key, str) for key in inventory)
+        and inventory == sorted(fields)
+    ):
+        errors.append("diagnostics walk_parameters fields does not list the stored walk arrays")
+    return fields
+
+
+def _walk_truth_errors(
+    corpus: dict[str, Any], fields: dict[str, tuple[tuple[str, ...], type[np.generic]]]
+) -> list[str]:
+    """Check the walk recipe echo, zero padding, prior supports and treatment identities."""
+    import json
+
+    errors: list[str] = []
+    diagnostics = corpus["diagnostics"]
+    metadata = diagnostics["walk_parameters"]
+    try:
+        round_trip = json.loads(json.dumps(metadata, allow_nan=False))
+    except (TypeError, ValueError):
+        round_trip = None
+    if round_trip != metadata:
+        errors.append("diagnostics walk_parameters must survive a JSON round trip unchanged")
+    if set(metadata) != set(_WALK_PARAMETER_KEYS):
+        errors.append("diagnostics walk_parameters keys do not match the schema")
+    mode = metadata["outcome_std_mode"]
+    relative = mode == "relative"
+    if diagnostics["signal"].get("outcome_std_mode") != mode:
+        errors.append(
+            "diagnostics walk_parameters outcome_std_mode does not match diagnostics signal"
+        )
+
+    relative_ranges = ("rw_baseline_std_range", "rw_outcome_std_range")
+    absolute_sigmas = ("rw_baseline_std_sigma", "rw_outcome_std_sigma")
+    for name in absolute_sigmas if relative else relative_ranges:
+        if metadata.get(name) is not None:
+            errors.append(f"diagnostics walk_parameters {name} must be None in {mode} mode")
+    supports: dict[str, tuple[float, float]] = {}
+    for name in (
+        "rw_positive_mean_range",
+        "rw_treatment_std_range",
+        "rw_covariate_mean_range",
+        "rw_baseline_mean_range",
+        *(relative_ranges if relative else ()),
+    ):
+        bounds = _finite_bounds(
+            metadata.get(name),
+            positive=name == "rw_positive_mean_range",
+            maximum=CORPUS_STORAGE_MAX,
+        )
+        if (
+            bounds is None
+            or (name.endswith("_std_range") and bounds[0] < 0.0)
+            or (name == "rw_treatment_std_range" and bounds[1] <= 0.0)
+        ):
+            errors.append(f"diagnostics walk_parameters {name} has invalid bounds")
+        else:
+            supports[name] = bounds
+    for name in (
+        "rw_std_sigma",
+        "rw_smoothness_alpha",
+        "rw_smoothness_beta",
+        *(() if relative else absolute_sigmas),
+    ):
+        value = metadata.get(name)
+        if not (_is_finite_real(value) and float(value) > 0.0):
+            errors.append(f"diagnostics walk_parameters {name} must be finite and positive")
+    max_weeks = metadata.get("rw_smoothness_max_weeks")
+    if isinstance(max_weeks, bool) or not isinstance(max_weeks, int) or max_weeks < 1:
+        errors.append("diagnostics walk_parameters rw_smoothness_max_weeks must be an int >= 1")
+    floor = metadata.get("baseline_floor")
+    if floor is not None and not _is_finite_real(floor):
+        errors.append("diagnostics walk_parameters baseline_floor must be None or finite")
+    scope = metadata.get("baseline_floor_scope")
+    if not isinstance(scope, str) or scope not in ("intercept", "non_treatment"):
+        errors.append("diagnostics walk_parameters baseline_floor_scope is not supported")
+
+    active = {
+        "treatment": corpus["treatment_active_mask"] == 1,
+        "covariate": corpus["covariate_active_mask"] == 1,
+        "latent": corpus["latent_active_mask"] == 1,
+    }
+    every_task = np.ones(corpus["treatment_raw"].shape[0], dtype=bool)
+    live: dict[str, np.ndarray] = {}
+    for key, (axes, _) in fields.items():
+        slots = active[axes[1]] if len(axes) == 2 else every_task
+        live[key] = corpus[key][slots]
+        if len(axes) == 2 and (corpus[key][~slots] != 0.0).any():
+            errors.append(f"{key} has nonzero inactive-{axes[1]} padding")
+        if key.endswith(("_std", "_std_relative")) and (live[key] < 0.0).any():
+            errors.append(f"{key} must be nonnegative")
+        if key.endswith("_smoothness") and ((live[key] < 0.0) | (live[key] > 1.0)).any():
+            errors.append(f"{key} must lie in [0, 1]")
+    for key, name in _WALK_SUPPORTS:
+        if key in fields and name in supports:
+            lo, hi = supports[name]
+            if ((live[key] < lo) | (live[key] > hi)).any():
+                errors.append(f"{key} is outside diagnostics walk_parameters {name}")
+
+    # The treatment walk's level is softplus(mean) and its relative draw scales
+    # it, exactly as the world model builds them.
+    level = corpus["treatment_level"][active["treatment"]]
+    with np.errstate(over="ignore", invalid="ignore"):
+        anchor = _softplus(live["walk_treatment_mean"])
+        expected_level = anchor.astype(np.float32)
+        level_error = np.abs(level.astype(np.float64) - expected_level.astype(np.float64))
+        level_ulp = np.spacing(np.maximum(np.abs(level), np.abs(expected_level)))
+        expected_std = live["walk_treatment_std_relative"] * anchor
+        std_error = np.abs(live["walk_treatment_std"] - expected_std)
+        std_tolerance = _rounding_tolerance(expected_std)
+    if not (level_error <= level_ulp).all():
+        errors.append("treatment_level is not float32(softplus(walk_treatment_mean)) within 1 ulp")
+    if not (np.isfinite(expected_std) & (std_error <= std_tolerance)).all():
+        errors.append(
+            "walk_treatment_std does not match walk_treatment_std_relative * "
+            "softplus(walk_treatment_mean)"
+        )
     return errors
 
 
@@ -709,6 +923,7 @@ class DataGenerator:
                 f"missing {missing}"
             )
         mechanism_fields = _mechanism_field_specs(corpus, errors)
+        walk_fields = _walk_field_specs(corpus, errors)
         jump_counts: dict[str, int] = {}
         if has_trajectory and isinstance(diagnostics, dict):
             trajectory_diagnostics = diagnostics["trajectory"]
@@ -812,6 +1027,7 @@ class DataGenerator:
         if has_trajectory:
             array_fields.update(TRAJECTORY_ARRAY_FIELDS)
         array_fields.update(mechanism_fields)
+        array_fields.update(walk_fields)
         field_specs = {
             key: (tuple(dimensions[axis] for axis in axes), dtype)
             for key, (axes, dtype) in array_fields.items()
@@ -1642,6 +1858,8 @@ class DataGenerator:
             errors.extend(_trajectory_truth_errors(corpus))
         if not errors and mechanism_fields:
             errors.extend(_mechanism_truth_errors(corpus, mechanism_fields))
+        if not errors and walk_fields:
+            errors.extend(_walk_truth_errors(corpus, walk_fields))
 
         return errors
 

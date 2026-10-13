@@ -1,0 +1,45 @@
+{
+  "scope": "Historical approvals only; compact publication is not a newly approved/sealed scientific run",
+  "original_commit": "4dc69ce",
+  "review_session": "Plannotator pn-2a768e",
+  "legacy_limit": "Original manifests and input hashes establish compatibility; historical per-fit output and original source hashes unavailable; approved report receipts seal later evidence, not old fitting",
+  "historical_approvals": {
+    "tv": {
+      "original_source_commit": "4dc69ce",
+      "historical_report_run_id": "f2dccfb682b95c9e8da4ffdc0d3f8c5f4134098468d54ef4f8c8e974cfbbffb3",
+      "historical_report_path_at_commit": "studies/recovery/report-artifacts/tv50-profile-v2/",
+      "historical_interpretation_path_at_commit": "studies/recovery/interpretations/tv50.md",
+      "original_evidence_sha256": "9a657354105b82edebe4f2054024d6d393820f6b5af99b78e71ff6536481e724",
+      "original_report_manifest_sha256": "ee233865a496410a45088506de8d58500698355f712497bd353299d0d7dcbf7d",
+      "original_report_receipt_sha256": "bb74f38de99585ea77cbf16b963dc57c171ba1e04ba5c7790b846f70f08c5078",
+      "original_review_json_sha256": "98b6fbd4fe46606f5e9d55a067c19dfb22eff7fae5cc6e0687a97bde6853b7b4",
+      "original_review_receipt_sha256": "97cece9abfeff257f05a6fca84f89450d9659c7f24a1ee70eeebe64e54e17c74",
+      "historical_review_id": "15a972d9798d4f1c7631264c77fc7fa4da317a6fb9d8658ff52db8334e405cea",
+      "reviewer": "Teemu Säilynoja",
+      "historical_decision": "approved",
+      "interpretation_sha256": "d4e2a598f084051fbe2bd80aa102a7907aa91fb9aa8449ced62e750fda60e96b"
+    },
+    "bounded": {
+      "original_source_commit": "4dc69ce",
+      "historical_report_run_id": "041a2b4bfc17d53631ad524508fe0a6243c8bdf50df47ec3ee567a7c202562de",
+      "historical_report_path_at_commit": "studies/recovery/report-artifacts/bounded50-profile-v2/",
+      "historical_interpretation_path_at_commit": "studies/recovery/interpretations/bounded50.md",
+      "original_evidence_sha256": "ed2ed262b390c5a673b38af1c5ada010f4650f551e62098d9971666cc0a6c014",
+      "original_report_manifest_sha256": "e3e962dd2a58edc78c920add5c837ecad47be7a57b56a0629b884da846e77e06",
+      "original_report_receipt_sha256": "04104ac6b8832d47b6031610d7fee083ddcce382f44d395b82238c96efc62b31",
+      "original_review_json_sha256": "20ff1185f09cf813a49844fb9fa82ef183da3f30adeafd2836ebc315425f6ed1",
+      "original_review_receipt_sha256": "0ea6260b02a3b71c8f5ade3537a362c5a9fcaf05a55a362e2ceafe3af50858d9",
+      "historical_review_id": "031ec6a9b96dfa8e7fdd2821cc25eabcef482c87a36082c2d62e81dc30f7939b",
+      "reviewer": "Teemu Säilynoja",
+      "historical_decision": "approved",
+      "interpretation_sha256": "ebefc14f94406efb2c0391a0035dcbc7420aa28ec9fd6f466ffa9142bd96e6db"
+    }
+  },
+  "compact_payload_sha256": {
+    "historical-config.json": "67eef75e4e45dcc0a27a073a580e717b53fa2d623657a7f3866b8065873ed70c",
+    "snapshot.json": "c484a86a3cd4b42347f5e243f5b0be9f10a00cb5441c727f0483b424804d1612",
+    "snapshot.npz": "b3a445e9e13e68116c2d5dd9e997ab27b56ce0ddac8fe731636800dc955b30bb",
+    "tv50.md": "d4e2a598f084051fbe2bd80aa102a7907aa91fb9aa8449ced62e750fda60e96b",
+    "bounded50.md": "ebefc14f94406efb2c0391a0035dcbc7420aa28ec9fd6f466ffa9142bd96e6db"
+  }
+}
