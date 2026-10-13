@@ -130,9 +130,10 @@ PRIOR_COND_DEFAULT_WIDTH_RANGES: dict[str, tuple[float, float]] = {
 #: configuration validation unbounded.
 MAX_QUERY_HORIZON_SEARCH_STEPS = 1_000_000
 
-#: Existing series and base features retain float32 storage. New realised
-#: trajectory/mechanism truth uses float64; this limit applies only to the
-#: historical float32 arrays.
+#: Existing series and base features retain float32 storage, so this is the
+#: largest magnitude they can hold. Schema-v5 float64 truth keeps the same bound
+#: for primitive shapes, raw and reference-derived outcome loadings, reference
+#: recipes and selected unscaled trajectory primitives (see docs/reference/corpus.md).
 CORPUS_STORAGE_DTYPE = np.float32
 CORPUS_STORAGE_MAX = float(np.finfo(CORPUS_STORAGE_DTYPE).max)
 

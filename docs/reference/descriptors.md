@@ -75,7 +75,8 @@ misses true constants. With `eps` the machine epsilon of the input dtype
 `max - min <= 4 * eps * max|x|`, its **steps are constant** (a linear ramp) when
 their range is at most `8 * eps * max|x|`, and its **mean is zero** when
 `|mean| <= (min(T, 32) * eps + T * eps64) * max|x|` — input-storage rounding plus
-float64 summation error — and it takes both signs. A constant has infinite level-to-variation, CV 0,
+float64 summation error — and it takes both signs. A nonzero constant has infinite
+level-to-variation (an all-zero series has none: it is undefined), CV 0,
 roughness and spike 0, and no autocorrelation or correlation; a ramp has
 roughness and spike 0 and no differenced statistics. There is no absolute
 epsilon, and every series is first rescaled exactly by a power of two, so values

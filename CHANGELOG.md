@@ -8,7 +8,7 @@ read the migration notes before upgrading.
 
 ### Added
 
-- **Trajectory showcase as a variety tool, with a plot-first corpus report (#29, #31).**
+- **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not
   rendered on the documentation site) generates N worlds (10 by default) from
   one block of parameter ranges and reads only the saved shard to plot, world
@@ -25,8 +25,6 @@ read the migration notes before upgrading.
   near-even zero counts. A `.config.json` written next to the shard holds the
   effective configuration and the shard's SHA-256; report-only execution on any
   valid shard degrades to observed panels when it is missing.
-  The eight-world baseline, the 8-vs-100 comparison, the archetype atlas and the
-  replay/template/oracle demonstrations were removed from the notebook.
 - **Opt-in walk-parameter truth in corpora.** `SCMPrior.record_walk_parameters=True`
   (default `False`) stores every world's realised walk means, absolute and
   relative standard deviations, outcome-noise scales and smoothness as float64
