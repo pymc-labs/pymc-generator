@@ -203,6 +203,76 @@ for key in ["treatment_raw", "covariates", "outcome_raw", "treatment_contributio
     print(f"{key:<28} {str(c[key].shape):<14} {c[key].dtype}")
 ```
 
+### Recorded walk parameters
+
+`SCMPrior.record_walk_parameters=True` (default `False`) adds every world's
+realised walk and outcome-noise parameters, taken from its accepted draw, as
+float64 arrays (`pymc_generator.slots.WALK_ARRAY_FIELDS`), together with
+`diagnostics["walk_parameters"]`. The arrays and the block are present together
+or not at all, and padded slots are exactly `0.0`.
+
+| Key | Shape | Meaning |
+| --- | --- | --- |
+| `walk_treatment_mean` | `(n_tasks, n_treatments)` | treatment walk mean, before softplus; `treatment_level` is its `float32(softplus(·))` |
+| `walk_treatment_std` | `(n_tasks, n_treatments)` | pre-softplus walk scale `param_rw_c_std` |
+| `walk_treatment_std_relative` | `(n_tasks, n_treatments)` | its draw from `rw_treatment_std_range`: `walk_treatment_std = walk_treatment_std_relative * softplus(walk_treatment_mean)` |
+| `walk_covariate_mean`, `walk_covariate_std` | `(n_tasks, n_covariates)` | covariate walk mean and HalfNormal(`rw_std_sigma`) scale |
+| `walk_baseline_mean`, `walk_baseline_std` | `(n_tasks,)` | intercept walk `RW_B` mean and absolute scale |
+| `outcome_noise_std` | `(n_tasks,)` | exact per-week Normal σ of `outcome_noise` |
+| `walk_baseline_std_relative`, `outcome_noise_std_relative` | `(n_tasks,)` | relative mode only: the draws from `rw_baseline_std_range` / `rw_outcome_std_range` that the parameter-only treatment amplitude `sqrt(sum((g_cy * beta)**2))` scales into `walk_baseline_std` / `outcome_noise_std` |
+| `walk_treatment_smoothness`, `walk_covariate_smoothness`, `walk_baseline_smoothness`, `walk_latent_smoothness` | per input slot, `(n_tasks,)` for the baseline | the cell's Beta smoothness draws |
+
+The walk scales follow the [random-walk label semantics](#random-walk-parameter-labels)
+above: `std²` is the walk's expected population variance over the full simulated
+horizon, not a reported-window standard deviation. A smoothness `s` sets the kernel width
+`max(1, round(s * rw_smoothness_max_weeks))` weeks, clamped to that horizon. The
+latent factor's mean and scale are pinned to 0 and 1, so only its smoothness is
+recorded. A degenerate prior range builds no random variable; its array holds the
+range's exact constant.
+
+`diagnostics["walk_parameters"]` echoes the priors with JSON-native values, as
+returned by `SCMPrior.walk_parameter_metadata()`: `fields` (the sorted walk
+arrays present), `outcome_std_mode`, the `rw_positive_mean_range`,
+`rw_treatment_std_range`, `rw_covariate_mean_range` and `rw_baseline_mean_range`
+supports, `rw_std_sigma`, the relative-mode `rw_baseline_std_range` /
+`rw_outcome_std_range` or the absolute-mode `rw_baseline_std_sigma` (the
+effective value) / `rw_outcome_std_sigma` — the other pair is `null` — plus
+`rw_smoothness_alpha`, `rw_smoothness_beta`, `rw_smoothness_max_weeks`,
+`baseline_floor` (`null` without a floor) and `baseline_floor_scope`.
+
+Recording changes nothing else. Generation requests the existing `param_rw_*`
+reports and, for the relative draws, the `rw_c_std` / `rw_b_std_rel` /
+`rw_y_std_rel` priors by name, ahead of the legacy outputs that keep assigning
+the random streams, and these values never gate acceptance; every other array,
+label and diagnostic is identical with the flag off. Only corpus generation
+reads the flag (`sample_prior_predictive`, `DataGenerator.generate` and
+`iter_batches`); `n=` truncation slices the arrays together with the other
+task-leading arrays, `save_corpus` / `load_corpus` round-trip them, and the
+schema version stays 5.
+
+`validate_corpus` checks the arrays and the block together (the relative arrays
+exactly in relative mode, matching the signal block's mode), their shapes and
+float64 dtype, finiteness, zero padding, nonnegative scales, means and relative
+draws inside the echoed ranges (inclusive), smoothness in `[0, 1]`,
+`treatment_level` within one float32 ulp of `float32(softplus(walk_treatment_mean))`,
+`walk_treatment_std` against `walk_treatment_std_relative * softplus(walk_treatment_mean)`
+to float64 rounding, and a block that survives a JSON round trip unchanged.
+
+```python exec="1" source="block" result="text"
+import pymc_generator as pg
+from pymc_generator.data_generator import DataGenerator
+
+cfg = pg.make_scm_prior(n_treatments=3, n_covariates=2, n_latent=1, n_time_steps=40,
+                        n_cells=2, draws_per_cell=2, seed=7, record_walk_parameters=True)
+c = pg.sample_prior_predictive(cfg)
+
+block = c["diagnostics"]["walk_parameters"]
+for key in block["fields"]:
+    print(f"{key:<28} {str(c[key].shape):<8} {c[key].dtype}")
+print("first world's treatment walk means:", c["walk_treatment_mean"][0].round(3))
+print("validation errors:", DataGenerator.validate_corpus(c) or "none")
+```
+
 ## Validate the output
 
 `DataGenerator.validate_corpus` checks the schema — required keys, shapes,

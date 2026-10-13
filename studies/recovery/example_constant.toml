@@ -1,0 +1,45 @@
+# NEW direct-effect geometric/MM example. Tiny budgets are plumbing checks, NOT science.
+[study]
+worlds = 2
+seed = 20271
+baseline = "constant"
+reported_weeks = [0, 31]
+score_weeks = [7, 31]
+burn_in = 8
+
+[generator]
+prior_file = "example_constant_prior.json"  # complete, editable SCMPrior; relative to THIS TOML
+
+[methods]
+enabled = ["ols", "advi", "mcmc"]
+
+[methods.ols]
+starts = 2
+max_nfev = 40
+seed = 3401
+
+[methods.advi]
+steps = 500
+draws = 40
+seeds = [4501, 4502]
+
+[methods.mcmc]
+chains = 2
+warmup = 100
+draws = 100
+seed = 5601
+target_accept = 0.9
+maxdepth = 8
+sampler = "nutpie"
+adaptation = "draw_diag"
+
+[score]
+relative = 0.10
+absolute = 0.01
+
+[diagnostics]
+rhat = 1.01
+ess = 400
+bfmi = 0.3
+divergences = 0
+maxdepth_hits = 0

@@ -9,5 +9,7 @@ recursive-include benchmarks *.py
 recursive-include docs_gen *.py
 recursive-include docs *.md *.css *.js *.svg
 include docs/examples/*.ipynb
+include docs/examples/data/linear-recovery-prevalence-config.json
+include docs/examples/data/linear-recovery-true-feature-sweep-config.json
 recursive-include .github *.md *.yml
 include .github/CODEOWNERS

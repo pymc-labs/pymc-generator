@@ -1,10 +1,11 @@
-"""With every feature off, the current package reproduces main (ce068d5) byte for byte.
+"""With every feature off, the current package reproduces main (ce068d5).
 
 ``tests/_golden_probe.py`` records seeded corpora with their raw candidate
 batches, ``sample_scm`` worlds, oracle densities, ``DataGenerator`` batches and
 template draws. The test runs it twice with this interpreter and these
 dependencies, importing main's package tree once and the current tree once, and
-compares every recorded array by dtype, shape and bytes.
+compares every recorded array by dtype, shape and bytes. Oracle arrays are the
+one exception: they must agree to ``ORACLE_RTOL`` (see there).
 
 Main's tree comes from ``PYMC_GENERATOR_BASELINE_TREE`` (a checkout of ce068d5;
 an unusable value fails) or, when that is unset, from this repository's git
@@ -62,6 +63,11 @@ STDERR_TAIL = 4000
 _SOURCE_HINT = (
     f"set {BASELINE_ENV} to a checkout of {BASELINE_SHA} or run `git fetch origin {BASELINE_SHA}`"
 )
+#: Reusable Oracle templates bind world inputs, prior intervals and walk widths as
+#: named runtime data, so PyTensor no longer constant-folds them into the oracle
+#: graph. Oracle densities, gradients and deterministics therefore match main's to
+#: rounding (at most 3.3e-12 relative when measured) rather than byte for byte.
+ORACLE_RTOL = 1e-10
 
 
 def _blob_id(path: Path) -> str:
@@ -244,13 +250,19 @@ def _check_modules(side: str, tree: Path, modules: dict[str, str | None]) -> Non
         )
 
 
-def _array_kind(a: np.ndarray, b: np.ndarray) -> str | None:
+def _array_kind(a: np.ndarray, b: np.ndarray, *, rtol: float = 0.0) -> str | None:
     if a.dtype != b.dtype:
         return f"dtype {a.dtype} != {b.dtype}"
     if a.shape != b.shape:
         return f"shape {a.shape} != {b.shape}"
     if np.ascontiguousarray(a).tobytes() == np.ascontiguousarray(b).tobytes():
         return None
+    if rtol and np.issubdtype(a.dtype, np.floating):
+        if np.allclose(b, a, rtol=rtol, atol=0.0, equal_nan=True):
+            return None
+        scale = np.maximum(np.abs(a), np.abs(b))
+        relative = np.abs(a - b) / np.where(scale > 0, scale, 1.0)
+        return f"relative difference {float(np.nanmax(relative)):.3g} exceeds {rtol:g}"
     a_items, b_items = (
         np.ascontiguousarray(x).reshape(-1).view(np.uint8).reshape(x.size, x.dtype.itemsize)
         for x in (a, b)
@@ -277,7 +289,11 @@ def _differences(outputs: dict[str, Path], sidecars: dict[str, dict]) -> dict[st
                 found[key] = "only in main"
             elif key not in main_keys:
                 found[key] = "only in current"
-            elif kind := _array_kind(main[key], current[key]):
+            elif kind := _array_kind(
+                main[key],
+                current[key],
+                rtol=ORACLE_RTOL if key.split("/", 1)[0] == "oracle" else 0.0,
+            ):
                 found[key] = kind
         for side, keys in (("main", main_keys), ("current", current_keys)):
             counts = Counter(key.split("/", 1)[0] for key in keys)

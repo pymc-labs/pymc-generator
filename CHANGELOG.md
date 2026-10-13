@@ -8,6 +8,33 @@ read the migration notes before upgrading.
 
 ### Added
 
+- **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
+  The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not
+  rendered on the documentation site) generates N worlds (10 by default) from
+  one block of parameter ranges and reads only the saved shard to plot, world
+  by world:
+  channel and control counts spanning 1–10 on both axes (an integer stratified
+  design, every count equally often, no pair repeated up to 100 worlds), every
+  generation parameter on the scale its prior is drawn on, the trend parameter's
+  down/flat/up split next to the realized direction, exact-zero weeks per input
+  from 0 to 100, and each world's channel/control/baseline share of the outcome.
+  References are the configured laws at the realized N (for the shares, the
+  uniform-composition ideal) with family-wise envelopes of at least 90%, and the
+  report prints how many panels chance alone should push outside. Every active
+  input drives the outcome directly; zeros come from one flighting law tuned to
+  near-even zero counts. A `.config.json` written next to the shard holds the
+  effective configuration and the shard's SHA-256; report-only execution on any
+  valid shard degrades to observed panels when it is missing.
+- **Opt-in walk-parameter truth in corpora.** `SCMPrior.record_walk_parameters=True`
+  (default `False`) stores every world's realised walk means, absolute and
+  relative standard deviations, outcome-noise scales and smoothness as float64
+  arrays (`slots.WALK_ARRAY_FIELDS`), with `diagnostics["walk_parameters"]`
+  echoing their priors (`SCMPrior.walk_parameter_metadata()`). The values come
+  from the accepted draw. They are requested ahead of the legacy outputs and never
+  gate acceptance, so every other array, label and diagnostic is unchanged.
+  `validate_corpus` checks the arrays and block together, zero padding, prior
+  supports, and the treatment level and scale identities. Corpus generation only;
+  the schema version stays 5.
 - **Richer worlds end-to-end (#27).** Ordinary generation, `sample_scm`, and
   reusable templates support all eight trajectory components and fractional
   per-input inclusion alongside richer mechanism priors. Template flags are
@@ -64,7 +91,6 @@ read the migration notes before upgrading.
   cross-schema metadata or archive-byte identity promise.
   Corpus and oracle guides use the current `covariates`, `latent_unobserved`
   and `outcome` API identifiers.
-
 - **Controllable coverage of active treatment × covariate counts (#26).**
   `SCMPrior.active_count_allocation` keeps independent per-cell draws
   (`"independent"`, the default) or, with `"stratified"`, allocates a corpus's
@@ -232,6 +258,122 @@ read the migration notes before upgrading.
   exclusions) and `compare_descriptors` (midrank percentiles and distribution
   shifts against a reference). Post-hoc only: no generation, RNG or schema
   change, and no information, significance or optimality claims.
+- **Main-reproduction guards (#28).** The slow
+  `tests/test_main_reproduction.py` compares, byte for byte in the same
+  environment, a features-off matrix against main `ce068d5`: 35 corpus
+  configurations (with raw candidate draws), 9 `sample_scm` worlds at two
+  seeds, fixed-point oracle evaluations for 5 worlds in both latent modes,
+  `DataGenerator` batches and 9 template layouts; CI's slow job checks main out
+  for it.
+  The fast `tests/test_rng_owner_contract.py` pins main's random-stream owner
+  order by RV name for every carryover × saturation pair, shocks, templates,
+  texture-off worlds and inert schedules, and checks that this is the order a
+  real draw reseeds; `tests/test_trajectories.py` restores the corpus owner
+  contract #27 removed.
+  `tests/test_control_identity.py` pins every covariate column as the literal
+  `(g_zy * rho_zy) * Z` on the reported covariates, and the outcome as reading
+  exactly that Z, with and without trajectory components.
+- Reusable posterior-oracle sampling (`sample_oracle`, `build_oracle_template`,
+  `compile_oracle`, `OracleSamplingConfig`). Oracle templates expose all
+  compatible changing inputs as named `pm.Data`, support one Nutpie/Numba
+  compilation across compatible fits, fail closed on structural changes, and
+  emit posterior-free data/template/compile receipts. Because those inputs are
+  runtime data, features-off oracle evaluations match main `ce068d5` to
+  floating-point rounding rather than byte for byte (the main-reproduction test
+  allows a 1e-10 relative tolerance for them only).
+
+### Changed — migration notes
+
+- **Feature-enabled same-seed outputs can differ from the #27 pre-release (#28).**
+  Restoring main's default graphs also affects feature-enabled configurations
+  that use no opt-in mechanism setting — composable trajectories, fractional
+  texture inclusion and active-count allocation — which return to main's
+  saturation arithmetic, relative-noise product and stream order. Every
+  template, including mechanism-prior templates, returns to main's parent-sum
+  order and summation. `sample_scm` worlds can draw different streams where
+  their stream reference or request changed: worlds that admit a schedule
+  component (all such worlds without shocks; with shocks, those whose inputs
+  carry one) and worlds that leave a texture innovation unused (a texture range
+  at zero, or `hf` / `pulse` inclusion below 1). Their seeded draws differ from
+  the #27 branch. Opt-in mechanism-prior ordinary corpora and oracles are
+  unchanged, and so are their other `sample_scm` worlds. With every feature
+  off, ordinary corpora (including raw candidate draws), `sample_scm` worlds,
+  `DataGenerator` batches and template draws reproduce main `ce068d5` byte for
+  byte in the same environment; fixed-point oracle evaluations match it to
+  rounding once Oracle inputs are runtime data (reusable Oracle sampling).
+- **Template throughput returns to main's (#28).** The #27 dot-product parent
+  sums cut template candidate time by roughly 30% but changed every template
+  draw; restoring main's n-ary sums restores main's speed.
+- **`pymc_generator.mechanisms.SATURATION_PRIOR_RANGES` removed (breaking).**
+  Saturation shape supports are configuration, not module state: read
+  `SCMPrior().saturation_prior_ranges` (or a config's own mapping) instead.
+  Importing the old constant raises `ImportError`. Enabled prior conditioning
+  additionally rejects width lower bounds at or below `8 * eps32 * max|support|`,
+  which float32 corpus labels cannot resolve; with conditioning disabled, only
+  explicitly configured width ranges are checked.
+
+### Fixed
+
+- **`sample_scm` with a texture term off keeps main's leftover streams (#28).**
+  #27 appended every primitive random variable to the world's draw request.
+  PyMC's draw walk reaches the last-requested names first and appends streams
+  the reference does not reach in that order, so the streams main gave unused
+  texture innovations and unused-family shape parameters moved: with any texture
+  range at zero — including `SCMPrior()` defaults — `SCM.exogenous` and
+  `SCM.params` differed from main while `SCM.data` did not. Primitives main never
+  requested now lead the request. The golden test's `sample_scm` section and the
+  owner contract now include texture-off worlds.
+- **`sample_scm` keeps default streams while admitted schedule components are
+  carried by no input (#28).** The world's stream reference listed the schedule
+  audit outputs (`treatment_activity` … `outcome_natural`) among the legacy
+  outputs. Without treatment shocks, admitting a schedule component that no
+  input carries therefore reassigned many random streams (7–19 of 39 in
+  measured worlds). Those outputs are now left out of the reference, so
+  variables only they reach are appended — the effect corpus generation gets by
+  requesting them first. Nothing changes with every feature off; feature-enabled
+  worlds that admit a schedule component can differ from the #27 pre-release
+  (see the migration note).
+- **Template parent sums reproduce main again (#28).** #27 replaced the
+  template's n-ary parent sums with `pt.dot`. PyMC's draw walk then reached
+  coefficients before parents and reassigned 9 of 39 random streams in the
+  measured layout, and the accumulation order changed by ulps, so every template
+  draw differed from main; mechanism-prior templates changed their parent-sum
+  order and rounding too. The n-ary sums are restored; to keep large templates
+  running, Python-backend compilation splits only Elemwise additions wider than
+  its 32-operand limit, which could not run before.
+- **Default relative outcome noise is main's literal product again (#28).**
+  Unless an opt-in mechanism setting is active, `rw_b_std` and `rw_y_std` are
+  `std * sqrt(sum((g_cy * beta)**2))` in generation, templates and both oracle
+  modes. The #27 mantissa/exponent product differed from it by up to 3 ulp in
+  measured worlds and was opaque to the canonicalizer that flattens the baseline
+  walk's scale, so every relative-noise world drifted in its noise, baseline and
+  outcome. It now
+  applies only under opt-in mechanism settings; raw ranges reaching subnormal
+  noise products need such a setting to keep extended-range arithmetic.
+- **Default MM, tanh and root saturation reproduce main again (#28).** The #27
+  scalar ops had replaced the default library graphs. MM's node visited its
+  reference and kappa before its input, so PyMC assigned different random streams
+  and whole same-seed worlds changed whenever an MM treatment's input reached an
+  undrawn variable; the opaque node also blocked the library's fold of the
+  downstream gate into the quotient (1–2 ulp). tanh evaluated `(x/r)/c` instead
+  of the canonicalized `x/(r·c)` (1–3 ulp), and root's scalar op rounded its
+  power 1–4 ulp differently under the Numba backend (ulp counts from measured
+  worlds); inside oracle graphs the opaque root node and its analytic pullback
+  also changed contributions, densities and gradients in both backends (sampled
+  corpora were unaffected).
+  Defaults are the library graphs again; the scalar ops are now
+  `stable_michaelis_menten_kappa_relative`, `stable_tanh_kappa_relative` and
+  `stable_root_kappa_relative` in the new `mechanisms.STABLE_SATURATION_FAMILIES`,
+  selected with the stable Hill and logistic forms only when an opt-in mechanism
+  setting is active.
+- Reusable world-model templates compile only the structure inputs their
+  requested outputs reach, so a single-treatment template no longer fails with
+  an unused-input error. Templates that already compiled draw identical arrays.
+
+## [0.0.2] - 2026-09-18
+
+### Added
+
 - Document the project as what it is: a **structural causal model generator**,
   rather than an MMM dataset generator. A new README "Scope and limits" section
   states the representable structure, the exact carryover and saturation
@@ -287,50 +429,8 @@ read the migration notes before upgrading.
   versioned identifiability metadata.
 - Complete bundle recipes containing effective priors, seeds, connectivity,
   environment versions, and replay instructions.
-- **Main-reproduction guards (#28).** The slow
-  `tests/test_main_reproduction.py` compares, byte for byte in the same
-  environment, a features-off matrix against main `ce068d5`: 35 corpus
-  configurations (with raw candidate draws), 9 `sample_scm` worlds at two
-  seeds, fixed-point oracle evaluations for 5 worlds in both latent modes,
-  `DataGenerator` batches and 9 template layouts; CI's slow job checks main out
-  for it.
-  The fast `tests/test_rng_owner_contract.py` pins main's random-stream owner
-  order by RV name for every carryover × saturation pair, shocks, templates,
-  texture-off worlds and inert schedules, and checks that this is the order a
-  real draw reseeds; `tests/test_trajectories.py` restores the corpus owner
-  contract #27 removed.
-  `tests/test_control_identity.py` pins every covariate column as the literal
-  `(g_zy * rho_zy) * Z` on the reported covariates, and the outcome as reading
-  exactly that Z, with and without trajectory components.
 
 ### Changed — migration notes
-
-- **Feature-enabled same-seed outputs can differ from the #27 pre-release (#28).**
-  Restoring main's default graphs also affects feature-enabled configurations
-  that use no opt-in mechanism setting — composable trajectories, fractional
-  texture inclusion and active-count allocation — which return to main's
-  saturation arithmetic, relative-noise product and stream order. Every
-  template, including mechanism-prior templates, returns to main's parent-sum
-  order and summation. `sample_scm` worlds can draw different streams where
-  their stream reference or request changed: worlds that admit a schedule
-  component (all such worlds without shocks; with shocks, those whose inputs
-  carry one) and worlds that leave a texture innovation unused (a texture range
-  at zero, or `hf` / `pulse` inclusion below 1). Their seeded draws differ from
-  the #27 branch. Opt-in mechanism-prior ordinary corpora and oracles are
-  unchanged, and so are their other `sample_scm` worlds. With every feature
-  off, ordinary corpora (including raw candidate draws), `sample_scm` worlds,
-  `DataGenerator` batches, fixed-point oracle evaluations and template draws
-  reproduce main `ce068d5` byte for byte in the same environment.
-- **Template throughput returns to main's (#28).** The #27 dot-product parent
-  sums cut template candidate time by roughly 30% but changed every template
-  draw; restoring main's n-ary sums restores main's speed.
-- **`pymc_generator.mechanisms.SATURATION_PRIOR_RANGES` removed (breaking).**
-  Saturation shape supports are configuration, not module state: read
-  `SCMPrior().saturation_prior_ranges` (or a config's own mapping) instead.
-  Importing the old constant raises `ImportError`. Enabled prior conditioning
-  additionally rejects width lower bounds at or below `8 * eps32 * max|support|`,
-  which float32 corpus labels cannot resolve; with conditioning disabled, only
-  explicitly configured width ranges are checked.
 
 - **Domain-neutral vocabulary (breaking).** The public API and the persisted
   corpus now use scientific node names instead of marketing ones. This renames
@@ -363,9 +463,11 @@ read the migration notes before upgrading.
   node family. Upstream `pymc_marketing` function names (`geometric_adstock`,
   `weibull_adstock`) are theirs and keep their spelling.
 
-  These vocabulary changes used corpus schema v4. Current schema v5 rejects
-  older archives because their realised rich-world truth cannot be recovered;
-  the #27 persistence notes above supersede the earlier lossless key migrations.
+  **Corpus schema is now version 4.** `load_corpus` migrates v1, v2 and v3
+  archives automatically, renaming arrays, diagnostics keys and `prior_cond`
+  columns while leaving contents, dtypes and shapes byte-identical. A corpus
+  that mixes v3 and v4 names is rejected rather than guessed at. Corpora written
+  by this version cannot be read by older releases.
 
 - **Released stack / Python floor (0.0.2 candidate):** require Python 3.13+ and
   test Python 3.13/3.14 in CI. Replace Git development dependencies with registry
@@ -444,61 +546,6 @@ read the migration notes before upgrading.
 
 ### Fixed
 
-- **`sample_scm` with a texture term off keeps main's leftover streams (#28).**
-  #27 appended every primitive random variable to the world's draw request.
-  PyMC's draw walk reaches the last-requested names first and appends streams
-  the reference does not reach in that order, so the streams main gave unused
-  texture innovations and unused-family shape parameters moved: with any texture
-  range at zero — including `SCMPrior()` defaults — `SCM.exogenous` and
-  `SCM.params` differed from main while `SCM.data` did not. Primitives main never
-  requested now lead the request. The golden test's `sample_scm` section and the
-  owner contract now include texture-off worlds.
-- **`sample_scm` keeps default streams while admitted schedule components are
-  carried by no input (#28).** The world's stream reference listed the schedule
-  audit outputs (`treatment_activity` … `outcome_natural`) among the legacy
-  outputs. Without treatment shocks, admitting a schedule component that no
-  input carries therefore reassigned many random streams (7–19 of 39 in
-  measured worlds). Those outputs are now left out of the reference, so
-  variables only they reach are appended — the effect corpus generation gets by
-  requesting them first. Nothing changes with every feature off; feature-enabled
-  worlds that admit a schedule component can differ from the #27 pre-release
-  (see the migration note).
-- **Template parent sums reproduce main again (#28).** #27 replaced the
-  template's n-ary parent sums with `pt.dot`. PyMC's draw walk then reached
-  coefficients before parents and reassigned 9 of 39 random streams in the
-  measured layout, and the accumulation order changed by ulps, so every template
-  draw differed from main; mechanism-prior templates changed their parent-sum
-  order and rounding too. The n-ary sums are restored; to keep large templates
-  running, Python-backend compilation splits only Elemwise additions wider than
-  its 32-operand limit, which could not run before.
-- **Default relative outcome noise is main's literal product again (#28).**
-  Unless an opt-in mechanism setting is active, `rw_b_std` and `rw_y_std` are
-  `std * sqrt(sum((g_cy * beta)**2))` in generation, templates and both oracle
-  modes. The #27 mantissa/exponent product differed from it by up to 3 ulp in
-  measured worlds and was opaque to the canonicalizer that flattens the baseline
-  walk's scale, so every relative-noise world drifted in its noise, baseline and
-  outcome. It now
-  applies only under opt-in mechanism settings; raw ranges reaching subnormal
-  noise products need such a setting to keep extended-range arithmetic.
-- **Default MM, tanh and root saturation reproduce main again (#28).** The #27
-  scalar ops had replaced the default library graphs. MM's node visited its
-  reference and kappa before its input, so PyMC assigned different random streams
-  and whole same-seed worlds changed whenever an MM treatment's input reached an
-  undrawn variable; the opaque node also blocked the library's fold of the
-  downstream gate into the quotient (1–2 ulp). tanh evaluated `(x/r)/c` instead
-  of the canonicalized `x/(r·c)` (1–3 ulp), and root's scalar op rounded its
-  power 1–4 ulp differently under the Numba backend (ulp counts from measured
-  worlds); inside oracle graphs the opaque root node and its analytic pullback
-  also changed contributions, densities and gradients in both backends (sampled
-  corpora were unaffected).
-  Defaults are the library graphs again; the scalar ops are now
-  `stable_michaelis_menten_kappa_relative`, `stable_tanh_kappa_relative` and
-  `stable_root_kappa_relative` in the new `mechanisms.STABLE_SATURATION_FAMILIES`,
-  selected with the stable Hill and logistic forms only when an opt-in mechanism
-  setting is active.
-- Reusable world-model templates compile only the structure inputs their
-  requested outputs reach, so a single-treatment template no longer fails with
-  an unused-input error. Templates that already compiled draw identical arrays.
 - Initial release hardening used locked uv environments for development, CI,
   documentation, and build tooling, with a tested Python 3.13 default and a
   3.12/3.13 CI matrix. At that stage all 153 previously locked dependency versions
