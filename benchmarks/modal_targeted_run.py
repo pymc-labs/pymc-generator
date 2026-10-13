@@ -69,7 +69,13 @@ def main():
     cfg.validate()
     cells = [CellWorkload(**decode(e)) for e in entry['cells'][:2]]
     adapter = SingleModel(method, cfg, cells, event)
+    cgroup_path = Path('/sys/fs/cgroup') / Path('/proc/self/cgroup').read_text().strip().split(':', 2)[-1].lstrip('/')
+    controls = {name: (cgroup_path/name).read_text().strip() for name in ['memory.max','memory.swap.max','cpu.max','memory.events']}
+    assert controls['memory.max'] == str(2*1024**3), controls
+    assert controls['memory.swap.max'] == '0', controls
+    assert os.sched_getaffinity(0) == {0}
     save('environment.json',dict(method=method, workload=workload,
+        cgroup_controls=controls,
         input_manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         selected_cells=[0,1], config=source, seed_set=0,
         generator_file=pymc_generator.__file__,
