@@ -3,9 +3,11 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export ROOT START_EPOCH=1791930009 RUN_DEADLINE=1791930429 FULL_DEADLINE=1791930609
-export DEST="$ROOT/benchmarks/fresh-masks-evidence"
+# Second attempt corrects a diagnostic assumption about relative noise. Preserve
+# first-attempt evidence and the same absolute budget; never reset the ledger.
+test -f "$ROOT/benchmarks/fresh-masks-evidence/budget.json"
+export DEST="$ROOT/benchmarks/fresh-masks-evidence/attempt2"
 mkdir "$DEST"
-printf '{"start_epoch":%s,"run_deadline":%s,"full_deadline":%s,"reserved_seconds":600,"status":"reserved","memory_max_bytes":2147483648,"scratch_max_bytes":134217728}\n' "$START_EPOCH" "$RUN_DEADLINE" "$FULL_DEADLINE" > "$DEST/budget.json"
 unshare --user --map-root-user --mount bash <<'INNER'
 set -euo pipefail
 scratch=$(mktemp -d)

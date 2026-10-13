@@ -1,0 +1,35 @@
+Running as unit: wayfinder61-fresh-masks.scope; invocation ID: 8cd6066fbe7d4378b788afa22a20aec6
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-modal-comparison/benchmarks/fresh_masks_test.py", line 198, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pymc-generator-modal-comparison/benchmarks/fresh_masks_test.py", line 178, in main
+    np.testing.assert_allclose(naive,m['outcome'],rtol=1e-10,atol=1e-10)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pymc-generator-modal-comparison/.venv/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 1768, in assert_allclose
+    assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         verbose=verbose, header=header, equal_nan=equal_nan,
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         strict=strict)
+                         ^^^^^^^^^^^^^^
+  File "/tmp/pymc-generator-modal-comparison/.venv/lib/python3.13/site-packages/numpy/testing/_private/utils.py", line 983, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Not equal to tolerance rtol=1e-10, atol=1e-10
+
+Mismatched elements: 104 / 104 (100%)
+First 5 mismatches are at indices:
+ [0, 0]: 12.89773612655561 (ACTUAL), 12.86745366266338 (DESIRED)
+ [0, 1]: 13.446627818187848 (ACTUAL), 13.419363702348127 (DESIRED)
+ [0, 2]: 11.782584332671084 (ACTUAL), 11.755706577589288 (DESIRED)
+ [0, 3]: 12.018589814566484 (ACTUAL), 11.991536840112143 (DESIRED)
+ [0, 4]: 13.512457997945129 (ACTUAL), 13.485676015846677 (DESIRED)
+Max absolute difference among violations: 0.03028246
+Max relative difference among violations: 0.00262044
+ ACTUAL: array([[12.897736, 13.446628, 11.782584, 12.01859 , 13.512458, 12.242103,
+        11.780571, 11.936373, 11.505868, 13.267032, 11.706293, 11.315927,
+        11.81694 , 12.512345, 12.632657, 12.251349, 11.966844, 12.179641,...
+ DESIRED: array([[12.867454, 13.419364, 11.755707, 11.991537, 13.485676, 12.215406,
+        11.756671, 11.912497, 11.48067 , 13.244315, 11.685159, 11.295311,
+        11.795054, 12.493495, 12.611247, 12.230001, 11.94774 , 12.161466,...

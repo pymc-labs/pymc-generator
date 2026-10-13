@@ -171,15 +171,25 @@ def main():
         assert np.count_nonzero(m['treatments'][...,0])==0
         assert np.count_nonzero(m['covariates'][...,0])==0
         naive=f['outcome']-f['contributions'][...,0]-f['covariate_contribution'][...,0]
+        # Relative-noise mode also rescales baseline and observation noise when
+        # g_cy changes. This adjustment is diagnostic attribution, not a proposed
+        # posthoc generation algorithm (it uses the masked reference components).
+        baseline_adjustment=(m['baseline_intrinsic']+m['outcome_noise']
+                             -f['baseline_intrinsic']-f['outcome_noise'])
+        adjusted=naive+baseline_adjustment
         delta=float(np.max(np.abs(naive-m['outcome'])))
-        if causal:
-            assert delta>1e-6, 'negative control did not expose downstream contamination'
-        else:
-            np.testing.assert_allclose(naive,m['outcome'],rtol=1e-10,atol=1e-10)
-        checks.append(dict(case=label,max_abs_posthoc_vs_causal_sales_difference=delta,
-            masked_vs_isolated_graph_pass=True))
+        adjusted_delta=float(np.max(np.abs(adjusted-m['outcome'])))
         np.savez_compressed(OUT/f'{label}.npz',full_sales=f['outcome'],masked_sales=m['outcome'],
-            reference_sales=ref['outcome'],posthoc_sales=naive)
+            reference_sales=ref['outcome'],posthoc_sales=naive,
+            baseline_adjustment=baseline_adjustment,adjusted_posthoc_sales=adjusted)
+        if causal:
+            assert adjusted_delta>1e-6, 'negative control did not expose downstream contamination'
+        else:
+            assert delta>1e-6, 'relative baseline/noise diagnostic was not exercised'
+            np.testing.assert_allclose(adjusted,m['outcome'],rtol=1e-10,atol=1e-10)
+        checks.append(dict(case=label,max_abs_posthoc_vs_causal_sales_difference=delta,
+            max_abs_difference_after_baseline_noise_adjustment=adjusted_delta,
+            masked_vs_isolated_graph_pass=True))
     assert len(adapter.models)==len(adapter.draws)==1
     save('result.json',dict(status='pass',primary_candidates=adapter.evaluated,
         accepted=len(adapter.accepted_ids),rejected=adapter.rejected,counts=counts,
