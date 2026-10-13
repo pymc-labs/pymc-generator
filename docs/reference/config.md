@@ -1127,6 +1127,34 @@ and `signal_metric_valid` arrays. Setting it to `False` omits that block while r
 `diagnostics["signal"]` quality report. It changes no model input, random draw,
 or generated observable array; use the disabled form for feature-only shards.
 
+## Walk-parameter labels
+
+`record_walk_parameters: bool = False` makes corpus generation
+(`sample_prior_predictive`, `DataGenerator.generate` and `iter_batches`) store
+every world's realised walk and outcome-noise parameters: walk means, absolute
+and relative standard deviations, outcome-noise scales and smoothness, as the
+float64 `pymc_generator.slots.WALK_ARRAY_FIELDS` arrays, with
+`diagnostics["walk_parameters"]` echoing their priors
+(`SCMPrior.walk_parameter_metadata()`). See the
+[corpus guide](../guide/corpus.md#recorded-walk-parameters) for the layout.
+
+```python
+from pymc_generator import make_scm_prior
+
+cfg = make_scm_prior(n_treatments=4, n_covariates=2, n_latent=1, record_walk_parameters=True)
+```
+
+- Values come from each world's accepted draw: the existing `param_rw_*`
+  reports, and the `rw_c_std` / `rw_b_std_rel` / `rw_y_std_rel` relative-scale
+  priors requested by name. A degenerate range builds no random variable and
+  records its exact constant.
+- It changes no model input, random draw or existing output. The extra outputs
+  are requested ahead of the legacy ones, which stay the stream reference, and
+  never gate acceptance, so every other array, label and diagnostic matches the
+  disabled form.
+- `sample_scm`, reusable templates and the oracle ignore the flag and gain no
+  new `param_*` report. Non-bool values are rejected.
+
 ::: pymc_generator.presets.make_scm_prior
 
 ::: pymc_generator.sampler.SCMPrior

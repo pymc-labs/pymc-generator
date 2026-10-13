@@ -281,6 +281,38 @@ MECHANISM_REFERENCE_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] 
     "covariate_reference_input": (("task", "covariate"), np.float64),
 }
 
+#: Opt-in realised walk and outcome-noise parameters
+#: (``SCMPrior.record_walk_parameters``), present together with
+#: ``diagnostics["walk_parameters"]``. Means and ``*_std`` are the accepted
+#: draw's walk priors (treatment means before softplus; standard deviations
+#: absolute), ``*_std_relative`` the relative draw before its anchor, and
+#: smoothness the cell's concrete Beta draw. Inactive slots are exactly zero.
+#: Kept apart from ``CORPUS_ARRAY_FIELDS`` because default corpora omit them.
+WALK_ARRAY_FIELDS: dict[str, tuple[tuple[str, ...], type[np.generic]]] = {
+    "walk_treatment_mean": (("task", "treatment"), np.float64),
+    "walk_treatment_std": (("task", "treatment"), np.float64),
+    "walk_treatment_std_relative": (("task", "treatment"), np.float64),
+    "walk_treatment_smoothness": (("task", "treatment"), np.float64),
+    "walk_covariate_mean": (("task", "covariate"), np.float64),
+    "walk_covariate_std": (("task", "covariate"), np.float64),
+    "walk_covariate_smoothness": (("task", "covariate"), np.float64),
+    "walk_baseline_mean": (("task",), np.float64),
+    "walk_baseline_std": (("task",), np.float64),
+    "walk_baseline_smoothness": (("task",), np.float64),
+    "outcome_noise_std": (("task",), np.float64),
+    "walk_baseline_std_relative": (("task",), np.float64),
+    "outcome_noise_std_relative": (("task",), np.float64),
+    "walk_latent_smoothness": (("task", "latent"), np.float64),
+}
+
+#: Walk arrays recorded only under ``outcome_std_mode="relative"``, where the
+#: baseline walk and the outcome noise draw a relative standard deviation that
+#: the treatment amplitude then scales.
+WALK_RELATIVE_MODE_FIELDS: tuple[str, ...] = (
+    "walk_baseline_std_relative",
+    "outcome_noise_std_relative",
+)
+
 
 @dataclass(frozen=True)
 class SlotLayout:
