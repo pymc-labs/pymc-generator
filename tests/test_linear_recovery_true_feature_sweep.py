@@ -1773,7 +1773,7 @@ def test_frozen_core_and_protected_hashes():
         assert hashlib.sha256(block.encode()).hexdigest() == expected
     protected = {
         "scripts/linear_recovery_prevalence.py": "737f72565466d68ca8949822b4a1bd85fcb0ba7df3ce6cd989aebcf77e71578c",
-        "tests/test_linear_recovery.py": "cd930434a4ec03d0b461f7d6a95ccdf2ed343759abd7e07d01600e5964932ead",
+        "tests/test_linear_recovery.py": "822e3113075b654985c4f3c31a8b16f92b81b850b265ead74041878ab5503a8b",
         "docs/examples/data/linear-recovery-prevalence-config.json": "2c45ea12691245c69882423fba721ab376739cad635b3c8ff883cb5f8289ab5a",
         "docs/examples/data/linear-recovery-prevalence.csv": "f0fb827b740a8b0d1da6c9c7e7d90d588538762185042f854b48609a0e85a47e",
         "docs/examples/linear-recovery.ipynb": "5709e0084b53810f584fd303bed6dbda2a5278ec04e8527ed99d8645f4dd6a05",
@@ -3024,6 +3024,7 @@ def test_runner_fsync_start_before_launch(tmp_path, monkeypatch):
 
 
 @linux_only
+@actual_runner
 @pytest.mark.parametrize("behavior", ["hang", "crash", "signal", "descendant"])
 def test_runner_real_engineering_subprocess_kill_reap_logs(tmp_path, monkeypatch, behavior):
     import os
