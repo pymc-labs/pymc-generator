@@ -1,0 +1,11 @@
+{
+  "generator_pin": "90773bb8960a9c7570ece93e293bee66b1fd3a94",
+  "source_digest": "c5ed9dc3684af0e2f4af5a938103a530a1fcbed1b12cac01db79a2dcf9ac0e7b",
+  "files": 17,
+  "pfn_commit": "a7cecaa83c8832353c4a88b3f69cf3a34924fc5a",
+  "wheel_present": false,
+  "deployed_image_verified": false,
+  "pinned_mode": "FAST_COMPILE",
+  "local_mode": "FAST_COMPILE",
+  "preflight_started": "2026-10-13T20:34:12Z"
+}
