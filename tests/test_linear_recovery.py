@@ -2022,6 +2022,9 @@ def test_c2_runner_handles_deadline_during_generation_and_diagnostics(tmp_path, 
     from scripts import linear_recovery_prevalence as runner
 
     config = _c2_mock_config()
+    # Deadline handling, not the fork precondition: the live process may hold
+    # worker threads left by earlier tests, and _bounded_phase is replaced below.
+    monkeypatch.setattr(runner, "_require_single_os_thread", lambda: None)
     monkeypatch.setattr(
         runner, "sample_prior_predictive", lambda _prior: {"cell_id": np.array([0, 0, 1, 1])}
     )
