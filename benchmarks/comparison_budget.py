@@ -38,6 +38,7 @@ def main():
     p.add_argument("--workload", required=True, type=int)
     p.add_argument("--repeat", required=True, type=int)
     p.add_argument("--destination", required=True, type=Path)
+    p.add_argument("--audit-source", type=Path)
     args = p.parse_args()
     with LEDGER.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -59,6 +60,7 @@ def main():
             "destination": str(dest),
             "reserved_s": reservation,
             "status": "reserved",
+            "kind": "rejection-audit" if args.audit_source else "comparison",
         }
         ledger["charged_s"] += reservation
         ledger["invocations"].append(entry)
@@ -74,6 +76,7 @@ def main():
             "INVOCATION_SECONDS": str(reservation - 15),
             "WORKLOAD": str(args.workload),
             "REPEAT": str(args.repeat),
+            "AUDIT_SOURCE": str(args.audit_source.resolve()) if args.audit_source else "",
         }
         start = time.monotonic()
         result = subprocess.run(["bash", str(ROOT / "benchmarks/comparison_envelope.sh")], env=env)

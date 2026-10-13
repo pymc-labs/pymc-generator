@@ -16,10 +16,12 @@ export PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMBA_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 cd "$ROOT"
 unit="wayfinder-comparison-$(date +%s)-$$"
+command=(benchmarks/comparison_run.py --workload "$WORKLOAD" --repeat "$REPEAT")
+if [[ -n "${AUDIT_SOURCE:-}" ]]; then command=(benchmarks/comparison_rejections.py); fi
 set +e
 systemd-run --user --scope --unit="$unit" -p MemoryMax=8G -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=64 \
     timeout --signal=TERM --kill-after=5s "$((INVOCATION_SECONDS-5))s" \
-    "$ROOT/.venv/bin/python" benchmarks/comparison_run.py --workload "$WORKLOAD" --repeat "$REPEAT" \
+    "$ROOT/.venv/bin/python" "${command[@]}" \
     > "$scratch/output/process.log" 2>&1
 status=$?
 set -e
