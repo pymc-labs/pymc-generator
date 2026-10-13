@@ -1,0 +1,46 @@
+{
+  "charged_s": 606,
+  "retained_bytes": 25976432,
+  "invocations": [
+    {
+      "workload": 0,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-000",
+      "reserved_s": 900,
+      "status": "failed",
+      "exit_code": 1,
+      "charged_s": 1,
+      "retained_bytes": 774
+    },
+    {
+      "workload": 0,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-001",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 156,
+      "retained_bytes": 2054019
+    },
+    {
+      "workload": 1,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w1-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 164,
+      "retained_bytes": 2891304
+    },
+    {
+      "workload": 2,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w2-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 225,
+      "retained_bytes": 3990975
+    }
+  ]
+}

@@ -1,0 +1,427 @@
+{
+  "invocations_passed": 36,
+  "controlled_input_gates_passed": 36,
+  "primary_draws": 5940,
+  "replay_draws": 5940,
+  "controlled_joint_primitive_draws": 36,
+  "rejection_audit_draws": 20,
+  "preflight_diagnostic_draws": 3,
+  "charged_seconds_including_preflight_reservation": 6634,
+  "remaining_seconds": 566,
+  "max_invocation_memory_peak_bytes": 1318154240,
+  "methods": {
+    "ordinary": {
+      "evaluated": 1980,
+      "accepted": 1980,
+      "rejected": 0
+    },
+    "dynamic": {
+      "evaluated": 1980,
+      "accepted": 1980,
+      "rejected": 0
+    },
+    "specialized": {
+      "evaluated": 1980,
+      "accepted": 1978,
+      "rejected": 2
+    }
+  },
+  "statistics": [
+    {
+      "workload": 0,
+      "label": "(5, 3) michaelis_menten / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 59.051108473227366,
+      "warm_rate_min": 52.52806404981443,
+      "warm_rate_max": 63.64915330798957,
+      "first_use_pipeline_median_s": 8.024111178237945,
+      "first_use_pipeline_min_s": 7.832459486788139,
+      "first_use_pipeline_max_s": 10.666527215158567
+    },
+    {
+      "workload": 0,
+      "label": "(5, 3) michaelis_menten / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 3.6327367310829777,
+      "warm_rate_min": 3.096644372006588,
+      "warm_rate_max": 4.4668825750761405,
+      "first_use_pipeline_median_s": 39.06910098507069,
+      "first_use_pipeline_min_s": 34.95442717615515,
+      "first_use_pipeline_max_s": 39.23259562510066
+    },
+    {
+      "workload": 0,
+      "label": "(5, 3) michaelis_menten / geometric",
+      "method": "specialized",
+      "warm_rate_median": 4.9626530650068315,
+      "warm_rate_min": 4.111847546757005,
+      "warm_rate_max": 5.224239481154,
+      "first_use_pipeline_median_s": 17.665828589117154,
+      "first_use_pipeline_min_s": 14.908444363158196,
+      "first_use_pipeline_max_s": 18.20540549303405
+    },
+    {
+      "workload": 1,
+      "label": "(5, 10) michaelis_menten / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 46.777438810131365,
+      "warm_rate_min": 45.5179393730904,
+      "warm_rate_max": 48.6702891219201,
+      "first_use_pipeline_median_s": 11.201534753199667,
+      "first_use_pipeline_min_s": 10.92977315117605,
+      "first_use_pipeline_max_s": 11.591867077397183
+    },
+    {
+      "workload": 1,
+      "label": "(5, 10) michaelis_menten / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.23503053483806,
+      "warm_rate_min": 4.222609878523016,
+      "warm_rate_max": 4.5517585370142495,
+      "first_use_pipeline_median_s": 35.1294646630995,
+      "first_use_pipeline_min_s": 34.35410321201198,
+      "first_use_pipeline_max_s": 35.72180618089624
+    },
+    {
+      "workload": 1,
+      "label": "(5, 10) michaelis_menten / geometric",
+      "method": "specialized",
+      "warm_rate_median": 5.023457252723692,
+      "warm_rate_min": 4.840177834590506,
+      "warm_rate_max": 5.300695435623874,
+      "first_use_pipeline_median_s": 15.274160377914086,
+      "first_use_pipeline_min_s": 14.76745041529648,
+      "first_use_pipeline_max_s": 16.240629011765122
+    },
+    {
+      "workload": 2,
+      "label": "(15, 3) michaelis_menten / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 29.173393793444127,
+      "warm_rate_min": 20.560021806959067,
+      "warm_rate_max": 31.069755455561058,
+      "first_use_pipeline_median_s": 17.449332494055852,
+      "first_use_pipeline_min_s": 17.167240218725055,
+      "first_use_pipeline_max_s": 22.44766958290711
+    },
+    {
+      "workload": 2,
+      "label": "(15, 3) michaelis_menten / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.160449884928554,
+      "warm_rate_min": 2.8980357699136188,
+      "warm_rate_max": 4.383527637530035,
+      "first_use_pipeline_median_s": 36.047314825002104,
+      "first_use_pipeline_min_s": 35.42518747621216,
+      "first_use_pipeline_max_s": 46.75547219789587
+    },
+    {
+      "workload": 2,
+      "label": "(15, 3) michaelis_menten / geometric",
+      "method": "specialized",
+      "warm_rate_median": 4.863888009076697,
+      "warm_rate_min": 3.289207207385024,
+      "warm_rate_max": 5.102385797474648,
+      "first_use_pipeline_median_s": 15.604638453107327,
+      "first_use_pipeline_min_s": 15.22804140811786,
+      "first_use_pipeline_max_s": 21.49801948107779
+    },
+    {
+      "workload": 3,
+      "label": "(15, 10) michaelis_menten / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 24.874755630509082,
+      "warm_rate_min": 15.222522004271184,
+      "warm_rate_max": 26.148620231538732,
+      "first_use_pipeline_median_s": 21.191030624555424,
+      "first_use_pipeline_min_s": 20.727812866680324,
+      "first_use_pipeline_max_s": 29.8183703571558
+    },
+    {
+      "workload": 3,
+      "label": "(15, 10) michaelis_menten / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.246796921868316,
+      "warm_rate_min": 2.71108627821334,
+      "warm_rate_max": 4.438761414936481,
+      "first_use_pipeline_median_s": 36.35901767690666,
+      "first_use_pipeline_min_s": 34.53678799071349,
+      "first_use_pipeline_max_s": 48.12380889011547
+    },
+    {
+      "workload": 3,
+      "label": "(15, 10) michaelis_menten / geometric",
+      "method": "specialized",
+      "warm_rate_median": 4.978510522610539,
+      "warm_rate_min": 3.1485318616175153,
+      "warm_rate_max": 5.2545180251799515,
+      "first_use_pipeline_median_s": 15.633798858616501,
+      "first_use_pipeline_min_s": 14.14925506641157,
+      "first_use_pipeline_max_s": 20.765994154149666
+    },
+    {
+      "workload": 4,
+      "label": "(10, 6) michaelis_menten / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 30.542099892176918,
+      "warm_rate_min": 28.639458606893186,
+      "warm_rate_max": 36.524539546050825,
+      "first_use_pipeline_median_s": 14.457305154763162,
+      "first_use_pipeline_min_s": 13.603439014405012,
+      "first_use_pipeline_max_s": 19.875190906692296
+    },
+    {
+      "workload": 4,
+      "label": "(10, 6) michaelis_menten / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.020034128889872,
+      "warm_rate_min": 3.12088848395475,
+      "warm_rate_max": 4.358770117262742,
+      "first_use_pipeline_median_s": 35.64957939181477,
+      "first_use_pipeline_min_s": 34.68843420408666,
+      "first_use_pipeline_max_s": 47.781125695910305
+    },
+    {
+      "workload": 4,
+      "label": "(10, 6) michaelis_menten / geometric",
+      "method": "specialized",
+      "warm_rate_median": 5.023316518345756,
+      "warm_rate_min": 2.7050846887589204,
+      "warm_rate_max": 5.151195539326332,
+      "first_use_pipeline_median_s": 15.241856795037165,
+      "first_use_pipeline_min_s": 15.199613118777052,
+      "first_use_pipeline_max_s": 17.57296810974367
+    },
+    {
+      "workload": 5,
+      "label": "(10, 6) linear / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 25.663888259344038,
+      "warm_rate_min": 23.844994305324523,
+      "warm_rate_max": 35.91639860261938,
+      "first_use_pipeline_median_s": 15.616371787851676,
+      "first_use_pipeline_min_s": 12.94090970302932,
+      "first_use_pipeline_max_s": 16.11103238002397
+    },
+    {
+      "workload": 5,
+      "label": "(10, 6) linear / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.249062122252403,
+      "warm_rate_min": 3.0146431244360317,
+      "warm_rate_max": 4.430300009484898,
+      "first_use_pipeline_median_s": 36.77389080496505,
+      "first_use_pipeline_min_s": 35.7543426672928,
+      "first_use_pipeline_max_s": 44.40498986793682
+    },
+    {
+      "workload": 5,
+      "label": "(10, 6) linear / geometric",
+      "method": "specialized",
+      "warm_rate_median": 5.237644199717016,
+      "warm_rate_min": 5.148348883826698,
+      "warm_rate_max": 5.278946166440526,
+      "first_use_pipeline_median_s": 14.704013835871592,
+      "first_use_pipeline_min_s": 14.692234962712973,
+      "first_use_pipeline_max_s": 15.917411651927978
+    },
+    {
+      "workload": 6,
+      "label": "(10, 6) hill / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 28.4658641484307,
+      "warm_rate_min": 26.895124336560517,
+      "warm_rate_max": 32.45861193624814,
+      "first_use_pipeline_median_s": 14.940727963810787,
+      "first_use_pipeline_min_s": 14.73273157584481,
+      "first_use_pipeline_max_s": 16.934206487843767
+    },
+    {
+      "workload": 6,
+      "label": "(10, 6) hill / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.171579091668809,
+      "warm_rate_min": 4.136228241363787,
+      "warm_rate_max": 4.341360138676978,
+      "first_use_pipeline_median_s": 34.65168465394527,
+      "first_use_pipeline_min_s": 34.53770832018927,
+      "first_use_pipeline_max_s": 48.69218166312203
+    },
+    {
+      "workload": 6,
+      "label": "(10, 6) hill / geometric",
+      "method": "specialized",
+      "warm_rate_median": 4.680609632278789,
+      "warm_rate_min": 4.678182157015611,
+      "warm_rate_max": 5.0368633543982035,
+      "first_use_pipeline_median_s": 15.756584209855646,
+      "first_use_pipeline_min_s": 15.73765413905494,
+      "first_use_pipeline_max_s": 23.478206201223657
+    },
+    {
+      "workload": 7,
+      "label": "(10, 6) logistic / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 31.830178857216417,
+      "warm_rate_min": 22.66605348201114,
+      "warm_rate_max": 33.381009871768235,
+      "first_use_pipeline_median_s": 15.506753280060366,
+      "first_use_pipeline_min_s": 15.29709498072043,
+      "first_use_pipeline_max_s": 19.58209095709026
+    },
+    {
+      "workload": 7,
+      "label": "(10, 6) logistic / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.3713988196765605,
+      "warm_rate_min": 3.3188172312218165,
+      "warm_rate_max": 4.399690879917324,
+      "first_use_pipeline_median_s": 35.0376043964643,
+      "first_use_pipeline_min_s": 34.97265495406464,
+      "first_use_pipeline_max_s": 45.953003546921536
+    },
+    {
+      "workload": 7,
+      "label": "(10, 6) logistic / geometric",
+      "method": "specialized",
+      "warm_rate_median": 5.0961523676012455,
+      "warm_rate_min": 3.2294573858748588,
+      "warm_rate_max": 5.206059653381056,
+      "first_use_pipeline_median_s": 16.211566739017144,
+      "first_use_pipeline_min_s": 15.703078631777316,
+      "first_use_pipeline_max_s": 20.111937361070886
+    },
+    {
+      "workload": 8,
+      "label": "(10, 6) tanh / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 32.520229155116375,
+      "warm_rate_min": 23.221483537667883,
+      "warm_rate_max": 33.62897528975005,
+      "first_use_pipeline_median_s": 13.996432180982083,
+      "first_use_pipeline_min_s": 13.855560713913292,
+      "first_use_pipeline_max_s": 19.17186357313767
+    },
+    {
+      "workload": 8,
+      "label": "(10, 6) tanh / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.157252201185173,
+      "warm_rate_min": 3.1720301610901074,
+      "warm_rate_max": 4.334431786647988,
+      "first_use_pipeline_median_s": 38.685620272299275,
+      "first_use_pipeline_min_s": 35.97906552813947,
+      "first_use_pipeline_max_s": 47.99705043644644
+    },
+    {
+      "workload": 8,
+      "label": "(10, 6) tanh / geometric",
+      "method": "specialized",
+      "warm_rate_median": 4.284805093772814,
+      "warm_rate_min": 3.2721430884130744,
+      "warm_rate_max": 5.217444807783356,
+      "first_use_pipeline_median_s": 18.098320375895128,
+      "first_use_pipeline_min_s": 17.233546510105953,
+      "first_use_pipeline_max_s": 18.373964834259823
+    },
+    {
+      "workload": 9,
+      "label": "(10, 6) root / geometric",
+      "method": "ordinary",
+      "warm_rate_median": 33.32712491731144,
+      "warm_rate_min": 30.85621276488424,
+      "warm_rate_max": 40.214998716794696,
+      "first_use_pipeline_median_s": 14.4215682761278,
+      "first_use_pipeline_min_s": 14.350023420061916,
+      "first_use_pipeline_max_s": 14.861223854124546
+    },
+    {
+      "workload": 9,
+      "label": "(10, 6) root / geometric",
+      "method": "dynamic",
+      "warm_rate_median": 4.201886113421978,
+      "warm_rate_min": 2.883446563782422,
+      "warm_rate_max": 4.467711016302429,
+      "first_use_pipeline_median_s": 37.364707523956895,
+      "first_use_pipeline_min_s": 35.260271785082296,
+      "first_use_pipeline_max_s": 37.811389041133225
+    },
+    {
+      "workload": 9,
+      "label": "(10, 6) root / geometric",
+      "method": "specialized",
+      "warm_rate_median": 4.892658341922855,
+      "warm_rate_min": 3.2942382817190787,
+      "warm_rate_max": 5.141129360478398,
+      "first_use_pipeline_median_s": 17.31499892217107,
+      "first_use_pipeline_min_s": 15.377917871344835,
+      "first_use_pipeline_max_s": 19.4402977200225
+    },
+    {
+      "workload": 10,
+      "label": "(10, 6) michaelis_menten / weibull",
+      "method": "ordinary",
+      "warm_rate_median": 25.645751550959055,
+      "warm_rate_min": 25.201050900156442,
+      "warm_rate_max": 28.22625494360283,
+      "first_use_pipeline_median_s": 26.38754173577763,
+      "first_use_pipeline_min_s": 25.508549049962312,
+      "first_use_pipeline_max_s": 27.378709350712597
+    },
+    {
+      "workload": 10,
+      "label": "(10, 6) michaelis_menten / weibull",
+      "method": "dynamic",
+      "warm_rate_median": 4.18347608484973,
+      "warm_rate_min": 2.472341163842479,
+      "warm_rate_max": 4.357039223704095,
+      "first_use_pipeline_median_s": 35.18079985817894,
+      "first_use_pipeline_min_s": 34.49407627386972,
+      "first_use_pipeline_max_s": 39.008942822925746
+    },
+    {
+      "workload": 10,
+      "label": "(10, 6) michaelis_menten / weibull",
+      "method": "specialized",
+      "warm_rate_median": 4.690456936974505,
+      "warm_rate_min": 3.8297698338749675,
+      "warm_rate_max": 4.868347923669344,
+      "first_use_pipeline_median_s": 22.29624841711484,
+      "first_use_pipeline_min_s": 22.252905380213633,
+      "first_use_pipeline_max_s": 23.317560208030045
+    },
+    {
+      "workload": 11,
+      "label": "(10, 6) michaelis_menten / mixed",
+      "method": "ordinary",
+      "warm_rate_median": 30.332397455241942,
+      "warm_rate_min": 15.469242067145794,
+      "warm_rate_max": 38.55228350707267,
+      "first_use_pipeline_median_s": 20.429722185013816,
+      "first_use_pipeline_min_s": 18.951758419862017,
+      "first_use_pipeline_max_s": 28.72407930600457
+    },
+    {
+      "workload": 11,
+      "label": "(10, 6) michaelis_menten / mixed",
+      "method": "dynamic",
+      "warm_rate_median": 4.261250759914188,
+      "warm_rate_min": 3.6608855443567228,
+      "warm_rate_max": 4.50123945303249,
+      "first_use_pipeline_median_s": 34.66853912384249,
+      "first_use_pipeline_min_s": 34.01132405502722,
+      "first_use_pipeline_max_s": 43.30153360380791
+    },
+    {
+      "workload": 11,
+      "label": "(10, 6) michaelis_menten / mixed",
+      "method": "specialized",
+      "warm_rate_median": 4.747615263885781,
+      "warm_rate_min": 4.098772000407612,
+      "warm_rate_max": 5.033808312852284,
+      "first_use_pipeline_median_s": 28.01132793095894,
+      "first_use_pipeline_min_s": 26.662075030151755,
+      "first_use_pipeline_max_s": 30.012175655923784
+    }
+  ]
+}

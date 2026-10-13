@@ -1,0 +1,7 @@
+Running as unit: wayfinder-comparison-1791909815-2011644.scope; invocation ID: 10a88f7a5c7a40af93ee2a972c28e4e5
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-generation-comparison/benchmarks/comparison_run.py", line 17, in <module>
+    from comparison_methods import Adapter, equivalence_gate
+  File "/tmp/pymc-generator-generation-comparison/benchmarks/comparison_methods.py", line 19, in <module>
+    from pytensor import clone_replace
+ImportError: cannot import name 'clone_replace' from 'pytensor' (/tmp/pymc-generator-generation-comparison/.venv/lib/python3.13/site-packages/pytensor/__init__.py)

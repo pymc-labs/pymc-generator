@@ -1,0 +1,16 @@
+{
+  "charged_s": 61,
+  "retained_bytes": 16843526,
+  "invocations": [
+    {
+      "workload": 0,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-000",
+      "reserved_s": 900,
+      "status": "failed",
+      "exit_code": 1,
+      "charged_s": 1,
+      "retained_bytes": 774
+    }
+  ]
+}

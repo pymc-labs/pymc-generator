@@ -1,0 +1,3 @@
+{"event": "build", "elapsed_s": 1.5715190339833498, "method": "specialized", "cell": 2}
+{"event": "compile", "elapsed_s": 13.857158024096861, "method": "specialized", "cell": 2}
+{"event": "draw", "elapsed_s": 15.69267302006483, "method": "specialized", "cell": 2, "draws": 10, "diagnostic": true, "seed": 833830853, "seconds": 1.8353378009051085}

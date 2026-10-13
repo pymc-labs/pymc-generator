@@ -1,0 +1,64 @@
+{
+  "method": "dynamic",
+  "workload": 2,
+  "repeat": 2,
+  "draws_per_structure": 1,
+  "candidate_allocation": 5,
+  "evaluated": 5,
+  "rejected": 0,
+  "accepted": 5,
+  "logical_candidate_ids": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ]
+  ],
+  "physical_to_logical_cells": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "generation_including_build_compile_acceptance_packing_s": 35.37863381416537,
+  "input_loading_s": 0.04173521208576858,
+  "original_structure_preparation_s": 0.0036308288108557463,
+  "stages": {
+    "build_s": 4.905644380953163,
+    "compile_s": 29.328861702000722,
+    "draw_s": 1.1205484208185226,
+    "invariants_and_hash_s": 0.002922751009464264,
+    "acceptance_and_packing_s": 0.002449675463140011,
+    "normalization_and_diagnostics_s": 0.016008626902475953
+  },
+  "compiler_cache": "shared within invocation; see events for compile positions",
+  "model_state": "fresh models",
+  "rejection_reasons": "aggregate shared realism/support-scale gate; no retries or replenishment",
+  "validation_s": 0.016851742984727025,
+  "serialization_s": 0.00794270820915699,
+  "readback_and_revalidation_s": 0.021759210852906108,
+  "persisted_bytes": 129487,
+  "pipeline_s": 35.42518747621216,
+  "accepted_locally_persisted_per_s": 0.14114251345479753,
+  "replay_pass": true,
+  "memory_invocation_cumulative": {
+    "self_peak_rss_kib": 742324,
+    "scope_peak_bytes": 627027968
+  }
+}

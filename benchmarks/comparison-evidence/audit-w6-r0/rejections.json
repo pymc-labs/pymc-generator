@@ -1,0 +1,27 @@
+{
+  "commit": "18c0795b939fdb325d506a8185f3c82bc2fc6082",
+  "workload": 6,
+  "repeat": 0,
+  "status": "pass",
+  "diagnostic_draws": 10,
+  "primary_draws": 0,
+  "rejections": [
+    {
+      "cell": 0,
+      "draw": 8,
+      "failures": [
+        "direct_treatment_cv_below_floor"
+      ],
+      "minimum_direct_cv": 0.055810443362311474,
+      "cv_floor": 0.08,
+      "outcome_spike_ratio": 1.1506674501547012,
+      "treatment_spike_ratio": 3.5889875743461954,
+      "support_scale": 0.6188077720741519
+    }
+  ],
+  "memory": {
+    "self_peak_rss_kib": 489108,
+    "scope_peak_bytes": 473165824
+  },
+  "scope": "acceptance replay and accepted outcome float32 equality"
+}

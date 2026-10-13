@@ -1,0 +1,146 @@
+{
+  "charged_s": 2669,
+  "retained_bytes": 61136423,
+  "invocations": [
+    {
+      "workload": 0,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-000",
+      "reserved_s": 900,
+      "status": "failed",
+      "exit_code": 1,
+      "charged_s": 1,
+      "retained_bytes": 774
+    },
+    {
+      "workload": 0,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-001",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 156,
+      "retained_bytes": 2054019
+    },
+    {
+      "workload": 1,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w1-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 164,
+      "retained_bytes": 2891304
+    },
+    {
+      "workload": 2,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w2-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 225,
+      "retained_bytes": 3990975
+    },
+    {
+      "workload": 3,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w3-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 241,
+      "retained_bytes": 4807646
+    },
+    {
+      "workload": 4,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w4-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 214,
+      "retained_bytes": 3460591
+    },
+    {
+      "workload": 5,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w5-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 188,
+      "retained_bytes": 3569083
+    },
+    {
+      "workload": 6,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w6-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 210,
+      "retained_bytes": 3482061
+    },
+    {
+      "workload": 7,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w7-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 209,
+      "retained_bytes": 3472095
+    },
+    {
+      "workload": 8,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w8-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 194,
+      "retained_bytes": 3375308
+    },
+    {
+      "workload": 9,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w9-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 177,
+      "retained_bytes": 3370512
+    },
+    {
+      "workload": 10,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w10-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 218,
+      "retained_bytes": 3381783
+    },
+    {
+      "workload": 11,
+      "repeat": 0,
+      "destination": "/tmp/comparison-broad-w11-r0",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 235,
+      "retained_bytes": 3507388
+    },
+    {
+      "workload": 0,
+      "repeat": 1,
+      "destination": "/tmp/comparison-broad-w0-r1",
+      "reserved_s": 900,
+      "status": "passed",
+      "exit_code": 0,
+      "charged_s": 177,
+      "retained_bytes": 2078164
+    }
+  ]
+}

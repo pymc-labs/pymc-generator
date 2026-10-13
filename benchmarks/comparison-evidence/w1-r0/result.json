@@ -1,0 +1,437 @@
+{
+  "status": "pass",
+  "memory": {
+    "self_peak_rss_kib": 1030604,
+    "scope_peak_bytes": 1047810048
+  },
+  "elapsed_s": 155.12993840803392,
+  "executions": {
+    "ordinary": [
+      {
+        "cell": 0,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 254931110,
+        "seconds": 0.017032046103850007
+      },
+      {
+        "cell": 1,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 809273237,
+        "seconds": 0.016766051994636655
+      },
+      {
+        "cell": 2,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 1359342055,
+        "seconds": 0.015405545011162758
+      },
+      {
+        "cell": 3,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 2119720157,
+        "seconds": 0.015901888953521848
+      },
+      {
+        "cell": 4,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 175757633,
+        "seconds": 0.015803975984454155
+      },
+      {
+        "cell": 0,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 254931110,
+        "seconds": 0.01689057587645948
+      },
+      {
+        "cell": 1,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 809273237,
+        "seconds": 0.016132825054228306
+      },
+      {
+        "cell": 2,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 1359342055,
+        "seconds": 0.015261755092069507
+      },
+      {
+        "cell": 3,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 2119720157,
+        "seconds": 0.01542673516087234
+      },
+      {
+        "cell": 4,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 175757633,
+        "seconds": 0.015076169976964593
+      },
+      {
+        "cell": 0,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 254931110,
+        "seconds": 0.1454406608827412
+      },
+      {
+        "cell": 1,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 809273237,
+        "seconds": 0.14930942794308066
+      },
+      {
+        "cell": 2,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 1359342055,
+        "seconds": 0.15160210919566453
+      },
+      {
+        "cell": 3,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 2119720157,
+        "seconds": 0.1473136730492115
+      },
+      {
+        "cell": 4,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 175757633,
+        "seconds": 0.14785166713409126
+      },
+      {
+        "cell": 0,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 254931110,
+        "seconds": 0.1482162680476904
+      },
+      {
+        "cell": 1,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 809273237,
+        "seconds": 0.14908653404563665
+      },
+      {
+        "cell": 2,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 1359342055,
+        "seconds": 0.14641584898345172
+      },
+      {
+        "cell": 3,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 2119720157,
+        "seconds": 0.1473351470194757
+      },
+      {
+        "cell": 4,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 175757633,
+        "seconds": 0.14913706597872078
+      }
+    ],
+    "dynamic": [
+      {
+        "cell": 0,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 254931110,
+        "seconds": 0.2284823339432478
+      },
+      {
+        "cell": 1,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 809273237,
+        "seconds": 0.2249304240103811
+      },
+      {
+        "cell": 2,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 1359342055,
+        "seconds": 0.22174064512364566
+      },
+      {
+        "cell": 3,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 2119720157,
+        "seconds": 0.22154331603087485
+      },
+      {
+        "cell": 4,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 175757633,
+        "seconds": 0.2211745970416814
+      },
+      {
+        "cell": 0,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 254931110,
+        "seconds": 0.22506875009275973
+      },
+      {
+        "cell": 1,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 809273237,
+        "seconds": 0.22430130490101874
+      },
+      {
+        "cell": 2,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 1359342055,
+        "seconds": 0.2236603458877653
+      },
+      {
+        "cell": 3,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 2119720157,
+        "seconds": 0.22194638312794268
+      },
+      {
+        "cell": 4,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 175757633,
+        "seconds": 0.22650987701490521
+      },
+      {
+        "cell": 0,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 254931110,
+        "seconds": 2.224507929990068
+      },
+      {
+        "cell": 1,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 809273237,
+        "seconds": 2.2740791619289666
+      },
+      {
+        "cell": 2,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 1359342055,
+        "seconds": 2.506048212060705
+      },
+      {
+        "cell": 3,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 2119720157,
+        "seconds": 2.2507485628593713
+      },
+      {
+        "cell": 4,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 175757633,
+        "seconds": 2.2290546000003815
+      },
+      {
+        "cell": 0,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 254931110,
+        "seconds": 2.3304631798528135
+      },
+      {
+        "cell": 1,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 809273237,
+        "seconds": 2.304002237971872
+      },
+      {
+        "cell": 2,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 1359342055,
+        "seconds": 2.2469186389353126
+      },
+      {
+        "cell": 3,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 2119720157,
+        "seconds": 2.3543257140554488
+      },
+      {
+        "cell": 4,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 175757633,
+        "seconds": 2.392181942006573
+      }
+    ],
+    "specialized": [
+      {
+        "cell": 0,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 254931110,
+        "seconds": 0.2471673919353634
+      },
+      {
+        "cell": 1,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 809273237,
+        "seconds": 0.24159362306818366
+      },
+      {
+        "cell": 2,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 1359342055,
+        "seconds": 0.24723973614163697
+      },
+      {
+        "cell": 3,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 2119720157,
+        "seconds": 0.24843599484302104
+      },
+      {
+        "cell": 4,
+        "draws": 1,
+        "diagnostic": false,
+        "seed": 175757633,
+        "seconds": 0.24982265220023692
+      },
+      {
+        "cell": 0,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 254931110,
+        "seconds": 0.2243903069756925
+      },
+      {
+        "cell": 1,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 809273237,
+        "seconds": 0.2496593869291246
+      },
+      {
+        "cell": 2,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 1359342055,
+        "seconds": 0.24348246399313211
+      },
+      {
+        "cell": 3,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 2119720157,
+        "seconds": 0.20229874504730105
+      },
+      {
+        "cell": 4,
+        "draws": 1,
+        "diagnostic": true,
+        "seed": 175757633,
+        "seconds": 0.19172018207609653
+      },
+      {
+        "cell": 0,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 254931110,
+        "seconds": 1.8806498278863728
+      },
+      {
+        "cell": 1,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 809273237,
+        "seconds": 2.2218688239809126
+      },
+      {
+        "cell": 2,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 1359342055,
+        "seconds": 1.8754773968830705
+      },
+      {
+        "cell": 3,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 2119720157,
+        "seconds": 2.0481059020385146
+      },
+      {
+        "cell": 4,
+        "draws": 10,
+        "diagnostic": false,
+        "seed": 175757633,
+        "seconds": 1.9494099179282784
+      },
+      {
+        "cell": 0,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 254931110,
+        "seconds": 2.062080522067845
+      },
+      {
+        "cell": 1,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 809273237,
+        "seconds": 2.1971854472067207
+      },
+      {
+        "cell": 2,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 1359342055,
+        "seconds": 1.941318575059995
+      },
+      {
+        "cell": 3,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 2119720157,
+        "seconds": 1.9267404640559107
+      },
+      {
+        "cell": 4,
+        "draws": 10,
+        "diagnostic": true,
+        "seed": 175757633,
+        "seconds": 1.915714655071497
+      }
+    ]
+  },
+  "gate_scope": "one controlled-input structure; all primary tasks replayed, both groupings; not statistical equivalence"
+}
