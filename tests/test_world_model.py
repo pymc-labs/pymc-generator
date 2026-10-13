@@ -363,28 +363,41 @@ def test_relative_outcome_scales_follow_the_treatment_amplitude(reference_target
         )
 
 
+#: An opt-in mechanism setting that adds no RV to these linear worlds: it only
+#: selects the extended-range relative-noise product.
+_OPT_IN = {"mm_scale_prior": "log_uniform"}
+
+
 @pytest.mark.parametrize("mode", ("FAST_COMPILE", "FAST_RUN"))
 @pytest.mark.parametrize(
-    ("coefficients", "relative_std"),
+    ("coefficients", "relative_std", "opt_in"),
     (
-        pytest.param((1.0, 1.5), 0.2, id="regular"),
-        pytest.param((1e-180, 1.5e-180), 1e38, id="tiny-coefficient"),
+        pytest.param((1.0, 1.5), 0.2, False, id="regular"),
+        pytest.param((1e-180, 1.5e-180), 1e38, True, id="tiny-coefficient"),
         pytest.param(
             (np.finfo(np.float64).tiny, 1.5 * np.finfo(np.float64).tiny),
             1e-16,
+            True,
             id="minimum-final-sigma",
         ),
         pytest.param(
             (np.nextafter(0.0, 1.0), 2 * np.nextafter(0.0, 1.0)),
             1e38,
+            True,
             id="minimum-coefficient",
         ),
-        pytest.param((1e38, 1.5e38), np.nextafter(0.0, 1.0), id="minimum-relative-std"),
-        pytest.param((np.nextafter(0.0, 1.0), 1e38), 1e38, id="mixed-extreme-coefficients"),
+        pytest.param((1e38, 1.5e38), np.nextafter(0.0, 1.0), True, id="minimum-relative-std"),
+        pytest.param((np.nextafter(0.0, 1.0), 1e38), 1e38, True, id="mixed-extreme-coefficients"),
     ),
 )
-def test_relative_noise_gradients_preserve_coefficient_direction(coefficients, relative_std, mode):
-    """Noise derivatives remain proportional to beta, not a rounded intermediate."""
+def test_relative_noise_gradients_preserve_coefficient_direction(
+    coefficients, relative_std, opt_in, mode
+):
+    """Noise derivatives remain proportional to beta, not a rounded intermediate.
+
+    Extended-range coefficients need the opt-in product; regular ones also hold
+    on the default (literal) product.
+    """
     cfg = make_scm_prior(
         n_treatments=2,
         n_covariates=1,
@@ -394,8 +407,10 @@ def test_relative_noise_gradients_preserve_coefficient_direction(coefficients, r
         beta_additive_range=coefficients,
         rw_baseline_std_range=(relative_std, relative_std),
         rw_outcome_std_range=(relative_std, relative_std),
+        **(_OPT_IN if opt_in else {}),
     )
     cfg.validate()
+    assert cfg.mechanism_priors_enabled is opt_in
     beta = pt.dvector("beta")
     with pm.Model():
         rw = {
@@ -420,6 +435,48 @@ def test_relative_noise_gradients_preserve_coefficient_direction(coefficients, r
     np.testing.assert_allclose(
         actual_gradient, expected_gradient, rtol=32 * np.finfo(float).eps, atol=0.0
     )
+
+
+def test_default_relative_outcome_scale_is_mains_literal_product():
+    """Default recipes keep ``std * sqrt(sum((g_cy * beta)**2))`` and its rewrites.
+
+    The expected scale is an independent NumPy product. Downstream, the generator
+    multiplies the scale into the walk; the literal product lets the canonicalizer
+    flatten that multiplication, which an opaque value-preserving node would not.
+    Bytes are compared in the generator's FAST_COMPILE draw mode.
+    """
+    cfg = make_scm_prior(n_treatments=4, n_covariates=1, n_latent=1, n_time_steps=16)
+    assert not cfg.mechanism_priors_enabled
+    g_cy = np.array([1, 0, 1, 1])
+    std = pt.tensor("std", shape=(1,), dtype="float64")
+    beta = pt.dvector("beta")
+    walk = pt.tensor("walk", shape=(None, 1), dtype="float64")
+    with pm.Model():
+        rw = {group: {"std": std} for group in ("rw_b", "rw_y")}
+        _apply_outcome_std_scale(cfg, rw, g_cy, beta)
+    scales = pytensor.function(
+        [std, beta], [rw["rw_b"]["std"], rw["rw_y"]["std"]], mode="FAST_COMPILE"
+    )
+    literal = std * pt.sqrt(pt.sum((pt.as_tensor_variable(g_cy) * beta) ** 2))
+    # Separate functions: one graph could merge the two sides into one node.
+    downstream = pytensor.function(
+        [std, beta, walk], walk * rw["rw_y"]["std"] / 3.0, mode="FAST_COMPILE"
+    )
+    expected_downstream = pytensor.function(
+        [std, beta, walk], walk * literal / 3.0, mode="FAST_COMPILE"
+    )
+    rng = np.random.default_rng(28)
+    walk_value = rng.normal(size=(8000, 1))
+    for draw in range(500):
+        std_value, beta_value = rng.uniform(0.0, 0.1, 1), rng.uniform(0.5, 2.0, 4)
+        expected = std_value * np.sqrt(np.sum((g_cy * beta_value) ** 2))
+        for observed in scales(std_value, beta_value):
+            assert observed.tobytes() == expected.tobytes(), draw
+        if draw < 20:
+            assert (
+                downstream(std_value, beta_value, walk_value).tobytes()
+                == expected_downstream(std_value, beta_value, walk_value).tobytes()
+            ), draw
 
 
 def test_absolute_outcome_scales_keep_halfnormal_semantics():

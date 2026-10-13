@@ -319,13 +319,15 @@ therefore the schedule gate, not the realised on-state — read it together with
 With every trajectory knob at its default nothing new is drawn: the controls
 leave same-seed numerical/model arrays and worlds unchanged. This is not a
 cross-version archive-identity guarantee; schema v5 changes the version stamp
-and saved corpus bytes. Inclusion flags draw from child streams spawned off the corpus's numpy
-generator and consume none of its state. But once a cell wires a component, the
+and saved corpus bytes. Inclusion flags draw from child streams spawned off the
+corpus's numpy generator and consume none of its state. A cell or world that
+carries no schedule component and keeps `hf` / `pulse` on every input whose
+range is live keeps the default draws. But once a cell wires a component, the
 random variables its compiled draw reaches can change, so that cell's *other*
-draws generally change at the same seed too; stream stability under enabling is
-tracked in [#28](https://github.com/pymc-labs/pymc-generator/issues/28). Corpora
-of two configs line up cell by cell only while their acceptance counts match.
-Details: [randomness and seeds](../reference/config.md#randomness-and-seeds).
+draws generally change at the same seed too: PyMC assigns streams by discovery
+order. Inside one compiled template, per-cell flags are data and move no draw.
+Corpora of two configs line up cell by cell only while their acceptance counts
+match. Details: [randomness and seeds](../reference/config.md#randomness-and-seeds).
 
 ## Limits
 

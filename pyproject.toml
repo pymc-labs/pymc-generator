@@ -44,6 +44,9 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-cov",
+    # Tests execute the committed reader cells without installing the docs site.
+    "ipython",
+    "nbformat>=5.10.4",
     # Pinned so local, pre-commit, and CI formatting agree; keep in sync
     # with .github/workflows/ci.yml and .pre-commit-config.yaml.
     "ruff==0.15.18",
@@ -95,6 +98,7 @@ Changelog = "https://github.com/pymc-labs/pymc-generator/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -114,6 +118,8 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    # Executed, hash-pinned generated reports; their source is build_notebook.py.
+    "studies/recovery/results/*/report.ipynb",
 ]
 
 [tool.ruff.lint]

@@ -9,6 +9,8 @@ saturation mechanism.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +22,34 @@ import pytest
 from pymc_generator import mechanisms
 from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 from pymc_generator.symbolic_graph import build_symbolic_graph
+
+linux_only = pytest.mark.skipif(
+    sys.platform != "linux", reason="requires Linux /proc, subreaper and pidfd behavior"
+)
+
+
+def _single_os_thread_error() -> str | None:
+    """Why bounded pilot phases cannot fork here, using the runner's own thread count."""
+    if sys.platform != "linux":
+        return "requires Linux /proc"
+    from scripts.linear_recovery_prevalence import _actual_os_thread_count
+
+    try:
+        count = _actual_os_thread_count()
+    except RuntimeError as error:
+        return str(error)
+    return None if count == 1 else f"found {count} OS threads before fork"
+
+
+_SINGLE_OS_THREAD_ERROR = _single_os_thread_error()
+single_os_thread = pytest.mark.skipif(
+    _SINGLE_OS_THREAD_ERROR is not None,
+    reason="bounded pilot phases need exactly one OS thread (run with OPENBLAS/OMP/MKL/"
+    f"NUMEXPR_NUM_THREADS=1): {_SINGLE_OS_THREAD_ERROR}",
+)
+requires_nbclient = pytest.mark.skipif(
+    importlib.util.find_spec("nbclient") is None, reason="requires nbclient to execute notebooks"
+)
 
 SEED = 20261005
 N_TIME_STEPS = 64
@@ -933,6 +963,7 @@ def test_c2_fork_guard_fails_closed_on_native_threads(monkeypatch):
         runner._bounded_phase(lambda: None, time.monotonic() + 1, time.monotonic)
 
 
+@linux_only
 def test_c2_supported_subprocess_reports_one_actual_os_thread():
     import os
     import subprocess
@@ -959,6 +990,8 @@ def test_c2_supported_subprocess_reports_one_actual_os_thread():
     assert python_threads == 1
 
 
+@linux_only
+@single_os_thread
 def test_c2_phase_kills_term_ignoring_child_and_reaps_it(tmp_path):
     import os
     import signal
@@ -980,6 +1013,8 @@ def test_c2_phase_kills_term_ignoring_child_and_reaps_it(tmp_path):
         os.kill(child_pid, 0)
 
 
+@linux_only
+@single_os_thread
 def test_c2_runner_executes_real_generation_and_diagnostic_phases_once(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1035,6 +1070,9 @@ def test_c2_runner_executes_real_generation_and_diagnostic_phases_once(tmp_path,
     assert diagnostic_marker.read_text() == "x"
 
 
+@linux_only
+@single_os_thread
+@requires_nbclient
 def test_c2_notebook_renders_runner_complete_partial_and_rejects_wrong_manifest(
     tmp_path, monkeypatch
 ):
@@ -1122,6 +1160,8 @@ def test_c2_notebook_renders_runner_complete_partial_and_rejects_wrong_manifest(
     assert json.loads(Path(complete["report_path"]).read_text())["source_provenance"]
 
 
+@linux_only
+@single_os_thread
 def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1198,6 +1238,8 @@ def test_c2_runner_success_accounting_resume_collision_and_schema_validation(tmp
     runner._write_json(manifest_path, original_manifest)
 
 
+@linux_only
+@single_os_thread
 def test_c2_bounded_phase_isolates_sleep_and_transfers_value_error_once(tmp_path):
     import time
 
@@ -1217,6 +1259,8 @@ def test_c2_bounded_phase_isolates_sleep_and_transfers_value_error_once(tmp_path
     assert marker.read_text() == "x"
 
 
+@linux_only
+@single_os_thread
 def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1269,6 +1313,8 @@ def test_c2_runner_deduplicates_failure_then_success_on_resume(tmp_path, monkeyp
     assert second["accounting"]["failures"] == 0
 
 
+@linux_only
+@single_os_thread
 def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplication(
     tmp_path, monkeypatch
 ):
@@ -1369,6 +1415,8 @@ def test_c2_repeated_failures_keep_identity_then_success_clears_without_duplicat
     assert success["accounting"]["accepted_world_metrics"] == 40
 
 
+@linux_only
+@single_os_thread
 def test_c2_resume_accumulates_budget_and_replaces_stale_failure_metadata(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1406,6 +1454,8 @@ def test_c2_resume_accumulates_budget_and_replaces_stale_failure_metadata(tmp_pa
     assert resumed["accounting"]["wall_budget_seconds"] == 60.0
 
 
+@linux_only
+@single_os_thread
 def test_c2_finalization_deadline_uses_checkpoint_only_partial_report(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1604,6 +1654,8 @@ def test_c2_main_reports_incomplete_without_claiming_report_file(tmp_path, monke
     assert not report_path.exists()
 
 
+@linux_only
+@single_os_thread
 def test_c2_nonterm_soft_deadline_persists_checkpoint_only_fallback(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1674,6 +1726,8 @@ def test_c2_nonterm_soft_deadline_persists_checkpoint_only_fallback(tmp_path, mo
     )
 
 
+@linux_only
+@single_os_thread
 def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_path, monkeypatch):
     import os
     import signal
@@ -1748,6 +1802,8 @@ def test_c2_term_at_final_report_write_returns_partial_and_restores_handler(tmp_
     assert signal.getsignal(signal.SIGTERM) == old_handler
 
 
+@linux_only
+@single_os_thread
 def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp_path, monkeypatch):
     import copy
     import os
@@ -1837,6 +1893,7 @@ def test_c2_term_at_exception_checkpoint_write_preserves_failure_and_handler(tmp
     assert signal.getsignal(signal.SIGTERM) == old_handler
 
 
+@linux_only
 def test_c2_runner_handles_term_during_finalization_after_completed_checkpoint(
     tmp_path, monkeypatch
 ):
@@ -1919,6 +1976,7 @@ def test_c2_runner_handles_term_during_finalization_after_completed_checkpoint(
     assert report["interrupted"]
 
 
+@linux_only
 def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path, monkeypatch):
     """Exercise TERM in a single-threaded runner process, not a forked pytest parent."""
     import os
@@ -1957,6 +2015,7 @@ def test_c2_runner_handles_term_mid_phase_with_honest_partial_artifacts(tmp_path
     assert persisted["accounting"]["wall_elapsed_seconds"] >= 0.0
 
 
+@linux_only
 def test_c2_runner_handles_deadline_during_generation_and_diagnostics(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
