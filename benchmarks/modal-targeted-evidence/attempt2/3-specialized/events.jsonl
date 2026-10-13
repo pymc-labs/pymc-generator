@@ -1,0 +1,5 @@
+{"event": "group_start", "elapsed_s": 0.20475668110884726, "label": "first", "cells": 1, "draws": 1}
+{"event": "build", "elapsed_s": 1.9878667551092803, "method": "specialized", "cell": 0}
+{"event": "compile", "elapsed_s": 16.08786518103443, "method": "specialized", "cell": 0}
+{"event": "draw", "elapsed_s": 16.301780743990093, "method": "specialized", "cell": 0, "draws": 1, "diagnostic": false, "seed": 298624104, "seconds": 0.21376195084303617}
+{"event": "failure", "elapsed_s": 16.312447613105178, "error": "AssertionError()", "traceback": "Traceback (most recent call last):\n  File \"/tmp/pymc-generator-modal-comparison/benchmarks/modal_targeted_run.py\", line 125, in <module>\n    main()\n    ~~~~^^\n  File \"/tmp/pymc-generator-modal-comparison/benchmarks/modal_targeted_run.py\", line 98, in main\n    assert not DataGenerator.validate_corpus(corpus)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n", "memory": {"self_peak_rss_kib": 414064, "scope_peak_bytes": 641155072}}

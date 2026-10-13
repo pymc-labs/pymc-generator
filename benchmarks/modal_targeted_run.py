@@ -80,8 +80,9 @@ def main():
         affinity=sorted(os.sched_getaffinity(0)),
         thread_settings={k:os.environ.get(k) for k in ['OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMBA_NUM_THREADS','NUMEXPR_NUM_THREADS']},
         memory=memory()))
-    # First-cell grouping screen, then a two-cell turnover and replay probe.
-    for label, count, draws in [('first',1,1),('warm10',1,10),('warm100',1,100),('turnover',2,10)]:
+    # Two cells are required by the unchanged train/validation corpus contract.
+    # Ordinary rebuilds at every structure transition; templates stay compatible.
+    for label, count, draws in [('first',2,1),('group10',2,10),('group100',2,100)]:
         adapter.accepted_ids=[]
         before=dict(adapter.times)
         event('group_start',label=label,cells=count,draws=draws)
@@ -95,7 +96,9 @@ def main():
             logical_ids=adapter.accepted_ids,stages=stages,generation_s=generation)
         if corpus is not None:
             t=time.monotonic()
-            assert not DataGenerator.validate_corpus(corpus)
+            errors = DataGenerator.validate_corpus(corpus)
+            event('validation', errors=errors)
+            assert not errors, errors
             row['validation_s']=time.monotonic()-t
             path=OUT/f'{label}.npz'
             t=time.monotonic(); save_corpus(corpus,path); row['persistence_s']=time.monotonic()-t
@@ -105,7 +108,8 @@ def main():
             for name,a in left.items():
                 b=right[name]
                 assert a.dtype==b.dtype and a.shape==b.shape and a.tobytes()==b.tobytes(), name
-            assert not DataGenerator.validate_corpus(back)
+            errors = DataGenerator.validate_corpus(back)
+            assert not errors, errors
             row['readback_s']=time.monotonic()-t
             row['persisted_bytes']=path.stat().st_size
             del corpus,back,left,right

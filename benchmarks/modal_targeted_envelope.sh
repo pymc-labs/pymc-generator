@@ -5,10 +5,10 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export ROOT
 export START_EPOCH=1791923652 RUN_DEADLINE=1791924432 FULL_DEADLINE=1791924552
-# Explicit second attempt after metadata serialization failure, within the SAME
+# Explicit third attempt after single-cell corpus-contract failure, within the SAME
 # absolute reservation. Original evidence and budget are never reset.
 test -f "$ROOT/benchmarks/modal-targeted-evidence/budget.json"
-export DEST="$ROOT/benchmarks/modal-targeted-evidence/attempt2"
+export DEST="$ROOT/benchmarks/modal-targeted-evidence/attempt3"
 mkdir "$DEST" # refuse reuse
 unshare --user --map-root-user --mount bash <<'INNER'
 set -euo pipefail

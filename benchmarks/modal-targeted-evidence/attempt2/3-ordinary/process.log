@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-modal-comparison/benchmarks/modal_targeted_run.py", line 125, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pymc-generator-modal-comparison/benchmarks/modal_targeted_run.py", line 98, in main
+    assert not DataGenerator.validate_corpus(corpus)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
