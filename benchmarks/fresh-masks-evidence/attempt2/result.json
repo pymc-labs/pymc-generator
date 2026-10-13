@@ -1,0 +1,144 @@
+{
+  "status": "pass",
+  "primary_candidates": 24,
+  "accepted": 24,
+  "rejected": 0,
+  "counts": [
+    [
+      9,
+      10
+    ],
+    [
+      10,
+      5
+    ],
+    [
+      6,
+      4
+    ],
+    [
+      8,
+      7
+    ],
+    [
+      6,
+      6
+    ],
+    [
+      9,
+      8
+    ],
+    [
+      8,
+      10
+    ],
+    [
+      8,
+      3
+    ],
+    [
+      9,
+      5
+    ],
+    [
+      5,
+      3
+    ],
+    [
+      10,
+      3
+    ],
+    [
+      13,
+      3
+    ],
+    [
+      5,
+      9
+    ],
+    [
+      13,
+      7
+    ],
+    [
+      13,
+      8
+    ],
+    [
+      6,
+      3
+    ],
+    [
+      11,
+      6
+    ],
+    [
+      14,
+      3
+    ],
+    [
+      13,
+      6
+    ],
+    [
+      7,
+      6
+    ],
+    [
+      5,
+      3
+    ],
+    [
+      10,
+      4
+    ],
+    [
+      5,
+      3
+    ],
+    [
+      13,
+      8
+    ]
+  ],
+  "unique_count_pairs": 21,
+  "build_count": 1,
+  "compile_count": 1,
+  "same_compiled_function_for_all_primary_replay_and_diagnostic_calls": true,
+  "preparation_s": 0.020450833020731807,
+  "generation_s": 20.304569012951106,
+  "stages": {
+    "build_s": 1.7612005050759763,
+    "compile_s": 13.689514042111114,
+    "draw_s": 4.748171996092424,
+    "invariants_and_hash_s": 0.013697412563487887,
+    "acceptance_and_packing_s": 0.011804511304944754,
+    "normalization_and_diagnostics_s": 0.06961080199107528
+  },
+  "validation_s": 0.07014037808403373,
+  "persistence_s": 0.02806869987398386,
+  "readback_s": 0.08561158692464232,
+  "primary_pipeline_s": 20.508840510854498,
+  "reversed_replay_s": 4.642762430012226,
+  "masking_checks": [
+    {
+      "case": "independent_additive",
+      "max_abs_posthoc_vs_causal_sales_difference": 0.030282463892230993,
+      "max_abs_difference_after_baseline_noise_adjustment": 3.552713678800501e-15,
+      "masked_vs_isolated_graph_pass": true
+    },
+    {
+      "case": "causal_interactions",
+      "max_abs_posthoc_vs_causal_sales_difference": 0.11321566318866694,
+      "max_abs_difference_after_baseline_noise_adjustment": 0.11021168554644056,
+      "masked_vs_isolated_graph_pass": true
+    }
+  ],
+  "archive_sha256": "68e7b244d556ef336017737d228aeb54bc4c96958057c6d27c19f0e3afebd259",
+  "memory": {
+    "self_peak_rss_kib": 406372,
+    "scope_peak_bytes": 470798336
+  },
+  "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+  "elapsed_s": 26.669867446180433
+}
