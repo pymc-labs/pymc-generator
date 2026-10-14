@@ -1,0 +1,3 @@
+Running as unit: wayfinder-200k-ue-cvm-fastrun-oracle.scope; invocation ID: 0c0cafa7b62341e6b723b3f6f50faa56
+/tmp/pymc-generator-200k-study/.venv/lib/python3.13/site-packages/pytensor/tensor/rewriting/elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
+  warn(

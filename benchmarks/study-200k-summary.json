@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-10-14T04:32:11.860184+00:00",
+  "generated_utc": "2026-10-14T04:47:46.469484+00:00",
   "ledger": {
     "start_epoch": 1791933087,
     "deadline_epoch": 1791954687,
@@ -845,9 +845,14 @@
         ],
         "start_epoch": 1791951564.0478048,
         "reserved_s": 1700,
-        "status": "reserved",
+        "status": "partial_or_failed",
         "cache": "cold isolated tmpfs",
-        "unit": "wayfinder-200k-ue-cvm-fastrun-oracle"
+        "unit": "wayfinder-200k-ue-cvm-fastrun-oracle",
+        "exit_code": -15,
+        "elapsed_s": 1361.8105058670044,
+        "finished_epoch": 1791952925.8583126,
+        "artifact_bytes": 786589,
+        "scratch_final_bytes": 11563714
       }
     ]
   },
@@ -871,7 +876,9 @@
         1.0
       ],
       "primary_elapsed_s": 196.25377581105568,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 193.8730817460455,
@@ -1078,6 +1085,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 77268.81030147756,
       "projected_200k_corpus_bytes": 7730900000.0
@@ -1101,7 +1109,9 @@
         1.0
       ],
       "primary_elapsed_s": 207.26215114584193,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 203.50420464761555,
@@ -1308,6 +1318,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 196068.1194447819,
       "projected_200k_corpus_bytes": 7591400000.0
@@ -1331,7 +1342,9 @@
         1.0
       ],
       "primary_elapsed_s": 196.0643621319905,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 193.99101889994927,
@@ -1538,6 +1551,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 75260.66081642476,
       "projected_200k_corpus_bytes": 7730900000.0
@@ -1561,7 +1575,9 @@
         1.0
       ],
       "primary_elapsed_s": 201.96420583711006,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 199.41008163592778,
@@ -1768,6 +1784,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 97336.62406893424,
       "projected_200k_corpus_bytes": 7591400000.0
@@ -1791,7 +1808,9 @@
         1.0
       ],
       "primary_elapsed_s": 325.42802764102817,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 320.96517276903614,
@@ -1997,6 +2016,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "three global IDs",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 156726.38286375394,
       "projected_200k_corpus_bytes": 7562800000.0
@@ -2020,7 +2040,9 @@
         1.0
       ],
       "primary_elapsed_s": 334.48624397884123,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 329.7197915511206,
@@ -2229,6 +2251,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "three global IDs",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 171635.76756640244,
       "projected_200k_corpus_bytes": 7562800000.0
@@ -2252,7 +2275,9 @@
         1.0
       ],
       "primary_elapsed_s": 163.4265201711096,
+      "planning_s": null,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 162.191987257218,
@@ -2487,6 +2512,7 @@
       ],
       "rng_work": null,
       "rebuild_pass": false,
+      "rebuild_scope": "no separate rebuild; fresh model per candidate and in-model replay",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 80626.06807354442,
       "projected_200k_corpus_bytes": 7720900000.0
@@ -2587,7 +2613,9 @@
         "scope_peak_bytes": 1357320192,
         "scope_current_bytes": 1357291520,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "uil-oracle-cached",
@@ -2679,7 +2707,9 @@
         "scope_peak_bytes": 1315684352,
         "scope_current_bytes": 1315655680,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "o-reference",
@@ -2706,7 +2736,9 @@
         0.9953692946481009
       ],
       "primary_elapsed_s": 411.67581082927063,
+      "planning_s": 1.1497798678465188,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 296.79760728776455,
@@ -3359,6 +3391,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three global IDs",
       "projected_candidates_200k": 201773.39901477832,
       "projected_200k_local_verified_s": 10309.703624849615,
       "projected_200k_corpus_bytes": 5101159802.955665
@@ -3394,7 +3427,9 @@
         0.995821759926687
       ],
       "primary_elapsed_s": 411.31312461476773,
+      "planning_s": 0.6562253213487566,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 336.97430395241827,
@@ -4051,6 +4086,7 @@
         }
       ],
       "rebuild_pass": false,
+      "rebuild_scope": "three global IDs",
       "projected_candidates_200k": 201972.3865877712,
       "projected_200k_local_verified_s": 10218.780300794646,
       "projected_200k_corpus_bytes": 5218393688.362919
@@ -4204,7 +4240,9 @@
         0.9960361131531201
       ],
       "primary_elapsed_s": 422.0571495532058,
+      "planning_s": 1.1207853108644485,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 313.84342365618795,
@@ -4861,6 +4899,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three global IDs",
       "projected_candidates_200k": 201574.8031496063,
       "projected_200k_local_verified_s": 10074.737012930515,
       "projected_200k_corpus_bytes": 5113945275.590551
@@ -4908,7 +4947,9 @@
         1.0
       ],
       "primary_elapsed_s": 335.0202739373781,
+      "planning_s": 0.014520952943712473,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 330.47603408433497,
@@ -5820,6 +5861,7 @@
         }
       ],
       "rebuild_pass": false,
+      "rebuild_scope": "no separate rebuild; fresh model per candidate and in-model replay",
       "projected_candidates_200k": 200000.0,
       "projected_200k_local_verified_s": 104470.13213031553,
       "projected_200k_corpus_bytes": 5748600000.0
@@ -5846,7 +5888,9 @@
         "scope_peak_bytes": 637243392,
         "scope_current_bytes": 636194816,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "se-primary",
@@ -5867,7 +5911,9 @@
         0.9960361131531201
       ],
       "primary_elapsed_s": 1154.114429009147,
+      "planning_s": 1.7402177918702364,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 1041.3819396914914,
@@ -13179,6 +13225,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 201574.8031496063,
       "projected_200k_local_verified_s": 13882.619901248107,
       "projected_200k_corpus_bytes": 5102119094.488189
@@ -13205,7 +13252,9 @@
         "scope_peak_bytes": 629284864,
         "scope_current_bytes": 629280768,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "sl-oracle-gap-5-1",
@@ -13229,7 +13278,9 @@
         "scope_peak_bytes": 587538432,
         "scope_current_bytes": 585441280,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "sl-oracle-gap-5-2",
@@ -13253,7 +13304,9 @@
         "scope_peak_bytes": 736055296,
         "scope_current_bytes": 735006720,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "sl-primary",
@@ -13274,7 +13327,9 @@
         0.9960361131531201
       ],
       "primary_elapsed_s": 1030.804264623206,
+      "planning_s": 1.6858206088654697,
       "cleanup_and_progress_s": null,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": null,
       "projected_200k_local_including_cleanup_s": null,
       "setup_s": 930.2254225430079,
@@ -20586,6 +20641,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 201574.8031496063,
       "projected_200k_local_verified_s": 12291.210445332887,
       "projected_200k_corpus_bytes": 5102119094.488189
@@ -20680,7 +20736,9 @@
         "scope_peak_bytes": 1260335104,
         "scope_current_bytes": 1260306432,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "si-primary",
@@ -20693,6 +20751,23 @@
       "result_status": "pass",
       "elapsed_s": 1133.4317750930786,
       "source_directory": "/tmp/pymc-generator-200k-study/benchmarks/study-200k-evidence/si-primary/sources",
+      "resident_200k_forecast": {
+        "formula": "build_compile_s + model_release_once_s + target_accepted / resident_cleanup_inclusive_accepted_per_s + measured_planning_s * projected_candidates / measured_candidates",
+        "target_accepted": 200000,
+        "build_compile_s": 978.4542776835151,
+        "model_release_once_s": 23.471106379758567,
+        "resident_cohort": 1,
+        "resident_cleanup_inclusive_accepted_per_s": 12.80340954842639,
+        "measured_planning_s": 1.1412201360799372,
+        "measured_candidates": 1024,
+        "measured_accepted": 1017,
+        "projected_candidates": 201376.59783677483,
+        "projected_planning_s": 224.42873865878806,
+        "total_without_planning_s": 16622.76444599745,
+        "total_with_planning_s": 16847.19318465624,
+        "total_with_planning_hours": 4.679775884626733,
+        "caveat": "Conditional local same-batching forecast; resident last cohort, release once, planning linear. No production/parallel/storage claim; representative rebuild scope and root limitations remain."
+      },
       "candidates": 1024,
       "accepted": 1017,
       "rejected": 7,
@@ -20701,7 +20776,9 @@
         0.9966848330340337
       ],
       "primary_elapsed_s": 1088.7604519422166,
+      "planning_s": 1.1412201360799372,
       "cleanup_and_progress_s": 38.374807061161846,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": 9.850014195659641,
       "projected_200k_local_including_cleanup_s": 21282.99354303087,
       "setup_s": 978.4542776835151,
@@ -29459,6 +29536,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 201376.59783677483,
       "projected_200k_local_verified_s": 13736.32548773847,
       "projected_200k_corpus_bytes": 5113189577.187807
@@ -29553,7 +29631,9 @@
         "scope_peak_bytes": 1288441856,
         "scope_current_bytes": 1288413184,
         "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
-      }
+      },
+      "oracle_output_count": 24,
+      "oracle_scope": "CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract."
     },
     {
       "name": "sil-primary",
@@ -29566,6 +29646,23 @@
       "result_status": "pass",
       "elapsed_s": 1277.8301384449005,
       "source_directory": "/tmp/pymc-generator-200k-study/benchmarks/study-200k-evidence/sil-primary/sources",
+      "resident_200k_forecast": {
+        "formula": "build_compile_s + model_release_once_s + target_accepted / resident_cleanup_inclusive_accepted_per_s + measured_planning_s * projected_candidates / measured_candidates",
+        "target_accepted": 200000,
+        "build_compile_s": 986.9633692121133,
+        "model_release_once_s": 22.640978124924004,
+        "resident_cohort": 1,
+        "resident_cleanup_inclusive_accepted_per_s": 20.46942165466186,
+        "measured_planning_s": 7.034316937904805,
+        "measured_candidates": 4096,
+        "measured_accepted": 4070,
+        "projected_candidates": 201277.6412776413,
+        "projected_planning_s": 345.6666799953221,
+        "total_without_planning_s": 10780.276102220278,
+        "total_with_planning_s": 11125.9427822156,
+        "total_with_planning_hours": 3.0905396617265555,
+        "caveat": "Conditional local same-batching forecast; resident last cohort, release once, planning linear. No production/parallel/storage claim; representative rebuild scope and root limitations remain."
+      },
       "candidates": 4096,
       "accepted": 4070,
       "rejected": 26,
@@ -29574,7 +29671,9 @@
         0.995664464253912
       ],
       "primary_elapsed_s": 1232.2372585139237,
+      "planning_s": 7.034316937904805,
       "cleanup_and_progress_s": 36.91924432711676,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": 18.124296874485765,
       "projected_200k_local_including_cleanup_s": 12021.874206583538,
       "setup_s": 986.9633692121133,
@@ -38332,6 +38431,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three IDs within one family",
       "projected_candidates_200k": 201277.6412776413,
       "projected_200k_local_verified_s": 10207.66072613554,
       "projected_200k_corpus_bytes": 4942742162.162162
@@ -38347,6 +38447,23 @@
       "result_status": "pass",
       "elapsed_s": 661.0336887836456,
       "source_directory": "/tmp/pymc-generator-200k-study/benchmarks/study-200k-evidence/uil-independent-repeat/sources",
+      "resident_200k_forecast": {
+        "formula": "build_compile_s + model_release_once_s + target_accepted / resident_cleanup_inclusive_accepted_per_s + measured_planning_s * projected_candidates / measured_candidates",
+        "target_accepted": 200000,
+        "build_compile_s": 309.1943239690736,
+        "model_release_once_s": 0.13905497593805194,
+        "resident_cohort": 1,
+        "resident_cleanup_inclusive_accepted_per_s": 16.36531792416454,
+        "measured_planning_s": 5.032538342289627,
+        "measured_candidates": 4096,
+        "measured_accepted": 4067,
+        "projected_candidates": 201426.11261372018,
+        "projected_planning_s": 247.48160030930055,
+        "total_without_planning_s": 12530.299749826569,
+        "total_with_planning_s": 12777.781350135869,
+        "total_with_planning_hours": 3.5493837083710744,
+        "caveat": "Conditional local same-batching forecast; resident last cohort, release once, planning linear. No production/parallel/storage claim; representative rebuild scope and root limitations remain."
+      },
       "candidates": 4096,
       "accepted": 4067,
       "rejected": 29,
@@ -38355,7 +38472,9 @@
         0.9950658216075239
       ],
       "primary_elapsed_s": 573.1122583239339,
+      "planning_s": 5.032538342289627,
       "cleanup_and_progress_s": 45.93256071768701,
+      "mechanical_whole_cohort_projection_note": "Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.",
       "steady_including_cleanup_accepted_per_s": 16.577283748387973,
       "projected_200k_local_including_cleanup_s": 12373.897024099222,
       "setup_s": 309.1943239690736,
@@ -39020,6 +39139,7 @@
         }
       ],
       "rebuild_pass": true,
+      "rebuild_scope": "three global IDs",
       "projected_candidates_200k": 201426.11261372018,
       "projected_200k_local_verified_s": 10115.103775135021,
       "projected_200k_corpus_bytes": 4945664076.715023
@@ -39032,8 +39152,8 @@
     },
     {
       "name": "ue-cvm-fastrun-oracle",
-      "envelope_status": "reserved",
-      "exit_code": null,
+      "envelope_status": "partial_or_failed",
+      "exit_code": -15,
       "result": "incomplete"
     }
   ],

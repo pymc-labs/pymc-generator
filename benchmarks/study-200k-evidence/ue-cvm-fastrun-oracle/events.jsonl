@@ -1,0 +1,2 @@
+{"event": "start", "elapsed_s": 0.14835016010329127, "preparation_s": 0.09803366614505649, "memory": {"peak_rss_kib": 298684, "scope_peak_bytes": 458383360, "scope_current_bytes": 457826304, "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"}}
+{"event": "build", "elapsed_s": 6.884123363997787, "key": "universal", "seconds": 6.5997514999471605}

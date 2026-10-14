@@ -843,9 +843,14 @@
       ],
       "start_epoch": 1791951564.0478048,
       "reserved_s": 1700,
-      "status": "reserved",
+      "status": "partial_or_failed",
       "cache": "cold isolated tmpfs",
-      "unit": "wayfinder-200k-ue-cvm-fastrun-oracle"
+      "unit": "wayfinder-200k-ue-cvm-fastrun-oracle",
+      "exit_code": -15,
+      "elapsed_s": 1361.8105058670044,
+      "finished_epoch": 1791952925.8583126,
+      "artifact_bytes": 786589,
+      "scratch_final_bytes": 11563714
     }
   ]
 }

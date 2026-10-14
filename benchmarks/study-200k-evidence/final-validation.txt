@@ -1,0 +1,9 @@
+2026-10-14 04:45:38 UTC
+PASS: resident_200k_forecast reproduces sil-primary 3.0905396617265555 hours and uil-independent-repeat 3.5493837083710744 hours (including planning).
+PASS: 863 manifest files checked for exact byte length and SHA-256, 376516594 bytes at validation (before adding this record); below 2GiB.
+PASS: ledger contains no reserved/active attempts.
+PASS: Python syntax compilation for study_200k_methods.py, packing.py, run.py, supervise.py, report.py via external PYTHONPYCACHEPREFIX.
+PASS: bash -n for study_200k_envelope.sh and study_200k_plan.sh.
+PASS: git diff --check.
+Scientific correctness evidence is in the bounded per-attempt results/progress, not implied by these static/report checks. No new scientific runs were performed for final reporting corrections.
+Final manifest is regenerated after adding this record and checked again before publication.

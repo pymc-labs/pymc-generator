@@ -19,7 +19,7 @@ All scientific runs use `study_200k_envelope.sh`: local CPU0, CPU quota one core
 - `study-200k-evidence/ledger.json`: immutable charged attempts, caps, exits and artifact sizes.
 - Each attempt: source snapshots, command/environment, cgroup accounting, process/events logs, raw instructions/input arrays, and results/progress where available.
 - Completed primary: full compressed corpora, array/dtype/shape/byte readback equality, corpus validation, actual flag metadata, rejected-candidate reasons, raw candidate hashes, compilation/graph/RNG-work records.
-- `rebuild.json`: **separate post-primary** new-model reverse-order raw-byte replay; excluded from primary timing/RSS.
+- `rebuild.json`: **separate post-primary** new-model reverse-order raw-byte replay; excluded from primary timing/RSS. Specialized methods check three IDs within **one family**, not independent rebuilds for all 18 families; universal methods check three global IDs.
 - `study-200k-summary.json`: read-only aggregation, descriptive forecasts and component/family counts; regenerate with `python benchmarks/study_200k_report.py`.
 - `study-200k-evidence/artifact-manifest.json`: SHA-256/byte manifest of retained evidence.
 - `study-200k-audit.md`: implementation audit and corrections.
@@ -38,7 +38,7 @@ The envelope contains the study's immutable timestamps; after this window it int
 
 > 🧠 **From Hindsight memory (Conventions and patterns)** — Project tests distinguish numerical oracle tolerance (1e-10) from same-environment seeded dtype/shape/raw-byte identity, and prefer executable contracts. The checks below implement that distinction; their pass status comes from the current retained evidence, not memory.
 
-Ordinary agreement uses common primitive values and checks every scientific corpus field at rtol/atol 1e-10. All 18 family combinations receive random/off/on/mixed cases and dormant-edge poisoning. Primaries additionally check finite values, decomposition, active tails, refreshed in-graph flag metadata, acceptance/normalization, complete serialization/readback, demanded compiled RNG progression and exact reseeding. Archive-based oracle completion proves deterministic physics/masks but explicitly reports **no fresh RNG progression**; fresh primary diagnostics cover actual RNG work.
+Ordinary agreement uses common primitive values and checks the **24 core outputs in `CORPUS_NAMES`** at rtol/atol 1e-10. This is not an independent oracle for every persisted trajectory/parameter/report field. The separate full-corpus validator and complete array/dtype/shape/raw-byte serialization readback cover the persisted archive (79 arrays in completed examples), but validation/lossless readback should not be confused with independent numerical truth comparison for every such field. All 18 family combinations receive random/off/on/mixed cases and dormant-edge poisoning. Primaries additionally check finite values, decomposition, active tails, refreshed in-graph flag metadata, acceptance/normalization, complete serialization/readback, demanded compiled RNG progression and exact reseeding. Archive-based oracle completion proves deterministic physics/masks but explicitly reports **no fresh RNG progression**; fresh primary diagnostics cover actual RNG work.
 
 Seed audit: root 631227, logical IDs 0–199999, **zero worlds generated**. Draft uint32 world seeds: 199998 unique, 2 colliding pairs. Actual downstream 30-bit PyMC compile seeds: 199979 unique, 21 colliding pairs, including the first two. These are shared-seed/stream risks, **not duplicate complete-world claims**: differing families/structures can yield distinct complete outputs.
 
@@ -46,7 +46,7 @@ Research `logical_id` uses `reseed_rngs(ordered_rngs,[root_seed,logical_candidat
 
 > 🧠 **From Hindsight memory (Key decisions and rationale)** — Default seeded-stream compatibility is an established project contract. The full-entropy path is an explicit research opt-in; production RNG code remains unchanged.
 
-Raw-world replay is invariant to the tested reordered scheduling/new-model rebuild. **Normalized corpus bytes and train/validation labels are not promised invariant under changed persistence shard boundaries**: the existing split repair can depend on shards.
+Raw-world replay is invariant to the **tested representative** reordered scheduling/new-model rebuild: three global IDs for universal, three IDs of one family for specialized. All-family specialized independent rebuild was not tested. **Normalized corpus bytes and train/validation labels are not promised invariant under changed persistence shard boundaries**: the existing split repair can depend on shards.
 
 ## Interpretation boundaries and failure accounting
 
@@ -83,13 +83,30 @@ All rows below use CVM with fast-compile rewrites. Rates are accepted worlds/s; 
 
 Specialized external eager/lazy matched **all 1024 raw candidate hashes and all corpus archive hashes**, with identical accepted IDs. Specialized internal eager/lazy matched the first 1024 raw candidate hashes despite changed persistence granularity. Thus neither requires a physics change for the observed results. External eager/lazy timing comparisons share policy and artifacts; the internal cleanup-rate gain **cannot** be attributed solely to laziness because chunk size/cohort size changed.
 
-Universal lazy's independent-root/process repeat has two2048-ID cohorts: 20.59/20.20 pipeline and16.80/16.37 cleanup-inclusive accepted/s. Specialized internal lazy's corresponding two2048-ID cohorts: 19.22/24.89 pipeline and16.26/20.47 cleanup-inclusive; first-per-family release cost is22.64s (once for18 transitions), explaining most of its first-cohort penalty. Its 4096-candidate actual primary wall time is1232.24s (including setup/diagnostics/logging), versus573.11s for universal's independent repeat. This is the important small-corpus versus amortized-large-corpus tradeoff.
+Universal lazy's independent-root/process repeat has two 2048-ID cohorts: 20.59/20.20 pipeline and 16.80/16.37 cleanup-inclusive accepted/s. Specialized internal lazy's corresponding two 2048-ID cohorts: 19.22/24.89 pipeline and 16.26/20.47 cleanup-inclusive; first-per-family release cost is 22.64s (once for 18 transitions), explaining most of its first-cohort penalty. Its 4096-candidate actual primary wall time is 1232.24s (including setup/diagnostics/logging), versus 573.11s for universal's independent repeat. This is the important small-corpus versus amortized-large-corpus tradeoff.
 
 ### Conditional 200k accepted-world projection
 
-Under the **measured chunk128 local pipeline**, amortizing setup/release once and using resident cleanup-inclusive rates, specialized internal lazy projects about**3.00h** for200k accepted worlds on one CPU versus about**3.48h** for universal internal lazy (roughly29min difference). These are conditional forecasts, not a demonstrated200k service, and exclude disk/upload/parallelism. Do not substitute the faster pipeline-only rate while silently omitting cleanup. The report/summary retains full wall time so different deployment accounting can be recomputed.
+Under the **measured chunk128 local pipeline**, amortizing setup/release once and using resident cleanup-inclusive rates, specialized internal lazy projects about **3.09h** for 200k accepted worlds on one CPU versus about **3.55h** for universal internal lazy, **including linearly extrapolated measured planning** (roughly 28min difference). Without planning those same formulas give 3.00h/3.48h; planning must not silently disappear. These are conditional forecasts, not a demonstrated 200k service, and exclude disk/upload/parallelism. Do not substitute the faster pipeline-only rate while silently omitting cleanup. The report/summary retains full wall time so different deployment accounting can be recomputed.
 
-Specialized internal lazy acceptance is4070/4096 (99.365%; Wilson95%99.071–99.566%), giving about201278 candidates for200k accepted at that empirical rate. Corpus-only compressed size projects about**4.60GiB**; sidecars, caches and real storage costs are additional. The8-world ordinary reference's334.64s complete service demonstrates fresh compile domination; its roughly97-day linear extrapolation is **not** a validated long-run ordinary forecast.
+Reproducible resident formula, exposed separately as `resident_200k_forecast` in the machine-readable summary:
+
+`build_compile_s + model_release_once_s + 200000 / resident_cleanup_inclusive_accepted_per_s + planning_s * projected_candidates / measured_candidates`
+
+| Input/result | Specialized internal lazy | Universal internal lazy repeat |
+|---|---:|---:|
+| build+compile s |986.963369|309.194324|
+| model release once s |22.640978|0.139055|
+| resident accepted/s, including cleanup |20.469421655|16.365317924|
+| measured planning s / candidates |7.034316938 / 4096|5.032538342 / 4096|
+| projected candidates |201277.641278|201426.112614|
+| projected planning s |345.666680|247.481600|
+| total s, including planning |11125.942782|12777.781350|
+| total hours, including planning |3.090539662|3.549383708|
+
+Planning is extrapolated per required candidate (about 5.76/4.12 minutes), not treated as a fixed one-off. The older descriptive `projected_200k_local_verified_s` fields mechanically use whole-cohort means, repeatedly include first-family release cost and exclude planning; they are retained with an explicit note and **are not the resident formula behind these Markdown forecasts**.
+
+Specialized internal lazy acceptance is 4070/4096 (99.365%; Wilson 95% 99.071–99.566%), giving about 201278 candidates for 200k accepted at that empirical rate. Corpus-only compressed size projects about **4.60GiB**; sidecars, caches and real storage costs are additional. The 8-world ordinary reference's 334.64s complete service demonstrates fresh compile domination; its roughly 97-day linear extrapolation is **not** a validated long-run ordinary forecast.
 
 Actual specialized-lazy family counts (candidate→accepted; saturation rows in documented order, adstock columns none/geometric/Weibull):
 
@@ -109,8 +126,27 @@ No quota/top-up was used. Channel-weighted component fractions before→after ac
 
 ### Recommendation boundary
 
-Pending the final explicit-CVM FAST_RUN diagnostic, the **best completely measured cleanup-inclusive large-corpus contender is specialized internal lazy with chunk128**. Universal internal lazy is the simpler, cheaper-startup fallback with independent-root repetition. Specialized external lazy has a faster resident pipeline but lacks a completed chunk128 cleanup-inclusive repeat within its approach budget; calling it the complete end-to-end winner would be inference, not measurement. The parent should select the method and RNG migration policy only after considering these caveats; #58 remains open.
+Among the **completed, directly cleanup-instrumented CVM measurements at the tested batching**, the leading large-corpus contender is specialized internal lazy with chunk128. This is not a statistically proven universal winner: the specialized result uses one root/process, whereas only universal lazy has alternate-root/process repetition; batching also differs across some comparisons. Universal internal lazy is the simpler, cheaper-startup fallback with independent-root repetition. Specialized external lazy has a faster resident pipeline but lacks a completed chunk128 cleanup-inclusive repeat within its approach budget; calling it the complete end-to-end winner would be inference, not measurement. The parent should select the method and RNG migration policy only after considering these caveats; #58 remains open.
 
 ### FAST_RUN dispatch failure and remaining diagnostic
 
-The first named `FAST_RUN` attempt actually recorded **NumbaLinker**, not CVM. Its first runtime JIT hit the hard2GiB OOM limit (systemd journal retained); this is **not evidence that CVM FAST_RUN failed**. Research selection now explicitly constructs CVM with fast-run rewrites. That separate bounded diagnostic is still pending at this report snapshot; any incomplete/failed result must remain explicit, and no primary may run before its full18-case oracle passes.
+The first named `FAST_RUN` attempt actually recorded **NumbaLinker**, not CVM. Its first runtime JIT hit the hard2GiB OOM limit (systemd journal retained); this is **not evidence that CVM FAST_RUN failed**. Research selection now explicitly constructs CVM with fast-run rewrites. Its separate cold-compile diagnostic was deliberately stopped after more than 22 minutes without a completed compile or oracle pair, to finalize reporting within the unchanged deadline. No FAST_RUN primary was launched; no FAST_RUN warm-throughput/correctness recommendation is supported. This is a bounded compile-cost limitation, not an established numerical failure. Charged explicit-CVM attempt time was 1361.810506s, exit -15; no compile completion, oracle pair or result. Stop rationale and scope cleanup are retained in its `termination-note.md` and journal.
+
+## Final resource/accounting summary
+
+No scientific worker or compiler remains active. Execution stopped before the 04:56:27 scientific cutoff and final publication is before the 05:11:27 deadline. Charged wrapper times include failures, deliberate stops and teardown:
+
+| Approach | cumulative seconds |
+|---|---:|
+| ordinary |1120.928445|
+| specialized external eager |2485.632314|
+| specialized external lazy |2472.226387|
+| specialized internal eager |2332.862232|
+| specialized internal lazy |2516.536030|
+| universal internal eager |**2700.309621 (0.310s overrun disclosed)**|
+| universal internal lazy |2415.599108|
+| universal external eager (seed audit + backend diagnostics) |1677.425183|
+
+Retained evidence is approximately 359MiB, below the 2GiB ceiling; the exact byte count and SHA-256 files are in the final manifest. The Numba backend attempt hit the enforced 2GiB OOM limit, rather than silently using extra memory. Completed scientific workers retained one compatible model and stayed under their recorded memory envelope. No paid execution, production edits, PR/merge, issue closure, or production method-selection decision was made.
+
+Final validation: syntax compilation for all research Python modules, shell syntax checks, whitespace/diff checks, executable scientific evidence described above, summary forecast reproduction and full manifest verification. Binary `.npz` evidence is explicitly retained despite the repository's generic ignore rule. Infrastructure lock inode remains local/untracked; `.venv` symlink is preserved and uncommitted.

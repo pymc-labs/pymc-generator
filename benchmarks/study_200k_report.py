@@ -31,8 +31,27 @@ for entry in ledger['attempts']:
         verified=r.get('verified_service_s',r['accepted_persisted_service_s']+r['readback_and_check_s'])
         steady=verified-setup
         cleanup=r.get('post_chunk_cleanup_and_progress_s')
+        resident=cohorts[-1] if cohorts else {}
+        resident_rate=resident.get('steady_including_cleanup_accepted_per_s')
+        release=r['stage_times'].get('model_release_s')
+        planning=r.get('planning_s')
+        if resident_rate and release is not None and planning is not None and a:
+            required_candidates=200000*n/a
+            projected_planning=planning*required_candidates/n
+            fixed=setup+release
+            row['resident_200k_forecast']=dict(
+                formula='build_compile_s + model_release_once_s + target_accepted / resident_cleanup_inclusive_accepted_per_s + measured_planning_s * projected_candidates / measured_candidates',
+                target_accepted=200000,build_compile_s=setup,model_release_once_s=release,
+                resident_cohort=resident['cohort'],resident_cleanup_inclusive_accepted_per_s=resident_rate,
+                measured_planning_s=planning,measured_candidates=n,measured_accepted=a,
+                projected_candidates=required_candidates,projected_planning_s=projected_planning,
+                total_without_planning_s=fixed+200000/resident_rate,
+                total_with_planning_s=fixed+200000/resident_rate+projected_planning,
+                total_with_planning_hours=(fixed+200000/resident_rate+projected_planning)/3600,
+                caveat='Conditional local same-batching forecast; resident last cohort, release once, planning linear. No production/parallel/storage claim; representative rebuild scope and root limitations remain.')
         row.update(candidates=n,accepted=a,rejected=n-a,acceptance_wilson95=[center-half,center+half],
-            primary_elapsed_s=r.get('elapsed_s'),cleanup_and_progress_s=cleanup,
+            primary_elapsed_s=r.get('elapsed_s'),planning_s=planning,cleanup_and_progress_s=cleanup,
+            mechanical_whole_cohort_projection_note='Legacy descriptive fields below use whole-cohort mean, repeat first-family release costs and exclude planning; use resident_200k_forecast for the Markdown resident forecast.',
             steady_including_cleanup_accepted_per_s=a/(steady+cleanup) if cleanup is not None else None,
             projected_200k_local_including_cleanup_s=setup+(steady+cleanup)*200000/a if cleanup is not None and a else None,
             setup_s=setup,model_release_s=r['stage_times'].get('model_release_s'),
@@ -43,13 +62,15 @@ for entry in ledger['attempts']:
             accepted_input_counts=r['accepted_input_counts'],accepted_component_counts=r['accepted_component_counts'],
             rejection_reasons=r.get('rejection_reasons'),compile_records=r['compile_records'],rng_work=r.get('rng_work'),
             rebuild_pass=(folder/'rebuild.json').exists() and json.loads((folder/'rebuild.json').read_text())['status']=='pass',
+            rebuild_scope='three IDs within one family' if 'specialized' in entry['approach'] else 'three global IDs' if entry['approach']!='ordinary' else 'no separate rebuild; fresh model per candidate and in-model replay',
             projected_candidates_200k=200000*n/a if a else None,
             # Conditional local forecast only: once-per-bank setup plus this
             # measured steady pipeline; excludes disk/upload/parallel effects.
             projected_200k_local_verified_s=setup+steady*200000/a if a else None,
             projected_200k_corpus_bytes=bytes_*200000/a if a else None)
     elif r.get('phase')=='oracle':
-        row.update(families=[x['family'] for x in r['families']],oracle_memory=r['memory'])
+        row.update(families=[x['family'] for x in r['families']],oracle_memory=r['memory'],
+            oracle_output_count=24,oracle_scope='CORPUS_NAMES core outputs only; not every persisted trajectory/parameter field. Full corpus validation/readback is a separate primary contract.')
     elif r.get('phase')=='seed_audit': row['seed_audit']=r
     rows.append(row)
 summary=dict(generated_utc=dt.datetime.now(dt.timezone.utc).isoformat(),ledger=ledger,attempts=rows,
