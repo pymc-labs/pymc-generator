@@ -154,32 +154,61 @@ def test_generation_failures_keep_their_traceback(monkeypatch, tmp_path):
 
 @pytest.fixture
 def served(monkeypatch, tmp_path):
-    """``serve`` up to the point it would start the server: the app's arguments."""
+    """``serve`` up to the point it would start the server.
+
+    Returns the store roots it opened, ``create_app``'s keyword arguments and
+    ``uvicorn.run``'s keyword arguments.
+    """
     import uvicorn
 
-    from live_dashboard import web
+    from live_dashboard import storage, web
 
-    created = []
+    roots, created, started = [], [], []
+    monkeypatch.setattr(storage, "DirectoryStore", lambda root, **kwargs: roots.append(root))
     monkeypatch.setattr(web, "create_app", lambda collector, **kwargs: created.append(kwargs))
-    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: None)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.append(kwargs))
     credentials = tmp_path / "auth.json"
     _hash(monkeypatch, credentials)
 
     def serve(*extra, credentials_file=credentials):
         main(["serve", "--data-dir", str(tmp_path), "--credentials", str(credentials_file), *extra])
-        return created
+        return roots, created, started
 
     return serve
 
 
-def test_serve_starts_the_app_with_the_requested_intervals(served):
-    (kwargs,) = served("--poll-seconds", "30")
+def test_serve_follows_the_data_dir_on_loopback_with_the_requested_intervals(served, tmp_path):
+    roots, (kwargs,), (server,) = served("--poll-seconds", "30")
+    assert roots == [tmp_path]
     assert (kwargs["poll_seconds"], kwargs["active_poll_seconds"]) == (30.0, 3.0)
     assert kwargs["credentials"].verify("demo", PASSWORD)
+    # Plain HTTP: only the local machine may reach it unless the operator chooses otherwise.
+    assert server == {"host": "127.0.0.1", "port": 8000}
 
 
 @pytest.mark.parametrize(
-    "extra", [("--poll-seconds", "0.5"), ("--poll-seconds", "301"), ("--port", "70000")]
+    ("extra", "accepted"),
+    [
+        (("--poll-seconds", "1"), {"poll_seconds": 1.0}),
+        (("--poll-seconds", "300"), {"poll_seconds": 300.0}),
+        (("--port", "0"), {"port": 0}),
+        (("--port", "65535"), {"port": 65535}),
+    ],
+)
+def test_serve_accepts_the_range_limits(served, extra, accepted):
+    _, (kwargs,), (server,) = served(*extra)
+    assert accepted.items() <= {**kwargs, **server}.items()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--poll-seconds", "0.5"),
+        ("--poll-seconds", "301"),
+        ("--port", "70000"),
+        ("--port", "-1"),
+        ("--port", "http"),
+    ],
 )
 def test_serve_refuses_unusable_settings(served, extra):
     with pytest.raises(SystemExit) as exit_info:

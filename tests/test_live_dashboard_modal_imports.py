@@ -236,6 +236,32 @@ def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, t
         assert kwargs["expected_run_id"] == "demo-0123456789ab"
         refused = module.generate_run("demo", "small", 5, 2, 7, None)
         assert refused["status"] == "refused" and len(calls) == 1, refused
+        # A worker timeout must not reach the launcher as the builtin TimeoutError, which
+        # FunctionCall.get raises while a call is still running.
+        def time_out(store, request, **kwargs):
+            import errno
+            raise OSError(errno.ETIMEDOUT, "volume commit timed out")  # builds a TimeoutError
+        generation.run_generation_or_refuse = time_out
+        try:
+            module.generate_run("demo", "small", 6, 2, 7, None)
+        except TimeoutError:
+            raise AssertionError("a worker timeout escaped as TimeoutError")
+        except RuntimeError as error:
+            assert "timed out" in str(error), error
+            assert isinstance(error.__cause__, TimeoutError), error.__cause__
+        else:
+            raise AssertionError("the worker timeout was swallowed")
+        # The worker's store publishes through the Volume (commit) and sees it (reload).
+        hooks = []
+        module.volume.commit = lambda: hooks.append("commit")
+        module.volume.reload = lambda: hooks.append("reload")
+        def touches_the_store(store, request, **kwargs):
+            store.commit()
+            store.refresh()
+            return {"status": "finished"}
+        generation.run_generation_or_refuse = touches_the_store
+        module.generate_run("demo", "small", 6, 2, 7, None)
+        assert hooks == ["commit", "reload"], hooks
         """
     )
     result = subprocess.run(
@@ -311,6 +337,7 @@ LAUNCH_SCENARIOS = textwrap.dedent(
             self.outcomes, self.volume, self.waits, self.gets = outcomes, volume, waits, 0
         def get(self, timeout=None):
             self.gets += 1
+            assert self.gets <= 1000, "the launcher spins"
             if self.volume is not None:
                 self.volume.polls += 1
             if self.waits and timeout:
@@ -328,6 +355,14 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         else:
             raise AssertionError(f"no SystemExit containing {text!r}")
 
+    import contextlib, io
+
+    def output_of(function, *args, **kwargs):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            function(*args, **kwargs)
+        return buffer.getvalue()
+
     case = __CASE__
     if case == "manifest-after-staging":
         # Poll 1 shows only a staging file (not a manifest); poll 2 shows run.json.
@@ -338,10 +373,48 @@ LAUNCH_SCENARIOS = textwrap.dedent(
     elif case == "refused-new-run":
         exits_with("worker refused the run: r", module._await_start,
                    Call([{"status": "refused", "reason": "r"}]), Volume([None]), RUN)
-    elif case == "never-visible-is-bounded":
-        call = Call([], Volume([None]), waits=False)  # get() returns at once: must not spin
-        module._await_start(call, call.volume, RUN)
-        assert call.gets <= module.START_WAIT_S / module._POLL_S + 1, call.gets
+    elif case in ("gives-up-after-the-window", "gives-up-after-the-window-fast-get"):
+        # A get() that returns at once must still be paced: no spin, same window.
+        call = Call([], Volume([None]), waits=case == "gives-up-after-the-window")
+        out = output_of(module._await_start, call, call.volume, RUN)
+        assert call.gets == module.START_WAIT_S // module._POLL_S, call.gets
+        assert clock.now == module.START_WAIT_S, clock.now
+        assert f"has not started run {RUN} yet" in out, out
+    elif case == "worker-error-propagates":
+        call = Call([RuntimeError("TimeoutError: [Errno 60] timed out")], Volume([None]))
+        try:
+            module._await_start(call, call.volume, RUN)
+        except RuntimeError as error:
+            assert "Errno 60" in str(error), error
+        else:
+            raise AssertionError("a worker failure was taken for a running call")
+        assert call.gets == 1, call.gets
+    elif case == "finished-before-manifest":
+        call = Call([{"status": "finished", "run_id": RUN}], Volume([None]))
+        out = output_of(module._await_start, call, call.volume, RUN)
+        assert call.gets == 1 and "'finished'" in out and "not started" not in out, out
+    elif case == "existing-run-needs-resume":
+        run_id = module.RunRequest("demo", "small", 6, 2, 7).run_id
+        module._published_runs = lambda volume: {run_id}
+        exits_with("already exists; pass --resume", module.main,
+                   label="demo", preset="small", worlds=6, worlds_per_task=2, seed=7)
+        assert [kind for kind, _ in modal.LOOKUPS] == ["Volume"], modal.LOOKUPS
+    elif case == "resume-of-missing-run":
+        module._published_runs = lambda volume: set()
+        exits_with("does not exist", module.main, label="demo", preset="small", worlds=6,
+                   worlds_per_task=2, seed=7, resume=True)
+        assert [kind for kind, _ in modal.LOOKUPS] == ["Volume"], modal.LOOKUPS
+    elif case == "resume-does-not-wait":
+        run_id = module.RunRequest("demo", "small", 6, 2, 7).run_id
+        module._published_runs = lambda volume: {run_id}
+        waited = []
+        module._await_start = lambda *args: waited.append(args)
+        module.main(label="demo", preset="small", worlds=6, worlds_per_task=2, seed=7, resume=True)
+        assert waited == [], waited
+    elif case == "demo-bounds":
+        exits_with("invalid request: at most 400 worlds", module.main, label="demo", worlds=402,
+                   worlds_per_task=2)
+        assert modal.LOOKUPS == [], modal.LOOKUPS
     elif case == "invalid-request":
         exits_with("invalid request:", module.main, label="demo", worlds=5, worlds_per_task=2)
         assert modal.LOOKUPS == [], modal.LOOKUPS
@@ -369,10 +442,17 @@ LAUNCH_SCENARIOS = textwrap.dedent(
     [
         "manifest-after-staging",
         "refused-new-run",
-        "never-visible-is-bounded",
         "invalid-request",
         "new-run-waits-for-start",
         "wait-reports-refusal",
+        "gives-up-after-the-window",
+        "gives-up-after-the-window-fast-get",
+        "worker-error-propagates",
+        "finished-before-manifest",
+        "existing-run-needs-resume",
+        "resume-of-missing-run",
+        "resume-does-not-wait",
+        "demo-bounds",
     ],
 )
 def test_launcher_waits_for_the_run_or_reports_why_not(stub_dir, case):
@@ -403,6 +483,7 @@ def test_dashboard_entry_reloads_the_volume_and_uses_the_configured_intervals(st
         import live_dashboard.web as web
         reloads = []
         module.dashboard_volume.reload = lambda: reloads.append(1)
+        module.MOUNT = "publications"  # relative to the test's own working directory
         created = []
         web.create_app = lambda collector, **kwargs: created.append((collector, kwargs))
         module.dashboard()
