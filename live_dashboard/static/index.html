@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PyMC Generator live dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="__PLOTLY_PATH__" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <h1>PyMC Generator live dashboard</h1>
+    <label class="run-picker">Run
+      <select id="run-select" disabled></select>
+    </label>
+    <span id="refresh-age" class="muted">store not refreshed yet</span>
+  </header>
+
+  <p id="store-message" class="message warning" hidden></p>
+  <p id="run-message" class="message" hidden></p>
+  <p id="collection-issues" class="message" hidden></p>
+
+  <main id="run-content" hidden>
+    <p id="run-info" class="muted"></p>
+
+    <section class="cards">
+      <article class="card" data-card="worlds">
+        <h2 class="card-title"></h2>
+        <p class="card-value"></p>
+        <p class="card-subtitle muted"></p>
+      </article>
+      <article class="card" data-card="speed">
+        <h2 class="card-title"></h2>
+        <p class="card-value"></p>
+        <p class="card-subtitle muted"></p>
+      </article>
+    </section>
+
+    <section class="grid">
+      <figure class="panel" data-figure="speed">
+        <figcaption class="panel-title"></figcaption>
+        <div class="plot"></div>
+        <p class="empty muted" hidden></p>
+        <p class="note muted" hidden></p>
+      </figure>
+      <figure class="panel" data-figure="cumulative">
+        <figcaption class="panel-title"></figcaption>
+        <div class="plot"></div>
+        <p class="empty muted" hidden></p>
+        <p class="note muted" hidden></p>
+      </figure>
+      <figure class="panel" data-figure="impact">
+        <figcaption class="panel-title"></figcaption>
+        <div class="plot"></div>
+        <p class="empty muted" hidden></p>
+        <p class="note muted" hidden></p>
+      </figure>
+      <figure class="panel" data-figure="composition">
+        <figcaption class="panel-title"></figcaption>
+        <div class="plot"></div>
+        <p class="empty muted" hidden></p>
+        <p class="note muted" hidden></p>
+      </figure>
+    </section>
+
+    <footer class="status">
+      <p id="status-line"></p>
+      <details id="problems" hidden>
+        <summary></summary>
+        <ul></ul>
+      </details>
+    </footer>
+  </main>
+</body>
+</html>

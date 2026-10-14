@@ -56,6 +56,16 @@ dev = [
     "ruff==0.15.18",
     "mypy",
     "pre-commit",
+    # The live dashboard's tests drive its web app (FastAPI's TestClient needs httpx).
+    "fastapi>=0.115",
+    "plotly>=6",
+    "httpx",
+]
+dashboard = [
+    # Live generation dashboard (live_dashboard/): web app, figures and a local server.
+    "fastapi>=0.115",
+    "plotly>=6",
+    "uvicorn>=0.30",
 ]
 docs = [
     # MkDocs Material site with docstring-driven API pages (mkdocstrings),
@@ -109,6 +119,11 @@ python_functions = ["test_*"]
 addopts = ["--strict-markers", "-ra"]
 markers = [
     "slow: marks tests as slow (>5s; large-N statistical). Gated by --runslow.",
+]
+filterwarnings = [
+    # Starlette 1.8's TestClient (live dashboard web tests) warns that its httpx
+    # transport is deprecated; the locked httpx is the supported test transport here.
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated:UserWarning",
 ]
 
 [tool.ruff]
