@@ -1,0 +1,22 @@
+Running as unit: wayfinder-200k-seed-audit.scope; invocation ID: a3a9cd51da8547d8a2852a2c704cb027
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 505, in <module>
+    try: main()
+         ~~~~^^
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 440, in main
+    cfg=config(args.candidates,args.seed)
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 95, in config
+    cfg = make_scm_prior(trajectories='composable', n_treatments=15, n_covariates=10,
+        n_latent=1, n_time_steps=104, n_cells=n, draws_per_cell=1, seed=seed,
+    ...<3 lines>...
+        saturation_family_probs={k:1/len(SATURATION_FAMILY_KEYS) for k in SATURATION_FAMILY_KEYS},
+        carryover_family_probs={k:1/len(CARRYOVER_FAMILY_KEYS) for k in CARRYOVER_FAMILY_KEYS})
+  File "/tmp/pymc-generator-200k-study/pymc_generator/presets.py", line 492, in make_scm_prior
+    cfg.validate()
+    ~~~~~~~~~~~~^^
+  File "/tmp/pymc-generator-200k-study/pymc_generator/sampler.py", line 932, in validate
+    _integer(name, getattr(self, name), minimum=minimum)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pymc-generator-200k-study/pymc_generator/sampler.py", line 905, in _integer
+    raise ValueError(f"{name} must be an integer >= {minimum}, got {value!r}")
+ValueError: n_cells must be an integer >= 2, got 1

@@ -1,0 +1,6 @@
+SKIP existing ui-logical-primary
+SKIP existing uil-primary
+SKIP existing se-primary
+SKIP existing sl-primary
+SKIP existing si-primary
+{"name": "sil-oracle", "approach": "specialized_internal_lazy", "args": ["specialized_internal_lazy", "--mode", "cvm_compile", "--phase", "oracle", "--all-pairs", "--primitives-from", "benchmarks/study-200k-evidence/ui-oracle-cached"], "start_epoch": 1791947543.2345424, "reserved_s": 1200, "status": "pass", "cache": "cold isolated tmpfs", "unit": "wayfinder-200k-sil-oracle", "exit_code": 0, "elapsed_s": 1029.9903531074524, "finished_epoch": 1791948573.2248964, "artifact_bytes": 716581, "scratch_final_bytes": 5301757}

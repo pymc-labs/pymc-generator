@@ -1,0 +1,5 @@
+SKIP existing ui-logical-primary
+SKIP existing uil-primary
+SKIP existing se-primary
+SKIP existing sl-primary
+{"name": "si-primary", "approach": "specialized_internal_eager", "args": ["specialized_internal_eager", "--mode", "cvm_compile", "--phase", "primary", "--candidates", "1024", "--seed-contract", "logical_id", "--rebuild-check"], "start_epoch": 1791946409.4878428, "reserved_s": 1495, "status": "pass", "cache": "cold isolated tmpfs", "unit": "wayfinder-200k-si-primary", "exit_code": 0, "elapsed_s": 1133.4317750930786, "finished_epoch": 1791947542.9196203, "artifact_bytes": 28123546, "scratch_final_bytes": 68726756}

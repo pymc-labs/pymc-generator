@@ -1,0 +1,4 @@
+Oct 14 07:01:52 oma-pc systemd[1479]: Started [systemd-run] /usr/bin/timeout --signal=TERM --kill-after=3s 1700 taskset -c 0 /tmp/pymc-generator-200k-study/.venv/bin/python benchmarks/study_200k_run.py universal_external_eager --mode fast_run --phase oracle --candidates 18 --all-pairs --seed-contract logical_id.
+Oct 14 07:06:40 oma-pc systemd[1479]: wayfinder-200k-ue-fastrun-oracle.scope: The kernel OOM killer killed some processes in this unit.
+Oct 14 07:06:40 oma-pc systemd[1479]: wayfinder-200k-ue-fastrun-oracle.scope: Failed with result 'oom-kill'.
+Oct 14 07:06:40 oma-pc systemd[1479]: wayfinder-200k-ue-fastrun-oracle.scope: Consumed 4min 15.138s CPU time over 4min 47.804s wall clock time, 2G memory peak.

@@ -1,0 +1,5 @@
+SKIP existing ui-logical-primary
+SKIP existing uil-primary
+{"name": "o-rng-probe", "approach": "ordinary", "args": ["ordinary", "--mode", "cvm_compile", "--phase", "rng_probe", "--candidates", "2", "--seed-contract", "logical_id"], "start_epoch": 1791941386.0784764, "reserved_s": 360, "status": "pass", "cache": "cold isolated tmpfs", "unit": "wayfinder-200k-o-rng-probe", "exit_code": 0, "elapsed_s": 143.2644362449646, "finished_epoch": 1791941529.3429139, "artifact_bytes": 168281, "scratch_final_bytes": 20034783}
+SKIP se-primary: oracle incomplete/failed
+{"name": "sl-oracle", "approach": "specialized_external_lazy", "args": ["specialized_external_lazy", "--mode", "cvm_compile", "--phase", "oracle", "--all-pairs", "--primitives-from", "benchmarks/study-200k-evidence/ui-oracle-cached"], "start_epoch": 1791941529.5474768, "reserved_s": 1000, "status": "partial_or_failed", "cache": "cold isolated tmpfs", "unit": "wayfinder-200k-sl-oracle", "exit_code": 124, "elapsed_s": 1001.0586471557617, "finished_epoch": 1791942530.6061249, "artifact_bytes": 655155, "scratch_final_bytes": 5010032}

@@ -7,6 +7,7 @@ optionally RVs; response-family instructions remain external, shared per world.
 from __future__ import annotations
 
 import dataclasses
+from collections import Counter
 import gc
 import time
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ import pytensor.tensor as pt
 from pytensor.compile.mode import Mode
 from pytensor.ifelse import ifelse
 from pytensor.link.vm import VMLinker
+from pytensor.tensor.random.op import RandomVariable
 
 from comparison_methods import Adapter, active_result, clone_function, digest, widths
 from pymc_generator import symbolic_graph as sg, trajectories as tr
@@ -77,7 +79,28 @@ def build_template(cfg, inputs, weeks, *, specialized, internal, lazy):
         for name in ('activity_column', 'level_shift_column', 'treatment_multiplier_column'):
             setattr(trajectory_proxy, name, clone_function(getattr(tr, name), **replacements))
         bindings.update(trajectories=trajectory_proxy, _flagged=flagged)
-    graph = clone_function(sg.build_symbolic_graph, **bindings)
+    scientific_graph = clone_function(sg.build_symbolic_graph, **bindings)
+    # Do not rely solely on the planner zero-padding adjacency. Active masks
+    # must remove dormant edges before parameters, reference scales and noise
+    # scaling, as well as before trajectory propagation.
+    def masked_edges(g, active):
+        c,z,d = (active[f'active_{r}'] for r in ('treatment','covariate','latent'))
+        return {**g, 'g_cy':g['g_cy']*c, 'g_zy':g['g_zy']*z, 'g_dy':g['g_dy']*d,
+            'g_dc':g['g_dc']*d[:,None]*c[None,:],
+            'g_dz':g['g_dz']*d[:,None]*z[None,:],
+            'g_zc':g['g_zc']*z[:,None]*c[None,:],
+            'g_cc':g['g_cc']*c[:,None]*c[None,:],
+            'g_zz':g['g_zz']*z[:,None]*z[None,:]}
+    def active_data():
+        return {f'active_{r}':pm.modelcontext(None)[f'active_{r}'] for r in ('treatment','covariate','latent')}
+    original_parameters=parameters
+    def parameters(*args, **kwargs):
+        kwargs['g']=masked_edges(kwargs['g'],active_data())
+        return original_parameters(*args,**kwargs)
+    def graph(g,*args,**kwargs):
+        return scientific_graph(masked_edges(g,kwargs['active']),*args,**kwargs)
+    def outcome_scale(cfg,rw,g_cy,beta):
+        return wt._apply_outcome_std_scale(cfg,rw,g_cy*active_data()['active_treatment'],beta)
     pm_proxy = pm
     if internal:
         probs = flag_probabilities(cfg)
@@ -90,7 +113,8 @@ def build_template(cfg, inputs, weeks, *, specialized, internal, lazy):
         pm_proxy = SimpleNamespace(**{name: getattr(pm, name) for name in dir(pm)})
         pm_proxy.Data = data
     builder = clone_function(wt.build_world_model_template, _scm_params=parameters,
-                             build_symbolic_graph=graph, pm=pm_proxy)
+                             build_symbolic_graph=graph, pm=pm_proxy,
+                             _apply_outcome_std_scale=outcome_scale)
     return builder(cfg, inputs, weeks)
 
 
@@ -111,13 +135,14 @@ def crop(value, counts):
 
 
 class StudyAdapter(Adapter):
-    def __init__(self, approach, cfg, event, mode_name='fast_compile'):
+    def __init__(self, approach, cfg, event, mode_name='fast_compile', seed_contract='legacy'):
         super().__init__(approach, cfg, [], event)
         self.internal = 'internal' in approach
         self.lazy = 'lazy' in approach
         self.specialized = approach.startswith('specialized')
         self.ordinary = approach == 'ordinary'
         self.mode_name = mode_name
+        self.seed_contract = seed_contract
         self.logical_ids = []
         self.current_key = None
         self.all_primary_hashes = {}
@@ -127,11 +152,19 @@ class StudyAdapter(Adapter):
         self.build_records = []
         self.pending_flags = {}
         self.last_raw = None
+        self.rng_work_records = []
+        self.rng_checked_keys = set()
 
     def set_chunk(self, cells, ids):
         self.cells, self.logical_ids = cells, ids
         self.accepted_ids = []
         self.retained_cell_ids = []
+        self.rejection_reasons = Counter()
+        self.rejection_records = []
+
+    def reject(self, reason):
+        self.rejection_reasons[reason] += 1
+        self.rejection_records.append(dict(candidate_id=self.logical_ids[self.current_cell],reason=reason))
 
     def build(self, g, cfg, structural, weeks, *, prior_cond=None):
         assert prior_cond is None
@@ -140,8 +173,10 @@ class StudyAdapter(Adapter):
         key = self.logical_ids[self.current_cell] if self.ordinary else (pair if self.specialized else 'universal')
         if key != self.current_key:
             # Worker lifecycle: one model, not an unbounded family/count cache.
+            released=time.perf_counter()
             self.models.clear(); self.draws.clear(); self.last_raw = None
             gc.collect()
+            self.times['model_release_s'] += time.perf_counter()-released
             self.current_key = key
         if not self.models:
             started = time.perf_counter()
@@ -164,22 +199,36 @@ class StudyAdapter(Adapter):
         if names not in self.draws:
             start = time.perf_counter()
             if self.mode_name == 'fast_run':
-                mode = 'FAST_RUN'
+                # Do not inherit ~/.pytensorrc/config.linker through the named
+                # FAST_RUN alias (observed to resolve to Numba and OOM here).
+                mode = Mode(linker=VMLinker(use_cloop=True,lazy=True),optimizer='fast_run')
             else:
-                # Explicitly enable laziness for BOTH variants: selection, not
-                # a linker mismatch, should explain their timing difference.
-                mode = Mode(linker=VMLinker(use_cloop=False, lazy=True), optimizer='fast_compile')
+                # Same rewrite selection; CVM is an independently measured
+                # execution option, not a scientific model change.
+                mode = Mode(linker=VMLinker(use_cloop=self.mode_name=='cvm_compile', lazy=True), optimizer='fast_compile')
             inputs = () if self.ordinary else (wt.TEMPLATE_STRUCTURE_INPUT_NAMES if self.internal else None)
             fn = wt.compile_template_draw_fn(self.models[0][0], names, input_names=inputs, mode=mode)
             self.draws[names] = fn
             elapsed = time.perf_counter()-start
             self.times['compile_s'] += elapsed
             record = dict(key=self.current_key, seconds=elapsed, nodes=len(fn.fn.maker.fgraph.apply_nodes),
-                          rngs=len(fn.ordered_rngs), input_names=fn.input_names, output_names=fn.out_names)
+                          rngs=len(fn.ordered_rngs), input_names=fn.input_names, output_names=fn.out_names,
+                          linker=type(fn.fn.maker.mode.linker).__name__,vm=type(fn.fn.vm).__name__,mode=self.mode_name)
             self.compile_records.append(record)
             self.event('compile', **record)
         self.last_names = tuple(requested)
         return self.draws[names]
+
+    def sample(self, fn, cell):
+        if self.seed_contract=='legacy':
+            return fn(cell.template_inputs,seed=cell.seed,draws=1)
+        # Explicit research opt-in. Keep the library's established default
+        # unchanged, but do not truncate logical world identities to 30 bits.
+        from pymc.pytensorf import reseed_rngs
+        ident=self.logical_ids[self.current_cell]
+        reseed_rngs(fn.ordered_rngs,[self.cfg.seed,ident,300])
+        values=fn.fn(*(np.asarray(cell.template_inputs[n]) for n in fn.input_names))
+        return {n:np.asarray(v)[None] for n,v in zip(fn.out_names,values)}
 
     def draw(self, names, draws, *, diagnostic=False):
         assert draws == 1
@@ -187,7 +236,7 @@ class StudyAdapter(Adapter):
         ident = self.logical_ids[self.current_cell]
         fn = self.compile(names)
         start = time.perf_counter()
-        raw = fn(cell.template_inputs, seed=cell.seed, draws=draws)
+        raw = self.sample(fn,cell)
         elapsed = time.perf_counter()-start
         self.times['replay_s' if diagnostic else 'draw_s'] += elapsed
         self.executions.append(dict(candidate_id=ident, seconds=elapsed, diagnostic=diagnostic))
@@ -217,4 +266,33 @@ class StudyAdapter(Adapter):
         else:
             self.all_primary_hashes[ident] = h
         self.times['invariants_and_hash_s'] += time.perf_counter()-check_start
+        if diagnostic and self.current_key not in self.rng_checked_keys:
+            import json
+            from comparison_preflight import plain
+            start=time.perf_counter()
+            states=lambda:[json.dumps(plain(r.get_value().bit_generator.state),sort_keys=True) for r in fn.ordered_rngs]
+            before=states()
+            inputs=tuple(np.asarray(cell.template_inputs[n]) for n in fn.input_names)
+            one=fn.fn(*inputs); middle=states(); two=fn.fn(*inputs); after=states()
+            changed=[a!=b and b!=c for a,b,c in zip(before,middle,after)]
+            random_nodes=[n for n in fn.fn.maker.fgraph.toposort() if isinstance(n.op,RandomVariable)]
+            executed_roots={n.inputs[0] for n in random_nodes}
+            active=[i for i,r in enumerate(fn.ordered_rngs) if r in executed_roots]
+            pruned=[i for i,r in enumerate(fn.ordered_rngs) if r not in executed_roots]
+            # Ordinary constant-zero edges can prune an original RV (delta_dy
+            # was observed). It remains in the pre-optimization seed roster but
+            # has no compiled sampler; do not confuse that with missing updates.
+            assert active and all(changed[i] for i in active), 'compiled RNG did not advance'
+            assert any(not np.array_equal(a,b) for a,b in zip(one,two)), 'unseeded outputs did not progress'
+            original=self.models[0][0].free_RVs
+            self.rng_work_records.append(dict(key=self.current_key,candidate_id=ident,
+                compiled_rng_updates_total=len(active),pruned_seed_slots=[dict(index=i,
+                    names=[rv.name for rv in original if rv.owner and rv.owner.inputs[0] is fn.ordered_rngs[i]]) for i in pruned],
+                requested_outputs=fn.out_names,rng_updates_total=len(changed),rng_updates_advanced=sum(changed),
+                scope='actual primary output contract, two unseeded calls after exact replay',
+                random_nodes=[dict(name=n.outputs[-1].name,op=type(n.op).__name__) for n in random_nodes]))
+            self.event('rng_work',**self.rng_work_records[-1])
+            self.rng_checked_keys.add(self.current_key)
+            self.times['rng_work_diagnostic_s'] += time.perf_counter()-start
+            del one,two
         return value

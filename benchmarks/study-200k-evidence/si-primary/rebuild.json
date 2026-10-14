@@ -1,0 +1,28 @@
+{
+  "status": "pass",
+  "ids": [
+    1023,
+    971,
+    954
+  ],
+  "reversed_scheduling": true,
+  "new_model": true,
+  "exact_raw_bytes": true,
+  "stage_times": {
+    "model_release_s": 1.593926039058715,
+    "build_s": 2.676991144195199,
+    "compile_s": 32.81618008483201,
+    "draw_s": 0.0,
+    "invariants_and_hash_s": 0.0031034257262945175,
+    "acceptance_and_packing_s": 0.0,
+    "normalization_and_diagnostics_s": 0.0,
+    "replay_s": 0.06357277370989323,
+    "rng_work_diagnostic_s": 0.0
+  },
+  "memory": {
+    "peak_rss_kib": 612552,
+    "scope_peak_bytes": 794009600,
+    "scope_current_bytes": 683515904,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  }
+}

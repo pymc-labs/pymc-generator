@@ -1,0 +1,920 @@
+[
+  {
+    "family": [
+      0,
+      0
+    ],
+    "candidate_id": 10,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 1.9290125052862095e-15,
+      "covariates": 1.3322676295501878e-14,
+      "treatments": 9.947598300641403e-14,
+      "baseline": 4.440892098500626e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 4.6629367034256575e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 4.440892098500626e-15,
+      "indirect_effects": 1.7763568394002505e-15,
+      "indirect_effects_by_source": 8.326672684688674e-16,
+      "outcome": 5.329070518200751e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 572692,
+      "scope_peak_bytes": 766697472,
+      "scope_current_bytes": 766697472,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      0,
+      1
+    ],
+    "candidate_id": 14,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 8.215650382226158e-15,
+      "covariates": 1.0380585280245214e-14,
+      "treatments": 3.375077994860476e-14,
+      "baseline": 8.881784197001252e-16,
+      "baseline_intrinsic": 0.0,
+      "covariate_contribution": 6.453171330633722e-16,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 8.326672684688674e-17,
+      "indirect_effects": 6.661338147750939e-16,
+      "indirect_effects_by_source": 7.771561172376096e-16,
+      "outcome": 8.881784197001252e-16,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 584172,
+      "scope_peak_bytes": 780836864,
+      "scope_current_bytes": 780836864,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      0,
+      2
+    ],
+    "candidate_id": 60,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 9.43689570931383e-16,
+      "covariates": 1.509903313490213e-14,
+      "treatments": 5.1514348342607263e-14,
+      "baseline": 1.7763568394002505e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 2.886579864025407e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 3.9968028886505635e-15,
+      "indirect_effects": 1.7763568394002505e-15,
+      "indirect_effects_by_source": 1.6427831317500363e-15,
+      "outcome": 5.329070518200751e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 712652,
+      "scope_peak_bytes": 914554880,
+      "scope_current_bytes": 912244736,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      1,
+      0
+    ],
+    "candidate_id": 12,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 3.219646771412954e-15,
+      "covariates": 1.532107773982716e-14,
+      "treatments": 4.440892098500626e-15,
+      "baseline": 5.329070518200751e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 5.329070518200751e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 3.885780586188048e-16,
+      "indirect_effects": 3.885780586188048e-16,
+      "indirect_effects_by_source": 3.469446951953614e-16,
+      "outcome": 5.329070518200751e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 722464,
+      "scope_peak_bytes": 926855168,
+      "scope_current_bytes": 926855168,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      1,
+      1
+    ],
+    "candidate_id": 6,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 4.884981308350689e-15,
+      "covariates": 4.440892098500626e-15,
+      "treatments": 1.7763568394002505e-14,
+      "baseline": 1.7763568394002505e-15,
+      "baseline_intrinsic": 0.0,
+      "covariate_contribution": 8.881784197001252e-16,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 5.551115123125783e-16,
+      "indirect_effects": 2.220446049250313e-16,
+      "indirect_effects_by_source": 2.220446049250313e-16,
+      "outcome": 1.7763568394002505e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 743812,
+      "scope_peak_bytes": 950734848,
+      "scope_current_bytes": 950734848,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      1,
+      2
+    ],
+    "candidate_id": 18,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 1.582067810090848e-15,
+      "covariates": 4.107825191113079e-15,
+      "treatments": 1.7763568394002505e-14,
+      "baseline": 1.7763568394002505e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 1.2490009027033011e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 1.1102230246251565e-15,
+      "indirect_effects": 1.0547118733938987e-15,
+      "indirect_effects_by_source": 6.730727086790012e-16,
+      "outcome": 3.552713678800501e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 761220,
+      "scope_peak_bytes": 970387456,
+      "scope_current_bytes": 970387456,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      2,
+      0
+    ],
+    "candidate_id": 8,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 8.215650382226158e-15,
+      "covariates": 2.3092638912203256e-14,
+      "treatments": 2.1316282072803006e-14,
+      "baseline": 1.7763568394002505e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 3.552713678800501e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 1.4432899320127035e-15,
+      "indirect_effects": 4.996003610813204e-16,
+      "indirect_effects_by_source": 5.551115123125783e-16,
+      "outcome": 1.7763568394002505e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 771972,
+      "scope_peak_bytes": 983224320,
+      "scope_current_bytes": 983224320,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      2,
+      1
+    ],
+    "candidate_id": 19,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 1.3322676295501878e-15,
+      "covariates": 8.43769498715119e-15,
+      "treatments": 1.554312234475219e-14,
+      "baseline": 3.1086244689504383e-15,
+      "baseline_intrinsic": 4.440892098500626e-16,
+      "covariate_contribution": 2.220446049250313e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 2.7755575615628914e-15,
+      "indirect_effects": 8.881784197001252e-16,
+      "indirect_effects_by_source": 8.118505867571457e-16,
+      "outcome": 2.6645352591003757e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 788868,
+      "scope_peak_bytes": 1002086400,
+      "scope_current_bytes": 1002086400,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      2,
+      2
+    ],
+    "candidate_id": 1,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 4.218847493575595e-15,
+      "covariates": 3.907985046680551e-14,
+      "treatments": 3.6415315207705135e-14,
+      "baseline": 4.440892098500626e-15,
+      "baseline_intrinsic": 1.7763568394002505e-15,
+      "covariate_contribution": 6.217248937900877e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 3.941291737419306e-15,
+      "indirect_effects": 5.551115123125783e-16,
+      "indirect_effects_by_source": 6.453171330633722e-16,
+      "outcome": 3.552713678800501e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 909308,
+      "scope_peak_bytes": 1127043072,
+      "scope_current_bytes": 1124896768,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      3,
+      0
+    ],
+    "candidate_id": 7,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 3.9968028886505635e-15,
+      "covariates": 8.881784197001252e-15,
+      "treatments": 1.1368683772161603e-13,
+      "baseline": 5.329070518200751e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 3.4416913763379853e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 1.2212453270876722e-15,
+      "indirect_effects": 7.771561172376096e-16,
+      "indirect_effects_by_source": 4.0245584642661925e-16,
+      "outcome": 3.552713678800501e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 913620,
+      "scope_peak_bytes": 1133809664,
+      "scope_current_bytes": 1133809664,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      3,
+      1
+    ],
+    "candidate_id": 17,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 4.440892098500626e-16,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 4.524158825347513e-15,
+      "covariates": 7.993605777301127e-15,
+      "treatments": 1.9539925233402755e-14,
+      "baseline": 1.7763568394002505e-15,
+      "baseline_intrinsic": 4.440892098500626e-16,
+      "covariate_contribution": 1.7763568394002505e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 1.1102230246251565e-16,
+      "indirect_effects": 1.1102230246251565e-16,
+      "indirect_effects_by_source": 0.0,
+      "outcome": 1.7763568394002505e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 925308,
+      "scope_peak_bytes": 1147441152,
+      "scope_current_bytes": 1147441152,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      3,
+      2
+    ],
+    "candidate_id": 15,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 8.881784197001252e-15,
+      "covariates": 1.1102230246251565e-14,
+      "treatments": 1.865174681370263e-14,
+      "baseline": 1.7763568394002505e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 1.124100812432971e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 5.551115123125783e-16,
+      "indirect_effects": 4.996003610813204e-16,
+      "indirect_effects_by_source": 5.464378949326942e-16,
+      "outcome": 1.7763568394002505e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 947068,
+      "scope_peak_bytes": 1171017728,
+      "scope_current_bytes": 1171017728,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      4,
+      0
+    ],
+    "candidate_id": 9,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 7.327471962526033e-15,
+      "covariates": 9.103828801926284e-15,
+      "treatments": 2.842170943040401e-14,
+      "baseline": 3.552713678800501e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 2.275957200481571e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 8.881784197001252e-16,
+      "indirect_effects": 5.551115123125783e-16,
+      "indirect_effects_by_source": 4.163336342344337e-16,
+      "outcome": 3.552713678800501e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 956284,
+      "scope_peak_bytes": 1182269440,
+      "scope_current_bytes": 1182269440,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      4,
+      1
+    ],
+    "candidate_id": 29,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 3.774758283725532e-15,
+      "covariates": 5.773159728050814e-14,
+      "treatments": 6.750155989720952e-14,
+      "baseline": 9.769962616701378e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 9.43689570931383e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 8.326672684688674e-15,
+      "indirect_effects": 1.7763568394002505e-15,
+      "indirect_effects_by_source": 1.4432899320127035e-15,
+      "outcome": 1.7763568394002505e-14,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 980860,
+      "scope_peak_bytes": 1209249792,
+      "scope_current_bytes": 1209249792,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      4,
+      2
+    ],
+    "candidate_id": 3,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 2.220446049250313e-15,
+      "covariates": 1.6209256159527285e-14,
+      "treatments": 2.3092638912203256e-14,
+      "baseline": 3.1086244689504383e-15,
+      "baseline_intrinsic": 0.0,
+      "covariate_contribution": 2.456368441983159e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 1.1102230246251565e-15,
+      "indirect_effects": 7.771561172376096e-16,
+      "indirect_effects_by_source": 5.967448757360216e-16,
+      "outcome": 2.6645352591003757e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 997500,
+      "scope_peak_bytes": 1228361728,
+      "scope_current_bytes": 1228361728,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      5,
+      0
+    ],
+    "candidate_id": 0,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 5.773159728050814e-15,
+      "covariates": 2.6645352591003757e-14,
+      "treatments": 1.4210854715202004e-14,
+      "baseline": 8.881784197001252e-16,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 8.881784197001252e-16,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 1.9984014443252818e-15,
+      "indirect_effects": 7.771561172376096e-16,
+      "indirect_effects_by_source": 7.494005416219807e-16,
+      "outcome": 3.552713678800501e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 1015152,
+      "scope_peak_bytes": 1248276480,
+      "scope_current_bytes": 1248276480,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      5,
+      1
+    ],
+    "candidate_id": 2,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 3.164135620181696e-15,
+      "covariates": 2.886579864025407e-15,
+      "treatments": 1.6431300764452317e-14,
+      "baseline": 2.6645352591003757e-15,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 1.0269562977782698e-15,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 4.440892098500626e-15,
+      "indirect_effects": 9.43689570931383e-16,
+      "indirect_effects_by_source": 8.326672684688674e-16,
+      "outcome": 5.329070518200751e-15,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 1033840,
+      "scope_peak_bytes": 1269071872,
+      "scope_current_bytes": 1269071872,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  },
+  {
+    "family": [
+      5,
+      2
+    ],
+    "candidate_id": 24,
+    "fields": 24,
+    "max_abs_errors": {
+      "saturation_scale": 0.0,
+      "param_treatment_level": 0.0,
+      "param_carryover_alpha": 0.0,
+      "param_weibull_lam": 0.0,
+      "param_weibull_k": 0.0,
+      "treatment_shock_mask": 0.0,
+      "treatment_shock_index": 0.0,
+      "treatment_shock_start": 0.0,
+      "treatment_shock_length": 0.0,
+      "treatment_shock_level_multiplier": 0.0,
+      "treatment_shock_level": 0.0,
+      "latent_unobserved": 4.218847493575595e-15,
+      "covariates": 3.2862601528904634e-14,
+      "treatments": 1.509903313490213e-14,
+      "baseline": 8.881784197001252e-16,
+      "baseline_intrinsic": 8.881784197001252e-16,
+      "covariate_contribution": 2.220446049250313e-16,
+      "latent_unobserved_contribution": 0.0,
+      "contributions": 6.661338147750939e-16,
+      "indirect_effects": 1.6653345369377348e-16,
+      "indirect_effects_by_source": 1.7759231585312563e-16,
+      "outcome": 8.881784197001252e-16,
+      "confounding_strength": 0.0,
+      "outcome_noise": 0.0
+    },
+    "flag_cases": [
+      "off",
+      "on",
+      "mixed"
+    ],
+    "dormant_edge_poison": true,
+    "rng_progression": false,
+    "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+    "rng_updates_advanced": 0,
+    "rng_updates_total": 0,
+    "reseed_replay": false,
+    "memory": {
+      "peak_rss_kib": 1051248,
+      "scope_peak_bytes": 1288441856,
+      "scope_current_bytes": 1288441856,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    }
+  }
+]

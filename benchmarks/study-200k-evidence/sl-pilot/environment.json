@@ -1,0 +1,351 @@
+{
+  "args": {
+    "approach": "specialized_external_lazy",
+    "mode": "fast_compile",
+    "phase": "pilot",
+    "candidates": 2,
+    "chunk": 32,
+    "seed": 631227,
+    "pair": "0,0"
+  },
+  "config": {
+    "n_time_steps": 104,
+    "n_treatments": 15,
+    "n_covariates": 10,
+    "n_latent": 1,
+    "n_cells": 2,
+    "draws_per_cell": 1,
+    "val_cell_frac": 0.2,
+    "query_frac": 0.25,
+    "p_long_horizon": 0.5,
+    "treatment_cv_floor": 0.08,
+    "l_max": 8,
+    "seed": 631227,
+    "n_treatments_active_range": [
+      5,
+      15
+    ],
+    "n_covariates_active_range": [
+      3,
+      10
+    ],
+    "n_latent_active_range": [
+      1,
+      1
+    ],
+    "active_count_allocation": "independent",
+    "active_count_weights": null,
+    "carryover_alpha_range": [
+      0.2,
+      0.8
+    ],
+    "carryover_family_probs": {
+      "none": 0.3333333333333333,
+      "geometric": 0.3333333333333333,
+      "weibull": 0.3333333333333333
+    },
+    "saturation_family_probs": {
+      "linear": 0.16666666666666666,
+      "hill": 0.16666666666666666,
+      "logistic": 0.16666666666666666,
+      "michaelis_menten": 0.16666666666666666,
+      "tanh": 0.16666666666666666,
+      "root": 0.16666666666666666
+    },
+    "saturation_prior_ranges": {
+      "hill": {
+        "slope": [
+          1.0,
+          3.0
+        ],
+        "kappa_mult": [
+          0.7,
+          1.5
+        ]
+      },
+      "logistic": {
+        "lam": [
+          0.5,
+          3.0
+        ]
+      },
+      "michaelis_menten": {
+        "kappa_mult": [
+          0.7,
+          1.5
+        ]
+      },
+      "tanh": {
+        "c": [
+          0.3,
+          1.5
+        ]
+      },
+      "root": {
+        "alpha": [
+          0.3,
+          0.9
+        ]
+      }
+    },
+    "mm_scale_prior": "uniform",
+    "weibull_lam_range": [
+      2.0,
+      8.0
+    ],
+    "weibull_k_range": [
+      1.5,
+      4.0
+    ],
+    "dz_base_rate": 0.3,
+    "zc_base_rate": 0.3,
+    "cc_base_rate": 0.15,
+    "zz_base_rate": 0.1,
+    "dc_coeff_range": [
+      0.1,
+      0.5
+    ],
+    "dz_coeff_range": [
+      0.1,
+      0.5
+    ],
+    "zc_coeff_range": [
+      0.05,
+      0.3
+    ],
+    "cc_coeff_range": [
+      0.05,
+      0.3
+    ],
+    "zz_coeff_range": [
+      -0.2,
+      0.2
+    ],
+    "dy_coeff_range": [
+      0.15,
+      0.45
+    ],
+    "zy_coeff_range": [
+      0.1,
+      0.4
+    ],
+    "beta_additive_range": [
+      0.5,
+      2.0
+    ],
+    "treatment_reference_contribution_range": null,
+    "treatment_reference_multiplier": 1.0,
+    "covariate_reference_contribution_range": null,
+    "covariate_reference_scale": 1.0,
+    "rw_covariate_mean_range": [
+      -3.0,
+      3.0
+    ],
+    "rw_positive_mean_range": [
+      0.1,
+      8.0
+    ],
+    "rw_baseline_mean_range": [
+      3.0,
+      8.0
+    ],
+    "rw_std_sigma": 1.5,
+    "rw_baseline_std_sigma": 1.0,
+    "rw_outcome_std_sigma": 0.25,
+    "outcome_std_mode": "relative",
+    "rw_baseline_std_range": [
+      0.0,
+      0.093
+    ],
+    "rw_outcome_std_range": [
+      0.01,
+      0.028
+    ],
+    "rw_smoothness_alpha": 2.0,
+    "rw_smoothness_beta": 2.0,
+    "rw_smoothness_max_weeks": 26,
+    "confounding_strength_range": null,
+    "rw_treatment_std_range": [
+      0.1,
+      1.2
+    ],
+    "treatment_hf_sigma_range": [
+      0.08,
+      0.6
+    ],
+    "treatment_pulse_prob_range": [
+      0.0,
+      0.25
+    ],
+    "treatment_pulse_amp_range": [
+      0.4,
+      2.5
+    ],
+    "covariate_hf_sigma_range": [
+      0.1,
+      0.8
+    ],
+    "covariate_pulse_prob_range": [
+      0.0,
+      0.25
+    ],
+    "covariate_pulse_amp_range": [
+      0.5,
+      3.0
+    ],
+    "baseline_floor": null,
+    "baseline_floor_scope": "intercept",
+    "carryover_burn_in": 8,
+    "n_treatment_shocks": 0,
+    "treatment_shock_length_range": [
+      2,
+      2
+    ],
+    "treatment_shock_level_range": [
+      0.0,
+      0.0
+    ],
+    "include_identifiability_labels": true,
+    "record_walk_parameters": false,
+    "prior_conditioning": false,
+    "prior_cond_width_ranges": null,
+    "edge_rate_overrides": null,
+    "edge_budget": {
+      "cy": [
+        1,
+        10
+      ],
+      "zy": [
+        1,
+        10
+      ],
+      "dc": 0,
+      "dz": 0,
+      "dy": 0,
+      "zc": [
+        1,
+        4
+      ],
+      "cc": [
+        1,
+        4
+      ],
+      "zz": [
+        1,
+        4
+      ]
+    },
+    "min_no_direct_effect_treatments": 0,
+    "treatment_hf_inclusion_prob": 0.9,
+    "treatment_pulse_inclusion_prob": 0.7,
+    "treatment_onset_inclusion_prob": 0.15,
+    "treatment_offset_inclusion_prob": 0.1,
+    "treatment_flighting_inclusion_prob": 0.2,
+    "treatment_level_jump_inclusion_prob": 0.2,
+    "treatment_seasonal_inclusion_prob": 0.3,
+    "treatment_trend_inclusion_prob": 0.3,
+    "covariate_hf_inclusion_prob": 0.9,
+    "covariate_pulse_inclusion_prob": 0.6,
+    "covariate_onset_inclusion_prob": 0.1,
+    "covariate_offset_inclusion_prob": 0.1,
+    "covariate_flighting_inclusion_prob": 0.15,
+    "covariate_level_jump_inclusion_prob": 0.3,
+    "covariate_seasonal_inclusion_prob": 0.35,
+    "covariate_trend_inclusion_prob": 0.3,
+    "treatment_onset_frac_range": [
+      0.052884615384615384,
+      0.12980769230769232
+    ],
+    "covariate_onset_frac_range": [
+      0.052884615384615384,
+      0.12980769230769232
+    ],
+    "treatment_offset_frac_range": [
+      0.6009615384615384,
+      0.9086538461538461
+    ],
+    "covariate_offset_frac_range": [
+      0.6009615384615384,
+      0.9086538461538461
+    ],
+    "treatment_flighting_period_weeks_range": [
+      4,
+      13
+    ],
+    "covariate_flighting_period_weeks_range": [
+      4,
+      13
+    ],
+    "treatment_flighting_duty_range": [
+      0.3,
+      0.8
+    ],
+    "covariate_flighting_duty_range": [
+      0.3,
+      0.8
+    ],
+    "treatment_level_jump_count": 1,
+    "covariate_level_jump_count": 1,
+    "treatment_level_jump_factor_range": [
+      0.5,
+      2.0
+    ],
+    "covariate_level_jump_size_range": [
+      -1.0,
+      1.0
+    ],
+    "treatment_seasonal_amplitude_range": [
+      0.1,
+      0.5
+    ],
+    "covariate_seasonal_amplitude_range": [
+      0.2,
+      1.0
+    ],
+    "treatment_seasonal_period_weeks_range": [
+      52.0,
+      52.0
+    ],
+    "covariate_seasonal_period_weeks_range": [
+      52.0,
+      52.0
+    ],
+    "treatment_trend_log_change_range": [
+      -1.0,
+      1.0
+    ],
+    "covariate_trend_change_range": [
+      -1.0,
+      1.0
+    ]
+  },
+  "controls": {
+    "memory.max": "2147483648",
+    "memory.swap.max": "0",
+    "cpu.max": "100000 100000"
+  },
+  "versions": {
+    "pymc": "6.2.0",
+    "pytensor": "3.2.4",
+    "numpy": "2.4.6"
+  },
+  "commit": "93073357f03fd48a6192d72f6e00af060e710cdc",
+  "source_sha256": {
+    "benchmarks/study_200k_run.py": "09412de7f983f9eb29360f1093422aeae10806242c051a88741b8e3315470af4",
+    "benchmarks/study_200k_methods.py": "a1037f8c9e6fafd40a85345278ded064aa035ab950ee7de6a07d7cfdb4f23bd9",
+    "benchmarks/study_200k_packing.py": "69427b6a8c58f769f0c71de6d10ccb1be26e03ffd69a03a2ecb2b2418bfe6d40",
+    "benchmarks/study_200k_envelope.sh": "983f3e9a52884b057991ef1c1662d7a22c174396fdcaad12c5847175efc7ad7d",
+    "benchmarks/study_200k_supervise.py": "4eb026025f967e4683315adb458b38bf5d3795c19e75e329d1abf5c0d76a4b17"
+  },
+  "pytensor_flags": "base_compiledir=/tmp/tmp.ceQIH3Lsfc/cache,floatX=float64",
+  "affinity": [
+    0
+  ],
+  "threads": {
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMBA_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1"
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "status": "pass",
+  "phase": "oracle",
+  "approach": "specialized_external_lazy",
+  "mode": "cvm_compile",
+  "families": [
+    {
+      "family": [
+        5,
+        2
+      ],
+      "candidate_id": 24,
+      "fields": 24,
+      "max_abs_errors": {
+        "saturation_scale": 0.0,
+        "param_treatment_level": 0.0,
+        "param_carryover_alpha": 0.0,
+        "param_weibull_lam": 0.0,
+        "param_weibull_k": 0.0,
+        "treatment_shock_mask": 0.0,
+        "treatment_shock_index": 0.0,
+        "treatment_shock_start": 0.0,
+        "treatment_shock_length": 0.0,
+        "treatment_shock_level_multiplier": 0.0,
+        "treatment_shock_level": 0.0,
+        "latent_unobserved": 4.218847493575595e-15,
+        "covariates": 3.2862601528904634e-14,
+        "treatments": 1.509903313490213e-14,
+        "baseline": 8.881784197001252e-16,
+        "baseline_intrinsic": 8.881784197001252e-16,
+        "covariate_contribution": 2.220446049250313e-16,
+        "latent_unobserved_contribution": 0.0,
+        "contributions": 6.661338147750939e-16,
+        "indirect_effects": 1.6653345369377348e-16,
+        "indirect_effects_by_source": 1.7759231585312563e-16,
+        "outcome": 8.881784197001252e-16,
+        "confounding_strength": 0.0,
+        "outcome_noise": 0.0
+      },
+      "flag_cases": [
+        "off",
+        "on",
+        "mixed"
+      ],
+      "dormant_edge_poison": true,
+      "rng_progression": false,
+      "primitive_source": "benchmarks/study-200k-evidence/ui-oracle-cached",
+      "rng_updates_advanced": 0,
+      "rng_updates_total": 0,
+      "reseed_replay": false,
+      "memory": {
+        "peak_rss_kib": 663712,
+        "scope_peak_bytes": 736055296,
+        "scope_current_bytes": 736055296,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+      }
+    }
+  ],
+  "elapsed_s": 67.43439802806824,
+  "memory": {
+    "peak_rss_kib": 663712,
+    "scope_peak_bytes": 736055296,
+    "scope_current_bytes": 735006720,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  }
+}

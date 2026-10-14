@@ -1,0 +1,15 @@
+Running as unit: wayfinder-200k-o-logical-reference.scope; invocation ID: 568c54fa022844c48d0a6e2db5b136a8
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 505, in <module>
+    try: main()
+         ~~~~^^
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 485, in main
+    primary(args,cfg,cells,ids,adapter)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 204, in primary
+    adapter.draw(adapter.last_names,1,diagnostic=True)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_methods.py", line 274, in draw
+    assert all(changed), 'primary-output RNG did not advance'
+           ~~~^^^^^^^^^
+AssertionError: primary-output RNG did not advance

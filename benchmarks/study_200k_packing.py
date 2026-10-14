@@ -342,6 +342,7 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
                 cell_evaluated += 1
                 audit_finite = all(np.isfinite(drawn[name]).all() for name in audit_names)
                 if not audit_finite:
+                    adapter.reject('nonfinite_audit')
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -387,6 +388,7 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
                         realism_outcome=drawn.get("outcome_unshocked"),
                     )
                 if not task_ok:
+                    adapter.reject('nonfinite_scientific_arrays' if any(not np.isfinite(v).all() for v in realism_arrays.values()) else 'realism_or_storage')
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -399,6 +401,7 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
                 )
                 candidate_outcome_scale = float(np.std(drawn["outcome"][support == 1]))
                 if not (np.isfinite(candidate_outcome_scale) and candidate_outcome_scale > 0.0):
+                    adapter.reject('nonpositive_or_nonfinite_support_scale')
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -407,6 +410,7 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
                 ):
                     # outcome_norm = outcome / scale would not be representable
                     # under either split (the validation-split repair may flip it).
+                    adapter.reject('outcome_normalization_storage_overflow')
                     n_rejected += 1
                     cell_rejected += 1
                     continue
@@ -463,9 +467,11 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
                 accepted += 1
             adapter.times["acceptance_and_packing_s"] += time.perf_counter() - packing_start
             del drawn_b, drawn
+        # The adapter owns the sole resident model. Avoid keeping the previous
+        # cell's model alive in this loop while the next one is constructed.
+        del model
     adapter.evaluated = n_evaluated
     adapter.rejected = n_rejected
-    adapter.times["normalization_and_diagnostics_s"] = 0.0
     normalization_start = time.perf_counter()
     if not kept.any():
         return None
@@ -632,5 +638,5 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
     corpus["outcome_scale"][:] = outcome_scale
     corpus["diagnostics"] = diagnostics
     corpus = _finalize_corpus(corpus, cfg)
-    adapter.times["normalization_and_diagnostics_s"] = time.perf_counter() - normalization_start
+    adapter.times["normalization_and_diagnostics_s"] += time.perf_counter() - normalization_start
     return corpus

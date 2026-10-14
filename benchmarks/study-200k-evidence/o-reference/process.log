@@ -1,0 +1,12 @@
+Running as unit: wayfinder-200k-o-reference.scope; invocation ID: 354920d3e1a048d2b28a20e475529c96
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 458, in <module>
+    try: main()
+         ~~~~^^
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 438, in main
+    primary(args,cfg,cells,ids,adapter)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_run.py", line 171, in primary
+    assert not errors, errors
+           ^^^^^^^^^^
+AssertionError: ['is_val must contain at least one training and one validation world']

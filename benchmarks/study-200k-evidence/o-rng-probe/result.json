@@ -1,0 +1,38 @@
+{
+  "status": "observed",
+  "phase": "rng_probe",
+  "candidate_id": 7,
+  "rngs": 45,
+  "advanced": 44,
+  "unchanged": [
+    {
+      "index": 41,
+      "original": [
+        {
+          "name": "delta_dy",
+          "shape": [
+            1
+          ],
+          "size": {
+            "dtype": "int64",
+            "shape": [
+              1
+            ],
+            "values": [
+              1
+            ]
+          }
+        }
+      ],
+      "compiled_nodes": []
+    }
+  ],
+  "any_outputs_changed": true,
+  "elapsed_s": 136.65068575832993,
+  "memory": {
+    "peak_rss_kib": 350952,
+    "scope_peak_bytes": 698552320,
+    "scope_current_bytes": 583233536,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  }
+}

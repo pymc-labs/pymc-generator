@@ -1,0 +1,271 @@
+{
+  "status": "pass",
+  "approach": "specialized_external_lazy",
+  "mode": "fast_compile",
+  "phase": "pilot",
+  "candidates": 2,
+  "accepted": 2,
+  "accepted_ids": [
+    10,
+    22
+  ],
+  "candidate_family_counts": {
+    "(0, 0)": 2
+  },
+  "accepted_family_counts": {
+    "(0, 0)": 2
+  },
+  "input_counts": {
+    "treatment": 25,
+    "covariate": 13
+  },
+  "component_counts": {
+    "treatment": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        19,
+        17,
+        2,
+        2,
+        3,
+        5,
+        8,
+        5
+      ]
+    },
+    "covariate": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        13,
+        8,
+        0,
+        2,
+        1,
+        4,
+        4,
+        2
+      ]
+    }
+  },
+  "accepted_input_counts": {
+    "treatment": 25,
+    "covariate": 13
+  },
+  "accepted_component_counts": {
+    "treatment": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        19,
+        17,
+        2,
+        2,
+        3,
+        5,
+        8,
+        5
+      ]
+    },
+    "covariate": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        13,
+        8,
+        0,
+        2,
+        1,
+        4,
+        4,
+        2
+      ]
+    }
+  },
+  "generation_s": 194.69602635712363,
+  "validate_before_write_s": 0.011360512115061283,
+  "write_s": 0.007749552838504314,
+  "readback_and_check_s": 0.02654917584732175,
+  "accepted_persisted_service_s": 194.7151364220772,
+  "accepted_per_service_s": 0.01027141513880395,
+  "steady_service_s": 0.7241175221279263,
+  "stage_times": {
+    "build_s": 1.6815334919374436,
+    "compile_s": 192.30948540801182,
+    "draw_s": 0.5602282609324902,
+    "invariants_and_hash_s": 0.004061979707330465,
+    "acceptance_and_packing_s": 0.002424641977995634,
+    "normalization_and_diagnostics_s": 0.008917042054235935,
+    "replay_s": 0.5524051261600107
+  },
+  "draw_seconds": [
+    0.28342380095273256,
+    0.27680445997975767
+  ],
+  "compile_records": [
+    {
+      "key": [
+        0,
+        0
+      ],
+      "seconds": 192.30948540801182,
+      "nodes": 6966,
+      "rngs": 53,
+      "input_names": [
+        "g_cy",
+        "g_dc",
+        "g_dz",
+        "g_dy",
+        "g_zy",
+        "g_zc",
+        "g_cc",
+        "g_zz",
+        "active_treatment",
+        "active_covariate",
+        "active_latent",
+        "rw_width_d",
+        "rw_width_z",
+        "rw_width_c",
+        "rw_width_b",
+        "use_hf",
+        "use_pulse",
+        "use_onset",
+        "use_offset",
+        "use_flighting",
+        "use_level_jump",
+        "use_seasonal",
+        "use_trend",
+        "use_covariate_hf",
+        "use_covariate_pulse",
+        "use_covariate_onset",
+        "use_covariate_offset",
+        "use_covariate_flighting",
+        "use_covariate_level_jump",
+        "use_covariate_seasonal",
+        "use_covariate_trend"
+      ],
+      "output_names": [
+        "param_hf_sigma",
+        "param_pulse_amp",
+        "param_pulse_prob",
+        "param_covariate_hf_sigma",
+        "param_covariate_pulse_amp",
+        "param_covariate_pulse_prob",
+        "param_trajectory_treatment_onset_start",
+        "param_trajectory_treatment_offset_stop",
+        "param_trajectory_treatment_flighting_period",
+        "param_trajectory_treatment_flighting_on_weeks",
+        "param_trajectory_treatment_flighting_phase",
+        "param_trajectory_treatment_level_jump_week",
+        "param_trajectory_treatment_level_jump_factor",
+        "param_trajectory_treatment_level_jump_log_factor",
+        "param_trajectory_treatment_seasonal_amplitude",
+        "param_trajectory_treatment_seasonal_period",
+        "param_trajectory_treatment_seasonal_phase",
+        "param_trajectory_treatment_trend_change",
+        "param_trajectory_covariate_onset_start",
+        "param_trajectory_covariate_offset_stop",
+        "param_trajectory_covariate_flighting_period",
+        "param_trajectory_covariate_flighting_on_weeks",
+        "param_trajectory_covariate_flighting_phase",
+        "param_trajectory_covariate_level_jump_week",
+        "param_trajectory_covariate_level_jump_size",
+        "param_trajectory_covariate_seasonal_amplitude",
+        "param_trajectory_covariate_seasonal_period",
+        "param_trajectory_covariate_seasonal_phase",
+        "param_trajectory_covariate_trend_change",
+        "treatment_activity",
+        "covariate_activity",
+        "treatment_log_level_shift",
+        "covariate_level_shift",
+        "treatments_natural",
+        "outcome_natural",
+        "saturation_scale",
+        "param_treatment_level",
+        "param_carryover_alpha",
+        "param_weibull_lam",
+        "param_weibull_k",
+        "treatment_shock_mask",
+        "treatment_shock_index",
+        "treatment_shock_start",
+        "treatment_shock_length",
+        "treatment_shock_level_multiplier",
+        "treatment_shock_level",
+        "latent_unobserved",
+        "covariates",
+        "treatments",
+        "baseline",
+        "baseline_intrinsic",
+        "covariate_contribution",
+        "latent_unobserved_contribution",
+        "contributions",
+        "indirect_effects",
+        "indirect_effects_by_source",
+        "outcome",
+        "confounding_strength",
+        "outcome_noise"
+      ]
+    }
+  ],
+  "build_records": [
+    {
+      "key": [
+        0,
+        0
+      ],
+      "seconds": 1.6815334919374436
+    }
+  ],
+  "chunks": [
+    {
+      "index": 0,
+      "family": [
+        0,
+        0
+      ],
+      "candidates": [
+        10,
+        22
+      ],
+      "accepted": [
+        10,
+        22
+      ],
+      "generation_s": 194.69602635712363,
+      "rejected": 0,
+      "memory": {
+        "peak_rss_kib": 489456,
+        "scope_peak_bytes": 704770048,
+        "scope_current_bytes": 575717376,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+      },
+      "bytes": 77309,
+      "arrays": 79,
+      "file": "corpus-000.npz",
+      "sha256": "83f9ed4b935cf04db683406592cc07c238877c284a86e0150fd28a894be484c2",
+      "replay_seconds": 0.554696402978152
+    }
+  ],
+  "primary_memory": {
+    "peak_rss_kib": 489712,
+    "scope_peak_bytes": 704770048,
+    "scope_current_bytes": 575713280,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  },
+  "elapsed_s": 196.0643621319905,
+  "raw_candidate_hashes": {
+    "10": "05673bc14a8844db18d16987e56686965c7ef6232873c2f914658eedbfcc4362",
+    "22": "3f3c0f90af1054a2d3d3ad78849cc2c772e13f64d04c249aa3414fa06180d599"
+  },
+  "artifact_bytes": 97622,
+  "projection_scope": "local candidate/accepted/persisted shards; no upload, Modal scheduling or exact accepted-family quotas"
+}

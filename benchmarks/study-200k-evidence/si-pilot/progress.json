@@ -1,0 +1,49 @@
+{
+  "candidates": 2,
+  "accepted": 2,
+  "chunks": [
+    {
+      "index": 0,
+      "family": [
+        0,
+        0
+      ],
+      "candidates": [
+        10,
+        22
+      ],
+      "accepted": [
+        10,
+        22
+      ],
+      "generation_s": 205.39736598497257,
+      "rejected": 0,
+      "memory": {
+        "peak_rss_kib": 499040,
+        "scope_peak_bytes": 602689536,
+        "scope_current_bytes": 479956992,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+      },
+      "bytes": 75914,
+      "arrays": 79,
+      "file": "corpus-000.npz",
+      "sha256": "782051fcb3d333b2ebf9ebbb8eb86473086ac09453971aee59a409109f0d08d0",
+      "replay_seconds": 1.0007299440912902
+    }
+  ],
+  "stage_times": {
+    "build_s": 1.8120897808112204,
+    "compile_s": 201.69211486680433,
+    "draw_s": 1.7385751348920166,
+    "invariants_and_hash_s": 0.004724576137959957,
+    "acceptance_and_packing_s": 0.002921723760664463,
+    "normalization_and_diagnostics_s": 0.014398649102076888,
+    "replay_s": 0.9983208579942584
+  },
+  "memory": {
+    "peak_rss_kib": 499040,
+    "scope_peak_bytes": 602689536,
+    "scope_current_bytes": 479956992,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  }
+}

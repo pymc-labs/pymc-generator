@@ -1,0 +1,50 @@
+{
+  "preparation_s": 0.031077052000910044,
+  "ids": [
+    10,
+    22
+  ],
+  "seeds": [
+    1211614557,
+    3737488447
+  ],
+  "counts": [
+    [
+      15,
+      8
+    ],
+    [
+      10,
+      5
+    ]
+  ],
+  "families": [
+    [
+      0,
+      0
+    ],
+    [
+      0,
+      0
+    ]
+  ],
+  "saturation_families": [
+    "linear",
+    "hill",
+    "logistic",
+    "michaelis_menten",
+    "tanh",
+    "root"
+  ],
+  "carryover_families": [
+    "none",
+    "geometric",
+    "weibull"
+  ],
+  "l_max": 8,
+  "burn_in": 8,
+  "nonflag_hashes": [
+    "ae192ad8ccdc9d6955627f3892dcd823b9496b084ff732a07a34e51081253f04",
+    "a97d8d238142dca021ef67b1ecddb57259890093b30b93a5fb90f35dfaf8ef6d"
+  ]
+}

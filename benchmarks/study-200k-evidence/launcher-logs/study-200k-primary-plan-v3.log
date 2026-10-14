@@ -1,0 +1,35 @@
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_supervise.py", line 17, in <module>
+    lock = (dest / '.lock').open('w'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                       ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+SKIP existing ui-logical-primary
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_supervise.py", line 17, in <module>
+    lock = (dest / '.lock').open('w'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                       ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_supervise.py", line 17, in <module>
+    lock = (dest / '.lock').open('w'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                       ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+SKIP se-primary: oracle incomplete/failed
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_supervise.py", line 17, in <module>
+    lock = (dest / '.lock').open('w'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                       ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+SKIP sl-primary: oracle incomplete/failed
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_supervise.py", line 17, in <module>
+    lock = (dest / '.lock').open('w'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                       ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+SKIP si-primary: oracle incomplete/failed
+Traceback (most recent call last):
+  File "/tmp/pymc-generator-200k-study/benchmarks/study_200k_supervise.py", line 17, in <module>
+    lock = (dest / '.lock').open('w'); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                       ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+SKIP sil-primary: oracle incomplete/failed

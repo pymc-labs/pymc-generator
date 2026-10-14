@@ -1,0 +1,118 @@
+{
+  "status": "pass",
+  "phase": "seed_audit",
+  "logical_ids": 200000,
+  "generated_worlds": 0,
+  "root_seed": 631227,
+  "legacy_uint32_world_seeds": {
+    "unique": 199998,
+    "duplicate_ids": 2,
+    "colliding_pairs": 2
+  },
+  "legacy_downstream_30bit_compile_seeds": {
+    "unique": 199979,
+    "duplicate_ids": 21,
+    "colliding_pairs": 21
+  },
+  "logical_id_first_rng_states": {
+    "unique": 200000,
+    "duplicate_ids": 0,
+    "colliding_pairs": 0
+  },
+  "collision_examples": [
+    {
+      "stage": "compile_seed",
+      "ids": [
+        10184,
+        18765
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        43906,
+        56759
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        25280,
+        59944
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        17620,
+        74665
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        90254,
+        97344
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        99787,
+        110897
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        63688,
+        112624
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        114936,
+        120665
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        92080,
+        122721
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        10953,
+        127517
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        117344,
+        131109
+      ]
+    },
+    {
+      "stage": "compile_seed",
+      "ids": [
+        2610,
+        141737
+      ]
+    }
+  ],
+  "root_policy": "reseed_rngs(ordered_rngs,[root_seed,logical_candidate_id,300]); no worker/shard index",
+  "deterministic_rebuild_and_reverse_mapping": true,
+  "caveat": "Seed/shared-stream collisions are not claims of duplicate complete worlds; structures and families can differ.",
+  "elapsed_s": 17.024632540997118,
+  "memory": {
+    "peak_rss_kib": 428424,
+    "scope_peak_bytes": 393101312,
+    "scope_current_bytes": 393101312,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  }
+}

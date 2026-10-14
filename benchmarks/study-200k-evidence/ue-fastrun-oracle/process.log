@@ -1,0 +1,5 @@
+Running as unit: wayfinder-200k-ue-fastrun-oracle.scope; invocation ID: 7fd17fdce113411caf13c5ac1cb941ed
+/tmp/pymc-generator-200k-study/.venv/lib/python3.13/site-packages/pytensor/tensor/rewriting/elemwise.py:1004: UserWarning: Loop fusion failed because the resulting node would exceed the kernel argument limit.
+  warn(
+/tmp/pymc-generator-200k-study/.venv/lib/python3.13/site-packages/pytensor/link/numba/dispatch/basic.py:234: UserWarning: Numba will use object mode to run discrete_uniform_rv{"(),()->()"}'s perform method. Set `pytensor.config.compiler_verbose = True` to see more details.
+  warnings.warn(

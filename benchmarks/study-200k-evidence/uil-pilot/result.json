@@ -1,0 +1,270 @@
+{
+  "status": "pass",
+  "approach": "universal_internal_lazy",
+  "mode": "fast_compile",
+  "phase": "pilot",
+  "candidates": 2,
+  "accepted": 2,
+  "accepted_ids": [
+    10,
+    22
+  ],
+  "candidate_family_counts": {
+    "(0, 0)": 2
+  },
+  "accepted_family_counts": {
+    "(0, 0)": 2
+  },
+  "input_counts": {
+    "treatment": 25,
+    "covariate": 13
+  },
+  "component_counts": {
+    "treatment": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        20,
+        16,
+        3,
+        4,
+        6,
+        5,
+        6,
+        5
+      ]
+    },
+    "covariate": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        13,
+        9,
+        1,
+        0,
+        3,
+        3,
+        4,
+        3
+      ]
+    }
+  },
+  "accepted_input_counts": {
+    "treatment": 25,
+    "covariate": 13
+  },
+  "accepted_component_counts": {
+    "treatment": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        20,
+        16,
+        3,
+        4,
+        6,
+        5,
+        6,
+        5
+      ]
+    },
+    "covariate": {
+      "dtype": "int64",
+      "shape": [
+        8
+      ],
+      "values": [
+        13,
+        9,
+        1,
+        0,
+        3,
+        3,
+        4,
+        3
+      ]
+    }
+  },
+  "generation_s": 331.38868399802595,
+  "validate_before_write_s": 0.012624912895262241,
+  "write_s": 0.01100262813270092,
+  "readback_and_check_s": 0.020540489815175533,
+  "accepted_persisted_service_s": 331.4123115390539,
+  "accepted_per_service_s": 0.006034778824939092,
+  "steady_service_s": 1.6925199879333377,
+  "stage_times": {
+    "build_s": 6.878173445118591,
+    "compile_s": 322.841618106002,
+    "draw_s": 1.5033903389703482,
+    "invariants_and_hash_s": 0.005544381914660335,
+    "acceptance_and_packing_s": 0.00264280429109931,
+    "normalization_and_diagnostics_s": 0.0134407680016011,
+    "replay_s": 1.4563979140948504
+  },
+  "draw_seconds": [
+    0.76818693196401,
+    0.7352034070063382
+  ],
+  "compile_records": [
+    {
+      "key": "universal",
+      "seconds": 322.841618106002,
+      "nodes": 11492,
+      "rngs": 75,
+      "input_names": [
+        "g_cy",
+        "g_dc",
+        "g_dz",
+        "g_dy",
+        "g_zy",
+        "g_zc",
+        "g_cc",
+        "g_zz",
+        "active_treatment",
+        "active_covariate",
+        "active_latent",
+        "carryover_family",
+        "sat_family",
+        "rw_width_d",
+        "rw_width_z",
+        "rw_width_c",
+        "rw_width_b"
+      ],
+      "output_names": [
+        "param_hf_sigma",
+        "param_pulse_amp",
+        "param_pulse_prob",
+        "param_covariate_hf_sigma",
+        "param_covariate_pulse_amp",
+        "param_covariate_pulse_prob",
+        "param_trajectory_treatment_onset_start",
+        "param_trajectory_treatment_offset_stop",
+        "param_trajectory_treatment_flighting_period",
+        "param_trajectory_treatment_flighting_on_weeks",
+        "param_trajectory_treatment_flighting_phase",
+        "param_trajectory_treatment_level_jump_week",
+        "param_trajectory_treatment_level_jump_factor",
+        "param_trajectory_treatment_level_jump_log_factor",
+        "param_trajectory_treatment_seasonal_amplitude",
+        "param_trajectory_treatment_seasonal_period",
+        "param_trajectory_treatment_seasonal_phase",
+        "param_trajectory_treatment_trend_change",
+        "param_trajectory_covariate_onset_start",
+        "param_trajectory_covariate_offset_stop",
+        "param_trajectory_covariate_flighting_period",
+        "param_trajectory_covariate_flighting_on_weeks",
+        "param_trajectory_covariate_flighting_phase",
+        "param_trajectory_covariate_level_jump_week",
+        "param_trajectory_covariate_level_jump_size",
+        "param_trajectory_covariate_seasonal_amplitude",
+        "param_trajectory_covariate_seasonal_period",
+        "param_trajectory_covariate_seasonal_phase",
+        "param_trajectory_covariate_trend_change",
+        "treatment_activity",
+        "covariate_activity",
+        "treatment_log_level_shift",
+        "covariate_level_shift",
+        "treatments_natural",
+        "outcome_natural",
+        "saturation_scale",
+        "param_treatment_level",
+        "param_carryover_alpha",
+        "param_weibull_lam",
+        "param_weibull_k",
+        "treatment_shock_mask",
+        "treatment_shock_index",
+        "treatment_shock_start",
+        "treatment_shock_length",
+        "treatment_shock_level_multiplier",
+        "treatment_shock_level",
+        "latent_unobserved",
+        "covariates",
+        "treatments",
+        "baseline",
+        "baseline_intrinsic",
+        "covariate_contribution",
+        "latent_unobserved_contribution",
+        "contributions",
+        "indirect_effects",
+        "indirect_effects_by_source",
+        "outcome",
+        "confounding_strength",
+        "outcome_noise",
+        "use_hf",
+        "use_pulse",
+        "use_onset",
+        "use_offset",
+        "use_flighting",
+        "use_level_jump",
+        "use_seasonal",
+        "use_trend",
+        "use_covariate_hf",
+        "use_covariate_pulse",
+        "use_covariate_onset",
+        "use_covariate_offset",
+        "use_covariate_flighting",
+        "use_covariate_level_jump",
+        "use_covariate_seasonal",
+        "use_covariate_trend"
+      ],
+      "linker": "VMLinker",
+      "vm": "Stack",
+      "mode": "fast_compile"
+    }
+  ],
+  "build_records": [
+    {
+      "key": "universal",
+      "seconds": 6.878173445118591
+    }
+  ],
+  "chunks": [
+    {
+      "index": 0,
+      "family": [
+        0,
+        0
+      ],
+      "candidates": [
+        10,
+        22
+      ],
+      "accepted": [
+        10,
+        22
+      ],
+      "generation_s": 331.38868399802595,
+      "rejected": 0,
+      "memory": {
+        "peak_rss_kib": 653748,
+        "scope_peak_bytes": 786599936,
+        "scope_current_bytes": 680927232,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+      },
+      "bytes": 75628,
+      "arrays": 79,
+      "file": "corpus-000.npz",
+      "sha256": "78ea94b0f5459575838820813a243d6765e139a8f592c055f16db8c8ebbe17d0",
+      "replay_seconds": 1.4601732471492141
+    }
+  ],
+  "primary_memory": {
+    "peak_rss_kib": 653748,
+    "scope_peak_bytes": 786599936,
+    "scope_current_bytes": 670081024,
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+  },
+  "elapsed_s": 334.48624397884123,
+  "raw_candidate_hashes": {
+    "10": "c15ef7efb7935a985953b1dd6c006a71677d46acfd81a468fe399be8e04dc0c0",
+    "22": "a70daa402179ef51dc4cdc61a3707977224d5c8bd2affd5453dea28e42b49ddb"
+  },
+  "artifact_bytes": 95910,
+  "projection_scope": "local candidate/accepted/persisted shards; no upload, Modal scheduling or exact accepted-family quotas"
+}
