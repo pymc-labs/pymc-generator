@@ -254,46 +254,6 @@ def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, t
     assert result.returncode == 0, result.stderr
 
 
-def test_worker_records_the_gpu_that_nvidia_smi_names_or_none(stub_dir, tmp_path):
-    root = _container_root(tmp_path)
-    smi = tmp_path / "nvidia-smi"
-    smi.write_text(
-        '#!/bin/sh\n[ "$*" = "--query-gpu=name --format=csv,noheader" ] || exit 2\n'
-        "echo 'NVIDIA A100-SXM4-40GB'\n"
-    )
-    smi.chmod(0o755)
-    code = PROBE.format(
-        path=[str(stub_dir), str(root)], module="modal_app", file=str(root / "modal_app.py")
-    ) + textwrap.dedent(
-        """
-        import os, pathlib
-        import live_dashboard.generation as generation
-        names = []
-        def record(store, request, **kwargs):
-            names.append(kwargs["worker"].gpu_name)
-            return {"status": "finished"}
-        generation.run_generation_or_refuse = record
-        module.generate_run("demo", "small", 6, 2, 7, None)
-        smi = pathlib.Path(os.environ["PATH"]) / "nvidia-smi"
-        # No driver: nvidia-smi explains on stdout and exits 9; still generates, without a name.
-        smi.write_text('#!/bin/sh\\necho "NVIDIA-SMI has failed: no driver"\\nexit 9\\n')
-        module.generate_run("demo", "small", 6, 2, 7, None)
-        smi.unlink()  # no nvidia-smi at all
-        module.generate_run("demo", "small", 6, 2, 7, None)
-        assert names == ["NVIDIA A100-SXM4-40GB", None, None], names
-        """
-    )
-    result = subprocess.run(
-        [sys.executable, "-I", "-S", "-c", code],
-        cwd=tmp_path,
-        env={"STUB_MODAL_LOCAL": "0", "STUB_MODAL_ENVIRONMENT": "", "PATH": str(tmp_path)},
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stderr
-
-
 def test_launcher_refuses_an_unknown_preset_before_touching_modal(stub_dir):
     code = PROBE.format(
         path=[str(stub_dir), str(REPO), str(REPO / "live_dashboard")],

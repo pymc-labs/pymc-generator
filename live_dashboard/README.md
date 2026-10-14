@@ -1,19 +1,75 @@
 # PyMC Generator live dashboard
 
+> **Experimental, internal tool.** `live_dashboard/` is a PyMC Labs repository tool, not
+> part of the installed `pymc-generator` package, and its publication protocol is an
+> interim single-writer design (see
+> [Publication protocol](#publication-protocol-pymc-generator-live-publication-10)).
+
 Follow a generation run while it happens. A generation worker publishes each completed
 task (a corpus payload plus a versioned JSON completion record) into a store; a separate
 web app polls the store, verifies and extracts every newly published output once, and
 redraws its cards and figures in the browser. Generation never reruns for the UI.
 
-On Modal, both live in the **`pfn` environment**: `generate_run` runs on an A100
-container and the dashboard on a separate CPU-only container with a stable URL behind
-HTTP Basic authentication. The same code runs locally against a folder.
+On Modal, both live in the **`pfn` environment**: `generate_run` runs on a CPU container
+and the dashboard on a separate CPU container with a stable URL behind HTTP Basic
+authentication. The same code runs locally against a folder.
 
-> **The A100 does not accelerate generation.** PyTensor 3.2 has no native CUDA backend
-> and the generator compiles its graphs in `FAST_COMPILE` mode to Python/NumPy thunks
-> (PyTensor's JAX and PyTorch backends, which could reach a GPU, are neither used nor
-> installed), so worlds are generated on the container's CPU while the GPU sits idle.
-> The worker records the GPU it ran beside (`worker.gpu_name`) so this stays visible.
+> **Decision (October 2026): workers run on CPU, not on an A100.** Generation is CPU
+> work: PyTensor 3.2 has no native CUDA backend, and the generator compiles its graphs
+> in `FAST_COMPILE` mode to Python/NumPy thunks. Measured on Modal, CPU-only workers
+> generate as fast as A100 workers for about 1/20 of the cost; see
+> [Hardware decision: CPU workers](#hardware-decision-cpu-workers).
+
+## How it works
+
+```mermaid
+flowchart LR
+    L["launch.py<br/>(your machine)"] -->|"spawn generate_run(request)"| W["generate_run<br/>(Modal CPU worker)"]
+    W -->|"1. payload .npz<br/>2. task record .json"| V[("Modal Volume<br/>runs/RUN_ID/")]
+    L -.->|"waits for run.json"| V
+    V -->|"reload, verify, extract<br/>every 3-10 s"| D["dashboard<br/>(Modal CPU container)"]
+    D -->|"cards and figures as JSON<br/>Basic auth, ETag"| B["browser page"]
+```
+
+1. **A request names a run.** A request is a label, a preset, a number of worlds, the
+   worlds per task and a seed. The run id is `<label>-<sha256(request)[:12]>`, so the
+   same request always names the same run (that is how `--resume` finds it) and a new
+   label starts a new run. The run is split into `worlds ÷ worlds_per_task` tasks, and
+   task `i` generates with seed `seed + i`.
+2. **Launch** (`launch.py`, an ephemeral Modal app run from your machine). It checks the
+   request and the demo bounds, refuses an existing run unless `--resume`, spawns the
+   deployed `generate_run`, prints the run id and its dashboard link, and for a new run
+   waits until the run's manifest appears in the Volume.
+3. **Generate and publish** (`generate_run` calling `run_generation` in
+   `generation.py`, one container at a time). It writes the run manifest (effective
+   configuration, digest of the generating source, package versions, git revision).
+   Then, task by task:
+   - `DataGenerator.generate(n_tasks=worlds_per_task, seed=seed + i)` generates the
+     task's worlds;
+   - the corpus is saved as `.npz`, reloaded and validated;
+   - it is written create-only and the Volume is committed;
+   - only then is the task's JSON completion record written and committed.
+
+   An attempt record tracks progress. The attempt stops starting tasks before Modal's
+   kill time, so `--resume` can continue it.
+4. **Store** (Modal Volume `pymc-generator-live-dashboard`). Plain files under
+   `runs/<run_id>/`; nothing is ever overwritten. A retry writes under its own attempt
+   id. The layout is under [Publication protocol](#publication-protocol-pymc-generator-live-publication-10).
+5. **Read** (the `dashboard` container: `collection.py`, `extract.py`). A poller thread
+   reloads the read-only Volume, every 3 s while a run is generating and every 10 s
+   otherwise. On each poll it:
+   - lists every task and decodes the records;
+   - checks each new payload's size and SHA-256;
+   - extracts each new payload's metrics once: composition shares, and channel impact
+     through the library's `outcome_distributions`.
+
+   The result is an immutable snapshot; requests never touch the Volume.
+6. **Show** (`figures.py`, `web.py`, `static/`). The page polls the JSON API with an
+   ETag. The server answers 304 until the snapshot changes; then the page redraws the
+   cards and Plotly figures. Every path requires Basic authentication.
+
+Locally the same flow runs without Modal: `generate` writes into a folder and `serve`
+reads it.
 
 ## What the page shows
 
@@ -25,7 +81,7 @@ HTTP Basic authentication. The same code runs locally against a folder.
 | Worlds over time | Cumulative consumable worlds at each publication, with the target. |
 | Channel impact | Two distributions: each active channel's direct contribution share of its world's outcome (pooled), and each world's total channel share (direct + indirect). |
 | Composition triangle | Each world's channel / control / baseline shares of its total outcome, at its exact barycentric position (corner = 100 %). Semi-transparent dots, so overlap shows density; worlds with a negative part sit outside and are drawn as ×. |
-| Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, the newest attempt and its GPU. |
+| Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, and the newest attempt (with its GPU, for the early runs that had one). |
 
 Shares use the trajectory-showcase notebook's definitions (`realized_shares`):
 channel = Σ treatment contributions + Σ indirect effects, control = Σ covariate
@@ -89,10 +145,9 @@ deployment); if a future Modal release refused that, mounting it read-write keep
 same behaviour because the dashboard never writes. Rotate credentials with
 `modal secret create --force ...` and redeploy.
 
-Limits: `generate_run` uses `gpu="A100"`, 2 CPU cores and 4 GiB, one container at a
-time, a 1200 s timeout and one retry, so one launch costs at most about two attempts of
-20 minutes (≈ $1.5 at Modal's October 2026 list prices, which bill `gpu="A100"` as an
-A100 40 GB even when Modal places it on an 80 GB card; most runs take a few minutes). A
+Limits: `generate_run` uses 2 CPU cores and 4 GiB (no GPU), one container at a time, a
+1200 s timeout and one retry. So one launch costs at most about two attempts of 20
+minutes, ≈ $0.08 at Modal's October 2026 list prices; a 20-world run costs about $0.003. A
 run is capped at 400 worlds and 20 worlds per task. Requests the worker can never
 satisfy (unknown preset, too large, a different generator than the stored run) are
 refused without a retry; the refusal is recorded as a failed attempt when the run
@@ -102,6 +157,162 @@ unpublished tasks. The dashboard uses one CPU core and 2 GiB, one container, and
 to zero after 10 idle minutes. Polling is every 3 s while a run is generating (or while
 the store cannot be read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up
 to one browser poll; this is a refresh cadence, not a latency guarantee.
+
+## Running future generations
+
+### Choose the request
+
+`launch.py` (Modal) and `python -m live_dashboard generate` (local) take the same
+request options:
+
+| Option | Default | Notes |
+|---|---|---|
+| `--label` | required | Part of the run id; use a new label for a fresh run. |
+| `--preset` | `showcase-variety` | Generator configuration, from `PRESETS` in `generation.py`. |
+| `--worlds` | 20 | Target worlds. Must be a multiple of `--worlds-per-task`, and at most 400 (`DEMO_MAX_WORLDS`). |
+| `--worlds-per-task` | 2 | Worlds per published task, at most 20 (`DEMO_MAX_WORLDS_PER_TASK`). The page updates once per task, so smaller tasks show progress more often. |
+| `--seed` | 29 | Base seed; task `i` uses `seed + i`. |
+
+### Launch, follow and resume
+
+```bash
+modal run -e pfn live_dashboard/launch.py --label <label> --worlds 100 --worlds-per-task 5
+```
+
+Open the printed link, or pick the run in the page's run menu.
+
+- **Timing.** On Modal hosts a world takes about 3–5 s, so 20 worlds take 1–2 minutes.
+- **Attempt length.** One attempt lasts at most 20 minutes, roughly 250–300 worlds. A
+  larger run stops cleanly; finish it by rerunning the same command with `--resume`.
+- **Changed generator.** Resuming with a different configuration, code or environment
+  is refused, so start a run with changed code under a new label.
+
+| Run state | Meaning | Next step |
+|---|---|---|
+| `waiting` | The manifest exists but no attempt has recorded progress yet. | Wait. |
+| `running` | The newest attempt is generating. | Wait. |
+| `complete` | Every task has a final record. Zero-world tasks and output problems are listed in the status line. | Done. |
+| `stopped` | The newest attempt ended (for example, near its time limit) with tasks left. | `--resume` |
+| `failed` | The newest attempt raised. Its error is in `runs/<run_id>/attempts/`. | Fix the cause, then `--resume`. |
+| `lost` | The newest attempt passed its kill time without finishing (the container died). | `--resume` |
+
+### Get the data out
+
+The trailing `/` downloads the run folder:
+
+```bash
+mkdir -p live-runs/runs
+modal volume get -e pfn pymc-generator-live-dashboard runs/<run_id>/ live-runs/runs
+```
+
+Then, from the repository root (`live_dashboard` is not installed as a package):
+
+```python
+from pathlib import Path
+
+from live_dashboard.collection import Collector
+from live_dashboard.publication import payload_path
+from live_dashboard.storage import DirectoryStore
+from pymc_generator.data_generator import load_corpus
+
+root = Path("live-runs")
+collector = Collector(DirectoryStore(root))
+collector.refresh()
+run = collector.snapshot.run_index["<run_id>"]
+corpora = [  # the verified payload of every published task
+    load_corpus(root / payload_path(run.run_id, task.task_id, task.attempt_id))
+    for task in run.tasks
+    if task.status == "published"
+]
+# run.worlds and run.impacts hold the per-world shares and impact units the figures plot.
+```
+
+Reading through the dashboard's reader, rather than globbing `*.npz`, skips orphans of
+retried attempts and payloads that fail their digest. To browse the downloaded runs
+locally, run `serve --data-dir live-runs`.
+
+### A new generator configuration
+
+1. Add a function to `PRESETS` in `live_dashboard/generation.py`. It must return the
+   library configuration for one task, with **one world per cell**: set
+   `n_cells=worlds_per_task` and `draws_per_cell=1`, because the library's default of 20
+   would give a task more worlds than its target.
+
+   ```python
+   def _my_study(worlds_per_task: int) -> SCMPrior:
+       from pymc_generator import make_scm_prior
+
+       return make_scm_prior(n_cells=worlds_per_task, draws_per_cell=1, ...)  # your knobs
+   ```
+
+   Register it as `{"my-study": _my_study, ...}`.
+2. Redeploy with `modal deploy -e pfn live_dashboard/modal_app.py`, then launch with
+   `--preset my-study`.
+
+The manifest pins the effective configuration and a digest of the generating source.
+Editing a preset, or the generator, later therefore makes `--resume` refuse runs started
+before the change; start new runs under a new label. The dashboard needs no change: it
+reads any corpus that passes validation.
+
+### Larger runs
+
+The limits live in `live_dashboard/deployment.py`:
+
+- `DEMO_MAX_WORLDS` (400);
+- `DEMO_MAX_WORLDS_PER_TASK` (20);
+- `GENERATION_TIMEOUT_S` (1200 s per attempt).
+
+Raising them raises the worst case of one launch, which is two attempts of the full
+timeout. Redeploy after changing them. Volume v1 recommends at most about 50,000 files,
+and each task adds two: its record and its payload.
+
+### Hardware decision: CPU workers
+
+**Decision (October 2026).** `generate_run` requests no GPU: 2 CPU cores and 4 GiB.
+
+**Why.** The first deployment requested an A100. During a run, `nvidia-smi` read 0 %
+GPU utilisation, 4 MiB of GPU memory in use and no GPU processes. PyTensor 3.2 has no
+native CUDA backend; its JAX and PyTorch backends are neither used nor installed. To
+check speed, 12 concurrent 20-world runs were measured on Modal. All used the same
+image, code and request with 2 CPU cores and 4 GiB each; only the GPU differed.
+
+| Worker | Mean worlds/min (6 runs) | Range | Cost per 20-world run |
+|---|---|---|---|
+| CPU-only | 15.6 | 13.6–20.5 | ≈ $0.003 |
+| A100 | 14.9 | 11.3–17.4 | ≈ $0.06 |
+
+The difference is within run-to-run noise (Welch p = 0.65). Speed follows the host's
+single-thread CPU speed: it correlates at r = 0.88 with a pure-Python benchmark run in
+the same containers.
+
+**Consequences.**
+
+- **Cost:** about 1/20 per run, and the worst case of one launch drops from ≈ $1.5 to
+  ≈ $0.08.
+- **Scheduling:** no GPU capacity is needed.
+- **Earlier runs:** the runs made before the switch keep their recorded A100 in the
+  status line.
+
+**Revisit** if a generator path that actually uses a GPU appears, such as a JAX-backed
+PyTensor mode:
+
+1. Add `gpu=...` to the `@app.function` of `generate_run` in `modal_app.py`.
+2. Record the GPU in its `WorkerInfo` (`gpu_requested`, `gpu_name`).
+3. Re-measure the same way: at least 6 runs per hardware, launched concurrently, with
+   the same image, request and CPU/memory. Compare the dashboard's speed card.
+
+**Running costs.** The dashboard container costs about $0.06 per hour while a page is
+open, and scales to zero 10 minutes after the last request. To see spend per app and
+resource (completed hours only), run
+`modal billing report --for today -r h --show-resources`.
+
+### Housekeeping
+
+- **Delete a run:** `modal volume rm -e pfn pymc-generator-live-dashboard runs/<run_id> -r`.
+  It leaves the page at the next refresh. Never delete a run that is generating.
+- **Deploy code changes:** `modal deploy -e pfn live_dashboard/modal_app.py`. New
+  launches use the new code.
+- **Rotate credentials:** see [Modal deployment](#modal-deployment-environment-pfn).
 
 ## Publication protocol (`pymc-generator-live-publication` 1.0)
 

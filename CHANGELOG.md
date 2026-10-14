@@ -8,22 +8,21 @@ read the migration notes before upgrading.
 
 ### Added
 
-- **Live generation dashboard with a Modal A100 worker and an authenticated CPU web
-  app (#52).** `live_dashboard/` (a repository tool, not part of the installed package)
-  publishes each completed generation task, a corpus payload plus a versioned JSON
-  completion record, into a store and follows the publications from a separate
-  FastAPI + Plotly page behind HTTP Basic authentication: worlds-generated and
+- **Experimental, internal live generation dashboard with a Modal CPU worker and an
+  authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the
+  installed package) publishes each completed generation task, a corpus payload plus a
+  versioned JSON completion record, into a store and follows the publications from a
+  separate FastAPI + Plotly page behind HTTP Basic authentication: worlds-generated and
   generation-speed cards, speed and cumulative worlds over time, channel impact
   distributions and the channel/control/baseline composition triangle, redrawn as tasks
-  publish without rerunning generation. On Modal (environment `pfn`) generation runs on
-  an A100 container and the dashboard on a separate CPU container with a stable URL;
-  PyTensor 3.2 has no native CUDA backend and the generator compiles Python/NumPy
-  thunks, so the A100 is allocated but worlds are generated on the container's CPU. The
-  interim single-writer publication protocol
-  (`pymc-generator-live-publication` 1.0) shows zero-world tasks, conflicting records and
-  unavailable payloads separately and never substitutes data; the multi-writer mechanism
-  remains open in #54. New optional extra `dashboard`; the `dev` extra gains the web
-  stack for the tests.
+  publish without rerunning generation. On Modal (environment `pfn`) generation and the
+  dashboard run on separate CPU containers, the dashboard at a stable URL. Workers use
+  no GPU by decision: PyTensor 3.2 has no native CUDA backend, and CPU-only workers
+  measured as fast as A100 workers for about 1/20 of the cost. The interim single-writer
+  publication protocol (`pymc-generator-live-publication` 1.0) shows zero-world tasks,
+  conflicting records and unavailable payloads separately and never substitutes data;
+  the multi-writer mechanism remains open in #54. New optional extra `dashboard`; the
+  `dev` extra gains the web stack for the tests.
 
 - **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not

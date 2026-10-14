@@ -18,9 +18,9 @@ GENERATE_FUNCTION = "generate_run"
 DASHBOARD_FUNCTION = "dashboard"
 REVISION_ENV = "LIVE_DASHBOARD_CODE_REVISION"
 
-GPU = "A100"
 GENERATION_TIMEOUT_S = 1200
-# A demo run must fit comfortably inside one worker timeout (about 1-3 s per world).
+# Demo bounds. One attempt covers roughly 250-300 worlds on Modal (3-5 s per world); a
+# larger run stops before the timeout and finishes with `launch.py --resume`.
 DEMO_MAX_WORLDS = 400
 DEMO_MAX_WORLDS_PER_TASK = 20
 

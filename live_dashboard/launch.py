@@ -143,5 +143,5 @@ def _await_start(call: modal.FunctionCall, volume: modal.Volume, run_id: str) ->
         return
     print(
         f"call {call.object_id} has not started run {run_id} yet (it may be queued behind "
-        "another run or waiting for a GPU); it starts on its own: follow the dashboard link"
+        "another run or waiting for a container); it starts on its own: follow the dashboard link"
     )

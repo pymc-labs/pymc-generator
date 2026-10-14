@@ -562,9 +562,9 @@ def status(run: RunSnapshot) -> dict[str, Any]:
         newest = run.attempts[0]
         attempt = f"latest attempt: {newest.status}"
         line.append(f"{attempt} ({newest.error})" if newest.error else attempt)
-        line.append(
-            f"GPU: {newest.gpu_requested or 'none'} requested, {newest.gpu_name or 'none'} detected"
-        )
+        if newest.gpu_requested or newest.gpu_name:  # e.g. the early A100 runs
+            requested = newest.gpu_requested or "none"
+            line.append(f"GPU: {requested} requested, {newest.gpu_name or 'none'} detected")
     else:
         line.append("latest attempt: none recorded")
     if run.issues:

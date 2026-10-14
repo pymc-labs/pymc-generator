@@ -1,15 +1,15 @@
-"""Modal deployment: an A100 generation worker and a CPU-only dashboard, in environment pfn.
+"""Modal deployment: a CPU generation worker and a CPU dashboard, in environment pfn.
 
 Deploy (the image is built from the repository's pyproject.toml and uv.lock):
 
     modal deploy -e pfn live_dashboard/modal_app.py
 
-``generate_run`` generates on an A100 container (one container at a time, tasks in
-order) and publishes into the Volume; ``dashboard`` is a separate CPU container serving
-the authenticated web app at a stable URL. Start runs with ``live_dashboard/launch.py``.
+``generate_run`` generates on a CPU container (one container at a time, tasks in order)
+and publishes into the Volume; ``dashboard`` is a separate CPU container serving the
+authenticated web app at a stable URL. Start runs with ``live_dashboard/launch.py``.
 
-PyTensor generation has no CUDA backend: the A100 is allocated as requested, but worlds
-are generated on the container's CPU. Each task record names the GPU it ran beside.
+No GPU: PyTensor generation has no CUDA backend, and CPU-only workers measured as fast
+as A100 workers for about 1/20 of the cost (the decision is in live_dashboard/README.md).
 
 Module scope imports only the standard library, ``modal`` and the stdlib-only
 ``live_dashboard.deployment``/``live_dashboard.revision``: the Modal CLI imports this
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import os
 import platform
-import subprocess
 from pathlib import Path
 
 import modal
@@ -30,7 +29,6 @@ from live_dashboard.deployment import (
     DASHBOARD_LABEL,
     ENVIRONMENT,
     GENERATION_TIMEOUT_S,
-    GPU,
     REVISION_ENV,
     SECRET_NAME,
     VOLUME_NAME,
@@ -78,24 +76,7 @@ dashboard_volume = volume.with_mount_options(read_only=True)
 app = modal.App(APP_NAME, image=image)
 
 
-def _gpu_name() -> str | None:
-    """Name of the attached GPU(s), from nvidia-smi; ``None`` without one."""
-    try:
-        output = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    names = [line.strip() for line in output.splitlines() if line.strip()]
-    return ", ".join(names) or None
-
-
 @app.function(
-    gpu=GPU,
     cpu=2.0,
     memory=4096,
     volumes={MOUNT: volume},
@@ -131,8 +112,8 @@ def generate_run(
     worker = WorkerInfo(
         platform=platform.platform(),
         cpu_count=os.cpu_count(),
-        gpu_requested=GPU,
-        gpu_name=_gpu_name(),
+        gpu_requested=None,
+        gpu_name=None,
     )
     store = DirectoryStore(MOUNT, on_commit=volume.commit, on_refresh=volume.reload)
     try:

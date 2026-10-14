@@ -490,7 +490,6 @@ def test_status_line_with_complete_accounting_and_a_failed_attempt():
             "rejected candidates: 1",
             "draw failures: 0",
             "latest attempt: failed (MemoryError)",
-            "GPU: none requested, none detected",
         ],
         "problems": [],
     }
