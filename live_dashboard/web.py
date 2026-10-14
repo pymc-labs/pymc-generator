@@ -171,15 +171,27 @@ def _poll(
     poll_seconds: float,
     active_poll_seconds: float,
 ) -> None:
-    """Refresh until ``stop`` is set; a failing refresh never ends the loop."""
+    """Refresh until ``stop`` is set; nothing else ends the loop.
+
+    Each step (choose the interval, wait, refresh) is guarded as a whole: an exception is
+    logged and the next step waits the active interval, as after a refresh that recorded
+    a store error. A misbehaving collector can thus neither end the thread nor make it
+    spin, and setting ``stop`` still ends any wait at once.
+    """
+    failed = False
     while True:
-        interval = poll_interval(collector.snapshot, poll_seconds, active_poll_seconds)
-        if stop.wait(interval):
-            return
         try:
+            if failed:
+                interval = active_poll_seconds
+            else:
+                interval = poll_interval(collector.snapshot, poll_seconds, active_poll_seconds)
+            failed = False
+            if stop.wait(interval):
+                return
             collector.refresh()
         except Exception:
-            logger.exception("collector refresh raised; keeping the previous snapshot")
+            logger.exception("poller step failed; retrying after the active interval")
+            failed = True
 
 
 def _static(name: str) -> bytes:
@@ -199,15 +211,17 @@ def create_app(
     Startup refreshes once (a failure leaves the API answering 503 until a refresh
     succeeds) and then, if ``start_poller``, runs the poller thread ``app.state.poller``
     (waiting :func:`poll_interval` between refreshes) until shutdown stops and joins it.
-    Both intervals must be finite and positive; the operator range
-    ``[MIN_POLL_SECONDS, MAX_POLL_SECONDS]`` applies to :func:`settings_from_env`.
+    Both intervals must be finite, positive and at most ``MAX_POLL_SECONDS``: a longer
+    wait would leave the page stale (and a huge one overflows the poller's timer). The
+    operator range ``[MIN_POLL_SECONDS, MAX_POLL_SECONDS]`` applies to
+    :func:`settings_from_env`.
     """
     for name, value in (
         ("poll_seconds", poll_seconds),
         ("active_poll_seconds", active_poll_seconds),
     ):
-        if not (math.isfinite(value) and value > 0):
-            raise ValueError(f"{name} must be a finite, positive number of seconds")
+        if not (math.isfinite(value) and 0 < value <= MAX_POLL_SECONDS):
+            raise ValueError(f"{name} must be a number of seconds in (0, {MAX_POLL_SECONDS:g}]")
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

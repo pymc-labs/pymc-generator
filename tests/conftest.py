@@ -135,7 +135,12 @@ def live_golden(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GoldenRun]
     store = support.VolumeLikeStore(tmp_path_factory.mktemp("live-golden"))
     request = RunRequest(label="golden", preset="small", worlds=6, worlds_per_task=2, seed=1)
     clock = support.FakeClock()
-    collector = Collector(store.reader(tmp_path_factory.mktemp("live-golden-reader")))
+    # The reader has its own frozen clock: its views never depend on the current date, and
+    # reading does not advance the writer's clock (golden timings stay fixed).
+    collector = Collector(
+        store.reader(tmp_path_factory.mktemp("live-golden-reader")),
+        clock=support.FakeClock(step=0.0),
+    )
     reader_views: list[ReaderView] = []
     diagnostics: dict[int, dict[str, Any]] = {}
     generate = DataGenerator.generate

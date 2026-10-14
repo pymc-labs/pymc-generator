@@ -587,7 +587,9 @@ def test_a_refresh_raising_unexpectedly_still_starts_the_app(credentials):
         assert collector.calls == 1
         listing = client.get("/api/runs", headers=AUTH)
         assert listing.status_code == 503
-        assert strict_json(listing)["last_error"] is None
+        body = strict_json(listing)
+        assert body["last_error"] is None
+        assert body["poll_seconds"] == 3.0  # never refreshed: the page polls fast
         collector.outcomes.append(make_snapshot(1, make_run(1)))
         collector.refresh()
         assert client.get("/api/runs", headers=AUTH).status_code == 200
@@ -771,7 +773,7 @@ QUIET = 0.3  # seconds a test waits to show that no refresh happens
 
 class SignallingCollector(StubCollector):
     """Sets ``reached`` during its ``signal_after``-th refresh, then blocks for
-    ``block_seconds`` (a slow store read in progress)."""
+    ``block_seconds`` (a slow store read in progress) and sets ``finished``."""
 
     def __init__(
         self,
@@ -783,6 +785,7 @@ class SignallingCollector(StubCollector):
         self.signal_after = signal_after
         self.block_seconds = block_seconds
         self.reached = threading.Event()
+        self.finished = threading.Event()
 
     def refresh(self) -> None:
         try:
@@ -791,6 +794,26 @@ class SignallingCollector(StubCollector):
             if self.calls == self.signal_after:
                 self.reached.set()
                 time.sleep(self.block_seconds)
+                self.finished.set()
+
+
+class UnreadableSnapshotCollector(SignallingCollector):
+    """Its snapshot cannot be read the first ``failures`` times it is asked for."""
+
+    def __init__(self, *outcomes: CollectionSnapshot, failures: int, signal_after: int) -> None:
+        self.failures = failures
+        super().__init__(*outcomes, signal_after=signal_after)
+
+    @property
+    def snapshot(self) -> CollectionSnapshot:
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("snapshot unavailable")
+        return self._snapshot
+
+    @snapshot.setter
+    def snapshot(self, value: CollectionSnapshot) -> None:
+        self._snapshot = value
 
 
 def poller_app(collector: StubCollector, credentials: Credentials, poll: float, active: float):
@@ -803,6 +826,7 @@ def poller_app(collector: StubCollector, credentials: Credentials, poll: float, 
     "startup",
     [
         pytest.param(make_snapshot(1, make_run(1, state="running")), id="generating"),
+        pytest.param(RuntimeError("collector bug"), id="first-refresh-raised"),
         pytest.param(
             make_snapshot(1, refreshed=False, last_error="OSError: volume unavailable"),
             id="first-refresh-failed",
@@ -829,11 +853,11 @@ def test_poller_uses_the_idle_interval_when_nothing_happens(credentials):
 
 def test_poller_survives_a_raising_refresh(credentials):
     collector = SignallingCollector(
-        make_snapshot(1, make_run(1, state="complete")),
+        make_snapshot(1, make_run(1, state="running")),
         RuntimeError("collector bug"),
         signal_after=4,
     )
-    app = poller_app(collector, credentials, poll=FAST, active=SLOW)
+    app = poller_app(collector, credentials, poll=SLOW, active=FAST)
     assert app.state.collector is collector
     with TestClient(app) as client:
         assert app.state.poller.name == "live-dashboard-poller"
@@ -842,14 +866,31 @@ def test_poller_survives_a_raising_refresh(credentials):
         assert client.get("/api/runs", headers=AUTH).status_code == 200
 
 
-def test_shutdown_waits_for_the_poller_to_finish(credentials):
+def test_poller_survives_an_unreadable_snapshot_and_retries_fast(credentials):
+    # Healthy and idle, so only the failure fallback (the active interval) brings the
+    # second refresh within the wait.
+    collector = UnreadableSnapshotCollector(
+        make_snapshot(1, make_run(1, state="complete")), failures=1, signal_after=2
+    )
+    with TestClient(poller_app(collector, credentials, poll=SLOW, active=FAST)):
+        assert collector.reached.wait(timeout=5.0)
+    assert collector.failures == 0
+
+
+def test_shutdown_waits_for_a_refresh_in_progress(credentials):
+    # The blocked refresh makes the run generating, so the poller's next wait is SLOW:
+    # nothing but shutdown can end the thread, however fast or slow this thread runs.
     collector = SignallingCollector(
-        make_snapshot(1, make_run(1, state="complete")), signal_after=2, block_seconds=QUIET
+        make_snapshot(1, make_run(1, state="complete")),
+        make_snapshot(2, make_run(1, state="running")),
+        signal_after=2,
+        block_seconds=QUIET,
     )
     app = poller_app(collector, credentials, poll=FAST, active=SLOW)
     with TestClient(app):
         poller = app.state.poller
         assert collector.reached.wait(timeout=5.0)  # the poller is now inside a refresh
+    assert collector.finished.is_set()
     assert not poller.is_alive()
     assert collector.calls == 2
 
@@ -860,11 +901,14 @@ def test_shutdown_waits_for_the_poller_to_finish(credentials):
         (math.inf, 3.0),
         (math.nan, 3.0),
         (0.0, 3.0),
+        (301.0, 3.0),
+        (1e10, 3.0),
         (10.0, 0.0),
         (10.0, -1.0),
         (10.0, math.nan),
+        (10.0, 301.0),
     ],
 )
-def test_create_app_refuses_non_positive_or_non_finite_intervals(credentials, poll, active):
-    with pytest.raises(ValueError, match="poll_seconds must be a finite, positive number"):
+def test_create_app_refuses_intervals_out_of_range(credentials, poll, active):
+    with pytest.raises(ValueError, match=r"poll_seconds must be a number of seconds in \(0, 300\]"):
         poller_app(StubCollector(), credentials, poll=poll, active=active)

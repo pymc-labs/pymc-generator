@@ -25,6 +25,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from live_dashboard.deployment import ENVIRONMENT, SECRET_NAME
+from live_dashboard.generation import RunConflictError
 
 
 def _time_limit(text: str) -> float:
@@ -35,6 +36,21 @@ def _time_limit(text: str) -> float:
         seconds = math.nan
     if not (math.isfinite(seconds) and 120.0 <= seconds <= 7 * 24 * 3600.0):
         raise argparse.ArgumentTypeError("must be a number of seconds from 120 to 604800")
+    return seconds
+
+
+def _poll_seconds(text: str) -> float:
+    """The dashboard's idle refresh interval, in the range its settings accept."""
+    from live_dashboard.web import MAX_POLL_SECONDS, MIN_POLL_SECONDS
+
+    try:
+        seconds = float(text)
+    except ValueError:
+        seconds = math.nan
+    if not (math.isfinite(seconds) and MIN_POLL_SECONDS <= seconds <= MAX_POLL_SECONDS):
+        raise argparse.ArgumentTypeError(
+            f"must be a number of seconds from {MIN_POLL_SECONDS:g} to {MAX_POLL_SECONDS:g}"
+        )
     return seconds
 
 
@@ -49,6 +65,7 @@ def _hash_password(args: argparse.Namespace) -> None:
             raise SystemExit("passwords differ")
     values = {USERNAME_ENV: args.username, PASSWORD_HASH_ENV: hash_password(password)}
     Credentials.from_env(values)  # refuse a username the dashboard would refuse
+    args.output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w") as handle:
         json.dump(values, handle, indent=2)
@@ -121,7 +138,9 @@ def main(argv: list[str] | None = None) -> None:
     serving.add_argument("--credentials", type=Path, help="JSON written by hash-password")
     serving.add_argument("--host", default="127.0.0.1")
     serving.add_argument("--port", type=int, default=8000)
-    serving.add_argument("--poll-seconds", type=float, help="idle refresh interval (1-300 s)")
+    serving.add_argument(
+        "--poll-seconds", type=_poll_seconds, help="idle refresh interval (1-300 s)"
+    )
     serving.set_defaults(handler=_serve)
 
     generating = commands.add_parser("generate", help="publish a run into a local store")
@@ -143,7 +162,11 @@ def main(argv: list[str] | None = None) -> None:
     generating.set_defaults(handler=_generate)
 
     args = parser.parse_args(argv)
-    args.handler(args)
+    try:
+        args.handler(args)
+    except (ValueError, OSError, RunConflictError) as error:
+        # Refused input or an unusable store/file: a message, not a traceback.
+        parser.exit(2, f"{parser.prog} {args.command}: error: {error}\n")
 
 
 if __name__ == "__main__":
