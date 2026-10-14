@@ -75,7 +75,6 @@ class VolumeLikeStore(DirectoryStore):
         self.root.mkdir(parents=True, exist_ok=True)
         self.committed = root / "committed"
         self.committed.mkdir(parents=True, exist_ok=True)
-        self.commits = 0
 
     def write_new(self, path: str, data: bytes) -> None:
         parts = path.split("/")
@@ -98,7 +97,6 @@ class VolumeLikeStore(DirectoryStore):
             payload = json.loads(record.read_bytes())["payload"]
             if payload is not None:
                 assert (self.committed / payload["path"]).is_file()
-        self.commits += 1
 
     def reader(self, root: Path) -> DirectoryStore:
         root.mkdir(parents=True, exist_ok=True)
@@ -127,11 +125,6 @@ def rewrite_json(path: Path, mutate: Callable[[dict[str, Any]], None]) -> None:
     body = json.loads(path.read_bytes())
     mutate(body)
     path.write_text(json.dumps(body, indent=2, sort_keys=True))
-
-
-def only_run_id(root: Path) -> str:
-    (run_id,) = sorted(path.name for path in (root / pub.RUNS_DIR).iterdir())
-    return run_id
 
 
 def load_manifest(store: DirectoryStore, run_id: str) -> pub.RunManifest:

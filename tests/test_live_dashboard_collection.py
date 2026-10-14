@@ -1,8 +1,9 @@
 """Collector: what the dashboard shows for any state of the publication store.
 
 Stores are written with the contract's own records (``publish_task`` commits payloads
-before records) and real ``small`` corpus payloads; damaged or out-of-protocol states are
-produced by editing the files a writer left behind.
+before records) and the real corpora of the session's golden run; damaged or
+out-of-protocol states are produced by editing the files a writer left behind. Every
+collector reads a frozen clock, so results never depend on how often it reads the time.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -23,8 +25,6 @@ from live_dashboard.collection import Collector
 from live_dashboard.extract import extract_payload
 from live_dashboard.snapshot import CollectionSnapshot, RunSnapshot
 from live_dashboard.storage import DirectoryStore
-from pymc_generator import DataGenerator, make_scm_prior
-from pymc_generator.data_generator import save_corpus
 
 
 def _load(name: str) -> ModuleType:
@@ -65,26 +65,15 @@ def _dashboard_environment(monkeypatch):
 
 
 @pytest.fixture(scope="module")
-def payloads(tmp_path_factory) -> dict[int, bytes]:
-    """``save_corpus`` bytes of a two-world ``small`` corpus for seeds 1, 2 and 3."""
-    prior = make_scm_prior(
-        n_treatments=3,
-        n_covariates=2,
-        n_latent=1,
-        n_time_steps=24,
-        n_cells=2,
-        draws_per_cell=1,
-        n_treatments_active_range=(1, 3),
-        n_covariates_active_range=(1, 2),
-        treatment_cv_floor=0.5,
+def payloads(live_golden) -> tuple[bytes, ...]:
+    """The golden run's payload bytes in task order: three distinct two-world corpora."""
+    store = DirectoryStore(live_golden.root)
+    run_id = live_golden.request.run_id
+    result = tuple(
+        store.read_bytes(pub.payload_path(run_id, pub.task_id_for(index), live_golden.attempt_id))
+        for index in range(live_golden.request.n_tasks)
     )
-    directory = tmp_path_factory.mktemp("payloads")
-    result = {}
-    for seed in (1, 2, 3):
-        path = directory / f"seed-{seed}.npz"
-        save_corpus(DataGenerator(prior).generate(n_tasks=2, seed=seed), path)
-        result[seed] = path.read_bytes()
-    assert len(set(result.values())) == 3
+    assert len(set(result)) == len(result) == 3
     return result
 
 
@@ -94,6 +83,11 @@ def payloads(tmp_path_factory) -> dict[int, bytes]:
 def _attempt_id(n: int) -> str:
     """Deterministic attempt ids whose sort order is ``n``'s."""
     return f"20260101T{n:06d}Z-{n:08x}"
+
+
+def _clock(seconds: float = 0.0) -> Any:
+    """A clock frozen at ``EPOCH + seconds`` (tests move it with ``advance``)."""
+    return support.FakeClock(start=EPOCH + timedelta(seconds=seconds), step=0)
 
 
 def _manifest(
@@ -183,8 +177,8 @@ def _flipped(data: bytes) -> bytes:
     return data[:middle] + bytes([data[middle] ^ 0xFF]) + data[middle + 1 :]
 
 
-def _collector(store: DirectoryStore, **kwargs: object) -> Collector:
-    collector = Collector(store, clock=kwargs.pop("clock", support.FakeClock()), **kwargs)
+def _collector(store: DirectoryStore, clock: Callable[[], datetime] | None = None) -> Collector:
+    collector = Collector(store, clock=clock or _clock())
     collector.refresh()
     return collector
 
@@ -250,7 +244,7 @@ class _FaultyStore(DirectoryStore):
 
 
 def test_a_new_collector_has_not_refreshed_and_an_empty_store_has_no_runs(tmp_path):
-    collector = Collector(DirectoryStore(tmp_path), clock=support.FakeClock())
+    collector = Collector(DirectoryStore(tmp_path), clock=_clock())
     initial = collector.snapshot
     assert (initial.sequence, initial.refreshed_at, initial.last_error, initial.runs) == (
         0,
@@ -264,6 +258,53 @@ def test_a_new_collector_has_not_refreshed_and_an_empty_store_has_no_runs(tmp_pa
     assert (snapshot.runs, snapshot.issues) == ((), ())
 
 
+def test_the_golden_run_reads_back_as_the_writer_published_it(live_golden, payloads):
+    store = DirectoryStore(live_golden.root)  # read-only: the collector writes nothing
+    snapshot = _collector(store).snapshot
+    assert (snapshot.last_error, snapshot.issues) == (None, ())
+    (run,) = snapshot.runs
+    request = live_golden.request
+    assert (run.run_id, run.label, run.preset, run.seed) == (request.run_id, "golden", "small", 1)
+    assert (run.state, run.issues, run.published_worlds, run.target_worlds) == (
+        "complete",
+        (),
+        6,
+        6,
+    )
+    assert [(attempt.attempt_id, attempt.status) for attempt in run.attempts] == [
+        (live_golden.attempt_id, "finished")
+    ]
+    for task in run.tasks:
+        record = pub.decode_task_record(
+            store.read_bytes(pub.task_record_path(run.run_id, task.task_id, task.attempt_id)),
+            manifest=support.load_manifest(store, run.run_id),
+            task_id=task.task_id,
+            attempt_id=live_golden.attempt_id,
+        )
+        accounting = record.accounting
+        assert (task.status, task.duplicate_records, task.detail) == ("published", 0, None)
+        assert (task.started_at, task.finished_at, task.generation_seconds) == (
+            record.started_at,
+            record.finished_at,
+            record.generation_seconds,
+        )
+        assert (task.candidates_evaluated, task.rejected_candidates, task.draw_failures) == (
+            accounting.candidates_evaluated,
+            accounting.rejected_candidates,
+            accounting.draw_failures,
+        )
+    # Precondition: rejections exist, so swapped accounting fields would show.
+    assert any(task.rejected_candidates for task in run.tasks)
+    for index, payload in enumerate(payloads):
+        metrics = extract_payload(payload)
+        task_id = pub.task_id_for(index)
+        worlds = [world for world in run.worlds if world.task_id == task_id]
+        assert [world.world_id for world in worlds] == [
+            pub.world_id_for(run.run_id, task_id, row) for row in range(2)
+        ]
+        assert [world.channel_share for world in worlds] == list(metrics.channel)
+
+
 @pytest.mark.parametrize(
     ("method", "error"),
     [("refresh", OSError("volume reload failed")), ("list_dirs", RuntimeError("listing broke"))],
@@ -272,8 +313,10 @@ def test_store_failures_set_last_error_and_keep_the_previous_runs(tmp_path, meth
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store)
     _publish(store, manifest, 0, 1)
-    collector = _collector(store)
+    clock = _clock()
+    collector = _collector(store, clock)
     before = collector.snapshot
+    clock.advance(60)
 
     def fail(*args: object) -> None:
         raise error
@@ -282,13 +325,16 @@ def test_store_failures_set_last_error_and_keep_the_previous_runs(tmp_path, meth
     collector.refresh()
     failed = collector.snapshot
     assert failed.last_error == f"{type(error).__name__}: {error}"
-    assert (failed.sequence, failed.refreshed_at) == (2, before.refreshed_at)
+    assert (failed.sequence, failed.refreshed_at) == (2, EPOCH)
     assert (failed.runs, failed.issues) == (before.runs, before.issues)
     delattr(store, method)
     collector.refresh()
     recovered = collector.snapshot
-    assert recovered.last_error is None
-    assert recovered.refreshed_at > before.refreshed_at
+    assert (recovered.sequence, recovered.refreshed_at, recovered.last_error) == (
+        3,
+        EPOCH + timedelta(seconds=60),
+        None,
+    )
     assert recovered.runs == before.runs
 
 
@@ -343,7 +389,7 @@ def test_runs_are_listed_newest_first(tmp_path):
 def test_a_volume_reader_sees_each_commit_after_exactly_one_refresh(tmp_path, payloads):
     writer = support.VolumeLikeStore(tmp_path / "volume")
     manifest = _manifest(writer)
-    collector = Collector(writer.reader(tmp_path / "reader"), clock=support.FakeClock())
+    collector = Collector(writer.reader(tmp_path / "reader"), clock=_clock())
     assert collector.snapshot.runs == ()
     collector.refresh()
     assert _statuses(collector) == ["pending", "pending"]
@@ -356,7 +402,7 @@ def test_a_volume_reader_sees_each_commit_after_exactly_one_refresh(tmp_path, pa
     collector.refresh()
     assert [attempt.attempt_id for attempt in _run(collector).attempts] == [_attempt_id(1)]
 
-    _publish(writer, manifest, 1, 1, payloads[1])
+    _publish(writer, manifest, 1, 1, payloads[0])
     assert _statuses(collector) == ["pending", "pending"]
     collector.refresh()
     assert _statuses(collector) == ["pending", "published"]
@@ -422,7 +468,7 @@ def test_a_partial_record_is_unreadable_until_it_is_complete(tmp_path, payloads)
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=2)
     _attempt(store, manifest, 1, "running")
-    _publish(store, manifest, 0, 1, payloads[1])
+    _publish(store, manifest, 0, 1, payloads[0])
     path = _record_file(tmp_path, manifest, 0, 1)
     complete = path.read_bytes()
     path.write_bytes(complete[: len(complete) // 3])
@@ -486,7 +532,7 @@ def test_names_and_paths_outside_the_layout_are_never_used(tmp_path, payloads):
     path.rename(path.with_name("latest.json"))
     path.with_name("notes.txt").write_text("hello")
     # task 1: a record naming another attempt's payload
-    _publish(store, manifest, 1, 1, payloads[1])
+    _publish(store, manifest, 1, 1, payloads[0])
     original = _record_file(tmp_path, manifest, 1, 1)
     redirected = _edit(original.read_bytes(), attempt_id=_attempt_id(2))
     original.unlink()
@@ -531,8 +577,8 @@ def test_duplicates_count_once_and_the_smallest_attempt_is_authoritative(tmp_pat
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=2)
     later = EPOCH + timedelta(hours=1)
-    _publish(store, manifest, 0, 5, payloads[1], started_at=later)  # arrives first
-    _publish(store, manifest, 0, 3, payloads[1])
+    _publish(store, manifest, 0, 5, payloads[0], started_at=later)  # arrives first
+    _publish(store, manifest, 0, 3, payloads[0])
     run = _run(_collector(store))
     (task,) = run.tasks
     assert (task.status, task.duplicate_records) == ("published", 1)
@@ -547,12 +593,12 @@ def test_duplicates_count_once_and_the_smallest_attempt_is_authoritative(tmp_pat
 def test_conflicting_records_are_excluded_also_for_a_fresh_collector(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store)
-    _publish(store, manifest, 0, 1, payloads[1])
+    _publish(store, manifest, 0, 1, payloads[0])
     _publish(store, manifest, 1, 1)
     first = _collector(store)
     assert _statuses(first) == ["published", "zero"]
-    _publish(store, manifest, 0, 2, payloads[2])
-    _publish(store, manifest, 1, 2, payloads[1])
+    _publish(store, manifest, 0, 2, payloads[1])
+    _publish(store, manifest, 1, 2, payloads[0])
     first.refresh()
     fresh = _collector(store)
     for collector in (first, fresh):
@@ -560,8 +606,8 @@ def test_conflicting_records_are_excluded_also_for_a_fresh_collector(tmp_path, p
         assert [task.status for task in run.tasks] == ["conflict", "conflict"]
         assert (run.worlds, run.impacts, run.published_worlds) == ((), (), 0)
         detail = run.tasks[0].detail
-        for n, seed in ((1, 1), (2, 2)):
-            assert f"{_attempt_id(n)} (2 worlds, sha256 {pub.sha256_hex(payloads[seed])})" in detail
+        for n, payload in ((1, payloads[0]), (2, payloads[1])):
+            assert f"{_attempt_id(n)} (2 worlds, sha256 {pub.sha256_hex(payload)})" in detail
         assert f"{_attempt_id(1)} (0 worlds, no payload)" in run.tasks[1].detail
     assert fresh.snapshot.runs == first.snapshot.runs
 
@@ -569,11 +615,11 @@ def test_conflicting_records_are_excluded_also_for_a_fresh_collector(tmp_path, p
 def test_payload_verification_sequence_on_one_collector(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=2)
-    record = _publish(store, manifest, 0, 1, payloads[1])
+    good = payloads[0]
+    record = _publish(store, manifest, 0, 1, good)
     payload = tmp_path / record.payload.path
-    good = payloads[1]
     calls: Counter[str] = Counter()
-    collector = Collector(store, clock=support.FakeClock(), extractor=_spy(calls))
+    collector = Collector(store, clock=_clock(), extractor=_spy(calls))
 
     payload.unlink()
     collector.refresh()
@@ -581,7 +627,7 @@ def test_payload_verification_sequence_on_one_collector(tmp_path, payloads):
     payload.write_bytes(_flipped(good))  # same length, other digest
     collector.refresh()
     assert _statuses(collector) == ["unavailable"]
-    payload.write_bytes(payloads[2])  # a valid corpus, but not the recorded one
+    payload.write_bytes(payloads[1])  # a valid corpus, but not the recorded one
     collector.refresh()
     assert _statuses(collector) == ["unavailable"]
     assert _run(collector).tasks[0].attempt_id == _attempt_id(1)  # timing still shown
@@ -605,8 +651,8 @@ def test_payload_verification_sequence_on_one_collector(tmp_path, payloads):
 def test_a_missing_payload_falls_back_to_a_duplicate_record(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=2)
-    first = _publish(store, manifest, 0, 1, payloads[1])
-    _publish(store, manifest, 0, 2, payloads[1])
+    first = _publish(store, manifest, 0, 1, payloads[0])
+    _publish(store, manifest, 0, 2, payloads[0])
     (tmp_path / first.payload.path).unlink()
     (task,) = _run(_collector(store)).tasks
     assert (task.status, task.attempt_id, task.duplicate_records) == (
@@ -620,14 +666,12 @@ def test_extraction_failures_stay_with_their_task(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=8)
     not_a_corpus = b"bytes that are not a corpus archive"
-    _publish(store, manifest, 0, 1, payloads[1])
+    _publish(store, manifest, 0, 1, payloads[0])
     _publish(store, manifest, 1, 1, not_a_corpus)  # deterministic content error
-    _publish(store, manifest, 2, 1, payloads[2])  # the extractor fails for another reason
-    _publish(store, manifest, 3, 1, payloads[3], accepted=1)  # holds 2 rows, records 1
+    _publish(store, manifest, 2, 1, payloads[1])  # the extractor fails for another reason
+    _publish(store, manifest, 3, 1, payloads[2], accepted=1)  # holds 2 rows, records 1
     calls: Counter[str] = Counter()
-    collector = Collector(
-        store, clock=support.FakeClock(), extractor=_spy(calls, failing=payloads[2])
-    )
+    collector = Collector(store, clock=_clock(), extractor=_spy(calls, failing=payloads[1]))
     collector.refresh()
     collector.refresh()
     snapshot = collector.snapshot
@@ -645,10 +689,10 @@ def test_extraction_failures_stay_with_their_task(tmp_path, payloads):
     # Content errors are cached by digest; the other failure is retried each refresh.
     assert calls == Counter(
         {
-            pub.sha256_hex(payloads[1]): 1,
+            pub.sha256_hex(payloads[0]): 1,
             pub.sha256_hex(not_a_corpus): 1,
-            pub.sha256_hex(payloads[2]): 2,
-            pub.sha256_hex(payloads[3]): 1,
+            pub.sha256_hex(payloads[1]): 2,
+            pub.sha256_hex(payloads[2]): 1,
         }
     )
 
@@ -656,15 +700,15 @@ def test_extraction_failures_stay_with_their_task(tmp_path, payloads):
 def test_each_payload_is_extracted_once_and_identities_attached_per_task(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=6)
-    _publish(store, manifest, 0, 1, payloads[1])
-    _publish(store, manifest, 0, 2, payloads[1])
-    _publish(store, manifest, 1, 1, payloads[1])
-    _publish(store, manifest, 2, 1, payloads[2])
+    _publish(store, manifest, 0, 1, payloads[0])
+    _publish(store, manifest, 0, 2, payloads[0])
+    _publish(store, manifest, 1, 1, payloads[0])
+    _publish(store, manifest, 2, 1, payloads[1])
     calls: Counter[str] = Counter()
-    collector = Collector(store, clock=support.FakeClock(), extractor=_spy(calls))
+    collector = Collector(store, clock=_clock(), extractor=_spy(calls))
     for _ in range(3):
         collector.refresh()
-    assert calls == Counter({pub.sha256_hex(payloads[1]): 1, pub.sha256_hex(payloads[2]): 1})
+    assert calls == Counter({pub.sha256_hex(payloads[0]): 1, pub.sha256_hex(payloads[1]): 1})
     run = _run(collector)
     assert _statuses(collector) == ["published"] * 3
     by_task = {}
@@ -681,7 +725,7 @@ def test_each_payload_is_extracted_once_and_identities_attached_per_task(tmp_pat
 def test_a_shortfall_task_publishes_its_accepted_worlds(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=4, worlds_per_task=4)
-    _publish(store, manifest, 0, 1, payloads[1], accepted=2)
+    _publish(store, manifest, 0, 1, payloads[0], accepted=2)
     run = _run(_collector(store))
     (task,) = run.tasks
     assert (task.status, task.accepted_worlds, task.target_worlds) == ("published", 2, 4)
@@ -692,10 +736,9 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=6)
     _attempt(store, manifest, 1, "running", deadline=3600.0)
-    collector = Collector(store, clock=support.FakeClock(start=EPOCH + timedelta(minutes=1)))
-    seeds = {0: 1, 1: 2, 2: 3}
+    collector = Collector(store, clock=_clock(60))
 
-    _publish(store, manifest, 2, 1, payloads[seeds[2]])
+    _publish(store, manifest, 2, 1, payloads[2])
     record = _record_file(tmp_path, manifest, 2, 1)
     record.rename(tmp_path / "aside.json")  # only the payload has arrived so far
     collector.refresh()
@@ -704,10 +747,10 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
     (tmp_path / "aside.json").rename(record)
     collector.refresh()
     assert _statuses(collector) == ["pending", "pending", "published"]
-    _publish(store, manifest, 0, 1, payloads[seeds[0]])
+    _publish(store, manifest, 0, 1, payloads[0])
     collector.refresh()
     assert _statuses(collector) == ["published", "pending", "published"]
-    _publish(store, manifest, 1, 1, payloads[seeds[1]])
+    _publish(store, manifest, 1, 1, payloads[1])
     collector.refresh()
 
     run = _run(collector)
@@ -715,8 +758,8 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
     assert [world.world_id for world in run.worlds] == [
         f"{manifest.run_id}/task-{index:05d}/w{row}" for index in range(3) for row in range(2)
     ]
-    for index, seed in seeds.items():
-        metrics = extract_payload(payloads[seed])
+    for index, payload in enumerate(payloads):
+        metrics = extract_payload(payload)
         task_id = pub.task_id_for(index)
         worlds = [world for world in run.worlds if world.task_id == task_id]
         assert [(w.channel_share, w.control_share, w.baseline_share) for w in worlds] == list(
@@ -737,18 +780,20 @@ def test_idle_refreshes_and_independent_collectors_agree(tmp_path, payloads):
     manifest = _manifest(store, worlds=8)
     _attempt(store, manifest, 1, "failed")
     _attempt(store, manifest, 2, "running", started=60.0, deadline=3600.0)
-    _publish(store, manifest, 0, 1, payloads[1])
-    _publish(store, manifest, 1, 1, payloads[2])
-    _publish(store, manifest, 1, 2, payloads[3])
+    _publish(store, manifest, 0, 1, payloads[0])
+    _publish(store, manifest, 1, 1, payloads[1])
+    _publish(store, manifest, 1, 2, payloads[2])
     _publish(store, manifest, 2, 1, b"not a corpus")
     (tmp_path / pub.tasks_dir(manifest.run_id) / "stray").mkdir()
-    first = _collector(store)
+    clock = _clock()
+    first = _collector(store, clock)
     before = first.snapshot
+    clock.advance(30)
     first.refresh()
     after = first.snapshot
-    assert (after.sequence, after.refreshed_at) == (2, before.refreshed_at + timedelta(seconds=1))
+    assert (after.sequence, after.refreshed_at) == (2, EPOCH + timedelta(seconds=30))
     assert (after.runs, after.issues) == (before.runs, before.issues)
-    second = _collector(store)
+    second = _collector(store, clock)
     assert second.snapshot.runs == after.runs
     run = _run(second)
     assert [task.status for task in run.tasks] == ["published", "conflict", "invalid", "pending"]
@@ -807,8 +852,7 @@ def test_run_states_and_attempt_statuses(tmp_path, case):
         _publish(store, manifest, index, 9)
     for n, attempt_state, started, deadline in attempts:
         _attempt(store, manifest, n, attempt_state, started=started, deadline=deadline)
-    clock = support.FakeClock(start=EPOCH + timedelta(seconds=now))
-    run = _run(_collector(store, clock=clock))
+    run = _run(_collector(store, _clock(now)))
     assert run.state == state
     assert [attempt.status for attempt in run.attempts] == statuses
     newest_first = sorted(attempts, key=lambda spec: (spec[2], spec[0]), reverse=True)
@@ -822,8 +866,8 @@ def test_unexpected_errors_stay_with_their_task_or_run(tmp_path, payloads, scope
     store = DirectoryStore(tmp_path)
     other = _manifest(store, label="other")
     manifest = _manifest(store)
-    _publish(store, manifest, 0, 1, payloads[1])
-    _publish(store, manifest, 1, 1, payloads[2])
+    _publish(store, manifest, 0, 1, payloads[0])
+    _publish(store, manifest, 1, 1, payloads[1])
     _publish(store, other, 0, 1)
     if scope == "task":
         fail_on = f"{pub.task_dir(manifest.run_id, 'task-00001')}/"

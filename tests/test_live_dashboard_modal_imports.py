@@ -168,3 +168,34 @@ def test_container_reimports_the_app_without_git_or_the_checkout(stub_dir, tmp_p
         git=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_launcher_arguments_bind_to_the_worker_signature_by_name(stub_dir):
+    # A reordered generate_run parameter would only fail on Modal (or silently swap values).
+    code = PROBE.format(
+        path=[str(stub_dir), str(REPO), str(REPO / "live_dashboard")],
+        module="modal_app",
+        file=str(REPO / "live_dashboard" / "modal_app.py"),
+    ) + textwrap.dedent(
+        """
+        import inspect
+        launch_spec = importlib.util.spec_from_file_location("launch", {launch!r})
+        launch = importlib.util.module_from_spec(launch_spec)
+        launch_spec.loader.exec_module(launch)
+        request = launch.RunRequest("demo", "small", 6, 2, 7)
+        bound = inspect.signature(module.generate_run).bind(*launch.spawn_arguments(request))
+        assert dict(bound.arguments) == {{
+            "label": "demo", "preset": "small", "worlds": 6, "worlds_per_task": 2,
+            "seed": 7, "expected_run_id": request.run_id,
+        }}, bound.arguments
+        """
+    ).format(launch=str(REPO / "live_dashboard" / "launch.py"))
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", code],
+        cwd=REPO,
+        env={"STUB_MODAL_LOCAL": "1", "STUB_MODAL_ENVIRONMENT": "pfn", "PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr

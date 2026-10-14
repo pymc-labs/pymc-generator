@@ -108,6 +108,7 @@ def test_every_request_field_names_a_different_run(change):
         {"worlds": True},
         {"seed": -1},
         {"seed": 1.0},
+        {"seed": pub.MAX_SEED + 1},
         {"worlds": 2 * (pub.MAX_TASKS + 1)},
         {"worlds_per_task": pub.MAX_WORLDS_PER_TASK + 2, "worlds": pub.MAX_WORLDS_PER_TASK + 2},
     ],
@@ -117,6 +118,13 @@ def test_invalid_requests_are_rejected(kwargs):
     arguments.update(kwargs)
     with pytest.raises(ValueError):
         pub.RunRequest(**arguments)
+
+
+def test_the_largest_seed_keeps_every_task_seed_json_safe():
+    request = pub.RunRequest("demo", "small", 2 * pub.MAX_TASKS, 2, pub.MAX_SEED)
+    manifest = _manifest(request)
+    assert request.task_seed(request.n_tasks - 1) <= pub.MAX_JSON_INT
+    assert pub.decode_run_manifest(manifest.encode(), run_id=manifest.run_id) == manifest
 
 
 def test_records_round_trip_exactly():
@@ -172,6 +180,7 @@ def test_additive_minor_versions_are_accepted():
         (lambda data: _edit(data, seed=3), pub.RecordError),
         (lambda data: _edit(data, seed=2.0), pub.RecordError),
         (lambda data: _edit(data, task_index=True), pub.RecordError),
+        (lambda data: _edit(data, accounting={"draw_failures": 2**53}), pub.RecordError),
         (lambda data: _edit(data, accepted_worlds=1), pub.RecordError),
         (lambda data: _edit(data, status="complete", accepted_worlds=1), pub.RecordError),
         (lambda data: _edit(data, world_ids=["x", "y"]), pub.RecordError),

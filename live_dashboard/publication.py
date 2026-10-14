@@ -46,6 +46,9 @@ MAX_WORLDS_PER_TASK = 10_000
 MAX_RECORD_BYTES = 1 << 20
 MAX_MESSAGE_CHARS = 1000
 MAX_TEXT_CHARS = 200
+# Every integer a record carries stays exact in any JSON reader (IEEE-754 doubles).
+MAX_JSON_INT = 2**53 - 1
+MAX_SEED = MAX_JSON_INT - MAX_TASKS
 
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _RUN_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{12}")
@@ -227,8 +230,8 @@ class RunRequest:
             raise ValueError(f"at most {MAX_TASKS} tasks per run")
         if self.worlds_per_task > MAX_WORLDS_PER_TASK:
             raise ValueError(f"at most {MAX_WORLDS_PER_TASK} worlds per task")
-        if not 0 <= self.seed <= 2**62:
-            raise ValueError(f"seed must be in [0, 2**62], got {self.seed}")
+        if not 0 <= self.seed <= MAX_SEED:
+            raise ValueError(f"seed must be in [0, {MAX_SEED}], got {self.seed}")
 
     @property
     def n_tasks(self) -> int:
@@ -580,8 +583,8 @@ def _int(body: Mapping[str, Any], key: str, *, minimum: int = 0, optional: bool 
     value = body.get(key)
     if value is None and optional:
         return None
-    if type(value) is not int or value < minimum:
-        raise RecordError(f"{key} must be an integer >= {minimum}, got {value!r}")
+    if type(value) is not int or not minimum <= value <= MAX_JSON_INT:
+        raise RecordError(f"{key} must be an integer in [{minimum}, {MAX_JSON_INT}], got {value!r}")
     return value
 
 

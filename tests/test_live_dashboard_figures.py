@@ -154,8 +154,9 @@ def trace(found_panel: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 # A run with an idle gap (90 s -> 300 s), overlapping tasks (0-60 and 30-90), a
-# zero-length task and two tasks finishing at the same instant (360 s). Active time:
-# [0, 90] + [300, 360] + [400, 420] = 170 s. Conflicts never count as active time.
+# zero-length task and two tasks finishing at the same instant (360 s). Invalid and
+# unavailable tasks spent generation time but add no worlds; conflicts are not timed.
+# Active time: [0, 90] + [300, 360] + [400, 420] + [480, 510] = 200 s.
 GAPPED = [
     published(0, (0, 60), generation_seconds=50.0),
     published(1, (30, 90)),
@@ -163,6 +164,7 @@ GAPPED = [
     published(3, (360, 360)),
     task(4, "invalid", (400, 420), accepted=2, attempt=ATTEMPT),
     task(5, "conflict", (0, 1000)),
+    task(6, "unavailable", (480, 510), accepted=2, attempt=ATTEMPT, generation_seconds=25.0),
 ]
 
 
@@ -204,13 +206,19 @@ def test_speed_figure_divides_by_the_union_of_task_intervals():
     speed = panel(snapshot, "speed")
     assert speed["empty"] is None
     line = trace(speed, "cumulative (active time)")
-    assert line["x"] == [iso(60), iso(90), iso(360), iso(420)]
-    assert line["y"] == pytest.approx([2 / 1.0, 4 / 1.5, 6 / 2.5, 6 / (170 / 60)])
+    assert line["x"] == [iso(60), iso(90), iso(360), iso(420), iso(510)]
+    assert line["y"] == pytest.approx([2 / 1.0, 4 / 1.5, 6 / 2.5, 6 / (170 / 60), 6 / (200 / 60)])
     markers = trace(speed, "per task")
-    # Rates use reported generation seconds, else wall time; zero-length tasks are skipped.
+    # Rates use reported generation seconds, else wall time; zero-length tasks are skipped
+    # and invalid or unavailable tasks have no rate of their own.
     assert markers["x"] == [iso(60), iso(90), iso(360)]
     assert markers["y"] == pytest.approx([2 / 50 * 60, 2.0, 0.0])
-    assert card(snapshot, "speed")["value"] == pytest.approx(line["y"][-1])
+    assert card(snapshot, "speed")["value"] == pytest.approx(1.8)  # 6 worlds / (200 s)
+    assert card(snapshot, "worlds")["text"] == "6 / 14"
+    worlds = trace(panel(snapshot, "cumulative"), "published worlds")
+    assert worlds["x"] == [iso(0), iso(60), iso(90), iso(360)]
+    assert worlds["y"] == [0, 2, 4, 6]
+    assert trace(panel(snapshot, "cumulative"), "target (14)")["x"] == [iso(0), iso(510)]
 
 
 def test_active_time_merges_intervals_bridged_by_a_later_task():

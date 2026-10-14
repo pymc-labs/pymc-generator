@@ -39,6 +39,9 @@ conflicting and invalid tasks appear in the status line instead.
 
 ## Local use
 
+`live_dashboard` is a repository tool (it is not part of the installed `pymc-generator`
+package): run its commands from the repository root.
+
 ```bash
 uv sync --locked --extra dev --extra dashboard
 # Credentials: a username and a PBKDF2 hash, written to a 0600 JSON file.
@@ -55,7 +58,8 @@ uv run --no-sync python -m live_dashboard generate --data-dir /tmp/live-runs \
 Presets: `showcase-variety` (the trajectory-showcase notebook's parameter ranges with
 independent active-count draws per world instead of the notebook's stratified integer
 design, which needs one call for a multiple of 10 worlds) and `small` (a tiny
-configuration for tests and smoke runs).
+configuration for tests and smoke runs). `generate --max-seconds` (default 3600) is the
+attempt's time limit; rerun the same command to resume a stopped run.
 
 ## Modal deployment (environment `pfn`)
 
@@ -75,14 +79,22 @@ modal run -e pfn live_dashboard/launch.py --label demo --worlds 20 --worlds-per-
 
 Resources: app `pymc-generator-live-dashboard`, Volume `pymc-generator-live-dashboard`
 (v1), Secret `pymc-generator-dashboard-auth`, web label `pymc-generator-dashboard`, all
-in `pfn`. Rotate credentials with `modal secret create --force ...` and redeploy.
+in `pfn`. The dashboard mounts the Volume read-only and calls `reload()` on it (verified
+on the first deployment); if a future Modal release refused that, mounting it read-write
+keeps the same behaviour because the dashboard never writes. Rotate credentials with
+`modal secret create --force ...` and redeploy.
 
 Limits: `generate_run` uses `gpu="A100"`, 2 CPU cores and 4 GiB, one container at a
 time, a 1200 s timeout and one retry, so one launch costs at most about two attempts of
 20 minutes (≈ $1.9 at Modal's A100-80GB list price; most runs take a few minutes). A
-run is capped at 400 worlds and 20 worlds per task. The dashboard uses one CPU core and
-2 GiB, one container, and scales to zero after 10 idle minutes. Polling is every 3 s
-while a run is generating and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up
+run is capped at 400 worlds and 20 worlds per task. Requests the worker can never
+satisfy (unknown preset, too large, a different generator than the stored run) are
+refused without a retry; the refusal is recorded as a failed attempt when the run
+exists. Each attempt records its kill time as `deadline_at` and stops starting tasks at
+least max(90 s, twice its longest task) before it; a resumed run continues with the
+unpublished tasks. The dashboard uses one CPU core and 2 GiB, one container, and scales
+to zero after 10 idle minutes. Polling is every 3 s while a run is generating (or while
+the store cannot be read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up
 to one browser poll; this is a refresh cadence, not a latency guarantee.
 
 ## Publication protocol (`pymc-generator-live-publication` 1.0)

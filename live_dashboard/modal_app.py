@@ -38,8 +38,6 @@ from live_dashboard.deployment import (
 from live_dashboard.revision import code_revision
 
 MOUNT = "/publications"
-# Stop starting tasks this long before the platform timeout kills the attempt.
-DEADLINE_MARGIN_S = 30
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _REPO = _PACKAGE_DIR.parent
 _IGNORE = ["**/__pycache__", "**/__pycache__/**", "**/*.pyc"]
@@ -70,8 +68,11 @@ else:
     # Inside a container the image is already built; local paths and git do not exist.
     image = _base_image
 
-volume = modal.Volume.from_name(VOLUME_NAME, environment_name=ENVIRONMENT, create_if_missing=True)
-# The dashboard only reads generation-owned data.
+# Volume v1 (the durable, generally available version); this app is its only writer.
+volume = modal.Volume.from_name(
+    VOLUME_NAME, environment_name=ENVIRONMENT, create_if_missing=True, version=1
+)
+# The dashboard only reads generation-owned data; reload() works on the read-only mount.
 dashboard_volume = volume.with_mount_options(read_only=True)
 
 app = modal.App(APP_NAME, image=image)
@@ -118,7 +119,9 @@ def generate_run(
     from live_dashboard.publication import RunRequest, WorkerInfo, utc_now
     from live_dashboard.storage import DirectoryStore
 
-    deadline = utc_now() + timedelta(seconds=GENERATION_TIMEOUT_S - DEADLINE_MARGIN_S)
+    # Modal kills this attempt at the timeout: record that bound; the writer stops starting
+    # tasks early enough to end before it.
+    deadline = utc_now() + timedelta(seconds=GENERATION_TIMEOUT_S)
     try:
         request = RunRequest(
             label=label, preset=preset, worlds=worlds, worlds_per_task=worlds_per_task, seed=seed

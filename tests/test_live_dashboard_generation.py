@@ -28,6 +28,7 @@ from live_dashboard.collection import Collector
 from live_dashboard.extract import extract_payload
 from live_dashboard.generation import (
     PRESETS,
+    RequestError,
     RunConflictError,
     generator_info,
     run_generation,
@@ -206,6 +207,16 @@ def test_each_task_publishes_the_independent_batch_of_its_seed(live_golden, tmp_
     assert (tmp_path / "batch.npz").read_bytes() == store.read_bytes(record.payload.path)
 
 
+def test_a_reader_follows_the_run_task_by_task(live_golden):
+    pending, published = "pending", "published"
+    assert live_golden.reader_views == (
+        ("running", (pending, pending, pending), 0),
+        ("running", (published, pending, pending), 1),
+        ("running", (published, published, pending), 2),
+        ("complete", (published, published, published), None),
+    )
+
+
 # -- resume and self-healing -----------------------------------------------------------
 
 
@@ -357,6 +368,7 @@ def test_a_clock_stepping_backwards_still_publishes_ordered_timing(tmp_path):
         RuntimeError("unrelated"),
         RecursionError("cell 0: only 0/1 tasks accepted after 8 rounds"),
         TypeError("unexpected keyword"),
+        KeyboardInterrupt("cancelled"),
     ],
     ids=lambda error: type(error).__name__,
 )
@@ -386,6 +398,29 @@ def test_other_generation_failures_fail_the_attempt_without_a_record(
 
     later = _resume(store, live_golden, hours=2)
     assert (later["status"], later["published"]) == ("finished", ["task-00001"])
+
+
+def test_refusing_never_swallows_a_failure_a_retry_could_fix(live_golden, tmp_path, monkeypatch):
+    store = _golden_copy(live_golden, tmp_path)
+    run_id = live_golden.request.run_id
+    (store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
+    before = _tree(store.root)
+
+    def generate(self, *args, **kwargs):
+        raise TypeError("unexpected keyword")
+
+    monkeypatch.setattr(DataGenerator, "generate", generate)
+    with pytest.raises(TypeError):
+        run_generation_or_refuse(
+            store,
+            live_golden.request,
+            worker=live_golden.worker,
+            expected_run_id=run_id,
+            clock=support.clock_after(live_golden.end_time),
+        )
+    (added,) = _new_files(before, _tree(store.root))
+    attempt = _attempt_record(store, support.load_manifest(store, run_id), Path(added).stem)
+    assert (attempt.state, attempt.error.type) == ("failed", "TypeError")
 
 
 def test_a_task_record_readers_would_reject_is_never_written(live_golden, tmp_path, monkeypatch):
@@ -483,6 +518,11 @@ def test_resuming_with_another_generator_is_refused_before_any_write(
             ),
             id="config-digest-mismatch",
         ),
+        pytest.param(
+            # Still valid JSON, but larger than any reader reads.
+            lambda path: path.write_bytes(path.read_bytes() + b" " * pub.MAX_RECORD_BYTES),
+            id="oversized",
+        ),
     ],
 )
 def test_an_unusable_run_manifest_is_refused_before_any_write(live_golden, tmp_path, corrupt):
@@ -491,6 +531,15 @@ def test_an_unusable_run_manifest_is_refused_before_any_write(live_golden, tmp_p
     before = _tree(store.root)
     with pytest.raises(RunConflictError, match="unusable run.json"):
         _resume(store, live_golden)
+    # Without a usable manifest the refusal cannot be recorded under the run.
+    refused = run_generation_or_refuse(
+        store,
+        live_golden.request,
+        worker=live_golden.worker,
+        clock=support.clock_after(live_golden.end_time),
+    )
+    assert (refused["status"], refused["attempt_id"]) == ("refused", None)
+    assert "unusable run.json" in refused["reason"]
     assert _tree(store.root) == before
 
 
@@ -551,27 +600,70 @@ def test_a_request_for_another_run_than_announced_is_refused(live_golden, tmp_pa
     assert not empty.exists()
 
 
+def test_a_malformed_attempt_id_is_refused_under_a_fresh_attempt(
+    live_golden, tmp_path, no_generation
+):
+    store = _golden_copy(live_golden, tmp_path)
+    run_id = live_golden.request.run_id
+    before = _tree(store.root)
+    result = run_generation_or_refuse(
+        store,
+        live_golden.request,
+        worker=live_golden.worker,
+        attempt_id="attempt-1",
+        clock=support.clock_after(live_golden.end_time),
+    )
+    assert (result["status"], result["run_id"]) == ("refused", run_id)
+    assert pub.is_attempt_id(result["attempt_id"])
+    assert _new_files(before, _tree(store.root)) == {
+        pub.attempt_record_path(run_id, result["attempt_id"])
+    }
+    attempt = _attempt_record(store, support.load_manifest(store, run_id), result["attempt_id"])
+    assert (attempt.state, attempt.error.type) == ("failed", "RequestError")
+
+
 @pytest.mark.parametrize(
     ("request_args", "kwargs"),
     [
-        pytest.param(("big", "small", 402, 2, 1), {}, id="too-many-worlds"),
-        pytest.param(("big", "small", 22, 22, 1), {}, id="too-many-worlds-per-task"),
+        pytest.param(("big", "small", 420, 20, 1), {}, id="too-many-worlds"),
+        pytest.param(("big", "small", 42, 21, 1), {}, id="too-many-worlds-per-task"),
         pytest.param(("odd", "unknown", 2, 2, 1), {}, id="unknown-preset"),
         pytest.param(("odd", "small", 2, 2, 1), {"attempt_id": "attempt-1"}, id="bad-attempt-id"),
     ],
 )
-def test_invalid_requests_are_rejected_before_any_write(
+def test_invalid_requests_are_refused_before_any_write(
     tmp_path, no_generation, request_args, kwargs
 ):
-    with pytest.raises(ValueError):
-        run_generation(
-            DirectoryStore(tmp_path / "store"),
-            pub.RunRequest(*request_args),
-            worker=support.WORKER,
-            clock=support.FakeClock(),
-            **kwargs,
-        )
+    request = pub.RunRequest(*request_args)
+    store = DirectoryStore(tmp_path / "store")
+    with pytest.raises(RequestError):
+        run_generation(store, request, worker=support.WORKER, clock=support.FakeClock(), **kwargs)
+    refused = run_generation_or_refuse(
+        store, request, worker=support.WORKER, clock=support.FakeClock(), **kwargs
+    )
+    assert (refused["status"], refused["run_id"], refused["attempt_id"]) == (
+        "refused",
+        request.run_id,
+        None,
+    )
     assert not (tmp_path / "store").exists()
+
+
+def test_the_largest_demo_request_is_accepted(tmp_path, no_generation):
+    store = DirectoryStore(tmp_path)
+    request = pub.RunRequest("largest", "small", 400, 20, 1)
+    clock = support.FakeClock(step=0.0)
+    # A deadline that leaves no time for a task: the run opens without generating.
+    result = run_generation(
+        store,
+        request,
+        worker=support.WORKER,
+        clock=clock,
+        deadline=clock.now + timedelta(seconds=1),
+    )
+    assert (result["status"], result["published"]) == ("stopped", [])
+    manifest = support.load_manifest(store, request.run_id)
+    assert (manifest.n_tasks, manifest.worlds_per_task) == (20, 20)
 
 
 # -- deadline --------------------------------------------------------------------------
@@ -590,7 +682,7 @@ def test_an_attempt_stops_before_a_task_that_could_outlast_the_deadline(tmp_path
     request = pub.RunRequest("deadline", "small", 6, 2, 1)
     deadline = support.EPOCH + timedelta(seconds=250)
     result = run_generation(store, request, worker=support.WORKER, clock=clock, deadline=deadline)
-    # About 145 s are left before task 1: more than the 60 s floor, less than twice 100 s.
+    # About 145 s are left before task 1: more than the 90 s floor, less than twice 100 s.
     assert (result["status"], result["published"]) == ("stopped", ["task-00000"])
     attempt = _attempt_record(
         store, support.load_manifest(store, request.run_id), result["attempt_id"]
@@ -599,27 +691,28 @@ def test_an_attempt_stops_before_a_task_that_could_outlast_the_deadline(tmp_path
     assert store.list_dirs(pub.tasks_dir(request.run_id)) == ["task-00000"]
 
 
-def test_an_attempt_with_less_than_a_minute_left_generates_nothing(
-    live_golden, tmp_path, no_generation
+@pytest.mark.parametrize(
+    ("seconds_left", "expected"),
+    [
+        pytest.param(89, ("stopped", [], ["task-00000"]), id="89s"),
+        pytest.param(90, ("finished", ["task-00001"], ["task-00000", "task-00002"]), id="90s"),
+    ],
+)
+def test_a_task_starts_only_with_at_least_90_seconds_left(
+    live_golden, tmp_path, seconds_left, expected
 ):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
     (store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
-    clock = support.clock_after(live_golden.end_time)
+    # A stopped clock: exactly ``seconds_left`` remain when task 1 is due.
+    clock = support.FakeClock(start=live_golden.end_time + timedelta(hours=1), step=0.0)
+    deadline = clock.now + timedelta(seconds=seconds_left)
     result = run_generation(
-        store,
-        live_golden.request,
-        worker=live_golden.worker,
-        clock=clock,
-        deadline=clock.now + timedelta(seconds=59),
+        store, live_golden.request, worker=live_golden.worker, clock=clock, deadline=deadline
     )
-    assert (result["status"], result["published"], result["reused"]) == (
-        "stopped",
-        [],
-        ["task-00000"],
-    )
+    assert (result["status"], result["published"], result["reused"]) == expected
     attempt = _attempt_record(store, support.load_manifest(store, run_id), result["attempt_id"])
-    assert attempt.state == "finished"
+    assert (attempt.state, attempt.deadline_at) == ("finished", deadline)
 
 
 # -- generator identity and presets ----------------------------------------------------

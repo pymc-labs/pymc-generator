@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import math
 import os
 import platform
 import sys
@@ -24,6 +25,17 @@ from datetime import timedelta
 from pathlib import Path
 
 from live_dashboard.deployment import ENVIRONMENT, SECRET_NAME
+
+
+def _time_limit(text: str) -> float:
+    """A generation time limit: finite seconds the writer can plan tasks within."""
+    try:
+        seconds = float(text)
+    except ValueError:
+        seconds = math.nan
+    if not (math.isfinite(seconds) and 120.0 <= seconds <= 7 * 24 * 3600.0):
+        raise argparse.ArgumentTypeError("must be a number of seconds from 120 to 604800")
+    return seconds
 
 
 def _hash_password(args: argparse.Namespace) -> None:
@@ -120,7 +132,13 @@ def main(argv: list[str] | None = None) -> None:
     generating.add_argument("--worlds-per-task", type=int, default=2)
     generating.add_argument("--seed", type=int, default=29)
     generating.add_argument(
-        "--max-seconds", type=float, default=3600.0, help="stop starting tasks after this long"
+        "--max-seconds",
+        type=_time_limit,
+        default=3600.0,
+        help=(
+            "time limit of this attempt (120 s to 7 days, default 3600); tasks stop starting "
+            "early enough to finish before it, and readers report the attempt lost after it"
+        ),
     )
     generating.set_defaults(handler=_generate)
 

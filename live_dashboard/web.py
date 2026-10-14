@@ -89,8 +89,8 @@ def _poll_seconds(text: str | None) -> float:
 def settings_from_env(environ: Mapping[str, str] | None = None) -> Settings:
     """Credentials and polling intervals; any malformed value refuses to start the app.
 
-    While a run is generating the app polls every ``DEFAULT_ACTIVE_POLL_SECONDS``, or
-    every ``DASHBOARD_POLL_SECONDS`` if that is shorter.
+    The fast interval (see :func:`poll_interval`) is ``DEFAULT_ACTIVE_POLL_SECONDS``, or
+    ``DASHBOARD_POLL_SECONDS`` if that is shorter.
     """
     env = os.environ if environ is None else environ
     credentials = Credentials.from_env(env)
@@ -100,6 +100,19 @@ def settings_from_env(environ: Mapping[str, str] | None = None) -> Settings:
         poll_seconds=poll_seconds,
         active_poll_seconds=min(DEFAULT_ACTIVE_POLL_SECONDS, poll_seconds),
     )
+
+
+def poll_interval(
+    snapshot: CollectionSnapshot, poll_seconds: float, active_poll_seconds: float
+) -> float:
+    """How long to wait before the next refresh, for the poller and the page alike.
+
+    Fast while a run is generating (new tasks are expected) and while the store has
+    never been read or its latest read failed: a transient failure, typically at cold
+    start, then recovers within seconds instead of after a full idle interval.
+    """
+    fast = snapshot.generating or snapshot.refreshed_at is None or snapshot.last_error is not None
+    return active_poll_seconds if fast else poll_seconds
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -160,7 +173,7 @@ def _poll(
 ) -> None:
     """Refresh until ``stop`` is set; a failing refresh never ends the loop."""
     while True:
-        interval = active_poll_seconds if collector.snapshot.generating else poll_seconds
+        interval = poll_interval(collector.snapshot, poll_seconds, active_poll_seconds)
         if stop.wait(interval):
             return
         try:
@@ -185,14 +198,16 @@ def create_app(
 
     Startup refreshes once (a failure leaves the API answering 503 until a refresh
     succeeds) and then, if ``start_poller``, runs the poller thread ``app.state.poller``
-    until shutdown, which stops and joins it.
+    (waiting :func:`poll_interval` between refreshes) until shutdown stops and joins it.
+    Both intervals must be finite and positive; the operator range
+    ``[MIN_POLL_SECONDS, MAX_POLL_SECONDS]`` applies to :func:`settings_from_env`.
     """
     for name, value in (
         ("poll_seconds", poll_seconds),
         ("active_poll_seconds", active_poll_seconds),
     ):
         if not (math.isfinite(value) and value > 0):
-            raise ValueError(f"{name} must be a positive number of seconds")
+            raise ValueError(f"{name} must be a finite, positive number of seconds")
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -243,7 +258,7 @@ def create_app(
         return {
             "refreshed_at": None if refreshed_at is None else format_timestamp(refreshed_at),
             "last_error": snapshot.last_error,
-            "poll_seconds": active_poll_seconds if snapshot.generating else poll_seconds,
+            "poll_seconds": poll_interval(snapshot, poll_seconds, active_poll_seconds),
             "issues": list(snapshot.issues),
             "runs": [figures.run_summary(run) for run in snapshot.runs],
         }

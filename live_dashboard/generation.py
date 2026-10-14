@@ -74,10 +74,18 @@ if TYPE_CHECKING:
 # any other exception is an infrastructure or code failure and fails the attempt.
 _EXHAUSTED = re.compile(r"tasks accepted after \d+ rounds")
 # Stop before a task when less than this much time, or twice the longest task so far,
-# is left before the deadline, so the attempt ends cleanly instead of being killed.
-_MIN_DEADLINE_MARGIN_S = 60.0
+# is left before the deadline (the time the platform kills the attempt), so the attempt
+# ends cleanly instead of being killed in the middle of a task.
+_MIN_DEADLINE_MARGIN_S = 90.0
 _ENVIRONMENT_PACKAGES = ("numpy", "scipy", "pytensor", "pymc", "pymc-marketing")
 _CONFLICT_FIELDS = ("config_sha256", "code_sha256", "environment")
+
+
+class RequestError(ValueError):
+    """The request cannot be run as asked (demo bounds, unknown preset, bad attempt id).
+
+    Raised before anything is written; retrying the same request cannot succeed.
+    """
 
 
 class RunConflictError(Exception):
@@ -522,9 +530,22 @@ def _publish_tasks(
 # -- entry points ----------------------------------------------------------------------
 
 
-def _check_attempt_id(attempt_id: str | None) -> None:
+def _check_request(
+    request: RunRequest, attempt_id: str | None, presets: Mapping[str, Callable[[int], SCMPrior]]
+) -> None:
+    """Validate what the request alone decides, before the store is touched."""
+    try:
+        check_demo_bounds(request)
+    except ValueError as error:
+        raise RequestError(str(error)) from error
     if attempt_id is not None and not is_attempt_id(attempt_id):
-        raise ValueError(f"attempt_id must look like 20260101T000000Z-0a1b2c3d, got {attempt_id!r}")
+        raise RequestError(
+            f"attempt_id must look like 20260101T000000Z-0a1b2c3d, got {attempt_id!r}"
+        )
+    if request.preset not in presets:
+        raise RequestError(
+            f"unknown preset {request.preset!r}; known: {', '.join(sorted(presets))}"
+        )
 
 
 def run_generation(
@@ -539,18 +560,17 @@ def run_generation(
 ) -> dict[str, Any]:
     """Publish every task of ``request`` that is not yet published, as one attempt.
 
-    Invalid requests (demo bounds, unknown preset, malformed ``attempt_id``) raise
-    ``ValueError`` and a stored run of another generator raises ``RunConflictError``,
+    An invalid request (demo bounds, unknown preset, malformed ``attempt_id``) raises
+    ``RequestError`` and a stored run of another generator raises ``RunConflictError``,
     both before anything is written. Any other failure marks the attempt ``failed``
-    (best effort) and propagates. With a ``deadline`` the attempt stops cleanly before a
-    task that might not finish in time. Returns ``{"status": "finished" | "stopped",
-    "run_id", "attempt_id", "published": [task ids], "reused": [task ids]}``.
+    (best effort) and propagates. ``deadline`` is the time after which the attempt
+    cannot still be running (the platform's kill time), recorded as the attempt's
+    ``deadline_at``: the attempt stops cleanly, instead of starting a task, once less
+    than 90 s or twice its longest task so far is left. Returns ``{"status": "finished"
+    | "stopped", "run_id", "attempt_id", "published": [task ids], "reused": [task ids]}``.
     """
-    check_demo_bounds(request)
-    _check_attempt_id(attempt_id)
+    _check_request(request, attempt_id, presets)
     store.refresh()
-    if request.preset not in presets:
-        raise ValueError(f"unknown preset {request.preset!r}; known: {', '.join(sorted(presets))}")
     cfg = presets[request.preset](request.worlds_per_task)
     started_at = clock()
     manifest = _open_run(store, request, generator_info(request.preset, cfg), started_at)
@@ -592,15 +612,17 @@ def run_generation_or_refuse(
     attempt_id: str | None = None,
     presets: Mapping[str, Callable[[int], SCMPrior]] = PRESETS,
 ) -> dict[str, Any]:
-    """``run_generation``, but a run that must not be resumed is refused, not raised.
+    """``run_generation``, but a request that must not run is refused, not raised.
 
-    A platform retry cannot fix a refusal, so it is returned as ``{"status": "refused",
-    "run_id", "attempt_id", "reason"}``. The refusal is recorded as a ``failed`` attempt
-    of the run when the run has a usable manifest (``attempt_id`` is ``None`` otherwise);
-    the manifest itself is never written. ``expected_run_id`` is the run the launcher
-    announced: a request naming another run is refused.
+    A platform retry cannot fix an invalid request (``RequestError``) or a run that must
+    not be resumed (``RunConflictError``), so both are returned as ``{"status":
+    "refused", "run_id", "attempt_id", "reason"}``. The refusal is recorded as a
+    ``failed`` attempt of the run when the run has a usable manifest (under a fresh
+    attempt id if the injected one is malformed; ``attempt_id`` is ``None`` without a
+    manifest); the manifest itself is never written. ``expected_run_id`` is the run the
+    launcher announced: a request naming another run is refused. Every other failure
+    propagates, so the platform can retry it.
     """
-    _check_attempt_id(attempt_id)
     try:
         if expected_run_id is not None and expected_run_id != request.run_id:
             raise RunConflictError(
@@ -616,14 +638,14 @@ def run_generation_or_refuse(
             attempt_id=attempt_id,
             presets=presets,
         )
-    except RunConflictError as error:
+    except (RequestError, RunConflictError) as error:
         return _refuse(store, request, error, worker, clock, deadline, attempt_id)
 
 
 def _refuse(
     store: DirectoryStore,
     request: RunRequest,
-    error: RunConflictError,
+    error: RequestError | RunConflictError,
     worker: WorkerInfo,
     clock: Callable[[], datetime],
     deadline: datetime | None,
@@ -641,7 +663,7 @@ def _refuse(
         attempt = _Attempt(
             store=store,
             manifest=manifest,
-            attempt_id=attempt_id or new_attempt_id(now),
+            attempt_id=attempt_id if is_attempt_id(attempt_id) else new_attempt_id(now),
             worker=worker,
             started_at=now,
             deadline_at=deadline,

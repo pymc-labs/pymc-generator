@@ -11,6 +11,7 @@ import math
 import re
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
@@ -22,8 +23,10 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from live_dashboard import web
+from live_dashboard import auth, web
+from live_dashboard import publication as pub
 from live_dashboard.auth import Credentials, hash_password
+from live_dashboard.collection import Collector
 from live_dashboard.snapshot import (
     AttemptView,
     CollectionSnapshot,
@@ -319,6 +322,39 @@ def test_wrong_credentials_after_a_success_are_still_rejected(credentials):
         assert client.get("/", headers=AUTH).status_code == 200
 
 
+def test_success_cache_is_bounded_and_forgets_the_least_recently_used(credentials, monkeypatch):
+    # PBKDF2 is replaced by a counting equality check: this test is about which headers
+    # are re-verified, and 600k-iteration hashes for 66 headers would dominate its time.
+    verified: list[str] = []
+
+    def counting_verify(self, username: str, password: str) -> bool:
+        verified.append(username)
+        return (username, password) == (USERNAME, PASSWORD)
+
+    monkeypatch.setattr(Credentials, "verify", counting_verify)
+    size = auth.ACCEPTED_CACHE_SIZE
+    # Distinct but equally valid headers: any number of spaces may follow the scheme.
+    headers = [{"Authorization": "Basic" + " " * n + TOKEN} for n in range(1, size + 2)]
+    with serve(StubCollector(), credentials) as client:
+
+        def accepted(header: dict[str, str]) -> bool:
+            return client.get("/", headers=header).status_code == 200
+
+        assert all(accepted(header) for header in headers)
+        assert len(verified) == size + 1
+        # The newest ``size`` headers are remembered (the first one was dropped).
+        assert accepted(headers[-1]) and accepted(headers[1])
+        assert len(verified) == size + 1
+        assert accepted(headers[0])
+        assert len(verified) == size + 2
+        # Re-admitting it dropped the least recently used header, which was headers[2]
+        # (headers[1] had just been used).
+        assert accepted(headers[1])
+        assert len(verified) == size + 2
+        assert accepted(headers[2])
+        assert len(verified) == size + 3
+
+
 # -- page and assets ---------------------------------------------------------------------
 
 
@@ -347,6 +383,17 @@ def test_page_references_assets_that_load(credentials):
         assert "Plotly" in bundle.text[:2000]
 
 
+def test_plotly_bundle_is_gzip_compressed_when_accepted(credentials):
+    with serve(StubCollector(), credentials) as client:
+        compressed = client.get(web.PLOTLY_PATH, headers={**AUTH, "Accept-Encoding": "gzip"})
+        identity = client.get(web.PLOTLY_PATH, headers={**AUTH, "Accept-Encoding": "identity"})
+    assert compressed.status_code == identity.status_code == 200
+    assert compressed.headers["content-encoding"] == "gzip"
+    assert "content-encoding" not in identity.headers
+    assert int(compressed.headers["content-length"]) < len(identity.content) // 2
+    assert compressed.content == identity.content  # httpx decodes the gzip body
+
+
 def test_unknown_static_path_is_not_found_after_authentication(credentials):
     with serve(StubCollector(make_snapshot(1)), credentials) as client:
         assert client.get("/static/missing.js", headers=AUTH).status_code == 404
@@ -358,17 +405,30 @@ def test_unknown_static_path_is_not_found_after_authentication(credentials):
 
 
 @pytest.mark.parametrize(
-    ("state", "poll_seconds"), [("running", 3.0), ("complete", 10.0)], ids=["generating", "idle"]
+    ("state", "last_error", "poll_seconds"),
+    [
+        ("running", None, 3.0),
+        ("complete", None, 10.0),
+        ("complete", "OSError: volume unavailable", 3.0),
+    ],
+    ids=["generating", "idle", "latest-refresh-failed"],
 )
-def test_run_list_reports_refresh_state_and_poll_interval(credentials, state, poll_seconds):
-    snapshot = make_snapshot(1, make_run(1, state=state), issues=("run.json of x is unsupported",))
+def test_run_list_reports_refresh_state_and_poll_interval(
+    credentials, state, last_error, poll_seconds
+):
+    snapshot = make_snapshot(
+        1,
+        make_run(1, state=state),
+        last_error=last_error,
+        issues=("run.json of x is unsupported",),
+    )
     with serve(StubCollector(snapshot), credentials) as client:
         response = client.get("/api/runs", headers=AUTH)
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     body = strict_json(response)
     assert body["refreshed_at"] == "2026-01-01T01:00:00.000Z"
-    assert body["last_error"] is None
+    assert body["last_error"] == last_error
     assert body["poll_seconds"] == poll_seconds
     assert body["issues"] == ["run.json of x is unsupported"]
     assert [(run["run_id"], run["state"], run["published_worlds"]) for run in body["runs"]] == [
@@ -450,21 +510,47 @@ def test_run_bodies_are_identical_across_app_instances(credentials):
     assert bodies[0] == bodies[1]
 
 
-def test_lost_attempt_changes_the_etag(credentials):
-    collector = StubCollector(make_snapshot(1, make_run(1)))
+def test_attempt_passing_its_deadline_changes_the_etag(credentials, live_golden, tmp_path):
+    # A real collector over a copy of the golden run whose last task is still being
+    # generated by a newer, running attempt; nothing is written after startup.
+    store = support.copy_store(live_golden.root, tmp_path / "store")
+    run_id = live_golden.request.run_id
+    for record_file in support.task_record_files(store.root, run_id, "task-00002"):
+        record_file.unlink()
+    started = live_golden.end_time + timedelta(hours=1)
+    attempt = pub.AttemptRecord(
+        run_id=run_id,
+        attempt_id=f"{started:%Y%m%dT%H%M%SZ}-0000beef",
+        state="running",
+        started_at=started,
+        updated_at=started,
+        deadline_at=started + timedelta(minutes=20),
+        current_task_index=2,
+        published_task_ids=(),
+        reused_task_ids=("task-00000", "task-00001"),
+        error=None,
+        worker=support.WORKER,
+    )
+    store.write_replace(pub.attempt_record_path(run_id, attempt.attempt_id), attempt.encode())
+    clock = support.FakeClock(start=started + timedelta(minutes=1))
+    collector = Collector(store, clock=clock)
+    url = f"/api/runs/{run_id}"
     with serve(collector, credentials) as client:
-        running = client.get(f"/api/runs/{RUN_ID}", headers=AUTH)
-        collector.outcomes.append(
-            make_snapshot(2, make_run(1, state="lost", attempt_status="lost"))
-        )
+        running = client.get(url, headers=AUTH)
+        assert running.status_code == 200
+        assert strict_json(running)["run"]["state"] == "running"
+        etag = running.headers["etag"]
+        collector.refresh()  # same store, a little later, still before the deadline
+        idle = client.get(url, headers={**AUTH, "If-None-Match": etag})
+        assert (idle.status_code, idle.headers["etag"]) == (304, etag)
+        clock.advance(20 * 60)
         collector.refresh()
-        lost = client.get(
-            f"/api/runs/{RUN_ID}", headers={**AUTH, "If-None-Match": running.headers["etag"]}
-        )
+        lost = client.get(url, headers={**AUTH, "If-None-Match": etag})
     assert lost.status_code == 200
-    assert lost.headers["etag"] != running.headers["etag"]
+    assert lost.headers["etag"] != etag
     body = strict_json(lost)
     assert body["run"]["state"] == "lost"
+    assert body["run"]["published_worlds"] == 4
     assert "latest attempt: lost" in body["status"]["line"]
 
 
@@ -479,7 +565,7 @@ def test_first_refresh_failure_serves_503_until_a_refresh_succeeds(credentials):
         assert strict_json(listing) == {
             "refreshed_at": None,
             "last_error": "OSError: volume unavailable",
-            "poll_seconds": 10.0,
+            "poll_seconds": 3.0,
             "issues": [],
             "runs": [],
         }
@@ -678,49 +764,107 @@ def test_hash_password_round_trip_and_password_policy(password_hash):
 
 # -- poller lifecycle --------------------------------------------------------------------
 
+FAST = 0.01  # seconds; a poller using it refreshes dozens of times per QUIET window
+SLOW = 60.0  # seconds; a poller using it never refreshes during a test
+QUIET = 0.3  # seconds a test waits to show that no refresh happens
+
 
 class SignallingCollector(StubCollector):
-    """Signals once it has been refreshed ``signal_after`` times."""
+    """Sets ``reached`` during its ``signal_after``-th refresh, then blocks for
+    ``block_seconds`` (a slow store read in progress)."""
 
-    def __init__(self, *outcomes: CollectionSnapshot | BaseException, signal_after: int) -> None:
+    def __init__(
+        self,
+        *outcomes: CollectionSnapshot | BaseException,
+        signal_after: int,
+        block_seconds: float = 0.0,
+    ) -> None:
         super().__init__(*outcomes)
         self.signal_after = signal_after
+        self.block_seconds = block_seconds
         self.reached = threading.Event()
 
     def refresh(self) -> None:
         try:
             super().refresh()
         finally:
-            if self.calls >= self.signal_after:
+            if self.calls == self.signal_after:
                 self.reached.set()
+                time.sleep(self.block_seconds)
+
+
+def poller_app(collector: StubCollector, credentials: Credentials, poll: float, active: float):
+    return web.create_app(
+        collector, credentials=credentials, poll_seconds=poll, active_poll_seconds=active
+    )
 
 
 @pytest.mark.parametrize(
-    ("state", "poll_seconds", "active_poll_seconds"),
-    [("running", 60.0, 0.01), ("complete", 0.01, 60.0)],
-    ids=["generating-uses-active-interval", "idle-uses-poll-interval"],
+    "startup",
+    [
+        pytest.param(make_snapshot(1, make_run(1, state="running")), id="generating"),
+        pytest.param(
+            make_snapshot(1, refreshed=False, last_error="OSError: volume unavailable"),
+            id="first-refresh-failed",
+        ),
+        pytest.param(
+            make_snapshot(1, make_run(1, state="complete"), last_error="OSError: volume gone"),
+            id="latest-refresh-failed",
+        ),
+    ],
 )
-def test_poller_refreshes_survives_errors_and_is_joined_on_shutdown(
-    credentials, state, poll_seconds, active_poll_seconds
-):
-    # Startup refresh, a failing poll, then two idle polls: only reachable within the
-    # bounded wait if the poller uses the short interval for this snapshot.
+def test_poller_uses_the_active_interval_while_generating_or_failing(credentials, startup):
+    collector = SignallingCollector(startup, signal_after=2)
+    with TestClient(poller_app(collector, credentials, poll=SLOW, active=FAST)):
+        assert collector.reached.wait(timeout=5.0)
+
+
+def test_poller_uses_the_idle_interval_when_nothing_happens(credentials):
+    # Not the shorter of the two intervals: an idle, healthy collection is left alone.
+    collector = SignallingCollector(make_snapshot(1, make_run(1, state="complete")), signal_after=2)
+    with TestClient(poller_app(collector, credentials, poll=SLOW, active=FAST)):
+        assert not collector.reached.wait(timeout=QUIET)
+    assert collector.calls == 1  # the startup refresh only
+
+
+def test_poller_survives_a_raising_refresh(credentials):
     collector = SignallingCollector(
-        make_snapshot(1, make_run(1, state=state)),
-        RuntimeError("transient store failure"),
+        make_snapshot(1, make_run(1, state="complete")),
+        RuntimeError("collector bug"),
         signal_after=4,
     )
-    app = web.create_app(
-        collector,
-        credentials=credentials,
-        poll_seconds=poll_seconds,
-        active_poll_seconds=active_poll_seconds,
-    )
+    app = poller_app(collector, credentials, poll=FAST, active=SLOW)
     assert app.state.collector is collector
     with TestClient(app) as client:
-        poller = app.state.poller
-        assert poller.name == "live-dashboard-poller"
-        assert poller.is_alive()
+        assert app.state.poller.name == "live-dashboard-poller"
         assert collector.reached.wait(timeout=5.0)
+        assert app.state.poller.is_alive()
         assert client.get("/api/runs", headers=AUTH).status_code == 200
+
+
+def test_shutdown_waits_for_the_poller_to_finish(credentials):
+    collector = SignallingCollector(
+        make_snapshot(1, make_run(1, state="complete")), signal_after=2, block_seconds=QUIET
+    )
+    app = poller_app(collector, credentials, poll=FAST, active=SLOW)
+    with TestClient(app):
+        poller = app.state.poller
+        assert collector.reached.wait(timeout=5.0)  # the poller is now inside a refresh
     assert not poller.is_alive()
+    assert collector.calls == 2
+
+
+@pytest.mark.parametrize(
+    ("poll", "active"),
+    [
+        (math.inf, 3.0),
+        (math.nan, 3.0),
+        (0.0, 3.0),
+        (10.0, 0.0),
+        (10.0, -1.0),
+        (10.0, math.nan),
+    ],
+)
+def test_create_app_refuses_non_positive_or_non_finite_intervals(credentials, poll, active):
+    with pytest.raises(ValueError, match="poll_seconds must be a finite, positive number"):
+        poller_app(StubCollector(), credentials, poll=poll, active=active)

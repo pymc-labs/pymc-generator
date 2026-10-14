@@ -1,8 +1,8 @@
 """extract_payload: the notebook's composition shares and per-channel impact of a payload.
 
-Payloads come from the real generator (the ``small`` preset shape, two worlds per seed),
-so every check runs against genuine float32 decompositions; expected values are
-recomputed here from the raw corpus arrays, independently of the implementation.
+Payloads are the real corpora of the session's golden run (``small`` preset, two worlds
+per task), so every check runs against genuine float32 decompositions; expected values
+are recomputed here from the raw corpus arrays, independently of the implementation.
 """
 
 from __future__ import annotations
@@ -21,9 +21,10 @@ import numpy as np
 import pytest
 
 import live_dashboard.extract as extract_module
+from live_dashboard import publication as pub
 from live_dashboard.extract import ExtractionError, extract_payload
-from pymc_generator import DataGenerator, make_scm_prior
-from pymc_generator.data_generator import load_corpus, save_corpus
+from live_dashboard.storage import DirectoryStore
+from pymc_generator.data_generator import DataGenerator, load_corpus, save_corpus
 
 
 def _load(name: str) -> ModuleType:
@@ -40,8 +41,6 @@ def _load(name: str) -> ModuleType:
 
 support = _load("_live_dashboard_support")
 
-SEEDS = (1, 3)
-
 
 @pytest.fixture(autouse=True)
 def _dashboard_environment(monkeypatch):
@@ -55,26 +54,14 @@ def _dashboard_environment(monkeypatch):
 
 
 @pytest.fixture(scope="module")
-def payloads(tmp_path_factory) -> dict[int, bytes]:
-    """``save_corpus`` bytes of a two-world ``small`` corpus per seed."""
-    prior = make_scm_prior(
-        n_treatments=3,
-        n_covariates=2,
-        n_latent=1,
-        n_time_steps=24,
-        n_cells=2,
-        draws_per_cell=1,
-        n_treatments_active_range=(1, 3),
-        n_covariates_active_range=(1, 2),
-        treatment_cv_floor=0.5,
+def payloads(live_golden) -> tuple[bytes, ...]:
+    """The golden run's payload bytes in task order."""
+    store = DirectoryStore(live_golden.root)
+    run_id = live_golden.request.run_id
+    return tuple(
+        store.read_bytes(pub.payload_path(run_id, pub.task_id_for(index), live_golden.attempt_id))
+        for index in range(live_golden.request.n_tasks)
     )
-    directory = tmp_path_factory.mktemp("payloads")
-    result = {}
-    for seed in SEEDS:
-        path = directory / f"seed-{seed}.npz"
-        save_corpus(DataGenerator(prior).generate(n_tasks=2, seed=seed), path)
-        result[seed] = path.read_bytes()
-    return result
 
 
 def _corpus(data: bytes, directory: Path) -> dict[str, Any]:
@@ -95,7 +82,7 @@ def _f64(corpus: dict[str, Any], key: str) -> np.ndarray:
 
 def test_composition_matches_the_raw_array_formula_within_the_closure_bound(payloads, tmp_path):
     largest_indirect_share = 0.0
-    for data in payloads.values():
+    for data in payloads:
         metrics = extract_payload(data)
         corpus = _corpus(data, tmp_path)
         outcome = _f64(corpus, "outcome_raw")
@@ -135,7 +122,7 @@ def test_composition_matches_the_raw_array_formula_within_the_closure_bound(payl
 
 def test_impact_units_are_the_active_channel_slots_with_their_direct_share(payloads, tmp_path):
     saw_inactive_slot = False
-    for data in payloads.values():
+    for data in payloads:
         metrics = extract_payload(data)
         corpus = _corpus(data, tmp_path)
         active = np.asarray(corpus["treatment_active_mask"]) == 1
@@ -152,7 +139,7 @@ def test_impact_units_are_the_active_channel_slots_with_their_direct_share(paylo
 
 
 def test_metrics_are_deterministic_plain_python_values(payloads):
-    data = payloads[SEEDS[0]]
+    data = payloads[0]
     metrics = extract_payload(data)
     assert extract_payload(data) == metrics  # the collector caches by digest
     fields = dataclasses.asdict(metrics)
@@ -198,7 +185,7 @@ DAMAGE = {
 def test_unusable_payloads_raise_the_same_extraction_error_and_leave_no_scratch(
     payloads, tmp_path, monkeypatch, damage
 ):
-    data = DAMAGE[damage](payloads[SEEDS[0]], tmp_path)
+    data = DAMAGE[damage](payloads[0], tmp_path)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
@@ -213,7 +200,7 @@ def test_unusable_payloads_raise_the_same_extraction_error_and_leave_no_scratch(
 
 def test_successful_extraction_leaves_no_scratch(payloads, tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    extract_payload(payloads[SEEDS[0]])
+    extract_payload(payloads[0])
     assert list(tmp_path.iterdir()) == []
 
 
@@ -224,7 +211,7 @@ def lenient_validation(monkeypatch):
 
 
 def test_worlds_without_positive_total_outcome_are_refused(payloads, tmp_path, lenient_validation):
-    corpus = _corpus(payloads[SEEDS[0]], tmp_path)
+    corpus = _corpus(payloads[0], tmp_path)
     corpus["outcome_raw"][1] = 0.0
     with pytest.raises(ExtractionError, match=r"positive total outcome.*\[1\]"):
         extract_payload(_saved(corpus, tmp_path))
@@ -233,7 +220,7 @@ def test_worlds_without_positive_total_outcome_are_refused(payloads, tmp_path, l
 def test_parts_must_close_on_the_outcome_within_the_storage_bound(
     payloads, tmp_path, lenient_validation
 ):
-    corpus = _corpus(payloads[SEEDS[0]], tmp_path)
+    corpus = _corpus(payloads[0], tmp_path)
     total = float(_f64(corpus, "outcome_raw")[0].sum())
     corpus["baseline_intrinsic"][0, 0] += np.float32(1e-3 * total)
     with pytest.raises(ExtractionError, match=r"storage bound in worlds \[0\]"):
@@ -256,7 +243,7 @@ def test_channel_shares_must_agree_with_the_library_to_1e_12(
 
     monkeypatch.setattr(extract_module, "outcome_distributions", perturbed)
     if accepted:
-        extract_payload(payloads[SEEDS[0]])
+        extract_payload(payloads[0])
     else:
         with pytest.raises(ExtractionError, match="treatment_total_contribution"):
-            extract_payload(payloads[SEEDS[0]])
+            extract_payload(payloads[0])

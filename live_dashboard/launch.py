@@ -28,6 +28,7 @@ from live_dashboard.deployment import (
     VOLUME_NAME,
     check_demo_bounds,
 )
+from live_dashboard.generation import PRESETS
 from live_dashboard.publication import RUNS_DIR, RunRequest
 
 if modal.is_local() and modal.config.config.get("environment") != ENVIRONMENT:
@@ -47,6 +48,18 @@ def _published_runs(volume: modal.Volume) -> set[str]:
     return {PurePosixPath(entry.path).name for entry in volume.listdir(RUNS_DIR)}
 
 
+def spawn_arguments(request: RunRequest) -> tuple[str, str, int, int, int, str]:
+    """Positional arguments of the deployed ``generate_run`` for ``request``."""
+    return (
+        request.label,
+        request.preset,
+        request.worlds,
+        request.worlds_per_task,
+        request.seed,
+        request.run_id,
+    )
+
+
 @app.local_entrypoint()
 def main(
     label: str,
@@ -61,6 +74,8 @@ def main(
         label=label, preset=preset, worlds=worlds, worlds_per_task=worlds_per_task, seed=seed
     )
     check_demo_bounds(request)
+    if request.preset not in PRESETS:
+        raise SystemExit(f"unknown preset {request.preset!r}; known: {', '.join(sorted(PRESETS))}")
     volume = modal.Volume.from_name(VOLUME_NAME, environment_name=ENVIRONMENT)
     exists = request.run_id in _published_runs(volume)
     if exists and not resume:
@@ -72,14 +87,7 @@ def main(
         raise SystemExit(f"--resume: run {request.run_id} does not exist")
     dashboard = modal.Function.from_name(APP_NAME, DASHBOARD_FUNCTION, environment_name=ENVIRONMENT)
     generate = modal.Function.from_name(APP_NAME, GENERATE_FUNCTION, environment_name=ENVIRONMENT)
-    call = generate.spawn(
-        request.label,
-        request.preset,
-        request.worlds,
-        request.worlds_per_task,
-        request.seed,
-        request.run_id,
-    )
+    call = generate.spawn(*spawn_arguments(request))
     print(f"run {request.run_id}: {request.n_tasks} tasks x {request.worlds_per_task} worlds")
     print(f"dashboard: {dashboard.get_web_url()}/?run={request.run_id}")
     print(f"call: {call.object_id}")
