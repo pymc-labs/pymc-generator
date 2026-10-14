@@ -25,7 +25,11 @@ from datetime import timedelta
 from pathlib import Path
 
 from live_dashboard.deployment import ENVIRONMENT, SECRET_NAME
-from live_dashboard.generation import RunConflictError
+from live_dashboard.generation import RequestError, RunConflictError
+
+
+class _RefusedError(Exception):
+    """Input or files the command refuses: reported in one line, not as a traceback."""
 
 
 def _time_limit(text: str) -> float:
@@ -54,6 +58,16 @@ def _poll_seconds(text: str) -> float:
     return seconds
 
 
+def _port(text: str) -> int:
+    try:
+        port = int(text)
+    except ValueError:
+        port = -1
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError("must be a TCP port number from 0 to 65535")
+    return port
+
+
 def _hash_password(args: argparse.Namespace) -> None:
     from live_dashboard.auth import PASSWORD_HASH_ENV, USERNAME_ENV, Credentials, hash_password
 
@@ -63,10 +77,13 @@ def _hash_password(args: argparse.Namespace) -> None:
         password = getpass.getpass("Dashboard password: ")
         if getpass.getpass("Repeat password: ") != password:
             raise SystemExit("passwords differ")
-    values = {USERNAME_ENV: args.username, PASSWORD_HASH_ENV: hash_password(password)}
-    Credentials.from_env(values)  # refuse a username the dashboard would refuse
-    args.output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        values = {USERNAME_ENV: args.username, PASSWORD_HASH_ENV: hash_password(password)}
+        Credentials.from_env(values)  # refuse a username the dashboard would refuse
+        args.output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except (ValueError, OSError) as error:
+        raise _RefusedError(str(error)) from error
     with os.fdopen(descriptor, "w") as handle:
         json.dump(values, handle, indent=2)
         handle.write("\n")
@@ -81,12 +98,20 @@ def _serve(args: argparse.Namespace) -> None:
     from live_dashboard.storage import DirectoryStore
     from live_dashboard.web import create_app, settings_from_env
 
-    environ: dict[str, str] = dict(os.environ)
-    if args.credentials is not None:
-        environ.update(json.loads(Path(args.credentials).read_text()))
-    if args.poll_seconds is not None:
-        environ["DASHBOARD_POLL_SECONDS"] = str(args.poll_seconds)
-    settings = settings_from_env(environ)
+    try:
+        environ: dict[str, str] = dict(os.environ)
+        if args.credentials is not None:
+            loaded = json.loads(Path(args.credentials).read_text())
+            if not isinstance(loaded, dict) or not all(
+                isinstance(key, str) and isinstance(value, str) for key, value in loaded.items()
+            ):
+                raise ValueError(f"{args.credentials} must hold a JSON object of strings")
+            environ.update(loaded)
+        if args.poll_seconds is not None:
+            environ["DASHBOARD_POLL_SECONDS"] = str(args.poll_seconds)
+        settings = settings_from_env(environ)
+    except (ValueError, OSError) as error:
+        raise _RefusedError(str(error)) from error
     collector = Collector(DirectoryStore(args.data_dir))
     app = create_app(
         collector,
@@ -102,23 +127,30 @@ def _generate(args: argparse.Namespace) -> None:
     from live_dashboard.publication import RunRequest, WorkerInfo, utc_now
     from live_dashboard.storage import DirectoryStore
 
-    request = RunRequest(
-        label=args.label,
-        preset=args.preset,
-        worlds=args.worlds,
-        worlds_per_task=args.worlds_per_task,
-        seed=args.seed,
-    )
+    try:
+        request = RunRequest(
+            label=args.label,
+            preset=args.preset,
+            worlds=args.worlds,
+            worlds_per_task=args.worlds_per_task,
+            seed=args.seed,
+        )
+    except ValueError as error:
+        raise _RefusedError(str(error)) from error
     worker = WorkerInfo(
         platform=platform.platform(), cpu_count=os.cpu_count(), gpu_requested=None, gpu_name=None
     )
     print(f"run {request.run_id}: {request.n_tasks} tasks x {request.worlds_per_task} worlds")
-    summary = run_generation(
-        DirectoryStore(args.data_dir),
-        request,
-        worker=worker,
-        deadline=utc_now() + timedelta(seconds=args.max_seconds),
-    )
+    try:
+        summary = run_generation(
+            DirectoryStore(args.data_dir),
+            request,
+            worker=worker,
+            deadline=utc_now() + timedelta(seconds=args.max_seconds),
+        )
+    except (RequestError, RunConflictError) as error:
+        # Refusals happen before any task runs; every other failure keeps its traceback.
+        raise _RefusedError(str(error)) from error
     print(json.dumps(summary, indent=2))
 
 
@@ -137,7 +169,7 @@ def main(argv: list[str] | None = None) -> None:
     serving.add_argument("--data-dir", type=Path, required=True)
     serving.add_argument("--credentials", type=Path, help="JSON written by hash-password")
     serving.add_argument("--host", default="127.0.0.1")
-    serving.add_argument("--port", type=int, default=8000)
+    serving.add_argument("--port", type=_port, default=8000)
     serving.add_argument(
         "--poll-seconds", type=_poll_seconds, help="idle refresh interval (1-300 s)"
     )
@@ -164,9 +196,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         args.handler(args)
-    except (ValueError, OSError, RunConflictError) as error:
-        # Refused input or an unusable store/file: a message, not a traceback.
-        parser.exit(2, f"{parser.prog} {args.command}: error: {error}\n")
+    except _RefusedError as refusal:
+        parser.exit(2, f"{parser.prog} {args.command}: error: {refusal}\n")
 
 
 if __name__ == "__main__":

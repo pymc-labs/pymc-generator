@@ -135,9 +135,14 @@ def generate_run(
         gpu_name=_gpu_name(),
     )
     store = DirectoryStore(MOUNT, on_commit=volume.commit, on_refresh=volume.reload)
-    return run_generation_or_refuse(
-        store, request, worker=worker, deadline=deadline, expected_run_id=expected_run_id
-    )
+    try:
+        return run_generation_or_refuse(
+            store, request, worker=worker, deadline=deadline, expected_run_id=expected_run_id
+        )
+    except TimeoutError as error:
+        # A caller's FunctionCall.get raises the builtin TimeoutError while the call is still
+        # running; a worker timeout (e.g. ETIMEDOUT on the Volume) must not look like that.
+        raise RuntimeError(f"{type(error).__name__}: {error}") from error
 
 
 @app.function(

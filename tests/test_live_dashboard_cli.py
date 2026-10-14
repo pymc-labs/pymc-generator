@@ -75,7 +75,15 @@ def _generate(tmp_path, *extra):
     main(["generate", "--data-dir", str(tmp_path / "store"), "--label", "cli", *extra])
 
 
-@pytest.mark.parametrize(("extra", "seconds"), [((), 3600), (("--max-seconds", "600"), 600)])
+@pytest.mark.parametrize(
+    ("extra", "seconds"),
+    [
+        ((), 3600),
+        (("--max-seconds", "600"), 600),
+        (("--max-seconds", "120"), 120),
+        (("--max-seconds", "604800"), 604800),
+    ],
+)
 def test_generate_hands_the_writer_its_time_limit(monkeypatch, tmp_path, extra, seconds):
     calls = []
     monkeypatch.setattr(
@@ -91,8 +99,13 @@ def test_generate_hands_the_writer_its_time_limit(monkeypatch, tmp_path, extra, 
     assert before + limit <= call["deadline"] <= after + limit + timedelta(milliseconds=1)
 
 
+def _writer_must_not_run(*args, **kwargs):
+    raise AssertionError("the writer was called")
+
+
 @pytest.mark.parametrize("value", ["119", "604801", "nan", "inf", "-5", "ten"])
-def test_generate_refuses_unusable_time_limits_before_writing(tmp_path, value):
+def test_generate_refuses_unusable_time_limits_before_writing(monkeypatch, tmp_path, value):
+    monkeypatch.setattr(generation, "run_generation", _writer_must_not_run)
     with pytest.raises(SystemExit) as exit_info:
         _generate(tmp_path, "--max-seconds", value)
     assert exit_info.value.code == 2
@@ -100,11 +113,86 @@ def test_generate_refuses_unusable_time_limits_before_writing(tmp_path, value):
 
 
 @pytest.mark.parametrize(
-    "extra", [("--preset", "showcase"), ("--worlds", "3"), ("--worlds", "402")]
+    ("extra", "reason"),
+    [
+        (("--preset", "showcase"), "unknown preset 'showcase'"),
+        (("--worlds", "3"), "must be a positive multiple"),
+        (("--worlds", "402"), "at most 400 worlds"),
+    ],
 )
-def test_generate_refuses_bad_requests_with_a_message(tmp_path, capsys, extra):
+def test_generate_refuses_bad_requests_with_a_message(monkeypatch, tmp_path, capsys, extra, reason):
+    from pymc_generator import DataGenerator
+
+    # The real writer refuses these before generating; never generate if it stops doing so.
+    monkeypatch.setattr(DataGenerator, "generate", _writer_must_not_run)
     with pytest.raises(SystemExit) as exit_info:
         _generate(tmp_path, *extra)
     assert exit_info.value.code == 2
-    assert "error:" in capsys.readouterr().err
+    assert reason in capsys.readouterr().err
     assert not (tmp_path / "store").exists()
+
+
+def test_generate_reports_a_conflicting_run_without_a_traceback(monkeypatch, tmp_path, capsys):
+    def conflict(store, request, **kwargs):
+        raise generation.RunConflictError("code_sha256 differs")
+
+    monkeypatch.setattr(generation, "run_generation", conflict)
+    with pytest.raises(SystemExit) as exit_info:
+        _generate(tmp_path)
+    assert exit_info.value.code == 2
+    assert "error: code_sha256 differs" in capsys.readouterr().err
+
+
+def test_generation_failures_keep_their_traceback(monkeypatch, tmp_path):
+    def library_bug(store, request, **kwargs):
+        raise ValueError("operands could not be broadcast together")
+
+    monkeypatch.setattr(generation, "run_generation", library_bug)
+    with pytest.raises(ValueError, match="broadcast"):
+        _generate(tmp_path)
+
+
+@pytest.fixture
+def served(monkeypatch, tmp_path):
+    """``serve`` up to the point it would start the server: the app's arguments."""
+    import uvicorn
+
+    from live_dashboard import web
+
+    created = []
+    monkeypatch.setattr(web, "create_app", lambda collector, **kwargs: created.append(kwargs))
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: None)
+    credentials = tmp_path / "auth.json"
+    _hash(monkeypatch, credentials)
+
+    def serve(*extra, credentials_file=credentials):
+        main(["serve", "--data-dir", str(tmp_path), "--credentials", str(credentials_file), *extra])
+        return created
+
+    return serve
+
+
+def test_serve_starts_the_app_with_the_requested_intervals(served):
+    (kwargs,) = served("--poll-seconds", "30")
+    assert (kwargs["poll_seconds"], kwargs["active_poll_seconds"]) == (30.0, 3.0)
+    assert kwargs["credentials"].verify("demo", PASSWORD)
+
+
+@pytest.mark.parametrize(
+    "extra", [("--poll-seconds", "0.5"), ("--poll-seconds", "301"), ("--port", "70000")]
+)
+def test_serve_refuses_unusable_settings(served, extra):
+    with pytest.raises(SystemExit) as exit_info:
+        served(*extra)
+    assert exit_info.value.code == 2
+
+
+@pytest.mark.parametrize("content", [None, "[1, 2]", "{not json", '{"DASHBOARD_USERNAME": 5}'])
+def test_serve_refuses_unusable_credentials_files(served, tmp_path, capsys, content):
+    bad = tmp_path / "bad.json"
+    if content is not None:
+        bad.write_text(content)
+    with pytest.raises(SystemExit) as exit_info:
+        served(credentials_file=bad)
+    assert exit_info.value.code == 2
+    assert "error:" in capsys.readouterr().err

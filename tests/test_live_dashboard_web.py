@@ -874,6 +874,9 @@ def test_poller_survives_an_unreadable_snapshot_and_retries_fast(credentials):
     )
     with TestClient(poller_app(collector, credentials, poll=SLOW, active=FAST)):
         assert collector.reached.wait(timeout=5.0)
+        # Once a step succeeds again the idle (SLOW) interval applies: no further refresh.
+        time.sleep(QUIET)
+        assert collector.calls == 2
     assert collector.failures == 0
 
 
@@ -912,3 +915,11 @@ def test_shutdown_waits_for_a_refresh_in_progress(credentials):
 def test_create_app_refuses_intervals_out_of_range(credentials, poll, active):
     with pytest.raises(ValueError, match=r"poll_seconds must be a number of seconds in \(0, 300\]"):
         poller_app(StubCollector(), credentials, poll=poll, active=active)
+
+
+def test_the_largest_interval_is_accepted_and_reported(credentials):
+    collector = StubCollector(make_snapshot(1, make_run(1, state="complete")))
+    app = poller_app(collector, credentials, poll=web.MAX_POLL_SECONDS, active=FAST)
+    with TestClient(app) as client:
+        listing = client.get("/api/runs", headers=AUTH)
+    assert strict_json(listing)["poll_seconds"] == web.MAX_POLL_SECONDS

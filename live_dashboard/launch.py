@@ -100,9 +100,16 @@ def main(
     print(f"dashboard: {dashboard.get_web_url()}/?run={request.run_id}")
     print(f"call: {call.object_id}")
     if wait:
-        print(call.get())
+        _report(call.get())
     elif not exists:
         _await_start(call, volume, request.run_id)
+
+
+def _report(result: dict) -> None:
+    """Print the worker's summary; a refusal ends the launcher with a non-zero status."""
+    if result.get("status") == "refused":
+        raise SystemExit(f"worker refused the run: {result.get('reason')}")
+    print(result)
 
 
 def _manifest_published(volume: modal.Volume, run_id: str) -> bool:
@@ -115,18 +122,26 @@ def _manifest_published(volume: modal.Volume, run_id: str) -> bool:
 
 
 def _await_start(call: modal.FunctionCall, volume: modal.Volume, run_id: str) -> None:
-    """Return once the run's manifest is published; exit if the worker ended without it."""
+    """Return once the run's manifest is published; exit if the worker refused the run.
+
+    ``call.get`` raises the builtin ``TimeoutError`` while the call is running (the worker
+    re-raises its own timeouts as other errors, so this cannot be mistaken for its result);
+    every poll still lasts at least ``_POLL_S`` so nothing unexpected can spin the loop.
+    """
     deadline = time.monotonic() + START_WAIT_S
     while time.monotonic() < deadline:
+        polled = time.monotonic()
         try:
             result = call.get(timeout=_POLL_S)
-        except TimeoutError:  # still running (the client raises the builtin TimeoutError)
+        except TimeoutError:
             if _manifest_published(volume, run_id):
                 print("worker started the run; follow it on the dashboard")
                 return
+            time.sleep(max(0.0, polled + _POLL_S - time.monotonic()))
             continue
-        if result.get("status") == "refused":
-            raise SystemExit(f"worker refused the run: {result.get('reason')}")
-        print(result)
+        _report(result)
         return
-    print(f"run not visible after {START_WAIT_S} s; check the Modal logs of {APP_NAME}")
+    print(
+        f"call {call.object_id} has not started run {run_id} yet (it may be queued behind "
+        "another run or waiting for a GPU); it starts on its own: follow the dashboard link"
+    )

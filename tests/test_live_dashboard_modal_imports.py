@@ -275,3 +275,159 @@ def test_launcher_refuses_an_unknown_preset_before_touching_modal(stub_dir):
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+LAUNCH_SCENARIOS = textwrap.dedent(
+    """
+    from types import SimpleNamespace as Entry
+    import modal
+
+    RUN = "demo-0123456789ab"
+
+    class Clock:  # replaces launch's `time`: polls and sleeps advance virtual time only
+        now = 0.0
+        def monotonic(self):
+            return self.now
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = Clock()
+    module.time = clock
+
+    class Volume:  # stage i is what the Volume shows after i polls
+        def __init__(self, stages):
+            self.stages, self.polls = stages, 0
+        def listdir(self, path):
+            files = self.stages[min(self.polls, len(self.stages) - 1)]
+            if files is None:
+                return []
+            if path in ("/", "runs"):
+                return [Entry(path="runs" if path == "/" else f"runs/{RUN}")]
+            return [Entry(path=f"runs/{RUN}/{name}") for name in files]
+
+    class Call:
+        object_id = "fc-test"
+        def __init__(self, outcomes, volume=None, waits=True):
+            self.outcomes, self.volume, self.waits, self.gets = outcomes, volume, waits, 0
+        def get(self, timeout=None):
+            self.gets += 1
+            if self.volume is not None:
+                self.volume.polls += 1
+            if self.waits and timeout:
+                clock.now += timeout
+            outcome = self.outcomes.pop(0) if self.outcomes else TimeoutError()
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+    def exits_with(text, function, *args, **kwargs):
+        try:
+            function(*args, **kwargs)
+        except SystemExit as refusal:
+            assert text in str(refusal), refusal
+        else:
+            raise AssertionError(f"no SystemExit containing {text!r}")
+
+    case = __CASE__
+    if case == "manifest-after-staging":
+        # Poll 1 shows only a staging file (not a manifest); poll 2 shows run.json.
+        volume = Volume([None, [".run.json.ab12.partial"], ["run.json"]])
+        call = Call([], volume)
+        module._await_start(call, volume, RUN)
+        assert volume.polls == 2, volume.polls
+    elif case == "refused-new-run":
+        exits_with("worker refused the run: r", module._await_start,
+                   Call([{"status": "refused", "reason": "r"}]), Volume([None]), RUN)
+    elif case == "never-visible-is-bounded":
+        call = Call([], Volume([None]), waits=False)  # get() returns at once: must not spin
+        module._await_start(call, call.volume, RUN)
+        assert call.gets <= module.START_WAIT_S / module._POLL_S + 1, call.gets
+    elif case == "invalid-request":
+        exits_with("invalid request:", module.main, label="demo", worlds=5, worlds_per_task=2)
+        assert modal.LOOKUPS == [], modal.LOOKUPS
+    elif case == "new-run-waits-for-start":
+        module._published_runs = lambda volume: set()
+        waited = []
+        module._await_start = lambda call, volume, run_id: waited.append(run_id)
+        module.main(label="demo", preset="small", worlds=6, worlds_per_task=2, seed=7)
+        assert waited == [module.RunRequest("demo", "small", 6, 2, 7).run_id], waited
+    elif case == "wait-reports-refusal":
+        module._published_runs = lambda volume: set()
+        refusal = Call([{"status": "refused", "reason": "code_sha256 differs"}])
+        deployed = Entry(spawn=lambda *args: refusal, get_web_url=lambda: "https://dash")
+        modal.Function.from_name = staticmethod(lambda *args, **kwargs: deployed)
+        exits_with("worker refused the run: code_sha256 differs", module.main,
+                   label="demo", preset="small", worlds=6, worlds_per_task=2, wait=True)
+    else:
+        raise AssertionError(case)
+    """
+)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "manifest-after-staging",
+        "refused-new-run",
+        "never-visible-is-bounded",
+        "invalid-request",
+        "new-run-waits-for-start",
+        "wait-reports-refusal",
+    ],
+)
+def test_launcher_waits_for_the_run_or_reports_why_not(stub_dir, case):
+    code = PROBE.format(
+        path=[str(stub_dir), str(REPO), str(REPO / "live_dashboard")],
+        module="launch",
+        file=str(REPO / "live_dashboard" / "launch.py"),
+    ) + LAUNCH_SCENARIOS.replace("__CASE__", repr(case))
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", code],
+        cwd=REPO,
+        env={"STUB_MODAL_LOCAL": "1", "STUB_MODAL_ENVIRONMENT": "pfn", "PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_dashboard_entry_reloads_the_volume_and_uses_the_configured_intervals(stub_dir, tmp_path):
+    from live_dashboard.auth import hash_password
+
+    root = _container_root(tmp_path)
+    code = PROBE.format(
+        path=[str(stub_dir), str(root)], module="modal_app", file=str(root / "modal_app.py")
+    ) + textwrap.dedent(
+        """
+        import live_dashboard.web as web
+        reloads = []
+        module.dashboard_volume.reload = lambda: reloads.append(1)
+        created = []
+        web.create_app = lambda collector, **kwargs: created.append((collector, kwargs))
+        module.dashboard()
+        ((collector, kwargs),) = created
+        assert (kwargs["poll_seconds"], kwargs["active_poll_seconds"]) == (30.0, 3.0), kwargs
+        assert kwargs["credentials"].verify("demo", "correct horse battery")
+        collector.refresh()
+        assert reloads == [1], reloads
+        """
+    )
+    environment = {
+        "STUB_MODAL_LOCAL": "0",
+        "STUB_MODAL_ENVIRONMENT": "",
+        "PATH": str(tmp_path),
+        "DASHBOARD_USERNAME": "demo",
+        "DASHBOARD_PASSWORD_HASH": hash_password("correct horse battery"),
+        "DASHBOARD_POLL_SECONDS": "30",
+    }
+    # -I without -S: the dashboard imports the web stack from this environment.
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
