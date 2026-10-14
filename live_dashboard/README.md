@@ -9,10 +9,11 @@ On Modal, both live in the **`pfn` environment**: `generate_run` runs on an A100
 container and the dashboard on a separate CPU-only container with a stable URL behind
 HTTP Basic authentication. The same code runs locally against a folder.
 
-> **The A100 does not accelerate generation.** PyTensor 3.2 has no CUDA backend and
-> generation compiles to Python/NumPy thunks, so worlds are generated on the
-> container's CPU while the GPU sits idle. The worker records the GPU it ran beside
-> (`worker.gpu_name`) so this stays visible.
+> **The A100 does not accelerate generation.** PyTensor 3.2 has no native CUDA backend
+> and the generator compiles its graphs in `FAST_COMPILE` mode to Python/NumPy thunks
+> (PyTensor's JAX and PyTorch backends, which could reach a GPU, are neither used nor
+> installed), so worlds are generated on the container's CPU while the GPU sits idle.
+> The worker records the GPU it ran beside (`worker.gpu_name`) so this stays visible.
 
 ## What the page shows
 
@@ -88,7 +89,8 @@ keeps the same behaviour because the dashboard never writes. Rotate credentials 
 
 Limits: `generate_run` uses `gpu="A100"`, 2 CPU cores and 4 GiB, one container at a
 time, a 1200 s timeout and one retry, so one launch costs at most about two attempts of
-20 minutes (≈ $1.9 at Modal's A100-80GB list price; most runs take a few minutes). A
+20 minutes (≈ $1.5 at Modal's October 2026 list prices, which bill `gpu="A100"` as an
+A100 40 GB even when Modal places it on an 80 GB card; most runs take a few minutes). A
 run is capped at 400 worlds and 20 worlds per task. Requests the worker can never
 satisfy (unknown preset, too large, a different generator than the stored run) are
 refused without a retry; the refusal is recorded as a failed attempt when the run
@@ -123,13 +125,14 @@ The manifest records the effective configuration, a digest of the generating sou
 the numerical package versions and the git revision; resuming a run with a different
 configuration, code or environment is refused, so a changed generator needs a new run.
 
-**Writer.** Each task's payload is written under its attempt's own path, verified
-(reloaded and validated), committed, and only then is the task record written and
-committed. Every record is decoded with the reader's decoder before it is written. A
-task that the library cannot fill within its bounded rounds publishes a zero-world
-record with the full shortfall and no payload; any other failure fails the attempt
-(recorded in its attempt record) and leaves the task for a retry. Resuming reuses a
-task when a record exists whose payload verifies (or that has no payload).
+**Writer.** Each task's payload is saved and verified (reloaded and validated) in a
+temporary directory, then written create-only under its attempt's own path and
+committed; only then is the task record written and committed. Every record is decoded
+with the reader's decoder before it is written. A task that the library cannot fill
+within its bounded rounds publishes a zero-world record with the full shortfall and no
+payload; any other failure fails the attempt (recorded in its attempt record) and leaves
+the task for a retry. Resuming reuses a task when a record exists whose payload verifies
+(or that has no payload).
 
 **Reader.** Every poll lists every task directory (no high-water cursor), so
 out-of-order publications are never skipped. Records with the same scientific content
@@ -142,9 +145,10 @@ published; unsupported contract major versions are rejected, not guessed; unknow
 fields are ignored. Files whose names start with `.` are staging files and are never
 read. Extraction runs once per payload and extraction version.
 
-Crash windows: before a payload commit nothing is visible; between the payload commit
-and the record commit the payload is an orphan that readers never consume (the retry
-writes its own); after the record commit a retry reuses the published task.
+Crash windows: until the task record is persisted, readers consume nothing of the task;
+a payload persisted before then (by its own commit or by a Volume background commit) is
+an orphan that readers never consume, and the retry writes its own. Once the record is
+persisted, readers consume the task and a retry reuses it.
 
 Known limits: an in-place modification of an already verified payload that keeps its
 size is not detected until the dashboard restarts; Volume v1 recommends at most five

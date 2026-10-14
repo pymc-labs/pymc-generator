@@ -1,14 +1,15 @@
 """The dashboard web app: one page, its assets and a small JSON API, all behind Basic auth.
 
-Request handlers never touch the store. One poller thread refreshes the collector
-(faster while a run is generating) and handlers read its latest immutable
-``CollectionSnapshot``, so a slow or failing store can delay data but never a response.
+Request handlers never touch the store. Startup refreshes the collector once (the first
+request after a cold start waits for it); then one poller thread refreshes it (faster
+while a run is generating) and handlers read its latest immutable ``CollectionSnapshot``,
+so a slow or failing store can delay data but never a response.
 
-Every JSON body is serialised here with ``ensure_ascii=True, allow_nan=False``: lone
-surrogates from record text are escaped instead of failing the response, and a NaN that
-slipped through is a loud bug rather than invalid JSON sent to the page. A run body is
-built once per collector refresh and identified by an ETag over its bytes, so the page's
-polling costs a 304 until something it shows actually changes.
+Every JSON body this module builds is serialised with ``ensure_ascii=True,
+allow_nan=False``: lone surrogates from record text are escaped instead of failing the
+response, and a NaN that slipped through is a loud bug rather than invalid JSON sent to
+the page. A run body is built once per collector refresh and identified by an ETag over
+its bytes, so the page's polling costs a 304 until something it shows actually changes.
 """
 
 from __future__ import annotations

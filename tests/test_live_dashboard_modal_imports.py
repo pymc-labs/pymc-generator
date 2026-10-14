@@ -184,6 +184,8 @@ def test_launcher_arguments_bind_to_the_worker_signature_by_name(stub_dir):
         launch = importlib.util.module_from_spec(launch_spec)
         launch_spec.loader.exec_module(launch)
         request = launch.RunRequest("demo", "small", 6, 2, 7)
+        assert (module.generate_run.__name__, module.dashboard.__name__) == (
+            launch.GENERATE_FUNCTION, launch.DASHBOARD_FUNCTION)
         bound = inspect.signature(module.generate_run).bind(*launch.spawn_arguments(request))
         assert dict(bound.arguments) == {{
             "label": "demo", "preset": "small", "worlds": 6, "worlds_per_task": 2,
@@ -213,7 +215,10 @@ def _container_root(tmp_path):
 def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, tmp_path):
     root = _container_root(tmp_path)
     smi = tmp_path / "nvidia-smi"
-    smi.write_text("#!/bin/sh\necho 'NVIDIA A100-SXM4-40GB'\n")
+    smi.write_text(
+        '#!/bin/sh\n[ "$*" = "--query-gpu=name --format=csv,noheader" ] || exit 2\n'
+        "echo 'NVIDIA A100-SXM4-40GB'\n"
+    )
     smi.chmod(0o755)
     code = PROBE.format(
         path=[str(stub_dir), str(root)], module="modal_app", file=str(root / "modal_app.py")
@@ -240,7 +245,11 @@ def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, t
         assert kwargs["worker"].gpu_name == "NVIDIA A100-SXM4-40GB", kwargs["worker"]
         import os, pathlib
         smi = pathlib.Path(os.environ["PATH"]) / "nvidia-smi"
-        smi.write_text("#!/bin/sh\\nexit 9\\n")  # no driver: still generates, without a name
+        # No driver: nvidia-smi explains on stdout and exits 9; still generates, without a name.
+        smi.write_text('#!/bin/sh\\necho "NVIDIA-SMI has failed: no driver"\\nexit 9\\n')
+        module.generate_run("demo", "small", 6, 2, 7, None)
+        assert calls[-1][1]["worker"].gpu_name is None, calls[-1][1]["worker"]
+        smi.unlink()  # no nvidia-smi at all
         module.generate_run("demo", "small", 6, 2, 7, None)
         assert calls[-1][1]["worker"].gpu_name is None, calls[-1][1]["worker"]
         del calls[1:]
@@ -375,9 +384,14 @@ LAUNCH_SCENARIOS = textwrap.dedent(
 
     def deploy(call):
         spawned = []
-        deployed = Entry(spawn=lambda *args: spawned.append(args) or call,
-                         get_web_url=lambda: "https://dash")
-        modal.Function.from_name = staticmethod(lambda *args, **kwargs: deployed)
+        functions = {
+            "generate_run": Entry(spawn=lambda *args: spawned.append(args) or call),
+            "dashboard": Entry(get_web_url=lambda: "https://dash"),
+        }
+        def from_name(app_name, name, *, environment_name):
+            assert (app_name, environment_name) == (module.APP_NAME, module.ENVIRONMENT)
+            return functions[name]
+        modal.Function.from_name = staticmethod(from_name)
         return spawned
 
     case = __CASE__
@@ -427,8 +441,10 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         spawned = deploy(Call([]))
         waited = []
         module._await_start = lambda *args: waited.append(args)
-        module.main(label="demo", preset="small", worlds=6, worlds_per_task=2, seed=7, resume=True)
+        out = output_of(module.main, label="demo", preset="small", worlds=6, worlds_per_task=2,
+                        seed=7, resume=True)
         assert spawned == [module.spawn_arguments(module.RunRequest("demo", "small", 6, 2, 7))]
+        assert f"dashboard: https://dash/?run={run_id}" in out, out
         assert waited == [], waited
     elif case == "demo-bounds":
         exits_with("invalid request: at most 400 worlds", module.main, label="demo", worlds=402,
@@ -451,8 +467,7 @@ LAUNCH_SCENARIOS = textwrap.dedent(
     elif case == "wait-reports-refusal":
         module._published_runs = lambda volume: set()
         refusal = Call([{"status": "refused", "reason": "code_sha256 differs"}])
-        deployed = Entry(spawn=lambda *args: refusal, get_web_url=lambda: "https://dash")
-        modal.Function.from_name = staticmethod(lambda *args, **kwargs: deployed)
+        deploy(refusal)
         exits_with("worker refused the run: code_sha256 differs", module.main,
                    label="demo", preset="small", worlds=6, worlds_per_task=2, wait=True)
     else:

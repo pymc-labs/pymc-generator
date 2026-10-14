@@ -17,8 +17,9 @@ read the migration notes before upgrading.
   distributions and the channel/control/baseline composition triangle, redrawn as tasks
   publish without rerunning generation. On Modal (environment `pfn`) generation runs on
   an A100 container and the dashboard on a separate CPU container with a stable URL;
-  PyTensor has no CUDA backend, so the A100 is allocated but worlds are generated on its
-  CPU. The interim single-writer publication protocol
+  PyTensor 3.2 has no native CUDA backend and the generator compiles Python/NumPy
+  thunks, so the A100 is allocated but worlds are generated on the container's CPU. The
+  interim single-writer publication protocol
   (`pymc-generator-live-publication` 1.0) shows zero-world tasks, conflicting records and
   unavailable payloads separately and never substitutes data; the multi-writer mechanism
   remains open in #54. New optional extra `dashboard`; the `dev` extra gains the web

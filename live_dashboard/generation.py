@@ -11,7 +11,8 @@ the generator configuration, source digest and numerical environment; resuming w
 different generator is refused because one run must never mix two generators' outputs.
 
 ``pymc_generator`` is imported inside functions only, so importing this module (e.g. by
-the CLI of the CPU-only dashboard image) does not load PyMC or PyTensor.
+the launcher, which the Modal CLI runs with its own interpreter) does not load PyMC or
+PyTensor.
 """
 
 from __future__ import annotations
