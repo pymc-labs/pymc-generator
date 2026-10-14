@@ -51,6 +51,14 @@ are not allowed. The distribution ships `py.typed`, and lazy public exports have
 explicit type-checking imports. Corpus mappings contain arrays plus nested
 metadata, so their values are heterogeneous rather than uniformly ndarrays.
 
+## Live generation dashboard
+
+`live_dashboard/` is a repository tool, not part of the installed package: it
+follows a generation run in an authenticated browser page, locally or on Modal
+(environment `pfn`). Install it with `uv sync --locked --extra dev --extra dashboard`;
+usage, deployment and its publication protocol are in
+[`live_dashboard/README.md`](live_dashboard/README.md).
+
 ## Documentation
 
 The docs are a MkDocs Material site under `docs/`. The API pages are generated

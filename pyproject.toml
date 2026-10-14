@@ -56,10 +56,12 @@ dev = [
     "ruff==0.15.18",
     "mypy",
     "pre-commit",
-    # The live dashboard's tests drive its web app (FastAPI's TestClient needs httpx).
+    # The live dashboard's tests drive its web app (FastAPI's TestClient needs httpx)
+    # and its `serve` command (uvicorn).
     "fastapi>=0.115",
     "plotly>=6",
     "httpx",
+    "uvicorn>=0.30",
 ]
 dashboard = [
     # Live generation dashboard (live_dashboard/): web app, figures and a local server.

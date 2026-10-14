@@ -25,6 +25,7 @@ import pytest
 import pymc_generator
 from live_dashboard import publication as pub
 from live_dashboard.collection import Collector
+from live_dashboard.deployment import DEMO_MAX_WORLDS, DEMO_MAX_WORLDS_PER_TASK
 from live_dashboard.extract import extract_payload
 from live_dashboard.generation import (
     PRESETS,
@@ -651,7 +652,7 @@ def test_invalid_requests_are_refused_before_any_write(
 
 def test_the_largest_demo_request_is_accepted(tmp_path, no_generation):
     store = DirectoryStore(tmp_path)
-    request = pub.RunRequest("largest", "small", 400, 20, 1)
+    request = pub.RunRequest("largest", "small", DEMO_MAX_WORLDS, DEMO_MAX_WORLDS_PER_TASK, 1)
     clock = support.FakeClock(step=0.0)
     # A deadline that leaves no time for a task: the run opens without generating.
     result = run_generation(
@@ -663,7 +664,10 @@ def test_the_largest_demo_request_is_accepted(tmp_path, no_generation):
     )
     assert (result["status"], result["published"]) == ("stopped", [])
     manifest = support.load_manifest(store, request.run_id)
-    assert (manifest.n_tasks, manifest.worlds_per_task) == (20, 20)
+    assert (manifest.n_tasks, manifest.worlds_per_task) == (
+        DEMO_MAX_WORLDS // DEMO_MAX_WORLDS_PER_TASK,
+        DEMO_MAX_WORLDS_PER_TASK,
+    )
 
 
 # -- deadline --------------------------------------------------------------------------

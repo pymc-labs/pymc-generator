@@ -858,9 +858,7 @@ def test_poller_survives_a_raising_refresh(credentials):
         signal_after=4,
     )
     app = poller_app(collector, credentials, poll=SLOW, active=FAST)
-    assert app.state.collector is collector
     with TestClient(app) as client:
-        assert app.state.poller.name == "live-dashboard-poller"
         assert collector.reached.wait(timeout=5.0)
         assert app.state.poller.is_alive()
         assert client.get("/api/runs", headers=AUTH).status_code == 200

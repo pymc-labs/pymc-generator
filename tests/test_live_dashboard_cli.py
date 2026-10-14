@@ -17,6 +17,7 @@ import pytest
 
 from live_dashboard import generation
 from live_dashboard.__main__ import main
+from live_dashboard.deployment import DEMO_MAX_WORLDS
 from live_dashboard.publication import utc_now
 from live_dashboard.web import settings_from_env
 
@@ -117,7 +118,7 @@ def test_generate_refuses_unusable_time_limits_before_writing(monkeypatch, tmp_p
     [
         (("--preset", "showcase"), "unknown preset 'showcase'"),
         (("--worlds", "3"), "must be a positive multiple"),
-        (("--worlds", "402"), "at most 400 worlds"),
+        (("--worlds", str(DEMO_MAX_WORLDS + 2)), f"at most {DEMO_MAX_WORLDS} worlds"),
     ],
 )
 def test_generate_refuses_bad_requests_with_a_message(monkeypatch, tmp_path, capsys, extra, reason):

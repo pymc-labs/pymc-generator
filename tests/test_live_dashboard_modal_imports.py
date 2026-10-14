@@ -62,15 +62,25 @@ STUB = textwrap.dedent(
     def _decorator(*args, **kwargs):
         return lambda function: function
 
-    class App:
-        def __init__(self, *args, **kwargs):
-            pass
+    class App:  # keeps what it deploys, like Modal's registry of an app's functions
+        def __init__(self, name=None, **kwargs):
+            self.name, self.registered = name, {}
 
-        function = staticmethod(_decorator)
+        def function(self, *args, **kwargs):
+            def register(function):
+                self.registered[function.__name__] = function
+                return function
+            return register
+
         local_entrypoint = staticmethod(_decorator)
 
     concurrent = _decorator
-    asgi_app = _decorator
+
+    def asgi_app(*args, **kwargs):
+        def web_endpoint(function):
+            function.web_endpoint = True
+            return function
+        return web_endpoint
 
     def is_local():
         return os.environ["STUB_MODAL_LOCAL"] == "1"
@@ -184,8 +194,6 @@ def test_launcher_arguments_bind_to_the_worker_signature_by_name(stub_dir):
         launch = importlib.util.module_from_spec(launch_spec)
         launch_spec.loader.exec_module(launch)
         request = launch.RunRequest("demo", "small", 6, 2, 7)
-        assert (module.generate_run.__name__, module.dashboard.__name__) == (
-            launch.GENERATE_FUNCTION, launch.DASHBOARD_FUNCTION)
         bound = inspect.signature(module.generate_run).bind(*launch.spawn_arguments(request))
         assert dict(bound.arguments) == {{
             "label": "demo", "preset": "small", "worlds": 6, "worlds_per_task": 2,
@@ -383,14 +391,26 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         return buffer.getvalue()
 
     def deploy(call):
+        # What `modal deploy` registers from modal_app.py in the CLI's environment, looked
+        # up like Modal's Function.from_name: by app name, function name and environment.
+        import pathlib
+        spec = importlib.util.spec_from_file_location(
+            "modal_app", pathlib.Path(module.__file__).with_name("modal_app.py"))
+        deployed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deployed)
+        environment = modal.config.config.get("environment")
+        modal.LOOKUPS.clear()  # the deployment's own lookups, not the launcher's
         spawned = []
-        functions = {
-            "generate_run": Entry(spawn=lambda *args: spawned.append(args) or call),
-            "dashboard": Entry(get_web_url=lambda: "https://dash"),
-        }
-        def from_name(app_name, name, *, environment_name):
-            assert (app_name, environment_name) == (module.APP_NAME, module.ENVIRONMENT)
-            return functions[name]
+        def cannot_spawn(*args):
+            raise TypeError("a web endpoint cannot be spawned")
+        def from_name(app_name, name, *, environment_name=None):
+            function = deployed.app.registered.get(name)
+            where = (app_name, environment_name or environment)
+            if function is None or where != (deployed.app.name, environment):
+                raise LookupError(f"no deployed function {name!r} in {where}")
+            if getattr(function, "web_endpoint", False):
+                return Entry(get_web_url=lambda: "https://dash", spawn=cannot_spawn)
+            return Entry(get_web_url=lambda: "", spawn=lambda *args: spawned.append(args) or call)
         modal.Function.from_name = staticmethod(from_name)
         return spawned
 
@@ -447,8 +467,9 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         assert f"dashboard: https://dash/?run={run_id}" in out, out
         assert waited == [], waited
     elif case == "demo-bounds":
-        exits_with("invalid request: at most 400 worlds", module.main, label="demo", worlds=402,
-                   worlds_per_task=2)
+        from live_dashboard.deployment import DEMO_MAX_WORLDS
+        exits_with(f"invalid request: at most {DEMO_MAX_WORLDS} worlds", module.main,
+                   label="demo", worlds=DEMO_MAX_WORLDS + 2, worlds_per_task=2)
         assert modal.LOOKUPS == [], modal.LOOKUPS
     elif case == "invalid-request":
         exits_with("invalid request:", module.main, label="demo", worlds=5, worlds_per_task=2)

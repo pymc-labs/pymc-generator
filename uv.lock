@@ -2471,6 +2471,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "uvicorn" },
 ]
 docs = [
     { name = "graphviz" },
@@ -2525,6 +2526,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.18" },
     { name = "scipy" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.30" },
     { name = "xarray" },
 ]
 provides-extras = ["dev", "dashboard", "docs"]

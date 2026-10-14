@@ -81,10 +81,11 @@ modal run -e pfn live_dashboard/launch.py --label demo --worlds 20 --worlds-per-
 ```
 
 Resources: app `pymc-generator-live-dashboard`, Volume `pymc-generator-live-dashboard`
-(v1), Secret `pymc-generator-dashboard-auth`, web label `pymc-generator-dashboard`, all
-in `pfn`. The dashboard mounts the Volume read-only and calls `reload()` on it (verified
-on the first deployment); if a future Modal release refused that, mounting it read-write
-keeps the same behaviour because the dashboard never writes. Rotate credentials with
+(v1), Secret `pymc-generator-dashboard-auth`, web label `pymc-generator-dashboard`, and
+the ephemeral launcher app `pymc-generator-live-dashboard-launch`, all in `pfn`. The
+dashboard mounts the Volume read-only and calls `reload()` on it (verified on the first
+deployment); if a future Modal release refused that, mounting it read-write keeps the
+same behaviour because the dashboard never writes. Rotate credentials with
 `modal secret create --force ...` and redeploy.
 
 Limits: `generate_run` uses `gpu="A100"`, 2 CPU cores and 4 GiB, one container at a
