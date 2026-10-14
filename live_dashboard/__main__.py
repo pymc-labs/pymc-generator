@@ -24,7 +24,6 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from live_dashboard.deployment import ENVIRONMENT, SECRET_NAME
 from live_dashboard.generation import RequestError, RunConflictError
 
 
@@ -88,7 +87,7 @@ def _hash_password(args: argparse.Namespace) -> None:
         json.dump(values, handle, indent=2)
         handle.write("\n")
     print(f"wrote {args.output} (username and password hash; mode 0600)")
-    print(f"Modal: modal secret create -e {ENVIRONMENT} {SECRET_NAME} --from-json {args.output}")
+    print("Modal: create the dashboard's Secret from this file (live_dashboard/README.md, step 1)")
 
 
 def _serve(args: argparse.Namespace) -> None:
