@@ -3,7 +3,7 @@
 Request handlers never touch the store. Startup refreshes the collector once (the first
 request after a cold start waits for it); then one poller thread refreshes it (faster
 while a run is generating) and handlers read its latest immutable ``CollectionSnapshot``,
-so a slow or failing store can delay data but never a response.
+so after startup a slow or failing store can delay data but never a response.
 
 Every JSON body this module builds is serialised with ``ensure_ascii=True,
 allow_nan=False``: lone surrogates from record text are escaped instead of failing the

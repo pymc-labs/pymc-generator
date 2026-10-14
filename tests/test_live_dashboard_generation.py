@@ -626,8 +626,22 @@ def test_a_malformed_attempt_id_is_refused_under_a_fresh_attempt(
 @pytest.mark.parametrize(
     ("request_args", "kwargs"),
     [
-        pytest.param(("big", "small", 420, 20, 1), {}, id="too-many-worlds"),
-        pytest.param(("big", "small", 42, 21, 1), {}, id="too-many-worlds-per-task"),
+        pytest.param(
+            (
+                "big",
+                "small",
+                (DEMO_MAX_WORLDS // DEMO_MAX_WORLDS_PER_TASK + 1) * DEMO_MAX_WORLDS_PER_TASK,
+                DEMO_MAX_WORLDS_PER_TASK,
+                1,
+            ),
+            {},
+            id="too-many-worlds",
+        ),
+        pytest.param(
+            ("big", "small", 2 * (DEMO_MAX_WORLDS_PER_TASK + 1), DEMO_MAX_WORLDS_PER_TASK + 1, 1),
+            {},
+            id="too-many-worlds-per-task",
+        ),
         pytest.param(("odd", "unknown", 2, 2, 1), {}, id="unknown-preset"),
         pytest.param(("odd", "small", 2, 2, 1), {"attempt_id": "attempt-1"}, id="bad-attempt-id"),
     ],
@@ -652,7 +666,8 @@ def test_invalid_requests_are_refused_before_any_write(
 
 def test_the_largest_demo_request_is_accepted(tmp_path, no_generation):
     store = DirectoryStore(tmp_path)
-    request = pub.RunRequest("largest", "small", DEMO_MAX_WORLDS, DEMO_MAX_WORLDS_PER_TASK, 1)
+    largest = DEMO_MAX_WORLDS - DEMO_MAX_WORLDS % DEMO_MAX_WORLDS_PER_TASK
+    request = pub.RunRequest("largest", "small", largest, DEMO_MAX_WORLDS_PER_TASK, 1)
     clock = support.FakeClock(step=0.0)
     # A deadline that leaves no time for a task: the run opens without generating.
     result = run_generation(
@@ -665,7 +680,7 @@ def test_the_largest_demo_request_is_accepted(tmp_path, no_generation):
     assert (result["status"], result["published"]) == ("stopped", [])
     manifest = support.load_manifest(store, request.run_id)
     assert (manifest.n_tasks, manifest.worlds_per_task) == (
-        DEMO_MAX_WORLDS // DEMO_MAX_WORLDS_PER_TASK,
+        largest // DEMO_MAX_WORLDS_PER_TASK,
         DEMO_MAX_WORLDS_PER_TASK,
     )
 

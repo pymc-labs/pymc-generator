@@ -68,7 +68,7 @@ STUB = textwrap.dedent(
 
         def function(self, *args, **kwargs):
             def register(function):
-                self.registered[function.__name__] = function
+                self.registered[kwargs.get("name") or function.__qualname__] = function
                 return function
             return register
 
@@ -181,37 +181,6 @@ def test_container_reimports_the_app_without_git_or_the_checkout(stub_dir, tmp_p
     assert result.returncode == 0, result.stderr
 
 
-def test_launcher_arguments_bind_to_the_worker_signature_by_name(stub_dir):
-    # A reordered generate_run parameter would only fail on Modal (or silently swap values).
-    code = PROBE.format(
-        path=[str(stub_dir), str(REPO), str(REPO / "live_dashboard")],
-        module="modal_app",
-        file=str(REPO / "live_dashboard" / "modal_app.py"),
-    ) + textwrap.dedent(
-        """
-        import inspect
-        launch_spec = importlib.util.spec_from_file_location("launch", {launch!r})
-        launch = importlib.util.module_from_spec(launch_spec)
-        launch_spec.loader.exec_module(launch)
-        request = launch.RunRequest("demo", "small", 6, 2, 7)
-        bound = inspect.signature(module.generate_run).bind(*launch.spawn_arguments(request))
-        assert dict(bound.arguments) == {{
-            "label": "demo", "preset": "small", "worlds": 6, "worlds_per_task": 2,
-            "seed": 7, "expected_run_id": request.run_id,
-        }}, bound.arguments
-        """
-    ).format(launch=str(REPO / "live_dashboard" / "launch.py"))
-    result = subprocess.run(
-        [sys.executable, "-I", "-S", "-c", code],
-        cwd=REPO,
-        env={"STUB_MODAL_LOCAL": "1", "STUB_MODAL_ENVIRONMENT": "pfn", "PATH": os.environ["PATH"]},
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stderr
-
-
 def _container_root(tmp_path):
     root = tmp_path / "root"
     root.mkdir()
@@ -222,12 +191,6 @@ def _container_root(tmp_path):
 
 def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, tmp_path):
     root = _container_root(tmp_path)
-    smi = tmp_path / "nvidia-smi"
-    smi.write_text(
-        '#!/bin/sh\n[ "$*" = "--query-gpu=name --format=csv,noheader" ] || exit 2\n'
-        "echo 'NVIDIA A100-SXM4-40GB'\n"
-    )
-    smi.chmod(0o755)
     code = PROBE.format(
         path=[str(stub_dir), str(root)], module="modal_app", file=str(root / "modal_app.py")
     ) + textwrap.dedent(
@@ -250,17 +213,6 @@ def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, t
         assert before + limit <= kwargs["deadline"] <= after + limit + timedelta(milliseconds=1)
         assert request == RunRequest("demo", "small", 6, 2, 7)
         assert kwargs["expected_run_id"] == "demo-0123456789ab"
-        assert kwargs["worker"].gpu_name == "NVIDIA A100-SXM4-40GB", kwargs["worker"]
-        import os, pathlib
-        smi = pathlib.Path(os.environ["PATH"]) / "nvidia-smi"
-        # No driver: nvidia-smi explains on stdout and exits 9; still generates, without a name.
-        smi.write_text('#!/bin/sh\\necho "NVIDIA-SMI has failed: no driver"\\nexit 9\\n')
-        module.generate_run("demo", "small", 6, 2, 7, None)
-        assert calls[-1][1]["worker"].gpu_name is None, calls[-1][1]["worker"]
-        smi.unlink()  # no nvidia-smi at all
-        module.generate_run("demo", "small", 6, 2, 7, None)
-        assert calls[-1][1]["worker"].gpu_name is None, calls[-1][1]["worker"]
-        del calls[1:]
         refused = module.generate_run("demo", "small", 5, 2, 7, None)
         assert refused["status"] == "refused" and len(calls) == 1, refused
         # A worker timeout must not reach the launcher as the builtin TimeoutError, which
@@ -289,6 +241,46 @@ def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, t
         generation.run_generation_or_refuse = touches_the_store
         module.generate_run("demo", "small", 6, 2, 7, None)
         assert hooks == ["commit", "reload"], hooks
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", code],
+        cwd=tmp_path,
+        env={"STUB_MODAL_LOCAL": "0", "STUB_MODAL_ENVIRONMENT": "", "PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_worker_records_the_gpu_that_nvidia_smi_names_or_none(stub_dir, tmp_path):
+    root = _container_root(tmp_path)
+    smi = tmp_path / "nvidia-smi"
+    smi.write_text(
+        '#!/bin/sh\n[ "$*" = "--query-gpu=name --format=csv,noheader" ] || exit 2\n'
+        "echo 'NVIDIA A100-SXM4-40GB'\n"
+    )
+    smi.chmod(0o755)
+    code = PROBE.format(
+        path=[str(stub_dir), str(root)], module="modal_app", file=str(root / "modal_app.py")
+    ) + textwrap.dedent(
+        """
+        import os, pathlib
+        import live_dashboard.generation as generation
+        names = []
+        def record(store, request, **kwargs):
+            names.append(kwargs["worker"].gpu_name)
+            return {"status": "finished"}
+        generation.run_generation_or_refuse = record
+        module.generate_run("demo", "small", 6, 2, 7, None)
+        smi = pathlib.Path(os.environ["PATH"]) / "nvidia-smi"
+        # No driver: nvidia-smi explains on stdout and exits 9; still generates, without a name.
+        smi.write_text('#!/bin/sh\\necho "NVIDIA-SMI has failed: no driver"\\nexit 9\\n')
+        module.generate_run("demo", "small", 6, 2, 7, None)
+        smi.unlink()  # no nvidia-smi at all
+        module.generate_run("demo", "small", 6, 2, 7, None)
+        assert names == ["NVIDIA A100-SXM4-40GB", None, None], names
         """
     )
     result = subprocess.run(
@@ -393,7 +385,7 @@ LAUNCH_SCENARIOS = textwrap.dedent(
     def deploy(call):
         # What `modal deploy` registers from modal_app.py in the CLI's environment, looked
         # up like Modal's Function.from_name: by app name, function name and environment.
-        import pathlib
+        import inspect, pathlib
         spec = importlib.util.spec_from_file_location(
             "modal_app", pathlib.Path(module.__file__).with_name("modal_app.py"))
         deployed = importlib.util.module_from_spec(spec)
@@ -401,7 +393,7 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         environment = modal.config.config.get("environment")
         modal.LOOKUPS.clear()  # the deployment's own lookups, not the launcher's
         spawned = []
-        def cannot_spawn(*args):
+        def cannot_spawn(*args, **kwargs):
             raise TypeError("a web endpoint cannot be spawned")
         def from_name(app_name, name, *, environment_name=None):
             function = deployed.app.registered.get(name)
@@ -410,9 +402,16 @@ LAUNCH_SCENARIOS = textwrap.dedent(
                 raise LookupError(f"no deployed function {name!r} in {where}")
             if getattr(function, "web_endpoint", False):
                 return Entry(get_web_url=lambda: "https://dash", spawn=cannot_spawn)
-            return Entry(get_web_url=lambda: "", spawn=lambda *args: spawned.append(args) or call)
+            def spawn(*args, **kwargs):  # binds like a call of the deployed function
+                spawned.append(dict(inspect.signature(function).bind(*args, **kwargs).arguments))
+                return call
+            return Entry(get_web_url=lambda: "", spawn=spawn)
         modal.Function.from_name = staticmethod(from_name)
         return spawned
+
+    def worker_arguments(run_id):  # generate_run's arguments for the request demo/small/6/2/7
+        return {"label": "demo", "preset": "small", "worlds": 6, "worlds_per_task": 2,
+                "seed": 7, "expected_run_id": run_id}
 
     case = __CASE__
     if case == "manifest-after-staging":
@@ -463,13 +462,14 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         module._await_start = lambda *args: waited.append(args)
         out = output_of(module.main, label="demo", preset="small", worlds=6, worlds_per_task=2,
                         seed=7, resume=True)
-        assert spawned == [module.spawn_arguments(module.RunRequest("demo", "small", 6, 2, 7))]
+        assert spawned == [worker_arguments(run_id)], spawned
         assert f"dashboard: https://dash/?run={run_id}" in out, out
         assert waited == [], waited
     elif case == "demo-bounds":
         from live_dashboard.deployment import DEMO_MAX_WORLDS
+        over = DEMO_MAX_WORLDS + 2 - DEMO_MAX_WORLDS % 2  # the smallest even count above it
         exits_with(f"invalid request: at most {DEMO_MAX_WORLDS} worlds", module.main,
-                   label="demo", worlds=DEMO_MAX_WORLDS + 2, worlds_per_task=2)
+                   label="demo", worlds=over, worlds_per_task=2)
         assert modal.LOOKUPS == [], modal.LOOKUPS
     elif case == "invalid-request":
         exits_with("invalid request:", module.main, label="demo", worlds=5, worlds_per_task=2)
@@ -482,7 +482,7 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         out = output_of(module.main, label="demo", preset="small", worlds=6, worlds_per_task=2,
                         seed=7)
         request = module.RunRequest("demo", "small", 6, 2, 7)
-        assert spawned == [module.spawn_arguments(request)], spawned
+        assert spawned == [worker_arguments(request.run_id)], spawned
         assert f"dashboard: https://dash/?run={request.run_id}" in out, out
         assert waited == [request.run_id], waited
     elif case == "wait-reports-refusal":

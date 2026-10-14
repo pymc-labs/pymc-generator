@@ -74,9 +74,10 @@ modal secret create -e pfn pymc-generator-dashboard-auth --from-json auth.json
 rm auth.json   # keep the password elsewhere; the secret holds only its hash
 # 2. Deploy the worker and the dashboard (prints the stable dashboard URL).
 modal deploy -e pfn live_dashboard/modal_app.py
-# 3. Start a run: prints the run id and its dashboard link, then waits until the worker
-#    has published the run (or exits with the reason it refused). --resume continues an
-#    existing run; --wait blocks until the worker returns its summary.
+# 3. Start a run: prints the run id and its dashboard link; for a new run it then waits
+#    up to 10 minutes for the worker to publish it (or exits with the reason it refused
+#    or failed). --resume continues an existing run without waiting; --wait blocks
+#    until the worker returns its summary.
 modal run -e pfn live_dashboard/launch.py --label demo --worlds 20 --worlds-per-task 2
 ```
 

@@ -118,7 +118,11 @@ def test_generate_refuses_unusable_time_limits_before_writing(monkeypatch, tmp_p
     [
         (("--preset", "showcase"), "unknown preset 'showcase'"),
         (("--worlds", "3"), "must be a positive multiple"),
-        (("--worlds", str(DEMO_MAX_WORLDS + 2)), f"at most {DEMO_MAX_WORLDS} worlds"),
+        # The smallest count above the bound that is a multiple of the default 2 per task.
+        (
+            ("--worlds", str(DEMO_MAX_WORLDS + 2 - DEMO_MAX_WORLDS % 2)),
+            f"at most {DEMO_MAX_WORLDS} worlds",
+        ),
     ],
 )
 def test_generate_refuses_bad_requests_with_a_message(monkeypatch, tmp_path, capsys, extra, reason):
