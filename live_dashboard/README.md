@@ -84,6 +84,8 @@ reads it.
 | Composition triangle | Each world's channel / control / baseline shares of its total outcome, at its exact barycentric position (corner = 100 %). Semi-transparent dots, so overlap shows density; worlds with a negative part sit outside and are drawn as ×. |
 | Worlds per saturation form | Consumable worlds per saturation family their active channels use, with all six library families on the x axis (linear, Hill, logistic, Michaelis-Menten, tanh, root); a world whose channels mix families counts once in each. Read from each payload's `sat_family`, which the library records only for configurations with mechanism priors; worlds without it are noted, not counted. |
 | Worlds per adstock form | The same for the adstock (carryover) family: none, geometric, Weibull (`carryover_family`, recorded in every payload). |
+| Worlds per active channels × active controls | Heatmap of consumable worlds per combination of active-channel and active-control counts. Every combination the layout allows has a cell (1 to the slot count on each axis, 0 too when some world has none active); absent combinations stay blank, and the note counts how many are present. |
+| Worlds per number of active inputs | Consumable worlds per number of active channels and per number of active controls, side by side: the matrix's two margins. |
 | Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, and the newest attempt (with its GPU, for the early runs that had one). |
 
 Shares use the trajectory-showcase notebook's definitions (`realized_shares`):
@@ -278,10 +280,12 @@ together (`geometric-mm-logistic`) as one dataset:
   late starts and early stops (15 % each), trends, yearly seasonality, a level jump,
   weekly jitter and pulses, on random walks whose smoothness runs from raw to a 26-week
   moving average.
-- **Baseline:** a random walk (level 2–16, spread ~ HalfNormal(0.8)) with its own
+- **Baseline:** a random walk (level 2–20, spread ~ HalfNormal(0.8)) with its own
   smoothness, plus weekly noise (in target units: `outcome_std_mode="absolute"`).
-- **Shares:** each input contributes 1–3 target units at its usual level, so the
-  channel, control and baseline shares follow the active counts and the baseline level.
+- **Shares:** each channel contributes 0.2–6 target units at its usual level (up to 30×
+  apart within a world, so dominant and minor channels mix) and each control 1–3; the
+  baseline level is 2–20. The channel, control and baseline shares follow the active
+  counts and the baseline level.
 
 Measured on the exact run `geometric-mm-logistic`, 160 worlds, 2 per task, seed 1000,
 generated locally with the same code:
@@ -290,26 +294,33 @@ generated locally with the same code:
 |---|---|
 | Worlds per style | 80 Michaelis-Menten, 80 logistic |
 | (channels, controls) combinations | 77 of 100; every count 1–10 on both axes |
-| Channel / control / baseline share (min–median–max) | 4–33–64 % / 1–31–78 % / 8–35–72 % |
-| All three shares within 5–90 % | 95 % of worlds; none above 90 % or below 1 % |
+| Channel / control / baseline share (min–median–max) | 3–41–72 % / 1–25–76 % / 6–33–78 % |
+| All three shares within 5–90 % | 92.5 % of worlds; none above 90 %; one world has a part below 1 % (controls 0.9 %) |
+| Each active channel's direct share (median / 95th pct / max) | 5.7 / 17 / 42 % (with effects drawn from 1–3: 5.3 / 12 / 32 %) |
+| Largest channel per world (median / 90th pct) | 13 / 20 % (with effects drawn from 1–3: 9.5 / 14.5 %) |
 | Channels: no zeros / under half zeros / half or more | 35 / 37 / 28 % |
 | Channels: trend up / down / flat | 38 / 40 / 21 % |
 | Channels: very smooth / medium / rough | 29 / 23 / 48 % |
 | Controls: no zeros / under half zeros / half or more | 33 / 38 / 28 % |
 | Controls: trend up / down / flat (changes beyond ±10 %: 47 % up, 27 % down) | 19 / 8 / 73 % |
 | Controls: very smooth / medium / rough | 48 / 34 / 19 % |
-| Baseline: flat / smooth moving / jagged; drifting up / down | 37 / 51 / 12 %; 16 / 12 % |
-| Negative channel or control values; lowest target | none; 5.8 |
+| Baseline: flat / smooth moving / jagged; drifting up / down | 42 / 47 / 11 %; 15 / 11 % |
+| Negative channel or control values; lowest target | none; 6.9 |
 
 Definitions: a trend is the fitted change in log level over the weeks the input is on
 (up above +1/3, down below −1/3); roughness is the week-to-week change relative to the
 series' spread (white noise 1; very smooth < 0.1, rough > 0.4); a flat baseline varies
 by less than 3 % of its mean, a jagged one is a nearly unsmoothed walk.
 
-**Limits.** The library has no setting that targets shares, so a world with a single
-small channel or control gives that component under 5 % (7 % of 800 worlds sampled with
-other seeds). The baseline is one smoothed random walk plus noise: isolated spikes and
-set trends would need a library change. Control positivity is a margin, not a floor (no
+**Limits.** The library has no setting that targets shares, so worlds with few active
+channels or controls (1–3 here) can give that component under 5 % (7.5 % of this run's
+worlds).
+Each channel's reference effect is drawn uniformly, so those differ by at most 30× within
+a world (realized channel totals differ more: a median of 10× and up to 108× here); a
+log-uniform draw (a library change) would give more dominant channels (a 95th
+percentile near 30 % in a rescaling test). The baseline is one smoothed random
+walk plus noise: isolated spikes and set trends would need a library change. Control
+positivity is a margin, not a floor (no
 negative value in 5,000+ sampled control series); a hard guarantee needs a covariate floor
 in the library. Controls trend less than channels, because their down-trends are capped
 to keep them positive.

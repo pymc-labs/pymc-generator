@@ -14,9 +14,10 @@ read the migration notes before upgrading.
   versioned JSON completion record, into a store and follows the publications from a
   separate FastAPI + Plotly page behind HTTP Basic authentication: worlds-generated and
   generation-speed cards, speed and cumulative worlds over time, channel impact
-  distributions, the channel/control/baseline composition triangle and worlds per
+  distributions, the channel/control/baseline composition triangle, worlds per
   saturation and adstock family (every library family on the x axis, read from each
-  payload), redrawn as tasks publish without rerunning generation. Presets
+  payload), and a heatmap of worlds per active-channel x active-control combination
+  with its two margins, redrawn as tasks publish without rerunning generation. Presets
   `geometric-mm` and `geometric-logistic` (10 channels and 10 controls acting only on the
   target, geometric adstock with Michaelis-Menten or logistic saturation, wide trajectory
   and share variety) and preset mixes, which alternate presets by task in one run

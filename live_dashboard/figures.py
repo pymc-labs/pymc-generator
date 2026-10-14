@@ -20,6 +20,7 @@ from __future__ import annotations
 import bisect
 import itertools
 import math
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -47,6 +48,7 @@ _TRIANGLE_HEIGHT = math.sqrt(3.0) / 2.0
 _GRID_LEVELS = (0.2, 0.4, 0.6, 0.8)
 _TEMPLATE = "plotly_white"  # explicit: the global plotly default is mutable process state
 _WORLD_COLOR = "#306998"
+_CONTROL_COLOR = "#e07b39"
 _NEGATIVE_COLOR = "#c0392b"
 _TARGET_COLOR = "#7f7f7f"
 _GRID_COLOR = "#d9d9d9"
@@ -612,6 +614,111 @@ def adstock_figure(run: RunSnapshot) -> dict[str, Any]:
     )
 
 
+def _active_axes(run: RunSnapshot) -> tuple[list[int], list[int]]:
+    """Every active-channel count and every active-control count the layouts allow.
+
+    Counts run from 1 (from 0 when some world has none active) up to the most slots.
+    """
+
+    def axis(active: list[int], slots: list[int]) -> list[int]:
+        return list(range(0 if min(active) == 0 else 1, max(*active, *slots) + 1))
+
+    worlds = run.worlds
+    return (
+        axis([w.active_channels for w in worlds], [w.channel_slots for w in worlds]),
+        axis([w.active_controls for w in worlds], [w.control_slots for w in worlds]),
+    )
+
+
+def combinations_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 7: consumable worlds per (active channels, active controls) combination.
+
+    Every combination the layout allows has a cell, so absent combinations show as empty.
+    """
+    title = "Worlds per active channels × active controls"
+    if not run.worlds:
+        return _panel("combinations", title, None, empty_state(run), None)
+    channels, controls = _active_axes(run)
+    counts = Counter((w.active_channels, w.active_controls) for w in run.worlds)
+    z = [[counts.get((c, m), 0) for m in controls] for c in channels]
+    figure = go.Figure(
+        data=[
+            go.Heatmap(
+                x=controls,
+                y=channels,
+                z=z,
+                text=[[str(value) if value else "" for value in row] for row in z],
+                texttemplate="%{text}",
+                colorscale="Blues",
+                zmin=0,
+                xgap=2,
+                ygap=2,
+                colorbar={
+                    "title": {"text": "worlds"},
+                    "tick0": 0,
+                    "dtick": _count_step(max(counts.values())),
+                    "tickformat": "d",
+                },
+                hovertemplate="%{y} channels, %{x} controls: %{z} worlds<extra></extra>",
+            )
+        ],
+        layout=_layout(
+            xaxis={
+                "title": {"text": "active controls (covariates)"},
+                "dtick": 1,
+                "showgrid": False,
+            },
+            yaxis={
+                "title": {"text": "active channels (treatments)"},
+                "dtick": 1,
+                "showgrid": False,
+            },
+        ),
+    )
+    note = f"{len(counts)} of {len(channels) * len(controls)} combinations present"
+    return _panel("combinations", title, figure, None, note)
+
+
+def active_counts_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 8: consumable worlds per number of active channels and of active controls."""
+    title = "Worlds per number of active inputs"
+    if not run.worlds:
+        return _panel("active_counts", title, None, empty_state(run), None)
+    channel_axis, control_axis = _active_axes(run)
+    axis = sorted({*channel_axis, *control_axis})
+    channels = Counter(w.active_channels for w in run.worlds)
+    controls = Counter(w.active_controls for w in run.worlds)
+    traces = [
+        ("channels (treatments)", channels, _WORLD_COLOR),
+        ("controls (covariates)", controls, _CONTROL_COLOR),
+    ]
+    top = max(max(channels.values()), max(controls.values()))
+    figure = go.Figure(
+        data=[
+            go.Bar(
+                name=name,
+                x=axis,
+                y=[counts.get(n, 0) for n in axis],
+                marker={"color": color},
+                hovertemplate="%{x} active " + name.split()[0] + ": %{y} worlds<extra></extra>",
+            )
+            for name, counts, color in traces
+        ],
+        layout=_layout(
+            barmode="group",
+            xaxis={"title": {"text": "active inputs"}, "dtick": 1},
+            yaxis={
+                "title": {"text": "worlds"},
+                "rangemode": "tozero",
+                "tick0": 0,
+                "dtick": _count_step(top),
+                "tickformat": "d",
+            },
+        ),
+    )
+    return _panel("active_counts", title, figure, None, None)
+
+
 # -- status ------------------------------------------------------------------------------
 
 
@@ -676,6 +783,8 @@ _FIGURES: tuple[Callable[[RunSnapshot], dict[str, Any]], ...] = (
     composition_figure,
     saturation_figure,
     adstock_figure,
+    combinations_figure,
+    active_counts_figure,
 )
 
 

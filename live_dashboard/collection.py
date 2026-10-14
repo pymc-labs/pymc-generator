@@ -418,6 +418,10 @@ def _world_metrics(
             saturation_forms=(
                 None if metrics.saturation_forms is None else metrics.saturation_forms[row]
             ),
+            active_channels=metrics.active_channels[row],
+            active_controls=metrics.active_controls[row],
+            channel_slots=metrics.channel_slots,
+            control_slots=metrics.control_slots,
         )
         for row in range(metrics.n_worlds)
     )

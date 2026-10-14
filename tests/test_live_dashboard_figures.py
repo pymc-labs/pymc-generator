@@ -33,7 +33,16 @@ support = _load("_live_dashboard_support")
 
 RUN_ID = "demo-0123456789ab"
 ATTEMPT = "20260101T000000Z-0000abcd"
-PANELS = ("speed", "cumulative", "impact", "composition", "saturation", "adstock")
+PANELS = (
+    "speed",
+    "cumulative",
+    "impact",
+    "composition",
+    "saturation",
+    "adstock",
+    "combinations",
+    "active_counts",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -111,9 +120,19 @@ def world(
     baseline: float,
     adstock: tuple[str, ...] = ("geometric",),
     saturation: tuple[str, ...] | None = ("michaelis_menten",),
+    active: tuple[int, int] = (3, 2),
+    slots: tuple[int, int] = (10, 10),
 ) -> WorldMetrics:
     return WorldMetrics(
-        f"{RUN_ID}/task-00000/w{row}", "task-00000", channel, control, baseline, adstock, saturation
+        f"{RUN_ID}/task-00000/w{row}",
+        "task-00000",
+        channel,
+        control,
+        baseline,
+        adstock,
+        saturation,
+        *active,
+        *slots,
     )
 
 
@@ -409,6 +428,71 @@ def test_saturation_panel_counts_only_worlds_whose_payload_records_families():
     mixed = run([published(0, (0, 60))], worlds=(unrecorded, world(1, 0.4, 0.3, 0.3)))
     assert panel(mixed, "saturation")["note"] == "1 world without recorded families not counted"
     assert _bars(mixed, "saturation")["michaelis_menten"] == 1
+
+
+def _matrix(snapshot: RunSnapshot) -> dict[tuple[int, int], int]:
+    """The heatmap's counts keyed by (active channels, active controls)."""
+    (cells,) = panel(snapshot, "combinations")["figure"]["data"]
+    return {
+        (channels, controls): count
+        for channels, row in zip(cells["y"], cells["z"], strict=True)
+        for controls, count in zip(cells["x"], row, strict=True)
+    }
+
+
+def test_the_combination_matrix_has_a_cell_for_every_allowed_pair():
+    worlds = (
+        world(0, 0.4, 0.3, 0.3, active=(2, 5), slots=(4, 6)),
+        world(1, 0.4, 0.3, 0.3, active=(2, 5), slots=(4, 6)),
+        world(2, 0.4, 0.3, 0.3, active=(4, 1), slots=(4, 6)),
+    )
+    snapshot = run([published(0, (0, 60)), published(1, (60, 120), accepted=1)], worlds=worlds)
+    matrix = _matrix(snapshot)
+    # Every pair from 1 up to the layout's slots has a cell; absent pairs count zero.
+    assert sorted(matrix) == [(c, m) for c in range(1, 5) for m in range(1, 7)]
+    assert {pair: n for pair, n in matrix.items() if n} == {(2, 5): 2, (4, 1): 1}
+    found = panel(snapshot, "combinations")
+    assert found["note"] == "2 of 24 combinations present"
+    (cells,) = found["figure"]["data"]
+    layout = found["figure"]["layout"]
+    # Channels run up the rows and controls across the columns, in the axes and the hover.
+    assert "channels" in layout["yaxis"]["title"]["text"]
+    assert "controls" in layout["xaxis"]["title"]["text"]
+    assert "%{y} channels" in cells["hovertemplate"]
+    assert "%{x} controls" in cells["hovertemplate"]
+    # Present combinations show their count; absent ones stay blank.
+    for text_row, count_row in zip(cells["text"], cells["z"], strict=True):
+        assert text_row == [str(count) if count else "" for count in count_row]
+    colorbar = cells["colorbar"]
+    assert colorbar["tick0"] == 0 and isinstance(colorbar["dtick"], int)
+    assert max(matrix.values()) <= 8 * colorbar["dtick"]
+
+
+def test_a_world_without_active_controls_adds_a_zero_column():
+    lone = world(0, 0.6, 0.0, 0.4, active=(1, 0), slots=(2, 2))
+    snapshot = run([published(0, (0, 60), accepted=1)], worlds=(lone,))
+    assert sorted(_matrix(snapshot)) == [(c, m) for c in (1, 2) for m in (0, 1, 2)]
+
+
+def test_active_count_bars_count_worlds_per_number_of_channels_and_controls():
+    worlds = (
+        world(0, 0.4, 0.3, 0.3, active=(2, 5), slots=(3, 6)),
+        world(1, 0.4, 0.3, 0.3, active=(2, 1), slots=(3, 6)),
+        world(2, 0.4, 0.3, 0.3, active=(3, 5), slots=(3, 6)),
+    )
+    snapshot = run([published(0, (0, 60)), published(1, (60, 120), accepted=1)], worlds=worlds)
+    found = panel(snapshot, "active_counts")["figure"]
+    bars = {
+        trace["name"]: dict(zip(trace["x"], trace["y"], strict=True)) for trace in found["data"]
+    }
+    assert bars == {
+        "channels (treatments)": {1: 0, 2: 2, 3: 1, 4: 0, 5: 0, 6: 0},
+        "controls (covariates)": {1: 1, 2: 0, 3: 0, 4: 0, 5: 2, 6: 0},
+    }
+    for trace in found["data"]:  # each bar's hover names its own input
+        assert trace["name"].split()[0] in trace["hovertemplate"]
+    axis = found["layout"]["yaxis"]
+    assert axis["tick0"] == 0 and isinstance(axis["dtick"], int)
 
 
 WAITING = "waiting for the first publication"

@@ -163,6 +163,24 @@ def test_functional_forms_are_the_families_of_the_active_channels(payloads, tmp_
     assert saw_inactive_zero
 
 
+def test_active_counts_are_the_masks_row_sums_out_of_their_slots(payloads, tmp_path):
+    saw_padding = False
+    for data in payloads:
+        metrics = extract_payload(data)
+        corpus = _corpus(data, tmp_path)
+        channels = np.asarray(corpus["treatment_active_mask"]) == 1
+        controls = np.asarray(corpus["covariate_active_mask"]) == 1
+        saw_padding |= not (channels.all() and controls.all())
+        assert metrics.active_channels == tuple(channels.sum(axis=1).tolist())
+        assert metrics.active_controls == tuple(controls.sum(axis=1).tolist())
+        assert (metrics.channel_slots, metrics.control_slots) == (
+            channels.shape[1],
+            controls.shape[1],
+        )
+    # Precondition: some worlds leave slots inactive, so counting slots would differ.
+    assert saw_padding
+
+
 def test_recorded_saturation_families_skip_padded_slots(payloads, tmp_path, lenient_validation):
     corpus = _corpus(payloads[0], tmp_path)
     active = np.asarray(corpus["treatment_active_mask"]) == 1

@@ -765,6 +765,22 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
         assert [(w.channel_share, w.control_share, w.baseline_share) for w in worlds] == list(
             zip(metrics.channel, metrics.control, metrics.baseline, strict=True)
         )
+        saturation = metrics.saturation_forms or (None,) * metrics.n_worlds
+        assert [
+            (w.adstock_forms, w.saturation_forms, w.active_channels, w.active_controls)
+            for w in worlds
+        ] == list(
+            zip(
+                metrics.adstock_forms,
+                saturation,
+                metrics.active_channels,
+                metrics.active_controls,
+                strict=True,
+            )
+        )
+        assert {(w.channel_slots, w.control_slots) for w in worlds} == {
+            (metrics.channel_slots, metrics.control_slots)
+        }
         impacts = [unit for unit in run.impacts if unit.task_id == task_id]
         assert [(unit.world_id, unit.channel, unit.share) for unit in impacts] == [
             (f"{manifest.run_id}/{task_id}/w{row}", label, share)

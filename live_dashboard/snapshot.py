@@ -61,7 +61,8 @@ class WorldMetrics:
 
     ``adstock_forms`` and ``saturation_forms`` are the families its active channels use,
     in the library's order; ``saturation_forms`` is ``None`` when its payload does not
-    record them.
+    record them. ``active_channels`` of ``channel_slots`` channels and
+    ``active_controls`` of ``control_slots`` controls are active.
     """
 
     world_id: str
@@ -71,6 +72,10 @@ class WorldMetrics:
     baseline_share: float  # intrinsic baseline + latent contributions + noise
     adstock_forms: tuple[str, ...]
     saturation_forms: tuple[str, ...] | None
+    active_channels: int
+    active_controls: int
+    channel_slots: int
+    control_slots: int
 
 
 @dataclass(frozen=True)

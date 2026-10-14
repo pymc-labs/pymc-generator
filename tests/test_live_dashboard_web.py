@@ -130,7 +130,17 @@ def make_run(
                 world_id = f"{RUN_ID}/{task_id}/w{row}"
                 worlds.append(
                     WorldMetrics(
-                        world_id, task_id, share, 0.35, 0.25, ("geometric",), ("logistic",)
+                        world_id,
+                        task_id,
+                        share,
+                        0.35,
+                        0.25,
+                        ("geometric",),
+                        ("logistic",),
+                        active_channels=1,
+                        active_controls=2,
+                        channel_slots=10,
+                        control_slots=10,
                     )
                 )
                 impacts.append(ImpactUnit(world_id, task_id, "C1", share / 2))
