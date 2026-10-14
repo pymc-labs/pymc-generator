@@ -193,6 +193,7 @@ def test_serve_follows_the_data_dir_on_loopback_with_the_requested_intervals(ser
         (("--poll-seconds", "300"), {"poll_seconds": 300.0}),
         (("--port", "0"), {"port": 0}),
         (("--port", "65535"), {"port": 65535}),
+        (("--host", "::1"), {"host": "::1"}),
     ],
 )
 def test_serve_accepts_the_range_limits(served, extra, accepted):
@@ -205,7 +206,7 @@ def test_serve_accepts_the_range_limits(served, extra, accepted):
     [
         ("--poll-seconds", "0.5"),
         ("--poll-seconds", "301"),
-        ("--port", "70000"),
+        ("--port", "65536"),
         ("--port", "-1"),
         ("--port", "http"),
     ],

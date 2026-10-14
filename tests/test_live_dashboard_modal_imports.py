@@ -212,6 +212,9 @@ def _container_root(tmp_path):
 
 def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, tmp_path):
     root = _container_root(tmp_path)
+    smi = tmp_path / "nvidia-smi"
+    smi.write_text("#!/bin/sh\necho 'NVIDIA A100-SXM4-40GB'\n")
+    smi.chmod(0o755)
     code = PROBE.format(
         path=[str(stub_dir), str(root)], module="modal_app", file=str(root / "modal_app.py")
     ) + textwrap.dedent(
@@ -234,6 +237,13 @@ def test_worker_entry_records_the_kill_time_and_refuses_bad_requests(stub_dir, t
         assert before + limit <= kwargs["deadline"] <= after + limit + timedelta(milliseconds=1)
         assert request == RunRequest("demo", "small", 6, 2, 7)
         assert kwargs["expected_run_id"] == "demo-0123456789ab"
+        assert kwargs["worker"].gpu_name == "NVIDIA A100-SXM4-40GB", kwargs["worker"]
+        import os, pathlib
+        smi = pathlib.Path(os.environ["PATH"]) / "nvidia-smi"
+        smi.write_text("#!/bin/sh\\nexit 9\\n")  # no driver: still generates, without a name
+        module.generate_run("demo", "small", 6, 2, 7, None)
+        assert calls[-1][1]["worker"].gpu_name is None, calls[-1][1]["worker"]
+        del calls[1:]
         refused = module.generate_run("demo", "small", 5, 2, 7, None)
         assert refused["status"] == "refused" and len(calls) == 1, refused
         # A worker timeout must not reach the launcher as the builtin TimeoutError, which
@@ -363,6 +373,13 @@ LAUNCH_SCENARIOS = textwrap.dedent(
             function(*args, **kwargs)
         return buffer.getvalue()
 
+    def deploy(call):
+        spawned = []
+        deployed = Entry(spawn=lambda *args: spawned.append(args) or call,
+                         get_web_url=lambda: "https://dash")
+        modal.Function.from_name = staticmethod(lambda *args, **kwargs: deployed)
+        return spawned
+
     case = __CASE__
     if case == "manifest-after-staging":
         # Poll 1 shows only a staging file (not a manifest); poll 2 shows run.json.
@@ -407,9 +424,11 @@ LAUNCH_SCENARIOS = textwrap.dedent(
     elif case == "resume-does-not-wait":
         run_id = module.RunRequest("demo", "small", 6, 2, 7).run_id
         module._published_runs = lambda volume: {run_id}
+        spawned = deploy(Call([]))
         waited = []
         module._await_start = lambda *args: waited.append(args)
         module.main(label="demo", preset="small", worlds=6, worlds_per_task=2, seed=7, resume=True)
+        assert spawned == [module.spawn_arguments(module.RunRequest("demo", "small", 6, 2, 7))]
         assert waited == [], waited
     elif case == "demo-bounds":
         exits_with("invalid request: at most 400 worlds", module.main, label="demo", worlds=402,
@@ -420,10 +439,15 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         assert modal.LOOKUPS == [], modal.LOOKUPS
     elif case == "new-run-waits-for-start":
         module._published_runs = lambda volume: set()
+        spawned = deploy(Call([]))
         waited = []
         module._await_start = lambda call, volume, run_id: waited.append(run_id)
-        module.main(label="demo", preset="small", worlds=6, worlds_per_task=2, seed=7)
-        assert waited == [module.RunRequest("demo", "small", 6, 2, 7).run_id], waited
+        out = output_of(module.main, label="demo", preset="small", worlds=6, worlds_per_task=2,
+                        seed=7)
+        request = module.RunRequest("demo", "small", 6, 2, 7)
+        assert spawned == [module.spawn_arguments(request)], spawned
+        assert f"dashboard: https://dash/?run={request.run_id}" in out, out
+        assert waited == [request.run_id], waited
     elif case == "wait-reports-refusal":
         module._published_runs = lambda volume: set()
         refusal = Call([{"status": "refused", "reason": "code_sha256 differs"}])
