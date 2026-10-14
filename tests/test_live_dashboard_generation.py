@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from types import ModuleType
@@ -28,10 +29,12 @@ from live_dashboard.collection import Collector
 from live_dashboard.deployment import DEMO_MAX_WORLDS, DEMO_MAX_WORLDS_PER_TASK
 from live_dashboard.extract import extract_payload
 from live_dashboard.generation import (
+    MIXES,
     PRESETS,
     RequestError,
     RunConflictError,
     generator_info,
+    preset_cycle,
     run_generation,
     run_generation_or_refuse,
 )
@@ -737,6 +740,11 @@ def test_a_task_starts_only_with_at_least_90_seconds_left(
 # -- generator identity and presets ----------------------------------------------------
 
 
+def _single(preset: str, cfg: SCMPrior) -> pub.GeneratorInfo:
+    """The recorded generator of a run of one preset (a one-preset cycle)."""
+    return generator_info(preset, (preset,), {preset: cfg})
+
+
 def test_missing_packages_are_recorded_as_unknown_versions(monkeypatch):
     cfg = PRESETS["small"](2)
 
@@ -744,7 +752,7 @@ def test_missing_packages_are_recorded_as_unknown_versions(monkeypatch):
         raise importlib.metadata.PackageNotFoundError(name)
 
     monkeypatch.setattr(importlib.metadata, "version", version)
-    info = generator_info("small", cfg)
+    info = _single("small", cfg)
     assert info.environment == {
         "python": platform.python_version(),
         "machine": platform.machine(),
@@ -755,16 +763,16 @@ def test_missing_packages_are_recorded_as_unknown_versions(monkeypatch):
 def test_the_deployment_revision_takes_precedence_over_git(tmp_path, monkeypatch):
     cfg = PRESETS["small"](2)
     monkeypatch.setenv("LIVE_DASHBOARD_CODE_REVISION", "  abc123  ")
-    assert generator_info("small", cfg).code_revision == "abc123"
+    assert _single("small", cfg).code_revision == "abc123"
     # A blank value falls back to git, which is unavailable here.
     monkeypatch.setenv("LIVE_DASHBOARD_CODE_REVISION", "   ")
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert generator_info("small", cfg).code_revision is None
+    assert _single("small", cfg).code_revision is None
 
 
 def test_the_code_digest_covers_generator_sources_wherever_they_live(tmp_path, monkeypatch):
     cfg = PRESETS["small"](2)
-    original = generator_info("small", cfg).code_sha256
+    original = _single("small", cfg).code_sha256
     copy = tmp_path / "elsewhere" / "pymc_generator"
     shutil.copytree(
         Path(pymc_generator.__file__).parent, copy, ignore=shutil.ignore_patterns("__pycache__")
@@ -773,23 +781,28 @@ def test_the_code_digest_covers_generator_sources_wherever_they_live(tmp_path, m
     (copy / "__pycache__" / "stale.py").write_text("x = 1\n")
     (copy / "notes.txt").write_text("not source")
     monkeypatch.setattr(pymc_generator, "__file__", str(copy / "__init__.py"))
-    assert generator_info("small", cfg).code_sha256 == original
+    assert _single("small", cfg).code_sha256 == original
     (copy / "slots.py").write_bytes((copy / "slots.py").read_bytes() + b"\n")
-    assert generator_info("small", cfg).code_sha256 != original
+    assert _single("small", cfg).code_sha256 != original
 
 
-@pytest.mark.parametrize("preset", sorted(PRESETS))
+@pytest.mark.parametrize("preset", sorted({*PRESETS, *MIXES}))
 def test_rebuilding_a_preset_yields_the_same_recorded_generator(preset):
     # A resume rebuilds the configuration; any drift would refuse every resume.
-    first = generator_info(preset, PRESETS[preset](4))
+    cycle = preset_cycle(preset)
+
+    def recorded() -> pub.GeneratorInfo:
+        return generator_info(preset, cycle, {name: PRESETS[name](4) for name in cycle})
+
     request = pub.RunRequest("preset", preset, 4, 4, 29)
     manifest = pub.RunManifest(
-        run_id=request.run_id, created_at=support.EPOCH, request=request, generator=first
+        run_id=request.run_id, created_at=support.EPOCH, request=request, generator=recorded()
     )
     decoded = pub.decode_run_manifest(manifest.encode(), run_id=request.run_id)
-    again = generator_info(preset, PRESETS[preset](4))
-    assert decoded.generator.config_sha256 == again.config_sha256
-    assert decoded.generator.config["n_cells"] == 4
+    assert decoded.generator.config_sha256 == recorded().config_sha256
+    config = decoded.generator.config
+    members = config["presets"].values() if len(cycle) > 1 else [config]
+    assert {member["n_cells"] for member in members} == {4}
 
 
 def test_the_showcase_preset_keeps_the_notebook_design_per_task():
@@ -822,3 +835,166 @@ def test_a_showcase_task_is_published_and_extracted(tmp_path):
     )
     metrics = extract_payload(store.read_bytes(record.payload.path))
     assert metrics.n_worlds == record.accepted_worlds == 2
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("preset", "saturation"),
+    [("geometric-mm", "michaelis_menten"), ("geometric-logistic", "logistic")],
+)
+def test_a_variety_task_has_only_direct_positive_effects_of_its_style(tmp_path, preset, saturation):
+    store = DirectoryStore(tmp_path / "store")
+    request = pub.RunRequest("variety", preset, 2, 2, 1000)
+    result = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert (result["status"], result["published"]) == ("finished", ["task-00000"])
+    record = _task_record(
+        store, support.load_manifest(store, request.run_id), "task-00000", result["attempt_id"]
+    )
+    data = store.read_bytes(record.payload.path)
+    corpus = _corpus(data, tmp_path)
+    graph = PRESETS[preset](2).layout.unpack(corpus["g"])
+    channels = corpus["treatment_active_mask"] == 1
+    controls = corpus["covariate_active_mask"] == 1
+    # Every active channel and control points to the target, and nothing else has an arrow.
+    assert (graph["cy"] == channels).all() and (graph["zy"] == controls).all()
+    assert not any(graph[edge].any() for edge in ("cc", "zc", "zz", "dc", "dz", "dy"))
+    assert not corpus["indirect_effects"].any()
+    assert not corpus["latent_unobserved_contribution"].any()
+    assert (corpus["treatment_contribution_raw"] >= 0).all()
+    assert (corpus["covariate_contribution"] >= 0).all()
+    collector = Collector(store)
+    collector.refresh()
+    worlds = collector.snapshot.run_index[request.run_id].worlds
+    assert [(world.adstock_forms, world.saturation_forms) for world in worlds] == [
+        (("geometric",), (saturation,))
+    ] * 2
+
+
+# -- preset mixes ----------------------------------------------------------------------
+
+
+def _small_with_carryover(family: str) -> Callable[[int], SCMPrior]:
+    """The small preset with every channel on one carryover family (visible in payloads)."""
+
+    def build(worlds_per_task: int) -> SCMPrior:
+        cfg = PRESETS["small"](worlds_per_task)
+        probs = {name: float(name == family) for name in cfg.carryover_family_probs}
+        return dataclasses.replace(cfg, carryover_family_probs=probs)
+
+    return build
+
+
+MIX_PRESETS = {"geo": _small_with_carryover("geometric"), "wei": _small_with_carryover("weibull")}
+MIX = {"geo-wei": ("geo", "wei")}
+
+
+@pytest.mark.slow  # two compiled configurations: about 3 s locally
+def test_a_mix_alternates_its_presets_by_task_and_records_each_one(tmp_path):
+    store = DirectoryStore(tmp_path)
+    request = pub.RunRequest("mix", "geo-wei", 6, 2, 7)
+    result = run_generation(
+        store,
+        request,
+        worker=support.WORKER,
+        clock=support.FakeClock(),
+        presets=MIX_PRESETS,
+        mixes=MIX,
+    )
+    assert (result["status"], result["published"]) == ("finished", TASK_IDS)
+    collector = Collector(store)
+    collector.refresh()
+    run = collector.snapshot.run_index[request.run_id]
+    assert {world.task_id: world.adstock_forms for world in run.worlds} == {
+        "task-00000": ("geometric",),
+        "task-00001": ("weibull",),
+        "task-00002": ("geometric",),
+    }
+    config = support.load_manifest(store, request.run_id).generator.config
+    assert config["cycle"] == ["geo", "wei"]
+    assert {
+        name: member["carryover_family_probs"]["weibull"]
+        for name, member in config["presets"].items()
+    } == {
+        "geo": 0.0,
+        "wei": 1.0,
+    }
+
+
+def test_resuming_a_mix_whose_member_changed_is_refused_before_any_write(tmp_path):
+    store = DirectoryStore(tmp_path)
+    request = pub.RunRequest("mix", "geo-wei", 4, 2, 7)
+    clock = support.FakeClock(step=0.0)
+    # A deadline that leaves no time for a task: the run opens without generating.
+    opened = run_generation(
+        store,
+        request,
+        worker=support.WORKER,
+        clock=clock,
+        deadline=clock.now + timedelta(seconds=1),
+        presets=MIX_PRESETS,
+        mixes=MIX,
+    )
+    assert (opened["status"], opened["published"]) == ("stopped", [])
+    before = _tree(store.root)
+    changed = {**MIX_PRESETS, "wei": _small_with_carryover("none")}
+    with pytest.raises(RunConflictError, match="config_sha256"):
+        run_generation(
+            store, request, worker=support.WORKER, clock=clock, presets=changed, mixes=MIX
+        )
+    assert _tree(store.root) == before
+
+
+def test_a_resumed_mix_keeps_every_task_on_its_member_and_seed(live_golden, tmp_path, monkeypatch):
+    golden = _corpus(
+        DirectoryStore(live_golden.root).read_bytes(
+            pub.payload_path(live_golden.request.run_id, "task-00000", live_golden.attempt_id)
+        ),
+        tmp_path,
+    )
+    # A saved corpus drops the in-memory timing a fresh generation carries.
+    golden["diagnostics"] = {**golden["diagnostics"], "timing": {"elapsed_s": 100.0}}
+    clock = support.FakeClock()
+    calls: list[tuple[str, int]] = []
+
+    def recorded_generate(self, *, n_tasks, seed):
+        weibull = self.config.carryover_family_probs["weibull"] == 1.0
+        calls.append(("wei" if weibull else "geo", seed))
+        clock.advance(100)  # each task takes 100 s of the attempt's time
+        return golden  # a valid two-world corpus: no generation needed to check the mapping
+
+    monkeypatch.setattr(DataGenerator, "generate", recorded_generate)
+    store = DirectoryStore(tmp_path / "store")
+    request = pub.RunRequest("mix", "geo-wei", 6, 2, 7)
+    options = {"worker": support.WORKER, "clock": clock, "presets": MIX_PRESETS, "mixes": MIX}
+    # 150 s are left after task 0: less than twice its 100 s, so the attempt stops there.
+    first = run_generation(
+        store, request, deadline=support.EPOCH + timedelta(seconds=250), **options
+    )
+    assert (first["status"], first["published"]) == ("stopped", ["task-00000"])
+    second = run_generation(store, request, **options)
+    assert (second["reused"], second["published"]) == (["task-00000"], TASK_IDS[1:])
+    # Task i uses member i % 2 and seed 7 + i, whichever attempt generates it.
+    assert calls == [("geo", 7), ("wei", 8), ("geo", 9)]
+
+
+@pytest.mark.parametrize(
+    ("mixes", "message"),
+    [
+        ({"broken": ("geo", "gone")}, r"preset mix 'broken' names unknown presets: \['gone'\]"),
+        (
+            {"broken": ("geo", "geo-wei"), "geo-wei": ("geo", "wei")},
+            r"unknown presets: \['geo-wei'\]",
+        ),
+        ({"broken": ()}, r"preset mix 'broken' must name one or more presets"),
+        ({"broken": "geo"}, r"preset mix 'broken' must name one or more presets"),
+        ({"geo": ("wei",), "broken": ("geo",)}, r"'geo' names both a preset and a preset mix"),
+    ],
+    ids=["unknown-member", "mix-of-mixes", "empty", "bare-string", "shadows-a-preset"],
+)
+def test_an_unusable_mix_is_refused_before_any_write(tmp_path, mixes, message):
+    store = DirectoryStore(tmp_path / "store")
+    preset = "geo" if "geo" in mixes else "broken"
+    request = pub.RunRequest("mix", preset, 4, 2, 7)
+    with pytest.raises(RequestError, match=message):
+        run_generation(store, request, worker=support.WORKER, presets=MIX_PRESETS, mixes=mixes)
+    assert not (tmp_path / "store").exists()

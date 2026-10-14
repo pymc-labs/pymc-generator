@@ -16,6 +16,7 @@ import pytest
 
 from live_dashboard import figures
 from live_dashboard.snapshot import AttemptView, ImpactUnit, RunSnapshot, TaskState, WorldMetrics
+from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
 
 def _load(name: str) -> ModuleType:
@@ -32,6 +33,7 @@ support = _load("_live_dashboard_support")
 
 RUN_ID = "demo-0123456789ab"
 ATTEMPT = "20260101T000000Z-0000abcd"
+PANELS = ("speed", "cumulative", "impact", "composition", "saturation", "adstock")
 
 
 @pytest.fixture(autouse=True)
@@ -102,8 +104,17 @@ def attempt(status: str = "running", **fields: Any) -> AttemptView:
     )
 
 
-def world(row: int, channel: float, control: float, baseline: float) -> WorldMetrics:
-    return WorldMetrics(f"{RUN_ID}/task-00000/w{row}", "task-00000", channel, control, baseline)
+def world(
+    row: int,
+    channel: float,
+    control: float,
+    baseline: float,
+    adstock: tuple[str, ...] = ("geometric",),
+    saturation: tuple[str, ...] | None = ("michaelis_menten",),
+) -> WorldMetrics:
+    return WorldMetrics(
+        f"{RUN_ID}/task-00000/w{row}", "task-00000", channel, control, baseline, adstock, saturation
+    )
 
 
 def impact(row: int, channel: str, share: float) -> ImpactUnit:
@@ -343,6 +354,63 @@ def test_composition_grid_lines_stay_on_the_triangle():
         assert max(channel, control, baseline) <= 0.8 + 1e-12
 
 
+def _bars(snapshot: RunSnapshot, panel_id: str) -> dict[str, int]:
+    """A form panel's bars, keyed by the library family each one counts."""
+    (bars,) = panel(snapshot, panel_id)["figure"]["data"]
+    return dict(zip(bars["customdata"], bars["y"], strict=True))
+
+
+def test_form_panels_count_worlds_per_family_with_every_library_family_on_x():
+    worlds = (
+        world(0, 0.4, 0.3, 0.3, ("geometric",), ("michaelis_menten",)),
+        world(1, 0.4, 0.3, 0.3, ("geometric",), ("logistic",)),
+        # A world whose channels mix families counts once in each of them.
+        world(2, 0.4, 0.3, 0.3, ("none", "weibull"), ("logistic", "michaelis_menten")),
+    )
+    snapshot = run([published(0, (0, 60)), published(1, (60, 120), accepted=1)], worlds=worlds)
+    saturation = _bars(snapshot, "saturation")
+    assert list(saturation) == list(SATURATION_FAMILY_KEYS)
+    assert saturation == {
+        **dict.fromkeys(SATURATION_FAMILY_KEYS, 0),
+        "logistic": 2,
+        "michaelis_menten": 2,
+    }
+    adstock = _bars(snapshot, "adstock")
+    assert list(adstock) == list(CARRYOVER_FAMILY_KEYS)
+    assert adstock == {"none": 1, "geometric": 2, "weibull": 1}
+    # The bars add up to more than the 3 worlds; the panel says why.
+    for panel_id in ("saturation", "adstock"):
+        assert panel(snapshot, panel_id)["note"] == (
+            "1 world mixing families, counted once per family"
+        )
+
+
+@pytest.mark.parametrize("worlds", [1, 2, 7, 160, 400])
+def test_form_panel_ticks_are_whole_worlds(worlds):
+    snapshot = run(
+        [published(0, (0, 60), accepted=worlds)],
+        worlds=tuple(world(row, 0.4, 0.3, 0.3) for row in range(worlds)),
+    )
+    axis = panel(snapshot, "saturation")["figure"]["layout"]["yaxis"]
+    # Integer ticks from 0, at most 8 steps up to the tallest bar.
+    assert axis["tick0"] == 0 and isinstance(axis["dtick"], int) and axis["dtick"] >= 1
+    assert worlds <= 8 * axis["dtick"]
+
+
+def test_saturation_panel_counts_only_worlds_whose_payload_records_families():
+    unrecorded = world(0, 0.4, 0.3, 0.3, saturation=None)
+    snapshot = run([published(0, (0, 60), accepted=1)], worlds=(unrecorded,))
+    found = panel(snapshot, "saturation")
+    assert (found["figure"], found["empty"]) == (
+        None,
+        "this run's payloads do not record these families",
+    )
+    assert _bars(snapshot, "adstock")["geometric"] == 1  # the adstock family is always stored
+    mixed = run([published(0, (0, 60))], worlds=(unrecorded, world(1, 0.4, 0.3, 0.3)))
+    assert panel(mixed, "saturation")["note"] == "1 world without recorded families not counted"
+    assert _bars(mixed, "saturation")["michaelis_menten"] == 1
+
+
 WAITING = "waiting for the first publication"
 
 
@@ -351,12 +419,12 @@ WAITING = "waiting for the first publication"
     [
         pytest.param(
             run([task(0, "pending"), task(1, "pending")], state="waiting"),
-            dict.fromkeys(("speed", "cumulative", "impact", "composition"), WAITING),
+            dict.fromkeys(PANELS, WAITING),
             id="waiting",
         ),
         pytest.param(
             run([task(0, "pending")], attempts=(attempt(),)),
-            dict.fromkeys(("speed", "cumulative", "impact", "composition"), WAITING),
+            dict.fromkeys(PANELS, WAITING),
             id="running-before-first-record",
         ),
         pytest.param(
@@ -365,10 +433,7 @@ WAITING = "waiting for the first publication"
                 state="failed",
                 attempts=(attempt("failed", error="TypeError: bad config"),),
             ),
-            dict.fromkeys(
-                ("speed", "cumulative", "impact", "composition"),
-                "run failed: TypeError: bad config",
-            ),
+            dict.fromkeys(PANELS, "run failed: TypeError: bad config"),
             id="failed",
         ),
         pytest.param(
@@ -378,7 +443,7 @@ WAITING = "waiting for the first publication"
                 attempts=(attempt("lost", deadline_at=at(1200)),),
             ),
             dict.fromkeys(
-                ("speed", "cumulative", "impact", "composition"),
+                PANELS,
                 f"run lost: attempt {ATTEMPT} passed its deadline {iso(1200)} while running",
             ),
             id="lost",
@@ -388,8 +453,7 @@ WAITING = "waiting for the first publication"
             {
                 "speed": None,
                 "cumulative": None,
-                "impact": "no consumable worlds: 2 zero-world tasks",
-                "composition": "no consumable worlds: 2 zero-world tasks",
+                **dict.fromkeys(PANELS[2:], "no consumable worlds: 2 zero-world tasks"),
             },
             id="only-zero-world-tasks",
         ),
@@ -402,10 +466,7 @@ WAITING = "waiting for the first publication"
                 ],
                 state="stopped",
             ),
-            dict.fromkeys(
-                ("speed", "cumulative", "impact", "composition"),
-                "no consumable worlds: 1 unavailable, 1 unreadable",
-            ),
+            dict.fromkeys(PANELS, "no consumable worlds: 1 unavailable, 1 unreadable"),
             id="unusable-records",
         ),
     ],
@@ -544,9 +605,4 @@ def test_run_body_is_plain_strict_json_even_from_numpy_and_nan_inputs():
         "published_worlds": 4,
         "recorded_tasks": 2,
     }
-    assert [item["id"] for item in body["figures"]] == [
-        "speed",
-        "cumulative",
-        "impact",
-        "composition",
-    ]
+    assert [item["id"] for item in body["figures"]] == list(PANELS)

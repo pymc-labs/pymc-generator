@@ -138,6 +138,54 @@ def test_impact_units_are_the_active_channel_slots_with_their_direct_share(paylo
     assert saw_inactive_slot
 
 
+def _names(codes: np.ndarray, keys: tuple[str, ...]) -> tuple[str, ...]:
+    """Family names of ``codes``, once each, in the library's order."""
+    return tuple(name for code, name in enumerate(keys) if code in set(codes.tolist()))
+
+
+def test_functional_forms_are_the_families_of_the_active_channels(payloads, tmp_path):
+    from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS
+
+    saw_inactive_zero = False
+    for data in payloads:
+        metrics = extract_payload(data)
+        corpus = _corpus(data, tmp_path)
+        active = np.asarray(corpus["treatment_active_mask"]) == 1
+        codes = np.asarray(corpus["carryover_family"])
+        saw_inactive_zero |= bool((codes[~active] == 0).any())
+        expected = tuple(
+            _names(row[mask], CARRYOVER_FAMILY_KEYS) for row, mask in zip(codes, active)
+        )
+        assert metrics.adstock_forms == expected
+        # The small preset has no mechanism priors, so its payloads do not store sat_family.
+        assert "sat_family" not in corpus and metrics.saturation_forms is None
+    # Precondition: padding holds code 0 (also "none"), so counting it would add "none".
+    assert saw_inactive_zero
+
+
+def test_recorded_saturation_families_skip_padded_slots(payloads, tmp_path, lenient_validation):
+    corpus = _corpus(payloads[0], tmp_path)
+    active = np.asarray(corpus["treatment_active_mask"]) == 1
+    assert not active.all()  # precondition: a padded slot exists
+    codes = np.full(active.shape, 4, dtype=np.uint8)  # tanh, left only in padded slots
+    codes[0][active[0]] = 2  # logistic
+    codes[1][active[1]] = 3  # michaelis_menten
+    codes[1][np.flatnonzero(active[1])[0]] = 5  # root, so world 1 mixes two families
+    corpus["sat_family"] = codes
+    metrics = extract_payload(_saved(corpus, tmp_path))
+    assert metrics.saturation_forms == (("logistic",), ("michaelis_menten", "root"))
+
+
+@pytest.mark.parametrize("key", ["carryover_family", "sat_family"])
+def test_unknown_family_ids_are_refused(payloads, tmp_path, lenient_validation, key):
+    corpus = _corpus(payloads[0], tmp_path)
+    codes = np.asarray(corpus["carryover_family"]).copy()
+    codes[0, 0] = 9  # slot C1 is active in every world
+    corpus[key] = codes
+    with pytest.raises(ExtractionError, match=rf"{key} holds unknown family ids \[9\]"):
+        extract_payload(_saved(corpus, tmp_path))
+
+
 def test_metrics_are_deterministic_plain_python_values(payloads):
     data = payloads[0]
     metrics = extract_payload(data)

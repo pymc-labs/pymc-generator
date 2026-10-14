@@ -128,7 +128,11 @@ def make_run(
             )
             for row in range(2):
                 world_id = f"{RUN_ID}/{task_id}/w{row}"
-                worlds.append(WorldMetrics(world_id, task_id, share, 0.35, 0.25))
+                worlds.append(
+                    WorldMetrics(
+                        world_id, task_id, share, 0.35, 0.25, ("geometric",), ("logistic",)
+                    )
+                )
                 impacts.append(ImpactUnit(world_id, task_id, "C1", share / 2))
         elif index == 2 and detail is not None:
             tasks.append(TaskState(task_id, index, "invalid", 2, detail=detail))
@@ -381,6 +385,15 @@ def test_page_references_assets_that_load(credentials):
         assert bundle.headers["cache-control"] == "private, max-age=31536000, immutable"
         assert bundle.headers["content-type"].startswith("text/javascript")
         assert "Plotly" in bundle.text[:2000]
+
+
+def test_every_figure_the_api_returns_has_a_place_on_the_page(credentials):
+    with serve(StubCollector(make_snapshot(1, make_run(2))), credentials) as client:
+        page = client.get("/", headers=AUTH)
+        detail = strict_json(client.get(f"/api/runs/{RUN_ID}", headers=AUTH))
+    # The page draws a figure only where an anchor with its id exists, in page order.
+    anchors = re.findall(r'data-figure="([^"]+)"', page.text)
+    assert anchors == [figure["id"] for figure in detail["figures"]]
 
 
 def test_plotly_bundle_is_gzip_compressed_when_accepted(credentials):

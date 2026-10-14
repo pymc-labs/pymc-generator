@@ -57,13 +57,20 @@ class TaskState:
 
 @dataclass(frozen=True)
 class WorldMetrics:
-    """Composition of one consumable world: signed shares of its total outcome."""
+    """Composition of one consumable world: signed shares of its total outcome.
+
+    ``adstock_forms`` and ``saturation_forms`` are the families its active channels use,
+    in the library's order; ``saturation_forms`` is ``None`` when its payload does not
+    record them.
+    """
 
     world_id: str
     task_id: str
     channel_share: float  # direct + indirect treatment contributions
     control_share: float  # covariate contributions (net, can be negative)
     baseline_share: float  # intrinsic baseline + latent contributions + noise
+    adstock_forms: tuple[str, ...]
+    saturation_forms: tuple[str, ...] | None
 
 
 @dataclass(frozen=True)

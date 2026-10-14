@@ -445,6 +445,15 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         assert spawned == [worker_arguments(request.run_id)], spawned
         assert f"dashboard: https://dash/?run={request.run_id}" in out, out
         assert waited == [request.run_id], waited
+    elif case == "mix-preset-spawns":
+        module._published_runs = lambda volume: set()
+        spawned = deploy(Call([]))
+        module._await_start = lambda call, volume, run_id: None
+        output_of(module.main, label="demo", preset="geometric-mm-logistic", worlds=6,
+                  worlds_per_task=2, seed=7)
+        request = module.RunRequest("demo", "geometric-mm-logistic", 6, 2, 7)
+        assert spawned == [{**worker_arguments(request.run_id),
+                            "preset": "geometric-mm-logistic"}], spawned
     elif case == "wait-reports-refusal":
         module._published_runs = lambda volume: set()
         refusal = Call([{"status": "refused", "reason": "code_sha256 differs"}])
@@ -464,6 +473,7 @@ LAUNCH_SCENARIOS = textwrap.dedent(
         "refused-new-run",
         "invalid-request",
         "new-run-waits-for-start",
+        "mix-preset-spawns",
         "wait-reports-refusal",
         "gives-up-after-the-window",
         "gives-up-after-the-window-fast-get",

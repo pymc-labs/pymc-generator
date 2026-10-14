@@ -30,7 +30,7 @@ from live_dashboard.deployment import (
     VOLUME_NAME,
     check_demo_bounds,
 )
-from live_dashboard.generation import PRESETS
+from live_dashboard.generation import RequestError, preset_cycle
 from live_dashboard.publication import RUNS_DIR, RunRequest
 
 if modal.is_local() and modal.config.config.get("environment") != ENVIRONMENT:
@@ -82,8 +82,10 @@ def main(
         check_demo_bounds(request)
     except ValueError as error:
         raise SystemExit(f"invalid request: {error}") from error
-    if request.preset not in PRESETS:
-        raise SystemExit(f"unknown preset {request.preset!r}; known: {', '.join(sorted(PRESETS))}")
+    try:
+        preset_cycle(request.preset)
+    except RequestError as error:
+        raise SystemExit(str(error)) from error
     volume = modal.Volume.from_name(VOLUME_NAME, environment_name=ENVIRONMENT)
     exists = request.run_id in _published_runs(volume)
     if exists and not resume:

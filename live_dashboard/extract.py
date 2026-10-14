@@ -2,7 +2,8 @@
 
 ``extract_payload`` turns a ``save_corpus`` archive into identity-free numbers: every
 world's composition (the trajectory-showcase notebook's channel / control / baseline
-split of total outcome) and every active channel's direct contribution share. The
+split of total outcome), every active channel's direct contribution share, and the
+adstock and saturation families every world's active channels use. The
 collector attaches run, task and world identities afterwards, so equal bytes published
 by different attempts share one cached result keyed by digest and ``EXTRACTION_VERSION``.
 
@@ -25,9 +26,15 @@ import numpy as np
 
 from pymc_generator.data_generator import DataGenerator, load_corpus
 from pymc_generator.outcomes import outcome_distributions
+from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
 # Part of the collector's cache key: bump whenever the same bytes would yield other metrics.
-EXTRACTION_VERSION = 1
+EXTRACTION_VERSION = 2
+
+# Every adstock (carryover) and saturation family of the library, in its own order: the
+# corpus stores a channel's family as an index into these.
+ADSTOCK_FAMILIES: tuple[str, ...] = tuple(CARRYOVER_FAMILY_KEYS)
+SATURATION_FAMILIES: tuple[str, ...] = tuple(SATURATION_FAMILY_KEYS)
 
 # Unit roundoff of the float32 storage: the notebook's per-world closure tolerance.
 _STORAGE_ROUNDOFF = 2.0**-24
@@ -51,7 +58,10 @@ class PayloadMetrics:
     ``channel``, ``control`` and ``baseline`` hold one signed share of total outcome per
     corpus row. The ``impact_*`` tuples describe one unit per active treatment slot,
     world-major then slot order: its corpus row, slot label ("C1".."CK") and direct
-    contribution share.
+    contribution share. ``adstock_forms`` and ``saturation_forms`` hold, per corpus row,
+    the families its active channels use (in the library's order); ``saturation_forms``
+    is ``None`` when the payload does not record saturation families (the library writes
+    them only for configurations with mechanism priors).
     """
 
     n_worlds: int
@@ -61,6 +71,8 @@ class PayloadMetrics:
     impact_rows: tuple[int, ...]
     impact_labels: tuple[str, ...]
     impact_shares: tuple[float, ...]
+    adstock_forms: tuple[tuple[str, ...], ...]
+    saturation_forms: tuple[tuple[str, ...], ...] | None
 
 
 def extract_payload(data: bytes) -> PayloadMetrics:
@@ -82,6 +94,13 @@ def extract_payload(data: bytes) -> PayloadMetrics:
             f"in worlds {disagreeing.tolist()}"
         )
     impact = distributions["treatment_contribution"]
+    active = np.asarray(corpus["treatment_active_mask"]) == 1
+    adstock = _families(corpus, "carryover_family", active, ADSTOCK_FAMILIES)
+    saturation = (
+        _families(corpus, "sat_family", active, SATURATION_FAMILIES)
+        if "sat_family" in corpus
+        else None
+    )
     return PayloadMetrics(
         n_worlds=int(channel.size),
         channel=tuple(channel.tolist()),
@@ -90,7 +109,29 @@ def extract_payload(data: bytes) -> PayloadMetrics:
         impact_rows=tuple(impact.world_index.tolist()),
         impact_labels=impact.labels(),
         impact_shares=tuple(impact.unit_share.tolist()),
+        adstock_forms=adstock,
+        saturation_forms=saturation,
     )
+
+
+def _families(
+    corpus: dict[str, Any], key: str, active: np.ndarray, names: tuple[str, ...]
+) -> tuple[tuple[str, ...], ...]:
+    """Per corpus row, the families its active channels use, in the library's order.
+
+    Inactive (padded) slots never count: their zero fill is also a real family's id.
+    """
+    codes = np.asarray(corpus[key])
+    if codes.shape != active.shape:
+        raise ExtractionError(f"{key} has shape {codes.shape}, expected {active.shape}")
+    forms = []
+    for row_codes, row_active in zip(codes, active, strict=True):
+        used = {int(code) for code in row_codes[row_active]}
+        unknown = sorted(code for code in used if not 0 <= code < len(names))
+        if unknown:
+            raise ExtractionError(f"{key} holds unknown family ids {unknown}")
+        forms.append(tuple(name for code, name in enumerate(names) if code in used))
+    return tuple(forms)
 
 
 def _load_valid_corpus(data: bytes) -> dict[str, Any]:

@@ -29,8 +29,9 @@ import plotly
 import plotly.graph_objects as go
 from plotly.offline import get_plotlyjs
 
+from live_dashboard.extract import ADSTOCK_FAMILIES, SATURATION_FAMILIES
 from live_dashboard.publication import format_timestamp
-from live_dashboard.snapshot import RunSnapshot, TaskState
+from live_dashboard.snapshot import RunSnapshot, TaskState, WorldMetrics
 
 PLOTLY_VERSION: str = plotly.__version__
 
@@ -50,6 +51,8 @@ _NEGATIVE_COLOR = "#c0392b"
 _TARGET_COLOR = "#7f7f7f"
 _GRID_COLOR = "#d9d9d9"
 _OUTLINE_COLOR = "#444444"
+# Axis labels of the library's family keys (the hover text shows the key itself).
+_FAMILY_LABELS = {"michaelis_menten": "Michaelis-Menten", "hill": "Hill", "weibull": "Weibull"}
 
 
 def plotly_js() -> bytes:
@@ -524,6 +527,91 @@ def composition_figure(run: RunSnapshot) -> dict[str, Any]:
     return _panel("composition", title, figure, None, note)
 
 
+# Tick steps of a count axis: the first that keeps at most 8 steps up to the largest bar,
+# so ticks stay integers (plotly's automatic steps go fractional for small counts).
+_COUNT_STEPS = (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000)
+
+
+def _count_step(top: int) -> int:
+    return next((step for step in _COUNT_STEPS if top <= 8 * step), _COUNT_STEPS[-1])
+
+
+def _forms_figure(
+    panel_id: str,
+    title: str,
+    run: RunSnapshot,
+    families: tuple[str, ...],
+    forms_of: Callable[[WorldMetrics], tuple[str, ...] | None],
+) -> dict[str, Any]:
+    """Consumable worlds per family, with every family of the library on the x axis.
+
+    A world counts once for each family its active channels use, so a world whose
+    channels mix families counts in each of them.
+    """
+    if not run.worlds:
+        return _panel(panel_id, title, None, empty_state(run), None)
+    recorded = [forms for forms in map(forms_of, run.worlds) if forms is not None]
+    if not recorded:
+        return _panel(
+            panel_id, title, None, "this run's payloads do not record these families", None
+        )
+    counts = [sum(family in forms for forms in recorded) for family in families]
+    figure = go.Figure(
+        data=[
+            go.Bar(
+                x=[_FAMILY_LABELS.get(family, family) for family in families],
+                y=counts,
+                customdata=list(families),
+                text=counts,
+                textposition="outside",
+                cliponaxis=False,
+                marker={"color": _WORLD_COLOR},
+                hovertemplate="%{customdata}: %{y} worlds<extra></extra>",
+            )
+        ],
+        layout=_layout(
+            showlegend=False,
+            yaxis={
+                "title": {"text": "worlds"},
+                "rangemode": "tozero",
+                "tick0": 0,
+                "dtick": _count_step(max(counts)),
+                "tickformat": "d",
+            },
+        ),
+    )
+    notes = []
+    unrecorded = len(run.worlds) - len(recorded)
+    if unrecorded:
+        notes.append(f"{_plural(unrecorded, 'world')} without recorded families not counted")
+    mixed = sum(len(forms) > 1 for forms in recorded)
+    if mixed:
+        notes.append(f"{_plural(mixed, 'world')} mixing families, counted once per family")
+    return _panel(panel_id, title, figure, None, "; ".join(notes) or None)
+
+
+def saturation_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 5: consumable worlds per saturation family of their active channels."""
+    return _forms_figure(
+        "saturation",
+        "Worlds per saturation form",
+        run,
+        SATURATION_FAMILIES,
+        lambda world: world.saturation_forms,
+    )
+
+
+def adstock_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 6: consumable worlds per adstock (carryover) family of their active channels."""
+    return _forms_figure(
+        "adstock",
+        "Worlds per adstock form",
+        run,
+        ADSTOCK_FAMILIES,
+        lambda world: world.adstock_forms,
+    )
+
+
 # -- status ------------------------------------------------------------------------------
 
 
@@ -586,6 +674,8 @@ _FIGURES: tuple[Callable[[RunSnapshot], dict[str, Any]], ...] = (
     cumulative_figure,
     impact_figure,
     composition_figure,
+    saturation_figure,
+    adstock_figure,
 )
 
 

@@ -19,8 +19,9 @@ DASHBOARD_FUNCTION = "dashboard"
 REVISION_ENV = "LIVE_DASHBOARD_CODE_REVISION"
 
 GENERATION_TIMEOUT_S = 1200
-# Demo bounds. One attempt covers roughly 250-300 worlds on Modal (3-5 s per world); a
-# larger run stops before the timeout and finishes with `launch.py --resume`.
+# Demo bounds. One attempt covers roughly 175-270 worlds on Modal (4-6.5 s of wall-clock
+# time per world); a larger run stops before the timeout and finishes with
+# `launch.py --resume`.
 DEMO_MAX_WORLDS = 400
 DEMO_MAX_WORLDS_PER_TASK = 20
 

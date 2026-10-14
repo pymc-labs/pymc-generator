@@ -1,7 +1,8 @@
 """Generation worker: publish the logical tasks of one run into a store, resumably.
 
 A run is a fixed list of logical tasks (``RunRequest``); task ``i`` generates
-``worlds_per_task`` worlds with seed ``seed + i``. For each task the writer persists and
+``worlds_per_task`` worlds with seed ``seed + i``, using the run's preset (a preset mix
+cycles through its member presets by task index). For each task the writer persists and
 commits the payload first and the immutable completion record second, so a reader never
 sees a record whose payload is not yet published. Every record is decoded with the
 contract decoder before it is written: the writer never publishes what readers would
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import hashlib
 import importlib.metadata
 import os
@@ -26,7 +28,7 @@ import platform
 import re
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -219,11 +221,158 @@ def _small(worlds_per_task: int) -> SCMPrior:
     )
 
 
+# Two variety styles that differ only in the saturation curve: geometric carryover with
+# Michaelis-Menten (``geometric-mm``) or logistic (``geometric-logistic``) saturation.
+# 10 channels and 10 controls (1-10 of each active per world), every active input acting
+# only on the target, positive effects, and wide spreads of trends, zeros, smoothness,
+# baseline shapes and channel / control / baseline shares (README, "Two-style variety").
+_VARIETY_PER_INPUT: dict[str, Any] = {  # applied to channels and controls alike
+    # Zeros: on/off blocks (on W of every P weeks), a late start, an early stop.
+    "flighting_inclusion_prob": 0.5,
+    "flighting_period_weeks_range": (4, 16),
+    "flighting_duty_range": (0.05, 0.95),
+    "onset_inclusion_prob": 0.15,
+    "offset_inclusion_prob": 0.15,
+    # Shapes.
+    "trend_inclusion_prob": 0.75,
+    "seasonal_inclusion_prob": 0.4,
+    "seasonal_period_weeks_range": (52.0, 52.0),
+    "level_jump_inclusion_prob": 0.3,
+    "level_jump_count": 1,
+    # Roughness on top of the smoothed walk: weekly jitter and pulses.
+    "hf_inclusion_prob": 0.4,
+    "pulse_inclusion_prob": 0.3,
+}
+_VARIETY_KNOBS: dict[str, Any] = {
+    "n_treatments": 10,
+    "n_covariates": 10,
+    "n_latent": 1,  # the library needs >= 1; the edge budget gives it no arrows (contributes 0)
+    "n_time_steps": 104,
+    "n_treatments_active_range": (1, 10),
+    "n_covariates_active_range": (1, 10),
+    "draws_per_cell": 1,
+    # Baseline walk and noise in target units: the relative mode would scale them by the
+    # channels' asymptotic coefficients, which near-linear saturation makes very large.
+    "outcome_std_mode": "absolute",
+    "rw_baseline_std_sigma": 0.8,
+    "rw_outcome_std_sigma": 0.4,
+    # Effect sizes: each input's contribution at its usual level; the baseline level.
+    "treatment_reference_contribution_range": (1.0, 3.0),
+    "covariate_reference_contribution_range": (1.0, 3.0),
+    "covariate_reference_scale": 5.5,  # controls sit near 5.5
+    "rw_baseline_mean_range": (2.0, 16.0),
+    "baseline_floor": 0.0,
+    # Channel levels; smoothness ~ Beta(0.6, 0.6): many very smooth and many jagged walks
+    # (smoothness 1 is a 26-week moving average).
+    "rw_positive_mean_range": (0.3, 6.0),
+    "rw_treatment_std_range": (0.1, 1.0),
+    "rw_smoothness_alpha": 0.6,
+    "rw_smoothness_beta": 0.6,
+    "rw_smoothness_max_weeks": 26,
+    # Controls are additive and unfloored: a level well above their swings keeps them
+    # positive (no negative value in 5,000+ sampled control series).
+    "rw_covariate_mean_range": (4.0, 7.0),
+    "rw_std_sigma": 0.2,
+    # Texture (control jitter and pulses scale with the control's own walk spread).
+    "treatment_hf_sigma_range": (0.03, 0.6),
+    "treatment_pulse_prob_range": (0.02, 0.25),
+    "treatment_pulse_amp_range": (0.4, 2.5),
+    "covariate_hf_sigma_range": (0.2, 1.6),
+    "covariate_pulse_prob_range": (0.02, 0.25),
+    "covariate_pulse_amp_range": (0.5, 3.0),
+    # Shapes.
+    "treatment_trend_log_change_range": (-1.5, 1.5),
+    "covariate_trend_change_range": (-2.0, 3.0),
+    "treatment_seasonal_amplitude_range": (0.1, 0.6),
+    "covariate_seasonal_amplitude_range": (0.2, 0.8),
+    "treatment_level_jump_factor_range": (0.5, 2.0),
+    "covariate_level_jump_size_range": (-0.6, 1.5),
+    "carryover_alpha_range": (0.05, 0.9),  # geometric adstock decay
+    **{
+        f"{role}_{key}": value
+        for role in ("treatment", "covariate")
+        for key, value in _VARIETY_PER_INPUT.items()
+    },
+    "covariate_trend_inclusion_prob": 0.9,  # control trends are additive: give more of them
+}
+_VARIETY_SHAPES: dict[str, dict[str, tuple[float, float]]] = {
+    "michaelis_menten": {"kappa_mult": (0.1, 10.0)},  # log-uniform: saturated to ~linear
+    "logistic": {"lam": (0.3, 5.0)},  # uniform: the library has no log-uniform option for lam
+}
+
+
+def _variety(saturation: str, worlds_per_task: int) -> SCMPrior:
+    """One two-style variety configuration, one world per cell, ``worlds_per_task`` cells."""
+    from pymc_generator import make_scm_prior
+    from pymc_generator.sampler import SATURATION_FAMILY_KEYS, SCMPrior
+
+    shapes = SCMPrior().saturation_prior_ranges
+    shapes[saturation].update(_VARIETY_SHAPES[saturation])
+    # Every active channel and control points only to the target: no channel->channel,
+    # control->channel, control->control or latent arrows (those budgets are pinned to 0).
+    edges: dict[str, int | tuple[int, int]] = dict.fromkeys(
+        ("cy", "dc", "dz", "dy", "zy", "zc", "cc", "zz"), (0, 0)
+    )
+    edges.update(cy=(10, 10), zy=(10, 10))
+    return make_scm_prior(
+        **_VARIETY_KNOBS,
+        n_cells=worlds_per_task,
+        edge_budget=edges,
+        trajectories="composable",
+        active_count_allocation="independent",
+        carryover_family_probs={"none": 0.0, "geometric": 1.0, "weibull": 0.0},
+        saturation_family_probs={
+            name: float(name == saturation) for name in SATURATION_FAMILY_KEYS
+        },
+        saturation_prior_ranges=shapes,
+        mm_scale_prior="log_uniform",
+        record_walk_parameters=True,
+    )
+
+
 # Preset name -> configuration for a task of ``worlds_per_task`` worlds (one per cell, so
 # a successful task accepts exactly its target). Read-only: runs are named by preset.
 PRESETS: Mapping[str, Callable[[int], SCMPrior]] = MappingProxyType(
-    {"showcase-variety": _showcase_variety, "small": _small}
+    {
+        "showcase-variety": _showcase_variety,
+        "small": _small,
+        "geometric-mm": functools.partial(_variety, "michaelis_menten"),
+        "geometric-logistic": functools.partial(_variety, "logistic"),
+    }
 )
+# Mix name -> the presets its run cycles through: task ``i`` uses member ``i % n``, so the
+# members alternate and, with a multiple of ``n`` tasks, finish with equal world counts.
+MIXES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {"geometric-mm-logistic": ("geometric-mm", "geometric-logistic")}
+)
+
+
+def preset_cycle(
+    name: str,
+    presets: Mapping[str, Callable[[int], SCMPrior]] = PRESETS,
+    mixes: Mapping[str, tuple[str, ...]] = MIXES,
+) -> tuple[str, ...]:
+    """The presets a run's tasks cycle through: task ``i`` uses ``cycle[i % len(cycle)]``.
+
+    A preset is a one-preset cycle. ``RequestError`` if ``name`` is neither a preset nor a
+    mix, is both, or is a mix that does not name one or more known presets (a mix of
+    mixes included).
+    """
+    if name in mixes:
+        if name in presets:
+            raise RequestError(f"{name!r} names both a preset and a preset mix")
+        members = mixes[name]
+        if isinstance(members, str) or not members:
+            raise RequestError(f"preset mix {name!r} must name one or more presets")
+        cycle = tuple(members)
+        unknown = sorted({member for member in cycle if member not in presets})
+        if unknown:
+            raise RequestError(f"preset mix {name!r} names unknown presets: {unknown}")
+        return cycle
+    if name in presets:
+        return (name,)
+    known = ", ".join(sorted({*presets, *mixes}))
+    raise RequestError(f"unknown preset {name!r}; known: {known}")
 
 
 # -- generator identity ----------------------------------------------------------------
@@ -275,14 +424,28 @@ def _code_revision() -> str | None:
     return code_revision(Path(__file__).resolve().parent.parent)
 
 
-def generator_info(preset: str, cfg: SCMPrior) -> GeneratorInfo:
-    """The effective generator of a run: what must match for a resume to be allowed."""
+def generator_info(
+    preset: str, cycle: Sequence[str], configs: Mapping[str, SCMPrior]
+) -> GeneratorInfo:
+    """The effective generator of a run: what must match for a resume to be allowed.
+
+    ``cycle`` is the run's ``preset_cycle`` and ``configs`` holds each member's
+    configuration. A single preset records its configuration; a mix records its cycle and
+    every member's configuration, so changing any member refuses a resume of the mix.
+    """
     import pymc_generator
     from pymc_generator.slots import CORPUS_SCHEMA_VERSION
 
+    if len(cycle) == 1:
+        config = dataclasses.asdict(configs[cycle[0]])
+    else:
+        config = {
+            "cycle": list(cycle),
+            "presets": {name: dataclasses.asdict(configs[name]) for name in dict.fromkeys(cycle)},
+        }
     return GeneratorInfo(
         preset=preset,
-        config=dataclasses.asdict(cfg),
+        config=config,
         pymc_generator_version=pymc_generator.__version__,
         corpus_schema_version=CORPUS_SCHEMA_VERSION,
         code_sha256=_code_sha256(),
@@ -500,15 +663,19 @@ def _generate_task(
 def _publish_tasks(
     store: DirectoryStore,
     manifest: RunManifest,
-    cfg: SCMPrior,
+    cycle: Sequence[str],
+    configs: Mapping[str, SCMPrior],
     attempt: _Attempt,
     clock: Callable[[], datetime],
     deadline: datetime | None,
 ) -> str:
-    """Reuse or generate every task in order; ``"stopped"`` when the deadline is near."""
+    """Reuse or generate every task in order; ``"stopped"`` when the deadline is near.
+
+    Task ``index`` is generated by the preset ``cycle[index % len(cycle)]``.
+    """
     from pymc_generator.data_generator import DataGenerator
 
-    generator = DataGenerator(cfg)
+    generators = {name: DataGenerator(cfg) for name, cfg in configs.items()}
     longest = 0.0
     for index in range(manifest.n_tasks):
         task_id = task_id_for(index)
@@ -521,6 +688,7 @@ def _publish_tasks(
                 return "stopped"
         attempt.current_task_index = index
         attempt.save("running", clock())
+        generator = generators[cycle[index % len(cycle)]]
         record = _generate_task(store, manifest, generator, index, attempt, clock)
         attempt.published.append(task_id)
         # Measured on the deadline's clock, so both sides of the stop rule agree.
@@ -532,9 +700,15 @@ def _publish_tasks(
 
 
 def _check_request(
-    request: RunRequest, attempt_id: str | None, presets: Mapping[str, Callable[[int], SCMPrior]]
-) -> None:
-    """Validate what the request alone decides, before the store is touched."""
+    request: RunRequest,
+    attempt_id: str | None,
+    presets: Mapping[str, Callable[[int], SCMPrior]],
+    mixes: Mapping[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    """Validate what the request alone decides, before the store is touched.
+
+    Returns the presets the run's tasks cycle through (``preset_cycle``).
+    """
     try:
         check_demo_bounds(request)
     except ValueError as error:
@@ -543,10 +717,7 @@ def _check_request(
         raise RequestError(
             f"attempt_id must look like 20260101T000000Z-0a1b2c3d, got {attempt_id!r}"
         )
-    if request.preset not in presets:
-        raise RequestError(
-            f"unknown preset {request.preset!r}; known: {', '.join(sorted(presets))}"
-        )
+    return preset_cycle(request.preset, presets, mixes)
 
 
 def run_generation(
@@ -558,10 +729,11 @@ def run_generation(
     deadline: datetime | None = None,
     attempt_id: str | None = None,
     presets: Mapping[str, Callable[[int], SCMPrior]] = PRESETS,
+    mixes: Mapping[str, tuple[str, ...]] = MIXES,
 ) -> dict[str, Any]:
     """Publish every task of ``request`` that is not yet published, as one attempt.
 
-    An invalid request (demo bounds, unknown preset, malformed ``attempt_id``) raises
+    An invalid request (demo bounds, unknown preset or mix, malformed ``attempt_id``) raises
     ``RequestError`` and a stored run of another generator raises ``RunConflictError``,
     both before anything is written. Any other failure marks the attempt ``failed``
     (best effort) and propagates. ``deadline`` is the time after which the attempt
@@ -569,12 +741,13 @@ def run_generation(
     ``deadline_at``: the attempt stops cleanly, instead of starting a task, once less
     than 90 s or twice its longest task so far is left. Returns ``{"status": "finished"
     | "stopped", "run_id", "attempt_id", "published": [task ids], "reused": [task ids]}``.
+    The request's preset may name a mix (``MIXES``): task ``i`` then uses member ``i % n``.
     """
-    _check_request(request, attempt_id, presets)
+    cycle = _check_request(request, attempt_id, presets, mixes)
     store.refresh()
-    cfg = presets[request.preset](request.worlds_per_task)
+    configs = {name: presets[name](request.worlds_per_task) for name in dict.fromkeys(cycle)}
     started_at = clock()
-    manifest = _open_run(store, request, generator_info(request.preset, cfg), started_at)
+    manifest = _open_run(store, request, generator_info(request.preset, cycle, configs), started_at)
     attempt = _Attempt(
         store=store,
         manifest=manifest,
@@ -585,7 +758,7 @@ def run_generation(
     )
     try:
         attempt.save("running", started_at)
-        status = _publish_tasks(store, manifest, cfg, attempt, clock, deadline)
+        status = _publish_tasks(store, manifest, cycle, configs, attempt, clock, deadline)
         attempt.current_task_index = None
         attempt.save("finished", clock())
     except BaseException as error:
@@ -612,6 +785,7 @@ def run_generation_or_refuse(
     deadline: datetime | None = None,
     attempt_id: str | None = None,
     presets: Mapping[str, Callable[[int], SCMPrior]] = PRESETS,
+    mixes: Mapping[str, tuple[str, ...]] = MIXES,
 ) -> dict[str, Any]:
     """``run_generation``, but a request that must not run is refused, not raised.
 
@@ -638,6 +812,7 @@ def run_generation_or_refuse(
             deadline=deadline,
             attempt_id=attempt_id,
             presets=presets,
+            mixes=mixes,
         )
     except (RequestError, RunConflictError) as error:
         return _refuse(store, request, error, worker, clock, deadline, attempt_id)

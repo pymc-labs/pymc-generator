@@ -414,6 +414,10 @@ def _world_metrics(
             channel_share=metrics.channel[row],
             control_share=metrics.control[row],
             baseline_share=metrics.baseline[row],
+            adstock_forms=metrics.adstock_forms[row],
+            saturation_forms=(
+                None if metrics.saturation_forms is None else metrics.saturation_forms[row]
+            ),
         )
         for row in range(metrics.n_worlds)
     )

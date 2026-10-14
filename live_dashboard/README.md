@@ -45,7 +45,7 @@ flowchart LR
    configuration, digest of the generating source, package versions, git revision).
    Then, task by task:
    - `DataGenerator.generate(n_tasks=worlds_per_task, seed=seed + i)` generates the
-     task's worlds;
+     task's worlds (with the preset `cycle[i mod n]` of a [preset mix](#presets-and-mixes));
    - the corpus is saved as `.npz`, reloaded and validated;
    - it is written create-only and the Volume is committed;
    - only then is the task's JSON completion record written and committed.
@@ -60,8 +60,9 @@ flowchart LR
    otherwise. On each poll it:
    - lists every task and decodes the records;
    - checks each new payload's size and SHA-256;
-   - extracts each new payload's metrics once: composition shares, and channel impact
-     through the library's `outcome_distributions`.
+   - extracts each new payload's metrics once: composition shares, channel impact
+     through the library's `outcome_distributions`, and the adstock and saturation
+     families of each world's active channels.
 
    The result is an immutable snapshot; requests never touch the Volume.
 6. **Show** (`figures.py`, `web.py`, `static/`). The page polls the JSON API with an
@@ -81,6 +82,8 @@ reads it.
 | Worlds over time | Cumulative consumable worlds at each publication, with the target. |
 | Channel impact | Two distributions: each active channel's direct contribution share of its world's outcome (pooled), and each world's total channel share (direct + indirect). |
 | Composition triangle | Each world's channel / control / baseline shares of its total outcome, at its exact barycentric position (corner = 100 %). Semi-transparent dots, so overlap shows density; worlds with a negative part sit outside and are drawn as ×. |
+| Worlds per saturation form | Consumable worlds per saturation family their active channels use, with all six library families on the x axis (linear, Hill, logistic, Michaelis-Menten, tanh, root); a world whose channels mix families counts once in each. Read from each payload's `sat_family`, which the library records only for configurations with mechanism priors; worlds without it are noted, not counted. |
+| Worlds per adstock form | The same for the adstock (carryover) family: none, geometric, Weibull (`carryover_family`, recorded in every payload). |
 | Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, and the newest attempt (with its GPU, for the early runs that had one). |
 
 Shares use the trajectory-showcase notebook's definitions (`realized_shares`):
@@ -112,11 +115,9 @@ uv run --no-sync python -m live_dashboard generate --data-dir /tmp/live-runs \
     --label local-demo --worlds 20 --worlds-per-task 2
 ```
 
-Presets: `showcase-variety` (the trajectory-showcase notebook's parameter ranges with
-independent active-count draws per world instead of the notebook's stratified integer
-design, which needs one call for a multiple of 10 worlds) and `small` (a tiny
-configuration for tests and smoke runs). `generate --max-seconds` (default 3600) is the
-attempt's time limit; rerun the same command to resume a stopped run.
+Presets and mixes: see [Presets and mixes](#presets-and-mixes). `generate --max-seconds`
+(default 3600) is the attempt's time limit; rerun the same command to resume a stopped
+run.
 
 ## Modal deployment (environment `pfn`)
 
@@ -168,10 +169,29 @@ request options:
 | Option | Default | Notes |
 |---|---|---|
 | `--label` | required | Part of the run id; use a new label for a fresh run. |
-| `--preset` | `showcase-variety` | Generator configuration, from `PRESETS` in `generation.py`. |
+| `--preset` | `showcase-variety` | A preset from `PRESETS` or a mix from `MIXES` in `generation.py` (see below). |
 | `--worlds` | 20 | Target worlds. Must be a multiple of `--worlds-per-task`, and at most 400 (`DEMO_MAX_WORLDS`). |
 | `--worlds-per-task` | 2 | Worlds per published task, at most 20 (`DEMO_MAX_WORLDS_PER_TASK`). The page updates once per task, so smaller tasks show progress more often. |
 | `--seed` | 29 | Base seed; task `i` uses `seed + i`. |
+
+### Presets and mixes
+
+| Name | Kind | Generates |
+|---|---|---|
+| `showcase-variety` | preset | The trajectory-showcase notebook's ranges: 10 channels, 10 controls, geometric adstock, Michaelis-Menten saturation, active counts drawn independently per world (the notebook's stratified design needs one call per multiple of 10 worlds). |
+| `geometric-mm` | preset | [Two-style variety](#two-style-variety-geometric-mm-geometric-logistic) with Michaelis-Menten saturation. |
+| `geometric-logistic` | preset | Two-style variety with logistic saturation. |
+| `geometric-mm-logistic` | mix | `geometric-mm` and `geometric-logistic`, alternating by task. |
+| `small` | preset | A tiny configuration for tests and smoke runs. |
+
+A **mix** is one run whose tasks cycle through its member presets: task `i` uses member
+`i mod n` (and, as always, seed `seed + i`). The members therefore grow together on the
+page, finish with equal world counts when the task count is a multiple of `n`, and the
+run's payloads are the concatenation of their generations: the page shows the combined
+dataset, and the form panels show each member's worlds as they arrive. The manifest
+records the cycle and every member's configuration (`generator.config = {"cycle": [...],
+"presets": {...}}`), so changing any member refuses a resume. To add one, map a new name
+to a tuple of preset names in `MIXES`.
 
 ### Launch, follow and resume
 
@@ -181,8 +201,11 @@ modal run -e pfn live_dashboard/launch.py --label <label> --worlds 100 --worlds-
 
 Open the printed link, or pick the run in the page's run menu.
 
-- **Timing.** On Modal hosts a world takes about 3–5 s, so 20 worlds take 1–2 minutes.
-- **Attempt length.** One attempt lasts at most 20 minutes, roughly 250–300 worlds. A
+- **Timing.** On Modal a world takes about 4–6.5 s of wall-clock time (generation plus
+  about 2.7 s per task of Volume commits, which the speed card leaves out), so 20 worlds
+  take 1.5–2.5 minutes. The two-style presets measured 5–15 % slower than
+  `showcase-variety` per world (ten tasks of each on one laptop).
+- **Attempt length.** One attempt lasts at most 20 minutes, roughly 175–270 worlds. A
   larger run stops cleanly; finish it by rerunning the same command with `--resume`.
 - **Changed generator.** Resuming with a different configuration, code or environment
   is refused, so start a run with changed code under a new label.
@@ -229,7 +252,67 @@ corpora = [  # the verified payload of every published task
 
 Reading through the dashboard's reader, rather than globbing `*.npz`, skips orphans of
 retried attempts and payloads that fail their digest. To browse the downloaded runs
-locally, run `serve --data-dir live-runs`.
+locally, run `serve --data-dir live-runs`. A mix run's payloads already hold every
+member's worlds, so `corpora` is the concatenated dataset; a world's member is its task
+index modulo the number of members, and its payload's `carryover_family` and
+`sat_family` record its functional form.
+
+### Two-style variety (`geometric-mm`, `geometric-logistic`)
+
+Two configurations that differ only in the saturation curve, built to be generated
+together (`geometric-mm-logistic`) as one dataset:
+
+- **Inputs:** 10 channels and 10 controls; each world draws 1–10 active channels and
+  1–10 active controls independently, so any of the 100 combinations can occur.
+- **Graph:** every active channel and control points only to the target: no channel →
+  channel, control → channel, control → control or latent arrows. (The library needs one
+  latent node; it has no arrows and contributes exactly 0.)
+- **Response:** geometric adstock (decay 0.05–0.9) with Michaelis-Menten saturation
+  (half-saturation 0.1–10 × the channel's usual level, log-uniform) or logistic
+  saturation (λ 0.3–5, uniform; the library has no log-uniform option for λ).
+- **Positive effects:** channel contributions are non-negative by construction; controls
+  have positive coefficients and stay positive because their level (4–7) sits well above
+  their swings; the baseline walk is floored at 0; the library rejects any world whose
+  target goes below 0.
+- **Trajectories** (channels and controls alike): on/off blocks (half of the inputs),
+  late starts and early stops (15 % each), trends, yearly seasonality, a level jump,
+  weekly jitter and pulses, on random walks whose smoothness runs from raw to a 26-week
+  moving average.
+- **Baseline:** a random walk (level 2–16, spread ~ HalfNormal(0.8)) with its own
+  smoothness, plus weekly noise (in target units: `outcome_std_mode="absolute"`).
+- **Shares:** each input contributes 1–3 target units at its usual level, so the
+  channel, control and baseline shares follow the active counts and the baseline level.
+
+Measured on the exact run `geometric-mm-logistic`, 160 worlds, 2 per task, seed 1000,
+generated locally with the same code:
+
+| Property | Result |
+|---|---|
+| Worlds per style | 80 Michaelis-Menten, 80 logistic |
+| (channels, controls) combinations | 77 of 100; every count 1–10 on both axes |
+| Channel / control / baseline share (min–median–max) | 4–33–64 % / 1–31–78 % / 8–35–72 % |
+| All three shares within 5–90 % | 95 % of worlds; none above 90 % or below 1 % |
+| Channels: no zeros / under half zeros / half or more | 35 / 37 / 28 % |
+| Channels: trend up / down / flat | 38 / 40 / 21 % |
+| Channels: very smooth / medium / rough | 29 / 23 / 48 % |
+| Controls: no zeros / under half zeros / half or more | 33 / 38 / 28 % |
+| Controls: trend up / down / flat (changes beyond ±10 %: 47 % up, 27 % down) | 19 / 8 / 73 % |
+| Controls: very smooth / medium / rough | 48 / 34 / 19 % |
+| Baseline: flat / smooth moving / jagged; drifting up / down | 37 / 51 / 12 %; 16 / 12 % |
+| Negative channel or control values; lowest target | none; 5.8 |
+
+Definitions: a trend is the fitted change in log level over the weeks the input is on
+(up above +1/3, down below −1/3); roughness is the week-to-week change relative to the
+series' spread (white noise 1; very smooth < 0.1, rough > 0.4); a flat baseline varies
+by less than 3 % of its mean, a jagged one is a nearly unsmoothed walk.
+
+**Limits.** The library has no setting that targets shares, so a world with a single
+small channel or control gives that component under 5 % (7 % of 800 worlds sampled with
+other seeds). The baseline is one smoothed random walk plus noise: isolated spikes and
+set trends would need a library change. Control positivity is a margin, not a floor (no
+negative value in 5,000+ sampled control series); a hard guarantee needs a covariate floor
+in the library. Controls trend less than channels, because their down-trends are capped
+to keep them positive.
 
 ### A new generator configuration
 
