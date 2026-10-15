@@ -290,8 +290,9 @@ together (`geometric-mm-logistic`) as one dataset:
   the baseline level is 2–20. The channel, control and baseline shares follow the
   active counts and the baseline level.
 
-Measured on the exact run `geometric-mm-logistic`, 240 worlds, 2 per task, seed 1000,
-generated locally with the same code:
+Measured on the Modal run `two-styles-radical-5860b66184a8` (`geometric-mm-logistic`,
+240 worlds, 2 per task, seed 1000), from its published payloads read on Modal through the
+dashboard's verified reader:
 
 | Property | Result |
 |---|---|
