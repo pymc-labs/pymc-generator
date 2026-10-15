@@ -20,7 +20,15 @@ authentication. The same code runs locally against a folder.
 > generate as fast as A100 workers for about 1/20 of the cost; see
 > [Hardware decision: CPU workers](#hardware-decision-cpu-workers).
 
-## How it works
+## Reusable-family streaming (opt-in)
+
+For compilation reuse, bounded per-worker save queues and incremental ten-world
+publications, use [`scripts/modal_streaming.py`](../scripts/modal_streaming.py).
+See [launch, resume, resource limits and scientific differences](STREAMING.md).
+This is a separate compositional prior, allows signed controls, and does not change
+existing demo presets or automatically launch a large corpus.
+
+## How the legacy demo works
 
 ```mermaid
 flowchart LR

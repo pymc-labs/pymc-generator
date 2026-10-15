@@ -8,6 +8,12 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Opt-in reusable-family streaming generation for the live dashboard: bounded
+  per-worker save queues, backpressure, single-writer Volume ownership, deterministic
+  ten-world publications and validated resume. The self-contained compositional
+  backend compiles once per family worker; existing generation defaults are unchanged.
+  See `live_dashboard/STREAMING.md` for launch instructions and scientific/scale limits.
+
 - **Experimental, internal live generation dashboard with a Modal CPU worker and an
   authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the
   installed package) is the generation engine and UI on top of the publication of #67:
