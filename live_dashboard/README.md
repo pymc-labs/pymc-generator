@@ -291,29 +291,30 @@ together (`geometric-mm-logistic`) as one dataset:
   baseline split stays even, but effects up to 39× apart within a world. The baseline
   level is 2–16. The three shares follow the active counts and the baseline level.
 
-Measured with the previous ranges (channels 0.1–10, controls 1–3, baseline 2–20) on the
-Modal run `two-styles-radical-5860b66184a8` (`geometric-mm-logistic`, 240 worlds, 2 per
-task, seed 1000), from its published payloads read on Modal through the dashboard's
-verified reader:
+Measured on the Modal run `two-styles-even-1ca0e8c013fc` (`geometric-mm-logistic`, 240
+worlds, 2 per task, seed 1000), from its published payloads read on Modal through the
+dashboard's verified reader. "Skewed" is the previous run with channels 0.1–10 and
+controls 1–3 (`two-styles-radical-5860b66184a8`); "1–3" is `two-styles-64091b9843a5`.
 
 | Property | Result |
 |---|---|
 | Worlds per style | 120 Michaelis-Menten, 120 logistic |
 | (channels, controls) combinations | 91 of 100; every count 1–10 on both axes |
-| Channel / control / baseline share (min–median–max) | 4.1–52–87 % / 0.5–21–71 % / 4.6–26–79 % |
-| All three shares within 5–90 % | 89.6 % of worlds; none above 90 %; two worlds have a part below 1 % (controls 0.55 and 0.61 %, one active control each) |
-| Each active channel's direct share (median / 95th pct / max) | 7.4 / 21.5 / 61 % (effects 0.2–6: 5.7 / 17 / 42 %; 1–3: 5.3 / 12 / 32 %) |
-| Active channels above 10 % / 20 % of the outcome | 36 / 6.7 % (effects 0.2–6: 24 / 1.7 %) |
-| Largest channel per world (median / 90th pct) | 17.6 / 27 % (effects 0.2–6: 13 / 20 %; 1–3: 9.5 / 14.5 %) |
-| Each active control's direct share (median / 95th pct / max) | 3.3 / 9.6 / 32.5 % |
+| Channel / control / baseline share (min–median–max) | 1.6–33–76 % / 1.0–32–79 % / 7.1–35–82 % (skewed: medians 52 / 21 / 26 %) |
+| All three shares within 5–90 % | 91.7 % of worlds; none below 1 % or above 90 % |
+| Each active channel's direct share (median / 95th pct / max) | 4.8 / 14.1 / 43 % (skewed: 7.4 / 21.5 / 61 %; 1–3: 5.3 / 12 / 32 %) |
+| Active channels above 10 % / 20 % of the outcome | 15.5 / 1.2 % (skewed: 36 / 6.7 %; 1–3: 10 / 0.3 %) |
+| Largest channel per world (median / 90th pct) | 11.2 / 18 % (skewed: 17.6 / 27 %; 1–3: 9.5 / 14.5 %) |
+| Each active control's direct share (median / 95th pct / max) | 4.4 / 15.5 / 39 % (skewed: 3.3 / 9.6 / 32.5 %; 1–3: 5.0 / 12.9 / 34 %) |
 | Channels: no zeros / under half zeros / half or more | 37 / 37 / 27 % |
 | Channels: trend up / down / flat | 41 / 39 / 20 % |
 | Channels: very smooth / medium / rough | 30 / 23 / 47 % |
 | Controls: no zeros / under half zeros / half or more | 35 / 36 / 29 % |
 | Controls: trend up / down / flat (changes beyond ±10 %: 47 % up, 27 % down) | 18 / 7 / 74 % |
 | Controls: very smooth / medium / rough | 48 / 33 / 19 % |
-| Baseline: flat / smooth moving / jagged; drifting up / down | 41 / 45 / 14 %; 13 / 10 % |
-| Negative channel or control values; lowest target | none; 3.4 |
+| Baseline: flat / smooth moving / jagged; drifting up / down | 36 / 49 / 15 %; 15 / 13 % |
+| Negative channel or control values; lowest target | none; 2.7 |
+| Worker time and estimated cost (cost card) | one attempt of 19.8 min, $0.042 |
 
 Definitions: a trend is the fitted change in log level over the weeks the input is on
 (up above +1/3, down below −1/3); roughness is the week-to-week change relative to the
@@ -321,17 +322,21 @@ series' spread (white noise 1; very smooth < 0.1, rough > 0.4); a flat baseline 
 by less than 3 % of its mean, a jagged one is a nearly unsmoothed walk.
 
 **Limits.** The library has no setting that targets shares, so a component can fall
-under 5 % (10.4 % of this run's worlds): controls in 21 worlds, all with 1–3 active
-controls; channels in 2 worlds with one channel; the baseline in 2 worlds where 7–10
-channels take 69–80 %. In that run each channel's reference effect was drawn uniformly,
-up to 100× apart within a world (realized channel totals differed more: a median of
-12× and up to 241×); a log-uniform draw over 0.05–20 (a library change) gave a 95th
-percentile near 30 % in a rescaling test, with many more near-zero channels (median
-2 %). The baseline is one smoothed random walk plus noise: isolated spikes and set
-trends would need a library change. Control positivity is a margin, not a floor (no
-negative value in 5,000+ sampled control series); a hard guarantee needs a covariate
-floor in the library. Controls trend less than channels, because their down-trends are
-capped to keep them positive.
+under 5 % (20 of this run's 240 worlds): controls in 14 worlds, all with 1–4 active
+controls; channels in 6 worlds, all with 1–3 channels; never the baseline. Each effect
+is drawn uniformly, which caps its spread within a world (a coefficient of variation of
+at most 0.58; 0.1–3.9 is at 0.55). The channel/control/baseline split follows how the
+ranges' means compare, and each unit's spread follows its range's spread relative to
+the mean. So at an even split the per-unit distributions cannot widen much further with
+settings (realized channel totals already differ by a median of 11× and up to 132×
+within a world); widening only the channel range does it by letting channels dominate
+(the skewed run). A log-uniform draw (a library change) would spread them further: over
+0.05–20 it gave a 95th percentile near 30 % in a rescaling test, with many more
+near-zero channels (median 2 %). The baseline is one smoothed random walk plus noise:
+isolated spikes and set trends would need a library change. Control positivity is a
+margin, not a floor (no negative value in 5,000+ sampled control series); a hard
+guarantee needs a covariate floor in the library. Controls trend less than channels,
+because their down-trends are capped to keep them positive.
 
 ### A new generator configuration
 
