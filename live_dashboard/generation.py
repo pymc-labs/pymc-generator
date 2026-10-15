@@ -67,6 +67,8 @@ from live_dashboard.revision import code_revision
 from live_dashboard.storage import DirectoryStore
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from pymc_generator.data_generator import DataGenerator
     from pymc_generator.publication import FilePublicationStore
     from pymc_generator.sampler import SCMPrior
@@ -802,8 +804,8 @@ def _published_tasks(
     return published, {task: reason for task, reason in unusable.items() if task not in published}
 
 
-def _negative_worlds(corpus: Mapping[str, Any]) -> int:
-    """How many worlds have a control value or a control contribution below zero.
+def negative_rows(corpus: Mapping[str, Any]) -> np.ndarray:
+    """Per world: whether a control value or a control contribution goes below zero.
 
     Checks every column of every world (columns without an effect too: a control's sign
     must not reveal whether it acts) on the arrays as published. NaN counts as negative;
@@ -815,7 +817,7 @@ def _negative_worlds(corpus: Mapping[str, Any]) -> int:
     values = np.where(present[:, None, :], np.asarray(corpus["covariates"]), 0.0)
     contributions = np.asarray(corpus["covariate_contribution"])
     usable = (values >= 0.0).all(axis=(1, 2)) & (contributions >= 0.0).all(axis=(1, 2))
-    return int((~usable).sum())
+    return np.logical_not(usable)
 
 
 @dataclass
@@ -905,7 +907,7 @@ def _generate_task(
         rejected += round(float(diagnostics["rejection_rate"]) * evaluated)
         draw_failures += int(diagnostics["n_draw_failures"])
         generation_seconds += float(diagnostics["timing"]["elapsed_s"])
-        negative = _negative_worlds(corpus) if max_redraws else 0
+        negative = int(negative_rows(corpus).sum()) if max_redraws else 0
         if not negative:
             published = int(diagnostics["n_tasks"])
             failure = None

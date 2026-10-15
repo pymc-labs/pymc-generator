@@ -25,8 +25,11 @@ authentication. The same code runs locally against a folder.
 For compilation reuse, bounded per-worker save queues and incremental ten-world
 publications, use [`scripts/modal_streaming.py`](../scripts/modal_streaming.py).
 See [launch, resume, resource limits and scientific differences](STREAMING.md).
-This is a separate compositional prior, allows signed controls, and does not change
-existing demo presets or automatically launch a large corpus.
+By default this is a separate compositional prior that allows signed controls; with
+`--design structural-splits` it compiles the 50 member configurations of the
+[structural-split design](#structural-splits-structural-splits) instead (one model per split ×
+regime, controls never below zero). It does not change existing demo presets or
+automatically launch a large corpus.
 
 ## How the legacy demo works
 

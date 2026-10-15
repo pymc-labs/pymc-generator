@@ -40,7 +40,7 @@ def test_zero_world_completion_and_scoped_discovery(tmp_path):
     record, data = store.read_output(ref)
     assert data is None and record["counts"]["shortfall"] == 10
     # A different task can publish despite an unrelated malformed record. Full
-    # run validation (used before resume) still reports the corruption.
+    # run validation (the coordinator's report) still reports the corruption.
     (tmp_path / ref).write_text("{}")
     second = metadata(1)
     store.publish(second, None)
@@ -48,6 +48,29 @@ def test_zero_world_completion_and_scoped_discovery(tmp_path):
         store.validated_outputs(first["run_id"])
     with pytest.raises(PublicationError):
         store.publish(metadata(0), None)
+
+
+def test_task_scoped_validation_checks_only_the_given_tasks(tmp_path):
+    store = StreamPublicationStore(tmp_path)
+    corrupt = store.publish(metadata(0), None)
+    good = store.publish(metadata(1), None)
+    run_id = metadata()["run_id"]
+    (tmp_path / corrupt).write_text("{}")
+    # Another worker's broken task does not block this worker's resume check...
+    (output,) = store.validated_task_outputs(run_id, [pub.task_id_for(1)])
+    assert output["reference"] == good
+    # ...but a broken task of its own does, as does a conflicting completion (one that
+    # publish would refuse, written by an overlapping attempt).
+    with pytest.raises(PublicationError, match="Unresolved"):
+        store.validated_task_outputs(run_id, [pub.task_id_for(0)])
+    retry = json.loads((tmp_path / good).read_text())
+    retry["attempt_id"] = pub.new_attempt_id()
+    retry["timing"]["generation_seconds"] = 1.0
+    path = tmp_path / good.replace(output["record"]["attempt_id"], retry["attempt_id"])
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(retry))
+    with pytest.raises(PublicationError, match="Conflicting"):
+        store.validated_task_outputs(run_id, [pub.task_id_for(1)])
 
 
 def test_task_prefixed_identity_required(tmp_path):

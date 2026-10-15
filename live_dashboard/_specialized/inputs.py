@@ -79,13 +79,21 @@ def make_cell(cfg, ident, internal):
     active = _slice_g_active(g, *counts)
     sampler = wm.sample_structure
     if internal:
-        # Placeholders only: do not waste a second flag sample outside the graph.
+        # Placeholders only: do not waste a second flag sample outside the graph. The
+        # graph samples only the template's flag inputs; a texture flag (hf, pulse) at
+        # probability 0 or 1 and a schedule flag at 0 are constants of the template, so
+        # their placeholder is already their value.
+        sampled = set(wt._trajectory_input_names(cfg))
+        probs = cfg.trajectory_inclusion_probs()
+
         def no_flags(cfg, n_treatments, n_covariates, rng):
-            return {
-                structural_key(role, c): np.zeros(n, dtype=bool)
-                for role, n in zip(TRAJECTORY_INPUTS, (n_treatments, n_covariates))
-                for c in TRAJECTORY_COMPONENTS
-            }
+            flags = {}
+            for role, n in zip(TRAJECTORY_INPUTS, (n_treatments, n_covariates)):
+                for c in TRAJECTORY_COMPONENTS:
+                    key = structural_key(role, c)
+                    static = probs[role][c] >= 1.0 and key not in sampled
+                    flags[key] = np.full(n, static, dtype=bool)
+            return flags
 
         sampler = clone_function(wm.sample_structure, sample_component_flags=no_flags)
     structural = sampler(active, cfg, graph_rng)

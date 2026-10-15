@@ -65,6 +65,8 @@ class Adapter:
         self.retained_cell_ids = []
         self.evaluated = 0
         self.rejected = 0
+        self.draw_failures = 0
+        self.last_draw_error = None
         self.primary_hashes = {}
         self.executions = []
 

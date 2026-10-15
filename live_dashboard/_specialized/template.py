@@ -24,7 +24,12 @@ from pymc_generator import symbolic_graph as sg
 from pymc_generator import trajectories as tr
 from pymc_generator import world_model as wm
 from pymc_generator import world_model_template as wt
-from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
+from pymc_generator.sampler import (
+    CARRYOVER_FAMILY_KEYS,
+    MECHANISM_ARRAY_FIELDS,
+    MECHANISM_REFERENCE_FIELDS,
+    SATURATION_FAMILY_KEYS,
+)
 from pymc_generator.slots import TRAJECTORY_COMPONENTS, TRAJECTORY_INPUTS, TRAJECTORY_PARAM_REPORTS
 
 from .helpers import Adapter, active_result, clone_function, digest, widths
@@ -50,7 +55,9 @@ def family_config(cfg, pair):
 
 def build_template(cfg, inputs, weeks, *, specialized, internal, lazy):
     wt.check_template_supported(cfg)
-    assert not cfg.mechanism_priors_enabled and not cfg.record_walk_parameters
+    # Mechanism priors come from the library's template helpers; walk truth is not
+    # reported by this backend.
+    assert not cfg.record_walk_parameters
     bindings = {}
     if specialized:
         sat = [
@@ -176,6 +183,11 @@ def crop(value, counts):
     }
     for key, report in TRAJECTORY_PARAM_REPORTS.items():
         extra[report] = k if key.startswith("trajectory_treatment_") else m
+    # Mechanism-prior reports, named as packing.generate_fixed requests them: the
+    # template draws every padded slot, the corpus keeps inactive slots at zero.
+    for key, (axes, _) in {**MECHANISM_ARRAY_FIELDS, **MECHANISM_REFERENCE_FIELDS}.items():
+        name = "saturation_scale" if key == "mechanism_saturation_scale" else f"param_{key}"
+        extra[name] = k if axes[-1] == "treatment" else m
     for name, width in extra.items():
         if name in result:
             result[name] = result[name][..., :width]
@@ -202,6 +214,9 @@ class StudyAdapter(Adapter):
         self.last_raw = None
         self.rng_work_records = []
         self.rng_checked_keys = set()
+        # In-graph component flags: only the template's flag inputs. Texture flags at
+        # probability 0 or 1 and schedule flags at 0 are constants; make_cell sets them.
+        self.flag_names = tuple(wt._trajectory_input_names(cfg)) if self.internal else ()
 
     def set_chunk(self, cells, ids):
         self.cells, self.logical_ids = cells, ids
@@ -260,21 +275,25 @@ class StudyAdapter(Adapter):
         return self.models[0]
 
     def compile(self, requested):
-        flag_names = tuple(flag_probabilities(self.cfg)) if self.internal else ()
-        names = tuple(dict.fromkeys(tuple(requested) + flag_names))
+        names = tuple(dict.fromkeys(tuple(requested) + self.flag_names))
         if names not in self.draws:
             start = time.perf_counter()
             if self.mode_name == "fast_run":
                 # Do not inherit ~/.pytensorrc/config.linker through the named
                 # FAST_RUN alias (observed to resolve to Numba and OOM here).
-                mode = Mode(linker=VMLinker(use_cloop=True, lazy=True), optimizer="fast_run")
+                linker, optimizer = VMLinker(use_cloop=True, lazy=True), "fast_run"
+            elif self.mode_name == "python_compile":
+                # fast_compile rewrites (their Python-thunk variant) in the C loop with
+                # Python thunks: only PyTensor's small VM module compiles, not every op,
+                # which takes minutes per cold container; draws are slower (STREAMING.md).
+                linker = VMLinker(use_cloop=True, c_thunks=False, lazy=True)
+                optimizer = "fast_compile"
             else:
                 # Same rewrite selection; CVM is an independently measured
                 # execution option, not a scientific model change.
-                mode = Mode(
-                    linker=VMLinker(use_cloop=self.mode_name == "cvm_compile", lazy=True),
-                    optimizer="fast_compile",
-                )
+                linker = VMLinker(use_cloop=self.mode_name == "cvm_compile", lazy=True)
+                optimizer = "fast_compile"
+            mode = Mode(linker=linker, optimizer=optimizer)
             inputs = (
                 ()
                 if self.ordinary
@@ -295,6 +314,7 @@ class StudyAdapter(Adapter):
                 "output_names": fn.out_names,
                 "linker": type(fn.fn.maker.mode.linker).__name__,
                 "vm": type(fn.fn.vm).__name__,
+                "c_thunks": linker.c_thunks,
                 "mode": self.mode_name,
             }
             self.compile_records.append(record)
@@ -329,12 +349,11 @@ class StudyAdapter(Adapter):
         self.last_raw = raw
         counts = self.counts(self.current_cell)
         if self.internal:
-            for role, n in zip(TRAJECTORY_INPUTS, counts[:2]):
-                for c in TRAJECTORY_COMPONENTS:
-                    key = tr.structural_key(role, c)
-                    cell.structure[key] = np.asarray(raw[key][0, :n], dtype=bool)
-                    cell.template_inputs[key][:] = 0
-                    cell.template_inputs[key][:n] = cell.structure[key]
+            for key in self.flag_names:
+                n = counts[1] if key.startswith("use_covariate_") else counts[0]
+                cell.structure[key] = np.asarray(raw[key][0, :n], dtype=bool)
+                cell.template_inputs[key][:] = 0
+                cell.template_inputs[key][:n] = cell.structure[key]
         flags = {
             role: np.stack(
                 [cell.structure[tr.structural_key(role, c)] for c in TRAJECTORY_COMPONENTS], axis=1

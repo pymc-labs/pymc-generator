@@ -25,19 +25,31 @@ Adaptations from that pinned source:
   temporal support/query masks and per-world support-scale semantics;
 - clear per-candidate audit histories between chunks in `FamilyGenerator`; keep the
   model and compiled draw function alive;
-- bounded candidate top-up in the orchestration wrapper, with explicit shortfalls.
+- bounded candidate top-up in the orchestration wrapper, with explicit shortfalls;
+- mechanism priors (reference contributions, shape ranges, log-uniform Michaelis-Menten
+  scale), built by the library's template helpers: their per-slot reports are cropped to
+  the active slots, as the corpus schema keeps inactive slots at zero;
+- texture flags (hf, pulse) at inclusion probability 0 or 1 and schedule flags at 0 are
+  template constants, not graph inputs: `make_cell` sets them, the graph samples the
+  rest (a schedule flag at probability 1 is sampled, and is always 1);
+- a retryable numeric draw failure (the library's predicate) leaves its candidate
+  without a world and counts as a draw failure instead of stopping the worker; a task
+  none of whose candidates draws stops the worker with the last error.
 
-The model has maximum 15 treatment slots, 10 controls and one latent slot. Active
-counts are 5–15 treatments and 3–10 controls. Active masks affect causal generation,
-not merely the saved columns. A family pair is constant within a worker; counts,
-causal structure, smoothness and component flags vary per world without recompiling.
-Component flags are sampled inside the graph. Parameters/innovations remain fresh.
+The composable prior (`inputs.config`) has maximum 15 treatment slots, 10 controls and
+one latent slot. Active counts are 5–15 treatments and 3–10 controls. Active masks
+affect causal generation, not merely the saved columns. A family pair is constant
+within a worker; counts, causal structure, smoothness and component flags vary per
+world without recompiling. Component flags are sampled inside the graph.
+Parameters/innovations remain fresh.
 
 The original compositional prior is retained. Signed controls/contributions are
-allowed; this is **not** the dashboard demo's positive-controls prior. Mechanism-prior
-and random-walk truth recording are not supported by this backend. Saturation-family
-arrays are consequently absent: the dashboard's split chart may be empty even
-though the family pair is recorded in each completion's provenance.
+allowed; this is **not** the dashboard demo's positive-controls prior, and it enables no
+mechanism priors, so its saturation-family arrays are absent: the dashboard's split
+chart may be empty even though the family pair is recorded in each completion's
+provenance. A structural-split design (`StreamPlan.design`) compiles the legacy member
+configurations instead (`generation.DESIGN_PRESETS`, mechanism priors included) and
+rejects worlds with a negative control. Random-walk truth recording is not supported.
 
 This backend intentionally uses private generator APIs and a copied packing routine.
 A library change requires replay, schema/readback and scientific invariant tests;

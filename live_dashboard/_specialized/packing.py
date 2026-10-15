@@ -2,8 +2,10 @@
 
 Copied from baseline b941d3a. The scientific packing/normalization is retained.
 Differences: supplied fixed structures and method adapter, one exact draw batch,
-no top-up or retry, candidate-local support seed, retained-row compaction, logical
-IDs in a sidecar, and coarse stage accounting. This is not production integration.
+no top-up or retry (a retryable numeric draw failure leaves its candidate without a
+world and counts as a draw failure), candidate-local support seed, retained-row
+compaction, logical IDs in a sidecar, and coarse stage accounting. This is not
+production integration.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from pymc_generator.sampler import (
     SCMPrior,
     _additive_task_ok,
     _finalize_corpus,
+    _is_retryable_draw_failure,
     _make_support_mask,
     _outcome_norm_overflows,
     _pack_prior_cond,
@@ -339,8 +342,17 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
                             component_flags[input_type][:, TRAJECTORY_COMPONENTS.index(component)]
                             != 0
                         )
-            except _RETRYABLE_DRAW_ERRORS:
-                raise  # No retries in this fixed-allocation experiment.
+            except _RETRYABLE_DRAW_ERRORS as exc:
+                # The library's predicate: only a numeric failure inside a PyTensor node
+                # (never a reference-domain or programming error) is a draw failure.
+                if not _is_retryable_draw_failure(exc):
+                    raise
+                # The library resamples it with a new seed; this fixed allocation has no
+                # top-up, so the candidate yields no world. Like the library, it is no
+                # evaluated candidate and counts only as a draw failure.
+                n_draw_failures += 1
+                adapter.last_draw_error = repr(exc)
+                continue
 
             for b in range(n_req):
                 if accepted == cfg.draws_per_cell:
@@ -486,6 +498,7 @@ def generate_fixed(cfg: SCMPrior, adapter) -> dict[str, Any]:
         del model
     adapter.evaluated = n_evaluated
     adapter.rejected = n_rejected
+    adapter.draw_failures = n_draw_failures
     normalization_start = time.perf_counter()
     if not kept.any():
         return None

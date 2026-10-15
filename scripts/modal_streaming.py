@@ -1,6 +1,8 @@
 """Explicit opt-in streaming launch. Never deploys/replaces the dashboard service.
 
 modal run --env pfn --detach scripts/modal_streaming.py --label stream-test
+modal run --env pfn --detach scripts/modal_streaming.py --label <label> \
+    --design structural-splits --compile-mode python --seed <UTC YYYYMMDDHHMMSS>
 See live_dashboard/STREAMING.md before changing quotas or resuming.
 """
 
@@ -73,11 +75,12 @@ def coordinate(
     previous_stopped: bool = False,
     attempt_id: str = "",
     results: list | None = None,
+    workers: int = 1,
 ):
     from live_dashboard import publication as pub
     from live_dashboard.storage import DirectoryStore
     from live_dashboard.streaming import prepare_run
-    from pymc_generator.publication import MountedVolumePublicationStore
+    from pymc_generator.publication import FilePublicationStore
 
     plan = parse_plan(data)
     store = DirectoryStore(MOUNT, on_commit=volume.commit, on_refresh=volume.reload)
@@ -85,6 +88,9 @@ def coordinate(
         manifest = prepare_run(store, plan, resume=resume, previous_stopped=previous_stopped)
         now = pub.utc_now()
         attempt_id = pub.new_attempt_id(now)
+        # At most `workers` partitions run at once, each within its startup and run
+        # timeouts; one spare wave covers slow scheduling.
+        waves = math.ceil(len(plan.partitions) / workers) + 1
         # Local coordinator is not a continuously billed generation container.
         record = pub.AttemptRecord(
             manifest.run_id,
@@ -92,14 +98,16 @@ def coordinate(
             "running",
             now,
             now,
-            now + timedelta(seconds=len(plan.families) * (WORKER_TIMEOUT + 600) + 1200),
+            now + timedelta(seconds=waves * (WORKER_TIMEOUT + 600) + 1200),
             None,
             (),
             (),
             None,
             pub.WorkerInfo("stream coordinator", None, None, None),
         )
-        store.write_new(pub.attempt_record_path(manifest.run_id, attempt_id), record.encode())
+        encoded = record.encode()
+        pub.decode_attempt_record(encoded, manifest=manifest, attempt_id=attempt_id)
+        store.write_new(pub.attempt_record_path(manifest.run_id, attempt_id), encoded)
         store.commit()
         return {"run_id": manifest.run_id, "attempt_id": attempt_id}
     store.refresh()
@@ -111,18 +119,30 @@ def coordinate(
         manifest=manifest,
         attempt_id=attempt_id,
     )
-    outputs = MountedVolumePublicationStore(MOUNT, volume).validated_outputs(manifest.run_id)
+    # store.refresh() reloaded the Volume once; reading needs no reload per payload.
+    outputs = FilePublicationStore(MOUNT).validated_outputs(manifest.run_id)
     count = sum(item["record"]["counts"]["published"] for item in outputs)
-    failed = any("error" in result for result in results)
+    failures = [result for result in results if "error" in result]
+    failed = bool(failures)
     state = "failed" if failed else "finished" if count == plan.request.worlds else "stopped"
     record = dataclasses.replace(
         record,
-        state=state,
+        # The dashboard reads running/finished/failed attempts; a stopped attempt ended
+        # without failing (like the legacy worker at its deadline) and leaves tasks pending.
+        state="failed" if failed else "finished",
         updated_at=pub.utc_now(),
         published_task_ids=tuple(item["record"]["task_id"] for item in outputs),
-        error=pub.ErrorInfo("WorkerFailure", str(results)) if failed else None,
+        # The dashboard shows the first 1,000 characters: failures only, by partition.
+        error=pub.ErrorInfo(
+            "WorkerFailure",
+            "; ".join(f"partition {f['partition']}: {f['error']}" for f in failures),
+        )
+        if failed
+        else None,
     )
-    store.write_replace(pub.attempt_record_path(manifest.run_id, attempt_id), record.encode())
+    encoded = record.encode()
+    pub.decode_attempt_record(encoded, manifest=manifest, attempt_id=attempt_id)
+    store.write_replace(pub.attempt_record_path(manifest.run_id, attempt_id), encoded)
     store.write_new(
         f"runs/{manifest.run_id}/stream-{attempt_id}.json", json.dumps(results, indent=2).encode()
     )
@@ -178,6 +198,8 @@ def generate(data: dict, partition: int, attempt_id: str, queue_size: int):
     result.update(
         container_id=os.environ.get("MODAL_TASK_ID"),
         peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        # The largest child process (the C compiler), which shares the container's memory.
+        peak_child_rss_kib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
         estimated_compute_usd=(time.monotonic() - start) * RATE / 3600,
     )
     return result
@@ -189,7 +211,9 @@ def main(
     worlds_per_split: int = 100,
     batch_size: int = 10,
     seed: int = 631227,
-    families: str = "hill:geometric,logistic:geometric",
+    families: str = "",
+    design: str = "",
+    compile_mode: str = "cvm",
     queue_size: int = 2,
     max_cost: float = 1.0,
     resume: bool = False,
@@ -197,18 +221,24 @@ def main(
 ):
     from live_dashboard.streaming import StreamPlan
 
-    plan = StreamPlan(
-        label,
-        worlds_per_split,
-        batch_size,
-        seed,
-        tuple(tuple(pair.split(":")) for pair in families.split(",")),
-    )
+    common = {
+        "worlds_per_split": worlds_per_split,
+        "batch_size": batch_size,
+        "seed": seed,
+        "compile_mode": compile_mode,
+    }
+    if design:
+        if families:
+            raise ValueError("a design's families are its splits: pass --design or --families")
+        plan = StreamPlan.for_design(label, design, **common)
+    else:
+        pairs = (families or "hill:geometric,logistic:geometric").split(",")
+        plan = StreamPlan(label, families=tuple(tuple(p.split(":")) for p in pairs), **common)
     if not 1 <= queue_size <= 8:
         raise ValueError("queue_size must be 1..8")
     # Reserve a complete bounded wave, not an optimistic throughput extrapolation.
     estimate = (
-        len(plan.families) * (WORKER_TIMEOUT + 600 + 2) + 2 * (600 + 600 + 2)
+        len(plan.partitions) * (WORKER_TIMEOUT + 600 + 2) + 2 * (600 + 600 + 2)
     ) * RATE / 3600 + 0.5
     if not math.isfinite(max_cost) or max_cost <= 0 or estimate > max_cost:
         raise ValueError(f"reserved estimate ${estimate:.3f} exceeds approved ${max_cost:.3f}")
@@ -218,16 +248,22 @@ def main(
     (output / "budget.json").write_text(
         json.dumps({"approved": max_cost, "reserved_estimate": estimate, "plan": data}, indent=2)
     )
-    info = coordinate.remote(data, resume, previous_stopped)
+    info = coordinate.remote(data, resume, previous_stopped, workers=WORKERS)
     (output / "launch.json").write_text(json.dumps(info))
     print(json.dumps(info), flush=True)
     results = []
-    for result in generate.starmap(
-        [(data, i, info["attempt_id"], queue_size) for i in range(len(plan.families))],
-        order_outputs=False,
+    # Ordered, so a failure is attributed to its partition.
+    outputs = generate.starmap(
+        [(data, i, info["attempt_id"], queue_size) for i in range(len(plan.partitions))],
+        order_outputs=True,
         return_exceptions=True,
-    ):
-        results.append({"error": repr(result)} if isinstance(result, BaseException) else result)
+    )
+    for partition, result in enumerate(outputs):
+        results.append(
+            {"partition": partition, "error": repr(result)}
+            if isinstance(result, BaseException)
+            else result
+        )
         (output / "workers.json").write_text(json.dumps(results, indent=2))
     report = coordinate.remote(data, attempt_id=info["attempt_id"], results=results)
     (output / "report.json").write_text(json.dumps(report, indent=2))

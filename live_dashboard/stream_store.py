@@ -2,7 +2,8 @@
 
 Avoid a full run scan for every ten-world write. The orchestrator must ensure a
 single attempt and disjoint task owners. Task-prefixed output/world identities
-make cross-task identity collisions impossible; resume still validates the run.
+make cross-task identity collisions impossible: a worker validates only its own
+tasks before it starts, and the coordinator validates the whole run when it reports.
 Only a worker's writer thread may use this instance while generation is running.
 """
 
@@ -36,8 +37,12 @@ class StreamPublicationStore(FilePublicationStore):
     def discover(self, run_id):
         if self._writing_task is None:
             return super().discover(run_id)
-        self._refresh()
-        directory = self.root / "runs" / _identifier(run_id) / "tasks" / self._writing_task
+        return self._discover_task(run_id, self._writing_task)
+
+    def _discover_task(self, run_id, task, *, refresh=True):
+        if refresh:
+            self._refresh()
+        directory = self.root / "runs" / _identifier(run_id) / "tasks" / _identifier(task)
         outputs, problems = [], {}
         for path in sorted(directory.glob("attempts/*/completion.json")):
             reference = path.relative_to(self.root).as_posix()
@@ -51,6 +56,27 @@ class StreamPublicationStore(FilePublicationStore):
             else:
                 outputs.append({"reference": reference, "record": record})
         return outputs, problems
+
+    def validated_task_outputs(self, run_id, task_ids):
+        """``validated_outputs`` of ``task_ids`` only, with the same checks per task."""
+        # One reload for discovery (a worker can own thousands of tasks); read_output
+        # still reloads for every completed task it validates.
+        self._refresh()
+        outputs = []
+        for task in task_ids:
+            candidates, problems = self._discover_task(run_id, task, refresh=False)
+            if problems:
+                raise PublicationError(f"Unresolved completion records: {problems}")
+            chosen = None
+            for candidate in candidates:
+                record, _ = self.read_output(candidate["reference"])
+                if chosen is None:
+                    chosen = candidate
+                elif self._contribution(record) != self._contribution(chosen["record"]):
+                    raise PublicationError(f"Conflicting results for task {task}")
+            if chosen is not None:
+                outputs.append(chosen)
+        return outputs
 
     def publish(self, metadata, corpus):
         task = metadata["task_id"]

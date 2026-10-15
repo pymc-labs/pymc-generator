@@ -37,9 +37,64 @@ Keep the **local launcher alive** until its summary: `--detach` is not a durable
 remote orchestrator for the whole local entrypoint. If it disconnects, inspect the
 Modal app before taking over; do not assume every queued family was dispatched.
 
+## The structural-split design (`--design structural-splits`)
+
+The 1,000-world `structural-splits` design of the legacy launcher (10 saturation ×
+adstock splits × 5 texture regimes, 20 worlds per split × regime, controls that never go
+below zero) runs through the same backend with `--design`:
+
+```bash
+STREAM_WORKERS=5 uv run --with modal modal run --env pfn --detach \
+  scripts/modal_streaming.py \
+  --label stream-structural-splits --design structural-splits --compile-mode python \
+  --worlds-per-split 100 --batch-size 10 \
+  --seed "$(date -u +%Y%m%d%H%M%S)" --queue-size 2 --max-cost 2.7
+```
+
+- **Partitions.** Every design member (split × regime, `<saturation>-<adstock>-<regime>`)
+  is a partition: one worker, one compiled model of the member's legacy configuration
+  (`generation.DESIGN_PRESETS`). Regimes change priors baked into the graph, so a split
+  cannot share one model over its regimes: 50 compilations. Task `i` belongs to the same
+  member as in the legacy design (`structural.SplitDesign.member_of`); 1,000 worlds are
+  100 ten-world tasks, two per member.
+- **Compile mode.** With only 20 worlds per compiled model, compilation dominates. In
+  cold 1 CPU / 2 GiB Modal containers (pre-flight, 2026-10-15) C thunks (`cvm`, the
+  default) compiled a member in 110–200 s and drew a world in about 10 ms; Python thunks
+  (`--compile-mode python`) compiled in 13–34 s and drew a world in 0.3–0.5 s, so a whole
+  member took 21–45 s instead of 2–3.5 minutes. The mode changes execution, not the prior.
+- **Workers.** The dashboard Volume is a Modal Volume v1, for which Modal recommends at
+  most five concurrent writers; each partition commits twice per published batch.
+- **Seeds.** `--seed` is the base seed (by convention the UTC launch time). Each split's
+  seed is the legacy split seed (first 31 bits of
+  `sha256('<base seed>:<saturation>:<adstock>')`), shared by its five regimes, whose
+  candidates differ by their global candidate IDs. The manifest records every split seed
+  (`generator.config.structural_splits`) and every member configuration
+  (`generator.config.presets`); each completion records its split, regime and root seed.
+- **Positive controls.** A world whose control value or control contribution goes below
+  zero is rejected inside the 2× candidate allowance and counted as `negative_controls`
+  (the legacy run redrew the whole task instead; the per-world distribution is the same).
+- **Run identity.** The run preset is `stream-structural-splits`, a plain run to the
+  dashboard: the legacy design's seed and redraw contract does not apply. The task
+  "seed" the dashboard shows is the logical `base seed + task index`.
+- **Same worlds, different machinery.** Given the same random draws, a member's compiled
+  template reproduces the ordinary per-world model's outputs and mechanism reports
+  (a slow test checks this for a calm and a hectic member, in both compile modes). What
+  differs from the legacy run: the random-number contract (no same-seed equivalence);
+  10-world instead of 2-world tasks (so "task `i`" holds other worlds); the compiled
+  template (C or Python thunks) on 1 CPU / 2 GiB instead of the per-world FAST_COMPILE
+  model on 2 CPU / 4 GiB; no walk truth (`record_walk_parameters` is off: a report, not a
+  prior); a realism rejection draws a fresh structure, where the library redraws
+  parameters on the same structure; rejected/surplus counts and the dashboard's speed and
+  cost cards are not comparable (compare worker-seconds per world and billing); the
+  dashboard header shows no code revision.
+- **Partial runs.** Partitions start in member order (the calm members of every split
+  first), so a run that is still going is not balanced over regimes: rate finished runs.
+- **Budget.** The envelope counts every partition at its full timeouts: 50 partitions
+  reserve about $2.65 with 1 CPU / 2 GiB each.
+
 ## Execution, memory and storage
 
-- One process per family worker; **one CPU core and 2 GiB**, numerical-library threads
+- One process per partition worker; **one CPU core and 2 GiB**, numerical-library threads
   limited to one. `STREAM_WORKERS` bounds concurrent containers (default 2, maximum 16).
 - One compiled model per worker, not per batch or realized causal graph. Active counts,
   causal structures and parameters vary per world. Each new container/resume compiles
@@ -56,13 +111,15 @@ Modal app before taking over; do not assume every queued family was dispatched.
   is no automatic retry or silent fallback to ordinary generation.
 - Scoped per-task discovery avoids rescanning every completion on every write. This
   relies on deterministic task-prefixed output/world IDs and exclusive task ownership;
-  it is not distributed locking. Full resume validation still detects conflicting records.
+  it is not distributed locking. Before it starts, a worker validates only its own tasks;
+  the coordinator validates the whole run, conflicting records included, when it reports.
 - The queue currently publishes each generated batch directly (no shard aggregation).
   Larger publication batches can reduce file/commit overhead, but change the run identity.
 
 ## Scientific configuration — important
 
-This is `stream-composable-v1`, **not** the five-regime `structural-splits` prior:
+Without `--design` this is `stream-composable-v1`, **not** the five-regime
+`structural-splits` prior:
 
 - 208 reported weeks, 8-week burn-in, 5–15 active channels, 3–10 controls;
 - original compositional input prior, including possible connections between inputs;
@@ -72,8 +129,9 @@ This is `stream-composable-v1`, **not** the five-regime `structural-splits` prio
   crosses in the dashboard are not hidden or clipped. Do not compare its speed or
   scientific distribution directly with the positive-controls 1,000-world demo;
 - one world per fresh structure, with deferred train/validation membership (`is_val=2`);
-- optional mechanism/walk-truth reporting is unsupported. Saturation-family arrays are
-  absent, so the structural-split chart can be empty; each completion records its family.
+- its prior enables no mechanism priors, so saturation-family arrays are absent and the
+  structural-split chart can be empty; each completion records its family. This backend
+  never records walk truth.
 
 The self-contained backend and its exact research provenance are documented in
 [`_specialized/README.md`](_specialized/README.md). No external research worktree is
@@ -84,7 +142,10 @@ required at runtime.
 Workers have a 30-minute timeout, stop accepting batches with a three-minute margin,
 and drain queued batches on graceful stop or generation exceptions. An in-progress
 compiler or stuck storage call can still hit the hard platform timeout. Abrupt death
-can lose queued/current batches but cannot turn them into valid publications.
+can lose queued/current batches but cannot turn them into valid publications. A
+numeric draw failure inside the model (the library's retryable kind) leaves its
+candidate without a world and counts as a draw failure (a task left without worlds
+records why); a task none of whose candidates draws, and any other error, stop the worker.
 
 The candidate allowance is at most twice the target per logical batch. Rejections are
 counted; exhausted batches publish a visible shortfall, not an unbounded replenishment
@@ -94,8 +155,9 @@ To resume an interrupted run:
 
 1. Inspect its Modal app and confirm **all earlier workers have stopped**. Stop that
    specific app if needed. Never overlap dispatchers/attempts for a run.
-2. Use the **same checkout, numerical environment, label, seed, family order, batch size
-   and quota**. Source/configuration digests are checked; mismatches require a new label.
+2. Use the **same checkout, numerical environment, label, seed, family order (or
+   `--design`), compile mode, batch size and quota**. Source/configuration digests are
+   checked; mismatches require a new label.
 3. Repeat the launch with `--resume --previous-stopped`. The second flag is an operator
    assertion, not an automatic lease check. Re-approve the estimated budget for each wave.
 4. Confirm valid publications are reused and only missing tasks run. Payload-only
@@ -137,3 +199,5 @@ limits and dashboard refresh time before choosing full-scale shard sizes.
 Reports are saved under `local-runs/<run-id>/<launch-time>/` and in the run's Volume
 `stream-<attempt-id>.json`. A `finished` summary means the target was published;
 `stopped` requires inspection (deadline or shortfall), and `failed` requires reconciliation.
+The attempt record the dashboard reads is `finished` for a stopped attempt too (its
+reader knows running, finished and failed attempts); the run's pending tasks show it.

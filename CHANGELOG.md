@@ -13,6 +13,15 @@ read the migration notes before upgrading.
   ten-world publications and validated resume. The self-contained compositional
   backend compiles once per family worker; existing generation defaults are unchanged.
   See `live_dashboard/STREAMING.md` for launch instructions and scientific/scale limits.
+  `--design structural-splits` streams the 1,000-world structural-split design: one
+  compiled model per split × regime (the legacy member configurations, mechanism priors
+  included; no walk truth), the legacy task-to-member mapping and split seeds, and
+  worlds with a negative control rejected. `--compile-mode python` runs the compiled
+  model with Python thunks: much faster to compile, slower to draw, for few worlds per
+  model. The backend now supports mechanism priors and inclusion probabilities of exactly
+  0 or 1, skips a candidate on a retryable numeric draw failure (stopping the worker when
+  no candidate of a task draws), validates only a worker's own tasks before it starts,
+  and records a stopped attempt as `finished` (the dashboard could not read `stopped`).
 
 - **Experimental, internal live generation dashboard with a Modal CPU worker and an
   authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the
