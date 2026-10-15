@@ -341,6 +341,17 @@ class StudyAdapter(Adapter):
         fn = self.compile(names)
         start = time.perf_counter()
         raw = self.sample(fn, cell)
+        if not self.ordinary and "indirect_effects_by_source" in raw:
+            # The ordinary model reports the indirect effect through an edge family a
+            # world lacks as an exact zero (static graph surgery). Runtime edge masks
+            # leave rounding residue there instead (~1e-15, measured on Modal), which
+            # the corpus validator rejects.
+            absent = np.array(
+                [not np.asarray(cell.template_inputs[k]).any() for k in ("g_cc", "g_zc", "g_dc")]
+            )
+            if absent.any():
+                by_source = raw["indirect_effects_by_source"]
+                raw["indirect_effects_by_source"] = np.where(absent, 0.0, by_source)
         elapsed = time.perf_counter() - start
         self.times["replay_s" if diagnostic else "draw_s"] += elapsed
         self.executions.append(

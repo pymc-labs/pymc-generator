@@ -34,7 +34,10 @@ Adaptations from that pinned source:
   rest (a schedule flag at probability 1 is sampled, and is always 1);
 - a retryable numeric draw failure (the library's predicate) leaves its candidate
   without a world and counts as a draw failure instead of stopping the worker; a task
-  none of whose candidates draws stops the worker with the last error.
+  none of whose candidates draws stops the worker with the last error;
+- the indirect effect through an edge family a world lacks is reported as an exact
+  zero, as the ordinary model's static graph surgery does; runtime edge masks otherwise
+  leave rounding residue (about 1e-15) that the corpus validator rejects.
 
 The composable prior (`inputs.config`) has maximum 15 treatment slots, 10 controls and
 one latent slot. Active counts are 5–15 treatments and 3–10 controls. Active masks

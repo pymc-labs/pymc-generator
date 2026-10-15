@@ -528,10 +528,12 @@ def test_real_design_members_keep_split_families_static_flags_and_positive_contr
     from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
     from pymc_generator.slots import TRAJECTORY_COMPONENTS
 
-    # One two-world task per member. Hill x geometric with texture off (calm) and with
+    # One ten-world task per member. Hill x geometric with texture off (calm) and with
     # jitter and pulses on every input (hectic): probabilities 0 and 1 build no flag input.
+    # Linear x none in the hectic regime: its runtime edge masks left rounding residue in
+    # the indirect effects through absent edge families (the run of 2026-10-15 failed).
     plan = design_plan(
-        "real-design-stream", worlds_per_split=10, batch_size=2, compile_mode=compile_mode
+        "real-design-stream", worlds_per_split=50, batch_size=10, compile_mode=compile_mode
     )
     m = prepare_run(DirectoryStore(tmp_path), plan)
     store = StreamPublicationStore(tmp_path)
@@ -542,12 +544,17 @@ def test_real_design_members_keep_split_families_static_flags_and_positive_contr
         return engines[i]
 
     texture = [TRAJECTORY_COMPONENTS.index(c) for c in ("hf", "pulse")]
-    for member, textured in (("hill-geometric-calm", False), ("hill-geometric-hectic", True)):
+    members = (
+        ("hill-geometric-calm", "hill", "geometric", False),
+        ("hill-geometric-hectic", "hill", "geometric", True),
+        ("linear-none-hectic", "linear", "none", True),
+    )
+    for member, saturation, adstock, textured in members:
         partition = plan.partitions.index(member)
         result = run_partition(
             plan, partition, m, pub.new_attempt_id(), store, factory=factory, queue_size=1
         )
-        assert result["compilations"] == 1 and result["published_worlds"] == 2
+        assert result["compilations"] == 1 and result["published_worlds"] == 10
         (record,) = engines[partition].adapter.compile_records
         assert record["mode"] == COMPILE_MODES[compile_mode]
         assert record["c_thunks"] == (compile_mode == "cvm")
@@ -556,10 +563,8 @@ def test_real_design_members_keep_split_families_static_flags_and_positive_contr
         _, corpus = store.read_output(output["reference"])
         channels = corpus["treatment_active_mask"] == 1
         controls = corpus["covariate_active_mask"] == 1
-        assert (corpus["sat_family"][channels] == SATURATION_FAMILY_KEYS.index("hill")).all()
-        assert (
-            corpus["carryover_family"][channels] == CARRYOVER_FAMILY_KEYS.index("geometric")
-        ).all()
+        assert (corpus["sat_family"][channels] == SATURATION_FAMILY_KEYS.index(saturation)).all()
+        assert (corpus["carryover_family"][channels] == CARRYOVER_FAMILY_KEYS.index(adstock)).all()
         assert (np.where(controls[:, None, :], corpus["covariates"], 0) >= 0).all()
         assert (corpus["covariate_contribution"] >= 0).all()
         for role, active in (("treatment", channels), ("covariate", controls)):
@@ -574,4 +579,4 @@ def test_real_design_members_keep_split_families_static_flags_and_positive_contr
     reader.refresh()
     assert reader.snapshot.last_error is None
     (run,) = reader.snapshot.runs
-    assert len(run.worlds) == 4 and not run.issues
+    assert len(run.worlds) == 30 and not run.issues
