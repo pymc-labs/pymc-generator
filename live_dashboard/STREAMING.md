@@ -64,6 +64,12 @@ STREAM_WORKERS=5 uv run --with modal modal run --env pfn --detach \
   member took 21–45 s instead of 2–3.5 minutes. The mode changes execution, not the prior.
 - **Workers.** The dashboard Volume is a Modal Volume v1, for which Modal recommends at
   most five concurrent writers; each partition commits twice per published batch.
+- **Baseline scale.** `--baseline-scale k` multiplies every member's baseline level range
+  and spread by `k` (`rw_baseline_mean_range` 3–9, 5–11 in the jagged-baseline regimes;
+  `rw_baseline_std_sigma` 1.5 and 2.5). The baseline is `max(0, level + spread × walk)`,
+  so it is scaled by `k` exactly in distribution and keeps its shape; channels, controls
+  and outcome noise are unchanged. The manifest records the scale and the scaled member
+  configurations; use a new label, the run ID does not include it.
 - **Seeds.** `--seed` is the base seed (by convention the UTC launch time). Each split's
   seed is the legacy split seed (first 31 bits of
   `sha256('<base seed>:<saturation>:<adstock>')`), shared by its five regimes, whose

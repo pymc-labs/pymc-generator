@@ -201,6 +201,12 @@ def test_manifest_mismatch_rejected():
         # Three tasks per split cannot cover its five regimes evenly.
         ({"families": DESIGN_FAMILIES, "design": DESIGN, "worlds_per_split": 30}, "regimes"),
         ({"compile_mode": "numba"}, "compile mode"),
+        ({"baseline_scale": 0.5}, "applies to a design"),
+        ({"families": DESIGN_FAMILIES, "design": DESIGN, "baseline_scale": 0.0}, "baseline scale"),
+        (
+            {"families": DESIGN_FAMILIES, "design": DESIGN, "baseline_scale": float("nan")},
+            "baseline scale",
+        ),
     ],
 )
 def test_bad_plan(kwargs, match):
@@ -253,6 +259,19 @@ def test_design_manifest_is_readable_and_records_member_configs_and_split_seeds(
         legacy = dataclasses.asdict(DESIGN_PRESETS[member](plan.batch_size))
         legacy.update(seed=plan.root_seed(partition), record_walk_parameters=False)
         assert config["presets"][member] == json.loads(pub.canonical_json(legacy)), member
+
+
+def test_baseline_scale_multiplies_only_every_members_baseline_level_and_spread():
+    from live_dashboard.streaming import member_config
+
+    plan, half = design_plan(), design_plan(baseline_scale=0.5)
+    for partition in range(len(plan.partitions)):
+        base = dataclasses.asdict(member_config(plan, partition))
+        scaled = dataclasses.asdict(member_config(half, partition))
+        low, high = base.pop("rw_baseline_mean_range")
+        assert scaled.pop("rw_baseline_mean_range") == (low / 2, high / 2)
+        assert scaled.pop("rw_baseline_std_sigma") == base.pop("rw_baseline_std_sigma") / 2
+        assert scaled == base
 
 
 class FakeDesignGenerator(FakeGenerator):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import math
 import platform
 import time
 from collections.abc import Callable, Iterator
@@ -43,6 +44,7 @@ class StreamPlan:
     partition, with its ``generation.DESIGN_PRESETS`` configuration and its split's seed:
     task ``i`` belongs to member ``design.member_of(i)``, as in the legacy design runs.
     ``compile_mode`` (``COMPILE_MODES``) changes execution speed, not the prior.
+    ``baseline_scale`` multiplies a design's baseline (``scale_baseline``).
     """
 
     label: str
@@ -52,6 +54,7 @@ class StreamPlan:
     families: tuple[tuple[str, str], ...] = (("hill", "geometric"), ("logistic", "geometric"))
     design: str | None = None
     compile_mode: str = "cvm"
+    baseline_scale: float = 1.0
 
     def __post_init__(self):
         if not self.families or len(set(self.families)) != len(self.families):
@@ -65,6 +68,10 @@ class StreamPlan:
             raise ValueError("worlds per split must be a positive multiple of batch size")
         if self.compile_mode not in COMPILE_MODES:
             raise ValueError(f"compile mode must be one of {sorted(COMPILE_MODES)}")
+        if not (math.isfinite(self.baseline_scale) and self.baseline_scale > 0):
+            raise ValueError("the baseline scale must be finite and positive")
+        if self.baseline_scale != 1.0 and self.design is None:
+            raise ValueError("a baseline scale applies to a design's members")
         if self.design is not None:
             design = structural.DESIGNS.get(self.design)
             if design is None:
@@ -133,6 +140,24 @@ class StreamPlan:
         return range(partition, self.request.n_tasks, n_partitions)
 
 
+def scale_baseline(cfg, scale: float):
+    """``cfg`` with its baseline multiplied by ``scale`` in distribution.
+
+    The baseline is ``max(0, level + spread * walk)``, level ~ U(``rw_baseline_mean_range``)
+    and spread ~ HalfNormal(``rw_baseline_std_sigma``) on the absolute outcome scale, so
+    scaling both scales it exactly and keeps its shape; channels, controls and outcome
+    noise are unchanged.
+    """
+    if cfg.outcome_std_mode != "absolute" or cfg.baseline_floor not in (None, 0.0):
+        raise ValueError("an exact baseline scale needs absolute walks and a floor of 0")
+    low, high = cfg.rw_baseline_mean_range
+    return dataclasses.replace(
+        cfg,
+        rw_baseline_mean_range=(low * scale, high * scale),
+        rw_baseline_std_sigma=cfg.rw_baseline_std_sigma_effective * scale,
+    )
+
+
 def member_config(plan: StreamPlan, partition: int):
     """The configuration ``partition``'s worker compiles; the manifest records the same."""
     if plan.design is None:
@@ -146,6 +171,8 @@ def member_config(plan: StreamPlan, partition: int):
         raise ValueError("streaming draws every world's active counts independently")
     # Walk truth is a report this backend cannot record; the priors are unchanged.
     cfg = dataclasses.replace(cfg, seed=plan.root_seed(partition), record_walk_parameters=False)
+    if plan.baseline_scale != 1.0:
+        cfg = scale_baseline(cfg, plan.baseline_scale)
     cfg.validate()
     return cfg
 

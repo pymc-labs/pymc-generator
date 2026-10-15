@@ -214,6 +214,7 @@ def main(
     families: str = "",
     design: str = "",
     compile_mode: str = "cvm",
+    baseline_scale: float = 1.0,
     queue_size: int = 2,
     max_cost: float = 1.0,
     resume: bool = False,
@@ -226,6 +227,7 @@ def main(
         "batch_size": batch_size,
         "seed": seed,
         "compile_mode": compile_mode,
+        "baseline_scale": baseline_scale,
     }
     if design:
         if families:
