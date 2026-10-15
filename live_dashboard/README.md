@@ -478,6 +478,30 @@ like the run above:
   The fix changes the code, which refuses a resume, so the run was redone under a new
   label.
 
+**A lower baseline (`--baseline-scale 0.5`).** The baseline's level range and spread
+(`rw_baseline_mean_range` 3–9, or 5–11 in `hectic` and `hectic-baseline`;
+`rw_baseline_std_sigma` 1.5 or 2.5) set how much of the outcome it carries. Halving both
+halves the baseline and keeps its shape (a counterfactual on the published payloads of
+the run above predicted the result). Run `stream-structural-splits-baseline-half-8c8d2e4fcfe2`
+(base seed 20261015194502, otherwise the same command):
+
+| Baseline share of the outcome | min | 5 % | median | 95 % | 99 % | max | worlds above 80 % |
+|---|---|---|---|---|---|---|---|
+| `stream-structural-splits-2-e7a58a3635c9` | 9.7 % | 19.7 % | 39.7 % | 70.1 % | 84.7 % | 95.1 % | 16 |
+| `stream-structural-splits-baseline-half-8c8d2e4fcfe2` | 4.6 % | 10.6 % | 24.6 % | 57.2 % | 73.4 % | 95.1 % | 5 |
+
+- Median shares channel / control / baseline: 34 / 36 / 25 % (before 29 / 25 / 40 %).
+  Trajectories and textures are unchanged (channels smooth / medium / hectic 49 / 3 / 48 %,
+  controls 55 / 14 / 32 %, baseline 59 / 14 / 27 %); every split 100 worlds, every
+  (split, regime) pair 20; no control below zero; lowest target 0.10.
+- The realism filter rejected 5 of 1,050 candidates (before 3 of 1,040, plus 2 with a
+  negative control): the outcome must stay at or above zero, which a lower baseline makes
+  slightly harder.
+- The worlds still above 80 % have one channel and one control with an effect, both
+  small (each under 7 % of the outcome); the baseline cannot fix those, a higher minimum
+  effect (`*_reference_contribution_range`, now from 0.1) would.
+- 8.3 minutes, 120 worlds/min, 36.7 minutes of worker time, as before.
+
 **Limits.** The library has no baseline trend or spike setting: the baseline moves up or
 down only by its walk's drift and is hectic only as a raw walk, which is visibly jagged
 in about 60 % of `hectic` and `hectic-baseline` worlds (the others swing too little next

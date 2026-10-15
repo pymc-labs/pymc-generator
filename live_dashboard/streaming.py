@@ -141,15 +141,24 @@ class StreamPlan:
 
 
 def scale_baseline(cfg, scale: float):
-    """``cfg`` with its baseline multiplied by ``scale`` in distribution.
+    """``cfg`` with its baseline multiplied by ``scale`` in the prior.
 
     The baseline is ``max(0, level + spread * walk)``, level ~ U(``rw_baseline_mean_range``)
     and spread ~ HalfNormal(``rw_baseline_std_sigma``) on the absolute outcome scale, so
     scaling both scales it exactly and keeps its shape; channels, controls and outcome
-    noise are unchanged.
+    noise are drawn as before. Published worlds also pass the realism filter, which reads
+    the outcome (never below 0, no extreme spike), so a lower baseline rejects slightly
+    more candidates.
     """
-    if cfg.outcome_std_mode != "absolute" or cfg.baseline_floor not in (None, 0.0):
-        raise ValueError("an exact baseline scale needs absolute walks and a floor of 0")
+    floored = cfg.baseline_floor is not None
+    if (
+        cfg.outcome_std_mode != "absolute"
+        or (floored and cfg.baseline_floor != 0.0)
+        or (floored and cfg.baseline_floor_scope != "intercept")
+    ):
+        raise ValueError(
+            "an exact baseline scale needs absolute walks and at most a floor of 0 on the intercept"
+        )
     low, high = cfg.rw_baseline_mean_range
     return dataclasses.replace(
         cfg,

@@ -67,9 +67,13 @@ STREAM_WORKERS=5 uv run --with modal modal run --env pfn --detach \
 - **Baseline scale.** `--baseline-scale k` multiplies every member's baseline level range
   and spread by `k` (`rw_baseline_mean_range` 3–9, 5–11 in the jagged-baseline regimes;
   `rw_baseline_std_sigma` 1.5 and 2.5). The baseline is `max(0, level + spread × walk)`,
-  so it is scaled by `k` exactly in distribution and keeps its shape; channels, controls
-  and outcome noise are unchanged. The manifest records the scale and the scaled member
-  configurations; use a new label, the run ID does not include it.
+  so its prior is scaled by `k` exactly and keeps its shape; channels, controls and
+  outcome noise are drawn as before. Published worlds also pass the realism filter, which
+  reads the outcome (never below 0, no extreme spike), so a lower baseline rejects a few
+  more candidates. The manifest records the scale and the scaled member configurations;
+  use a new label, the run ID does not include it. Measured at `k = 0.5`: baseline shares
+  5–73 % for 99 % of worlds instead of 10–85 % (see
+  [Structural splits](README.md#structural-splits-structural-splits)).
 - **Seeds.** `--seed` is the base seed (by convention the UTC launch time). Each split's
   seed is the legacy split seed (first 31 bits of
   `sha256('<base seed>:<saturation>:<adstock>')`), shared by its five regimes, whose
