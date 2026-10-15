@@ -400,24 +400,33 @@ it:
   | `spiky-inputs` | smooth | jitter and pulses on every input | smooth |
   | `hectic-baseline` | raw | none; their walks are nearly flat, so trends and seasons carry them | jagged |
 
-Pilot on Modal (the final configuration: 200 worlds, 2 per task of every member, read
-from the generated corpora). A trajectory is the fitted linear change over the weeks a
-series is on, relative to its mean (up above +20 %, down below −20 %). A series is
-smooth when its week-to-week changes are smooth (std of second differences ÷ 2 std of
-first differences below 0.3, about a ≥ 6-week moving average of a random walk) or
-invisible (below 0.5 % of its level), and hectic when they are jagged (above 0.45) and
-visible (above 2 % of its level).
+Measured on Modal on the run `structural-splits-f481c0a8fb17` (1,000 worlds, base seed
+20261015131001, read from its published payloads through the dashboard's reader). A
+trajectory is the fitted linear change over the weeks a series is on, relative to its
+mean (up above +20 %, down below −20 %). A series is smooth when its week-to-week
+changes are smooth (std of second differences ÷ 2 std of first differences below 0.3,
+about a ≥ 6-week moving average of a random walk) or invisible (below 0.5 % of its
+level), and hectic when they are jagged (above 0.45) and visible (above 2 % of its
+level).
 
 | | Channels | Controls | Baseline |
 |---|---|---|---|
-| Up / flat / down | 36 / 32 / 33 % | 29 / 38 / 33 % | 27 / 44 / 29 % |
-| Smooth / medium / hectic | 48 / 3 / 49 % | 52 / 15 / 33 % | 59 / 16 / 26 % |
-| Hectic in `calm` / `hectic` / `mixed` / `spiky-inputs` / `hectic-baseline` (worlds) | 0 / 100 / 95 / 100 / 0 % | 0 / 95 / 60 / 100 / 0 % | 0 / 60 / 8 / 0 / 60 % |
+| Up / flat / down | 34 / 32 / 34 % | 30 / 38 / 33 % | 28 / 43 / 29 % |
+| Smooth / medium / hectic | 46 / 3 / 52 % | 55 / 15 / 30 % | 59 / 16 / 26 % |
+| Hectic in `calm` / `hectic` / `mixed` / `spiky-inputs` / `hectic-baseline` (worlds) | 0 / 99 / 87 / 99.5 / 0 % | 0 / 93 / 53 / 93 / 0 % | 0 / 58 / 12 / 0 / 60 % |
 
-Every input and the baseline are smooth at once in every `calm` world (22 % of all
-worlds). The shares stay even (medians: channels 29 %, controls 27 %, baseline 39 %),
-every control value and contribution is ≥ 0, no task needed a redraw, and a world
-takes about 5 s of generation.
+- Every split has exactly 100 worlds and every (split, regime) pair 20; every split's
+  seed in the completions matches `run.json`.
+- All 100 (channel columns, control columns) combinations occur, each count 85–113
+  times; 60 % of channel columns and 57 % of control columns have an effect.
+- Every `calm` world is smooth in all three components at once (22 % of the run).
+- No control value or contribution is below zero and the lowest target is 0.21; no task
+  needed a redraw, and the library rejected 2 candidates in the whole run.
+- Median shares: channels 26 %, controls 27 %, baseline 40 %. 13 % of worlds have a
+  share below 5 %, mostly a single small input with an effect.
+- 79.4 minutes of worker time ($0.17 on the cost card), 25 worlds/min of generation.
+  The platform interrupted the first attempt after 217 tasks (`KeyboardInterrupt`);
+  Modal's retry reused those tasks and finished the run.
 
 **Limits.** The library has no baseline trend or spike setting: the baseline moves up or
 down only by its walk's drift and is hectic only as a raw walk, which is visibly jagged
@@ -425,7 +434,7 @@ in about 60 % of `hectic` and `hectic-baseline` worlds (the others swing too lit
 to their level). One world cannot mix smooth channels with a jagged baseline except
 through `hectic-baseline` (raw walks made nearly flat for the inputs) or by chance in
 `mixed`. Redraws discard whole tasks, so a frequent redraw would favour worlds with
-fewer controls; none was needed in the pilot. A task whose six draws all fail is
+fewer controls; none was needed in the run. A task whose six draws all fail is
 published with no worlds and leaves its split short.
 
 ### A new generator configuration
