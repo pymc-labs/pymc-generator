@@ -488,7 +488,7 @@ def test_a_large_triangle_draws_one_run_order_sample_that_keeps_proportions(monk
 
 def test_a_partly_read_run_says_so_on_its_cards_and_drawn_panels():
     snapshot = run(
-        [published(0, (0, 60)), task(1, "loading", (60, 120), accepted=2, attempt=ATTEMPT)],
+        [published(0, (0, 60)), task(1, "loading", (60, 180), accepted=2, attempt=ATTEMPT)],
         worlds=(world(0, 0.5, 0.3, 0.2), world(1, 0.4, 0.3, 0.3)),
         attempts=(attempt(),),
     )
@@ -496,8 +496,12 @@ def test_a_partly_read_run_says_so_on_its_cards_and_drawn_panels():
     assert body["run"]["loading_tasks"] == 1
     cards = {item["id"]: item for item in body["cards"]}
     assert cards["worlds"]["subtitle"] == "2/2 tasks recorded, 1 not read yet"
-    # The tasks read first would give a rate that is not the run's.
-    assert (cards["speed"]["value"], cards["speed"]["text"]) == (None, "—")
+    # The unread task counts with its recorded worlds and time: 4 worlds in 3 minutes,
+    # not the 2 worlds per minute of the task read so far.
+    assert cards["speed"]["value"] == pytest.approx(4 / 3)
+    assert cards["speed"]["subtitle"] == (
+        "latest task: 1.0 worlds/min; 1 task counted from records, not read yet"
+    )
     drawn = [item for item in body["figures"] if item["figure"] is not None]
     assert drawn
     for item in drawn:

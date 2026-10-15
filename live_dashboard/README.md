@@ -97,7 +97,7 @@ reads it.
 | Element | Definition |
 |---|---|
 | Card: worlds generated | Consumable worlds (published, verified, extracted) of the run's target. |
-| Card: generation speed | Consumable worlds per minute of active generation time (the union of task start–finish intervals, so gaps between attempts do not count). |
+| Card: generation speed | Consumable worlds per minute of active generation time (the union of task start–finish intervals, so gaps between attempts do not count). Tasks whose payloads the dashboard has not read yet count with the worlds and times their records give. |
 | Card: estimated generation cost | The run's attempts summed: each attempt's recorded time (from its start to its latest update, which the worker writes before every task) at the hourly list price its worker recorded ($0.126/h for 2 cores and 4 GiB). A lower bound of Modal's bill: container start-up, scale-down and the time after an attempt's last update (the task in progress, or a killed container) are not counted; "≥" marks a total that also misses attempts without a price. Runs made before workers recorded a price, and local runs, show —. |
 | Speed over time | Per-task rate (worlds ÷ generation time) and the cumulative average. |
 | Worlds over time | Cumulative consumable worlds at each publication, with the target. |
@@ -134,13 +134,16 @@ the composition triangle draws at most 4,000 worlds, evenly spaced in run order 
 of them, so dots and × keep their proportions. The panel note says how many were drawn
 of how many, and counts, legends and axes still cover every value. (A 200,000-world run
 has about 1.3 million channel and control units: drawing them all made a 105 MB body per
-poll and 15 s of work per refresh, measured on Modal.) A refresh spends at most 10 s
+poll and 15 s of work per refresh, measured on Modal.) A refresh spends at most 30 s
 reading and extracting payloads it has not read yet (store listings and records do not
 count, and it goes on until one payload is read), newest run first. A cold container
 over a large store therefore shows the rest as `loading`: the worlds card and run list
-count them as "not read yet", the speed card shows — until all are read, and every drawn
-panel's note says how many tasks it covers. Each following refresh (one every few
-seconds plus the 10 s) reads more. The body of a run that did not change is reused.
+count them as "not read yet", the speed card counts them from their records, and every
+drawn panel's note says how many tasks it covers. Each following refresh reads more. On
+the 200,000-world run (100-world payloads, about 1 s each to read and extract), a 10 s
+budget read about as fast as five workers published, so a backlog of about 80 tasks
+never cleared; 30 s reads faster than they publish. The body of a run that did not
+change is reused.
 
 ## Local use
 

@@ -50,7 +50,8 @@ _KEEP_WARM = os.environ.get("DASHBOARD_KEEP_WARM", "0") == "1"
 # Seconds of payload reads and extractions per refresh (listings and records not
 # counted), going on until one unread payload's outcome is cached; the rest show as
 # loading and are read by the next refreshes, newest run first (live_dashboard.collection).
-DASHBOARD_EXTRACTION_BUDGET_S = 10.0
+# 10 s read 100-world payloads (about 1 s each) only as fast as five workers publish them.
+DASHBOARD_EXTRACTION_BUDGET_S = 30.0
 _base_image = modal.Image.debian_slim(python_version="3.13")
 if modal.is_local():
     if modal.config.config.get("environment") != ENVIRONMENT:

@@ -31,13 +31,14 @@ read the migration notes before upgrading.
   For runs of 200,000 worlds the dashboard draws at most 2,000 points per violin (evenly
   spaced ranks, with the outline's bandwidth from every value) and 4,000 worlds in the
   composition triangle (evenly spaced in run order over all worlds, so × and dots keep
-  their proportions), spends at most 10 s per refresh reading and extracting unread
+  their proportions), spends at most 30 s per refresh reading and extracting unread
   payloads, newest run first (the rest show as `loading`; the cards, run list and drawn
-  panels then say the data are partial, and the speed card waits), starts serving after
-  at most 60 s however long its first read of the store takes, reuses the worlds of
-  unchanged tasks and the bodies of unchanged runs between refreshes, and runs with 4 GiB
-  (`DASHBOARD_KEEP_WARM=1` at deploy keeps it running). The streaming coordinator may run
-  an hour, to re-validate every payload of a large run in its final report.
+  panels then say the data are partial, and the speed card counts them from their task
+  records), starts serving after at most 60 s however long its first read of the store
+  takes, reuses the worlds of unchanged tasks and the bodies of unchanged runs between
+  refreshes, and runs with 4 GiB (`DASHBOARD_KEEP_WARM=1` at deploy keeps it running). The
+  streaming coordinator may run an hour, to re-validate every payload of a large run in its
+  final report.
 
 - **Experimental, internal live generation dashboard with a Modal CPU worker and an
   authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the

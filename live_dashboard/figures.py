@@ -106,25 +106,29 @@ def _rate_text(rate: float | None) -> str:
     return "—" if rate is None else f"{rate:.1f} worlds/min"
 
 
-def _timed_tasks(run: RunSnapshot) -> list[_Timed]:
+def _timed_tasks(run: RunSnapshot, statuses: frozenset[str] = TIMED_STATUSES) -> list[_Timed]:
     """Tasks with a generation interval, in completion order (ties by task index)."""
     timed = [
         _Timed(task, task.started_at, task.finished_at)
         for task in run.tasks
-        if task.status in TIMED_STATUSES
-        and task.started_at is not None
-        and task.finished_at is not None
+        if task.status in statuses and task.started_at is not None and task.finished_at is not None
     ]
     return sorted(timed, key=lambda item: (item.finished_at, item.task.task_index))
 
 
+def _recorded_worlds(task: TaskState) -> int:
+    """A task's consumable worlds; for one not read yet, the worlds its record accepts."""
+    return task.accepted_worlds if task.status == "loading" else task.consumable_worlds
+
+
 def _task_rate(item: _Timed) -> float | None:
-    """Consumable worlds per minute of one task, from its reported generation seconds
-    (wall time when unreported); ``None`` unless that duration is positive."""
+    """Consumable (or, not read yet, recorded) worlds per minute of one task, from its
+    reported generation seconds (wall time when unreported); ``None`` unless that
+    duration is positive."""
     seconds = item.task.generation_seconds
     if seconds is None:
         seconds = (item.finished_at - item.started_at).total_seconds()
-    return _rate(item.task.consumable_worlds, float(seconds))
+    return _rate(_recorded_worlds(item.task), float(seconds))
 
 
 def _rate(worlds: int, seconds: float) -> float | None:
@@ -234,23 +238,17 @@ def worlds_card(run: RunSnapshot) -> dict[str, Any]:
 def speed_card(run: RunSnapshot) -> dict[str, Any]:
     """Consumable worlds per minute of active generation, plus the latest task's rate.
 
-    A dash while published payloads are still being read: the tasks read first would
-    give a rate that is not the run's."""
-    if run.loading_tasks:
-        return {
-            "id": "speed",
-            "title": "Generation speed",
-            "value": None,
-            "text": "—",
-            "subtitle": f"reading published payloads: {_plural(run.loading_tasks, 'task')} left",
-        }
-    timed = _timed_tasks(run)
-    rate = _rate(run.published_worlds, _active_seconds(timed))
-    published = [item for item in timed if item.task.status == "published"]
+    Tasks whose payloads are not read yet count with the worlds and times their records
+    give, so the rate does not wait for the dashboard to read them."""
+    timed = _timed_tasks(run, TIMED_STATUSES | {"loading"})
+    rate = _rate(sum(_recorded_worlds(task) for task in run.tasks), _active_seconds(timed))
+    published = [item for item in timed if item.task.status in ("published", "loading")]
     if published:
         subtitle = f"latest task: {_rate_text(_task_rate(published[-1]))}"
     else:
         subtitle = "no task published yet"
+    if run.loading_tasks:
+        subtitle += f"; {_plural(run.loading_tasks, 'task')} counted from records, not read yet"
     return {
         "id": "speed",
         "title": "Generation speed",
