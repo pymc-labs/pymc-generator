@@ -13,22 +13,24 @@ read the migration notes before upgrading.
   installed package) publishes each completed generation task, a corpus payload plus a
   versioned JSON completion record, into a store and follows the publications from a
   separate FastAPI + Plotly page behind HTTP Basic authentication: worlds-generated and
-  generation-speed cards, speed and cumulative worlds over time, channel impact
-  distributions, the channel/control/baseline composition triangle, worlds per
-  saturation and adstock family (every library family on the x axis, read from each
-  payload), and a heatmap of worlds per active-channel x active-control combination
-  with its two margins, redrawn as tasks publish without rerunning generation. Presets
-  `geometric-mm` and `geometric-logistic` (10 channels and 10 controls acting only on the
-  target, geometric adstock with Michaelis-Menten or logistic saturation, wide trajectory
-  and share variety) and preset mixes, which alternate presets by task in one run
-  (`geometric-mm-logistic`), so one run is the concatenated dataset. On Modal (environment
-  `pfn`) generation and the dashboard run on separate CPU containers, the dashboard at a
-  stable URL. Workers use no GPU by decision: PyTensor 3.2 has no native CUDA backend,
-  and CPU-only workers measured as fast as A100 workers for about 1/20 of the cost. The
-  interim single-writer publication protocol (`pymc-generator-live-publication` 1.0)
-  shows zero-world tasks, conflicting records and unavailable payloads separately and
-  never substitutes data; the multi-writer mechanism remains open in #54. New optional
-  extra `dashboard`; the `dev` extra gains the web stack for the tests.
+  generation-speed cards, speed and cumulative worlds over time, channel impact, control
+  impact and baseline share distributions on one 0-100 % axis, the
+  channel/control/baseline composition triangle, worlds per saturation and adstock
+  family (every library family on the x axis, read from each payload), and a heatmap of
+  worlds per active-channel x active-control combination with its two margins, redrawn
+  as tasks publish without rerunning generation. Presets `geometric-mm` and
+  `geometric-logistic` (10 channels and 10 controls acting only on the target, geometric
+  adstock with Michaelis-Menten or logistic saturation, wide trajectory and share
+  variety, channel effects up to 100x apart within a world) and preset mixes, which
+  alternate presets by task in one run (`geometric-mm-logistic`), so one run is the
+  concatenated dataset. On Modal (environment `pfn`) generation and the dashboard run on
+  separate CPU containers, the dashboard at a stable URL. Workers use no GPU by
+  decision: PyTensor 3.2 has no native CUDA backend, and CPU-only workers measured as
+  fast as A100 workers for about 1/20 of the cost. The interim single-writer publication
+  protocol (`pymc-generator-live-publication` 1.0) shows zero-world tasks, conflicting
+  records and unavailable payloads separately and never substitutes data; the
+  multi-writer mechanism remains open in #54. New optional extra `dashboard`; the `dev`
+  extra gains the web stack for the tests.
 
 - **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not

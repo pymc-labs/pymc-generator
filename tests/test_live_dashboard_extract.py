@@ -120,20 +120,31 @@ def test_composition_matches_the_raw_array_formula_within_the_closure_bound(payl
     assert largest_indirect_share > 1e-3
 
 
-def test_impact_units_are_the_active_channel_slots_with_their_direct_share(payloads, tmp_path):
+@pytest.mark.parametrize(
+    ("field", "mask", "contribution", "letter"),
+    [
+        ("impact", "treatment_active_mask", "treatment_contribution_raw", "C"),
+        ("control_impact", "covariate_active_mask", "covariate_contribution", "Z"),
+    ],
+)
+def test_impact_units_are_the_active_slots_with_their_direct_share(
+    payloads, tmp_path, field, mask, contribution, letter
+):
     saw_inactive_slot = False
     for data in payloads:
         metrics = extract_payload(data)
         corpus = _corpus(data, tmp_path)
-        active = np.asarray(corpus["treatment_active_mask"]) == 1
+        active = np.asarray(corpus[mask]) == 1
         saw_inactive_slot |= not active.all()
         rows, slots = np.nonzero(active)
-        assert metrics.impact_rows == tuple(rows.tolist())
-        assert metrics.impact_labels == tuple(f"C{slot + 1}" for slot in slots.tolist())
-        direct = _f64(corpus, "treatment_contribution_raw").sum(axis=1)
+        assert getattr(metrics, f"{field}_rows") == tuple(rows.tolist())
+        labels = tuple(f"{letter}{slot + 1}" for slot in slots.tolist())
+        assert getattr(metrics, f"{field}_labels") == labels
+        direct = _f64(corpus, contribution).sum(axis=1)
         total = _f64(corpus, "outcome_raw").sum(axis=1)
         expected = direct[rows, slots] / total[rows]
-        assert np.max(np.abs(np.asarray(metrics.impact_shares) - expected)) <= 1e-7
+        shares = np.asarray(getattr(metrics, f"{field}_shares"))
+        assert np.max(np.abs(shares - expected)) <= 1e-7
     # Precondition: padding slots exist, so including them would change the units.
     assert saw_inactive_slot
 
@@ -209,8 +220,9 @@ def test_metrics_are_deterministic_plain_python_values(payloads):
     metrics = extract_payload(data)
     assert extract_payload(data) == metrics  # the collector caches by digest
     fields = dataclasses.asdict(metrics)
-    assert {type(value) for value in metrics.channel + metrics.impact_shares} == {float}
-    assert {type(value) for value in metrics.impact_rows} == {int}
+    shares = metrics.channel + metrics.impact_shares + metrics.control_impact_shares
+    assert {type(value) for value in shares} == {float}
+    assert {type(value) for value in metrics.impact_rows + metrics.control_impact_rows} == {int}
     json.dumps(fields, allow_nan=False)  # figures serialise these without numpy
 
 

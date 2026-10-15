@@ -378,38 +378,98 @@ def _violin(name: str, values: list[float], text: list[str]) -> go.Violin:
     )
 
 
+def _share_axis(run: RunSnapshot) -> dict[str, Any]:
+    """The y axis of the three share panels: 0-100 %, widened only to fit a finite share
+    outside it in any of them (a negative control share), so all three keep one scale."""
+    shares = itertools.chain(
+        (unit.share for unit in run.impacts),
+        (unit.share for unit in run.control_impacts),
+        itertools.chain.from_iterable(
+            (world.channel_share, world.control_share, world.baseline_share) for world in run.worlds
+        ),
+    )
+    values = [value for value in map(_finite, shares) if value is not None]
+    low, high = min([0.0, *values]), max([1.0, *values])
+    pad = 0.02 * (high - low)
+    return {
+        "title": {"text": "share of outcome"},
+        "tickformat": ".0%",
+        "range": [low - pad, high + pad],
+    }
+
+
+def _shares_figure(
+    run: RunSnapshot,
+    panel_id: str,
+    title: str,
+    violins: list[tuple[str, Iterable[tuple[float, str]]]],
+) -> dict[str, Any]:
+    """One violin per ``(name, (share, hover text) points)`` on the run's share axis;
+    non-finite shares are left out and counted in the note."""
+    traces: list[go.Violin] = []
+    dropped = 0
+    for name, points in violins:
+        values: list[float] = []
+        text: list[str] = []
+        for share, label in points:
+            value = _finite(share)
+            if value is None:
+                dropped += 1
+            else:
+                values.append(value)
+                text.append(label)
+        traces.append(_violin(name, values, text))
+    figure = go.Figure(data=traces, layout=_layout(showlegend=False, yaxis=_share_axis(run)))
+    note = f"{_plural(dropped, 'non-finite share')} not shown" if dropped else None
+    return _panel(panel_id, title, figure, None, note)
+
+
 def impact_figure(run: RunSnapshot) -> dict[str, Any]:
     """Fig 3: direct share of each active channel, and all channels' share per world."""
     title = "Channel impact (share of outcome)"
     if not run.worlds:
         return _panel("impact", title, None, empty_state(run), None)
-    unit_shares: list[float] = []
-    unit_text: list[str] = []
-    for unit in run.impacts:
-        share = _finite(unit.share)
-        if share is not None:
-            unit_shares.append(share)
-            unit_text.append(f"{unit.world_id} {unit.channel}")
-    world_shares: list[float] = []
-    world_text: list[str] = []
-    for world in run.worlds:
-        share = _finite(world.channel_share)
-        if share is not None:
-            world_shares.append(share)
-            world_text.append(world.world_id)
-    excluded = len(run.impacts) - len(unit_shares) + len(run.worlds) - len(world_shares)
-    figure = go.Figure(
-        data=[
-            _violin("Each active channel", unit_shares, unit_text),
-            _violin("All channels per world", world_shares, world_text),
+    return _shares_figure(
+        run,
+        "impact",
+        title,
+        [
+            ("Each active channel", ((u.share, f"{u.world_id} {u.channel}") for u in run.impacts)),
+            ("All channels per world", ((w.channel_share, w.world_id) for w in run.worlds)),
         ],
-        layout=_layout(
-            showlegend=False,
-            yaxis={"title": {"text": "share of outcome"}, "tickformat": ".0%"},
-        ),
     )
-    note = f"{_plural(excluded, 'non-finite share')} not shown" if excluded else None
-    return _panel("impact", title, figure, None, note)
+
+
+def control_impact_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 4: direct share of each active control, and all controls' share per world."""
+    title = "Control impact (share of outcome)"
+    if not run.worlds:
+        return _panel("control_impact", title, None, empty_state(run), None)
+    return _shares_figure(
+        run,
+        "control_impact",
+        title,
+        [
+            (
+                "Each active control",
+                ((u.share, f"{u.world_id} {u.control}") for u in run.control_impacts),
+            ),
+            ("All controls per world", ((w.control_share, w.world_id) for w in run.worlds)),
+        ],
+    )
+
+
+def baseline_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 5: the baseline's share per world (intrinsic walk, latent and noise)."""
+    title = "Baseline (share of outcome)"
+    if not run.worlds:
+        return _panel("baseline", title, None, empty_state(run), None)
+    return _shares_figure(
+        run,
+        "baseline",
+        title,
+        [("Baseline per world", ((w.baseline_share, w.world_id) for w in run.worlds))],
+    )
 
 
 def _triangle_point(control: float, baseline: float) -> tuple[float, float]:
@@ -465,7 +525,7 @@ class _Points:
 
 
 def composition_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 4: each world's channel / control / baseline split of its outcome.
+    """Fig 6: each world's channel / control / baseline split of its outcome.
 
     Worlds with a negative part lie outside the triangle and are drawn as crosses;
     worlds with a missing or non-finite share cannot be placed and are only counted.
@@ -593,7 +653,7 @@ def _forms_figure(
 
 
 def saturation_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 5: consumable worlds per saturation family of their active channels."""
+    """Fig 7: consumable worlds per saturation family of their active channels."""
     return _forms_figure(
         "saturation",
         "Worlds per saturation form",
@@ -604,7 +664,7 @@ def saturation_figure(run: RunSnapshot) -> dict[str, Any]:
 
 
 def adstock_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 6: consumable worlds per adstock (carryover) family of their active channels."""
+    """Fig 8: consumable worlds per adstock (carryover) family of their active channels."""
     return _forms_figure(
         "adstock",
         "Worlds per adstock form",
@@ -631,7 +691,7 @@ def _active_axes(run: RunSnapshot) -> tuple[list[int], list[int]]:
 
 
 def combinations_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 7: consumable worlds per (active channels, active controls) combination.
+    """Fig 9: consumable worlds per (active channels, active controls) combination.
 
     Every combination the layout allows has a cell, so absent combinations show as empty.
     """
@@ -680,7 +740,7 @@ def combinations_figure(run: RunSnapshot) -> dict[str, Any]:
 
 
 def active_counts_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 8: consumable worlds per number of active channels and of active controls."""
+    """Fig 10: consumable worlds per number of active channels and of active controls."""
     title = "Worlds per number of active inputs"
     if not run.worlds:
         return _panel("active_counts", title, None, empty_state(run), None)
@@ -780,6 +840,8 @@ _FIGURES: tuple[Callable[[RunSnapshot], dict[str, Any]], ...] = (
     speed_figure,
     cumulative_figure,
     impact_figure,
+    control_impact_figure,
+    baseline_figure,
     composition_figure,
     saturation_figure,
     adstock_figure,

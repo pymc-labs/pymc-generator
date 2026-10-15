@@ -60,9 +60,9 @@ flowchart LR
    otherwise. On each poll it:
    - lists every task and decodes the records;
    - checks each new payload's size and SHA-256;
-   - extracts each new payload's metrics once: composition shares, channel impact
-     through the library's `outcome_distributions`, and the adstock and saturation
-     families of each world's active channels.
+   - extracts each new payload's metrics once: composition shares, channel and
+     control impact through the library's `outcome_distributions`, and the adstock and
+     saturation families of each world's active channels.
 
    The result is an immutable snapshot; requests never touch the Volume.
 6. **Show** (`figures.py`, `web.py`, `static/`). The page polls the JSON API with an
@@ -81,6 +81,8 @@ reads it.
 | Speed over time | Per-task rate (worlds ÷ generation time) and the cumulative average. |
 | Worlds over time | Cumulative consumable worlds at each publication, with the target. |
 | Channel impact | Two distributions: each active channel's direct contribution share of its world's outcome (pooled), and each world's total channel share (direct + indirect). |
+| Control impact | The same for controls: each active control's direct contribution share (pooled), and each world's total control share (net, can be negative). |
+| Baseline | Each world's baseline share. Channel impact, control impact and baseline share one 0–100 % axis (widened only to fit a value outside it), so the three compare at a glance. |
 | Composition triangle | Each world's channel / control / baseline shares of its total outcome, at its exact barycentric position (corner = 100 %). Semi-transparent dots, so overlap shows density; worlds with a negative part sit outside and are drawn as ×. |
 | Worlds per saturation form | Consumable worlds per saturation family their active channels use, with all six library families on the x axis (linear, Hill, logistic, Michaelis-Menten, tanh, root); a world whose channels mix families counts once in each. Read from each payload's `sat_family`, which the library records only for configurations with mechanism priors; worlds without it are noted, not counted. |
 | Worlds per adstock form | The same for the adstock (carryover) family: none, geometric, Weibull (`carryover_family`, recorded in every payload). |
@@ -91,10 +93,11 @@ reads it.
 Shares use the trajectory-showcase notebook's definitions (`realized_shares`):
 channel = Σ treatment contributions + Σ indirect effects, control = Σ covariate
 contributions (net, can be negative), baseline = Σ intrinsic baseline + Σ latent
-contributions + Σ observation noise, each divided by Σ outcome. Channel impact is the
-library's `outcome_distributions(...)["treatment_contribution"].unit_share`. Channel
-slots are activated as a prefix (slot k is active only in worlds with at least k
-channels), so impact is shown pooled, never per slot.
+contributions + Σ observation noise, each divided by Σ outcome. Channel and control
+impact are the library's `outcome_distributions(...)` `unit_share` of
+`"treatment_contribution"` and `"covariate_contribution"`. Slots are activated as a
+prefix (channel slot k is active only in worlds with at least k channels; controls
+likewise), so impact is shown pooled, never per slot.
 
 Only published worlds enter the distributions. Pending, zero-world, unavailable,
 conflicting and invalid tasks appear in the status line instead.
@@ -149,8 +152,8 @@ same behaviour because the dashboard never writes. Rotate credentials with
 `modal secret create --force ...` and redeploy.
 
 Limits: `generate_run` uses 2 CPU cores and 4 GiB (no GPU), one container at a time, a
-1200 s timeout and one retry. So one launch costs at most about two attempts of 20
-minutes, ≈ $0.08 at Modal's October 2026 list prices; a 20-world run costs about $0.003. A
+1800 s timeout and one retry. So one launch costs at most about two attempts of 30
+minutes, ≈ $0.13 at Modal's October 2026 list prices; a 20-world run costs about $0.003. A
 run is capped at 400 worlds and 20 worlds per task. Requests the worker can never
 satisfy (unknown preset, too large, a different generator than the stored run) are
 refused without a retry; the refusal is recorded as a failed attempt when the run
@@ -207,7 +210,7 @@ Open the printed link, or pick the run in the page's run menu.
   about 2.7 s per task of Volume commits, which the speed card leaves out), so 20 worlds
   take 1.5–2.5 minutes. The two-style presets measured 5–15 % slower than
   `showcase-variety` per world (ten tasks of each on one laptop).
-- **Attempt length.** One attempt lasts at most 20 minutes, roughly 175–270 worlds. A
+- **Attempt length.** One attempt lasts at most 30 minutes, roughly 260–420 worlds. A
   larger run stops cleanly; finish it by rerunning the same command with `--resume`.
 - **Changed generator.** Resuming with a different configuration, code or environment
   is refused, so start a run with changed code under a new label.
@@ -249,7 +252,7 @@ corpora = [  # the verified payload of every published task
     for task in run.tasks
     if task.status == "published"
 ]
-# run.worlds and run.impacts hold the per-world shares and impact units the figures plot.
+# run.worlds, run.impacts and run.control_impacts hold what the share figures plot.
 ```
 
 Reading through the dashboard's reader, rather than globbing `*.npz`, skips orphans of
@@ -282,48 +285,50 @@ together (`geometric-mm-logistic`) as one dataset:
   moving average.
 - **Baseline:** a random walk (level 2–20, spread ~ HalfNormal(0.8)) with its own
   smoothness, plus weekly noise (in target units: `outcome_std_mode="absolute"`).
-- **Shares:** each channel contributes 0.2–6 target units at its usual level (up to 30×
-  apart within a world, so dominant and minor channels mix) and each control 1–3; the
-  baseline level is 2–20. The channel, control and baseline shares follow the active
-  counts and the baseline level.
+- **Shares:** each channel contributes 0.1–10 target units at its usual level (up to
+  100× apart within a world, so dominant and minor channels mix) and each control 1–3;
+  the baseline level is 2–20. The channel, control and baseline shares follow the
+  active counts and the baseline level.
 
-Measured on the exact run `geometric-mm-logistic`, 160 worlds, 2 per task, seed 1000,
+Measured on the exact run `geometric-mm-logistic`, 240 worlds, 2 per task, seed 1000,
 generated locally with the same code:
 
 | Property | Result |
 |---|---|
-| Worlds per style | 80 Michaelis-Menten, 80 logistic |
-| (channels, controls) combinations | 77 of 100; every count 1–10 on both axes |
-| Channel / control / baseline share (min–median–max) | 3–41–72 % / 1–25–76 % / 6–33–78 % |
-| All three shares within 5–90 % | 92.5 % of worlds; none above 90 %; one world has a part below 1 % (controls 0.9 %) |
-| Each active channel's direct share (median / 95th pct / max) | 5.7 / 17 / 42 % (with effects drawn from 1–3: 5.3 / 12 / 32 %) |
-| Largest channel per world (median / 90th pct) | 13 / 20 % (with effects drawn from 1–3: 9.5 / 14.5 %) |
-| Channels: no zeros / under half zeros / half or more | 35 / 37 / 28 % |
-| Channels: trend up / down / flat | 38 / 40 / 21 % |
-| Channels: very smooth / medium / rough | 29 / 23 / 48 % |
-| Controls: no zeros / under half zeros / half or more | 33 / 38 / 28 % |
-| Controls: trend up / down / flat (changes beyond ±10 %: 47 % up, 27 % down) | 19 / 8 / 73 % |
-| Controls: very smooth / medium / rough | 48 / 34 / 19 % |
-| Baseline: flat / smooth moving / jagged; drifting up / down | 42 / 47 / 11 %; 15 / 11 % |
-| Negative channel or control values; lowest target | none; 6.9 |
+| Worlds per style | 120 Michaelis-Menten, 120 logistic |
+| (channels, controls) combinations | 91 of 100; every count 1–10 on both axes |
+| Channel / control / baseline share (min–median–max) | 4.1–52–87 % / 0.5–21–71 % / 4.6–26–79 % |
+| All three shares within 5–90 % | 89.6 % of worlds; none above 90 %; two worlds have a part below 1 % (controls 0.55 and 0.61 %, one active control each) |
+| Each active channel's direct share (median / 95th pct / max) | 7.4 / 21.5 / 61 % (effects 0.2–6: 5.7 / 17 / 42 %; 1–3: 5.3 / 12 / 32 %) |
+| Active channels above 10 % / 20 % of the outcome | 36 / 6.7 % (effects 0.2–6: 24 / 1.7 %) |
+| Largest channel per world (median / 90th pct) | 17.6 / 27 % (effects 0.2–6: 13 / 20 %; 1–3: 9.5 / 14.5 %) |
+| Each active control's direct share (median / 95th pct / max) | 3.3 / 9.6 / 32.5 % |
+| Channels: no zeros / under half zeros / half or more | 37 / 37 / 27 % |
+| Channels: trend up / down / flat | 41 / 39 / 20 % |
+| Channels: very smooth / medium / rough | 30 / 23 / 47 % |
+| Controls: no zeros / under half zeros / half or more | 35 / 36 / 29 % |
+| Controls: trend up / down / flat (changes beyond ±10 %: 47 % up, 27 % down) | 18 / 7 / 74 % |
+| Controls: very smooth / medium / rough | 48 / 33 / 19 % |
+| Baseline: flat / smooth moving / jagged; drifting up / down | 41 / 45 / 14 %; 13 / 10 % |
+| Negative channel or control values; lowest target | none; 3.4 |
 
 Definitions: a trend is the fitted change in log level over the weeks the input is on
 (up above +1/3, down below −1/3); roughness is the week-to-week change relative to the
 series' spread (white noise 1; very smooth < 0.1, rough > 0.4); a flat baseline varies
 by less than 3 % of its mean, a jagged one is a nearly unsmoothed walk.
 
-**Limits.** The library has no setting that targets shares, so worlds with few active
-channels or controls (1–3 here) can give that component under 5 % (7.5 % of this run's
-worlds).
-Each channel's reference effect is drawn uniformly, so those differ by at most 30× within
-a world (realized channel totals differ more: a median of 10× and up to 108× here); a
-log-uniform draw (a library change) would give more dominant channels (a 95th
-percentile near 30 % in a rescaling test). The baseline is one smoothed random
-walk plus noise: isolated spikes and set trends would need a library change. Control
-positivity is a margin, not a floor (no
-negative value in 5,000+ sampled control series); a hard guarantee needs a covariate floor
-in the library. Controls trend less than channels, because their down-trends are capped
-to keep them positive.
+**Limits.** The library has no setting that targets shares, so a component can fall
+under 5 % (10.4 % of this run's worlds): controls in 21 worlds, all with 1–3 active
+controls; channels in 2 worlds with one channel; the baseline in 2 worlds where 7–10
+channels take 69–80 %. Each channel's reference effect is drawn uniformly, so those
+differ by at most 100× within a world (realized channel totals differ more: a median of
+12× and up to 241× here); a log-uniform draw over 0.05–20 (a library change) gave a 95th
+percentile near 30 % in a rescaling test, with many more near-zero channels (median
+2 %). The baseline is one smoothed random walk plus noise: isolated spikes and set
+trends would need a library change. Control positivity is a margin, not a floor (no
+negative value in 5,000+ sampled control series); a hard guarantee needs a covariate
+floor in the library. Controls trend less than channels, because their down-trends are
+capped to keep them positive.
 
 ### A new generator configuration
 
@@ -354,7 +359,7 @@ The limits live in `live_dashboard/deployment.py`:
 
 - `DEMO_MAX_WORLDS` (400);
 - `DEMO_MAX_WORLDS_PER_TASK` (20);
-- `GENERATION_TIMEOUT_S` (1200 s per attempt).
+- `GENERATION_TIMEOUT_S` (1800 s per attempt).
 
 Raising them raises the worst case of one launch, which is two attempts of the full
 timeout. Redeploy after changing them. Volume v1 recommends at most about 50,000 files,
@@ -381,8 +386,8 @@ the same containers.
 
 **Consequences.**
 
-- **Cost:** about 1/20 per run, and the worst case of one launch drops from ≈ $1.5 to
-  ≈ $0.08.
+- **Cost:** about 1/20 per run, and the worst case of one launch (two 30-minute
+  attempts) drops from ≈ $2.3 to ≈ $0.13.
 - **Scheduling:** no GPU capacity is needed.
 - **Earlier runs:** the runs made before the switch keep their recorded A100 in the
   status line.

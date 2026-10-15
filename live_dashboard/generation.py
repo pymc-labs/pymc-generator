@@ -257,9 +257,10 @@ _VARIETY_KNOBS: dict[str, Any] = {
     "rw_baseline_std_sigma": 0.8,
     "rw_outcome_std_sigma": 0.4,
     # Effect sizes: each input's contribution at its usual level; the baseline level.
-    # Channels draw from a wide range (up to 30x apart within a world), so a world mixes
-    # dominant and minor channels; the baseline range is raised to keep its share.
-    "treatment_reference_contribution_range": (0.2, 6.0),
+    # Channel effects span up to 100x (0.1-10) within a world, so a world mixes dominant
+    # and minor channels; with controls at 1-3 and the baseline at 2-20, channels,
+    # controls and baseline each stay within 5-90 % of the outcome in ~90 % of worlds.
+    "treatment_reference_contribution_range": (0.1, 10.0),
     "covariate_reference_contribution_range": (1.0, 3.0),
     "covariate_reference_scale": 5.5,  # controls sit near 5.5
     "rw_baseline_mean_range": (2.0, 20.0),

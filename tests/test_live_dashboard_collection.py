@@ -604,7 +604,12 @@ def test_conflicting_records_are_excluded_also_for_a_fresh_collector(tmp_path, p
     for collector in (first, fresh):
         run = _run(collector)
         assert [task.status for task in run.tasks] == ["conflict", "conflict"]
-        assert (run.worlds, run.impacts, run.published_worlds) == ((), (), 0)
+        assert (run.worlds, run.impacts, run.control_impacts, run.published_worlds) == (
+            (),
+            (),
+            (),
+            0,
+        )
         detail = run.tasks[0].detail
         for n, payload in ((1, payloads[0]), (2, payloads[1])):
             assert f"{_attempt_id(n)} (2 worlds, sha256 {pub.sha256_hex(payload)})" in detail
@@ -788,7 +793,18 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
                 metrics.impact_rows, metrics.impact_labels, metrics.impact_shares, strict=True
             )
         ]
-    assert [unit.task_id for unit in run.impacts] == sorted(unit.task_id for unit in run.impacts)
+        controls = [unit for unit in run.control_impacts if unit.task_id == task_id]
+        assert [(unit.world_id, unit.control, unit.share) for unit in controls] == [
+            (f"{manifest.run_id}/{task_id}/w{row}", label, share)
+            for row, label, share in zip(
+                metrics.control_impact_rows,
+                metrics.control_impact_labels,
+                metrics.control_impact_shares,
+                strict=True,
+            )
+        ]
+    for units in (run.impacts, run.control_impacts):
+        assert [unit.task_id for unit in units] == sorted(unit.task_id for unit in units)
 
 
 def test_idle_refreshes_and_independent_collectors_agree(tmp_path, payloads):

@@ -89,6 +89,16 @@ class ImpactUnit:
 
 
 @dataclass(frozen=True)
+class ControlUnit:
+    """One active control of one consumable world: its direct contribution share."""
+
+    world_id: str
+    task_id: str
+    control: str  # slot label "Z1".."ZM"
+    share: float
+
+
+@dataclass(frozen=True)
 class AttemptView:
     attempt_id: str
     status: AttemptStatus
@@ -118,6 +128,7 @@ class RunSnapshot:
     impacts: tuple[ImpactUnit, ...]  # consumable worlds' active channels, same order
     attempts: tuple[AttemptView, ...]  # newest first
     issues: tuple[str, ...] = ()  # e.g. undecodable attempt records
+    control_impacts: tuple[ControlUnit, ...] = ()  # consumable worlds' active controls
 
     @property
     def published_worlds(self) -> int:

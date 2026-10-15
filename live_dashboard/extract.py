@@ -29,7 +29,7 @@ from pymc_generator.outcomes import outcome_distributions
 from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
 # Part of the collector's cache key: bump whenever the same bytes would yield other metrics.
-EXTRACTION_VERSION = 3
+EXTRACTION_VERSION = 4
 
 # Every adstock (carryover) and saturation family of the library, in its own order: the
 # corpus stores a channel's family as an index into these.
@@ -58,10 +58,12 @@ class PayloadMetrics:
     ``channel``, ``control`` and ``baseline`` hold one signed share of total outcome per
     corpus row. The ``impact_*`` tuples describe one unit per active treatment slot,
     world-major then slot order: its corpus row, slot label ("C1".."CK") and direct
-    contribution share. ``adstock_forms`` and ``saturation_forms`` hold, per corpus row,
-    the families its active channels use (in the library's order); ``saturation_forms``
-    is ``None`` when the payload does not record saturation families (the library writes
-    them only for configurations with mechanism priors). ``active_channels`` and
+    contribution share; the ``control_impact_*`` tuples do the same for every active
+    covariate slot ("Z1".."ZM"). ``adstock_forms`` and ``saturation_forms`` hold, per
+    corpus row, the families its active channels use (in the library's order);
+    ``saturation_forms`` is ``None`` when the payload does not record saturation families
+    (the library writes them only for configurations with mechanism priors).
+    ``active_channels`` and
     ``active_controls`` count each row's active channels and controls, out of the
     payload's ``channel_slots`` and ``control_slots``.
     """
@@ -73,6 +75,9 @@ class PayloadMetrics:
     impact_rows: tuple[int, ...]
     impact_labels: tuple[str, ...]
     impact_shares: tuple[float, ...]
+    control_impact_rows: tuple[int, ...]
+    control_impact_labels: tuple[str, ...]
+    control_impact_shares: tuple[float, ...]
     adstock_forms: tuple[tuple[str, ...], ...]
     saturation_forms: tuple[tuple[str, ...], ...] | None
     active_channels: tuple[int, ...]
@@ -87,7 +92,11 @@ def extract_payload(data: bytes) -> PayloadMetrics:
     channel, control, baseline = _composition(corpus)
     distributions = outcome_distributions(
         corpus,
-        quantities=["treatment_contribution", "treatment_total_contribution"],
+        quantities=[
+            "treatment_contribution",
+            "treatment_total_contribution",
+            "covariate_contribution",
+        ],
         keep_series=False,
     )
     library_channel = distributions.quantities["treatment_total_contribution"].unit_share
@@ -100,6 +109,7 @@ def extract_payload(data: bytes) -> PayloadMetrics:
             f"in worlds {disagreeing.tolist()}"
         )
     impact = distributions["treatment_contribution"]
+    control_impact = distributions["covariate_contribution"]
     active = np.asarray(corpus["treatment_active_mask"]) == 1
     controls = np.asarray(corpus["covariate_active_mask"]) == 1
     adstock = _families(corpus, "carryover_family", active, ADSTOCK_FAMILIES)
@@ -116,6 +126,9 @@ def extract_payload(data: bytes) -> PayloadMetrics:
         impact_rows=tuple(impact.world_index.tolist()),
         impact_labels=impact.labels(),
         impact_shares=tuple(impact.unit_share.tolist()),
+        control_impact_rows=tuple(control_impact.world_index.tolist()),
+        control_impact_labels=control_impact.labels(),
+        control_impact_shares=tuple(control_impact.unit_share.tolist()),
         adstock_forms=adstock,
         saturation_forms=saturation,
         active_channels=tuple(int(count) for count in active.sum(axis=1)),

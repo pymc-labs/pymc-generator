@@ -15,7 +15,14 @@ import numpy as np
 import pytest
 
 from live_dashboard import figures
-from live_dashboard.snapshot import AttemptView, ImpactUnit, RunSnapshot, TaskState, WorldMetrics
+from live_dashboard.snapshot import (
+    AttemptView,
+    ControlUnit,
+    ImpactUnit,
+    RunSnapshot,
+    TaskState,
+    WorldMetrics,
+)
 from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 
 
@@ -37,6 +44,8 @@ PANELS = (
     "speed",
     "cumulative",
     "impact",
+    "control_impact",
+    "baseline",
     "composition",
     "saturation",
     "adstock",
@@ -146,6 +155,7 @@ def run(
     state: str = "running",
     worlds: tuple[WorldMetrics, ...] = (),
     impacts: tuple[ImpactUnit, ...] = (),
+    control_impacts: tuple[ControlUnit, ...] = (),
     attempts: tuple[AttemptView, ...] = (),
     issues: tuple[str, ...] = (),
 ) -> RunSnapshot:
@@ -165,6 +175,7 @@ def run(
         impacts=impacts,
         attempts=attempts,
         issues=issues,
+        control_impacts=control_impacts,
     )
 
 
@@ -316,7 +327,37 @@ def test_impact_figure_shows_channel_units_and_world_totals_as_percentages():
         assert violin["marker"]["opacity"] == pytest.approx(0.4)
         assert violin["box"]["visible"] is True
     assert found["figure"]["layout"]["yaxis"]["tickformat"] == ".0%"
+    # Every finite share lies in [0, 1] (the NaN is dropped), so the axis stays 0-100 %.
+    assert found["figure"]["layout"]["yaxis"]["range"] == pytest.approx([-0.02, 1.02])
     assert found["note"] == "1 non-finite share not shown"
+
+
+def control(row: int, label: str, share: float) -> ControlUnit:
+    return ControlUnit(f"{RUN_ID}/task-00000/w{row}", "task-00000", label, share)
+
+
+def test_control_and_baseline_panels_show_the_same_picture_on_a_shared_axis():
+    snapshot = run(
+        [published(0, (0, 60))],
+        worlds=(world(0, 0.5, 0.3, 0.2), world(1, 0.25, -0.1, 0.85)),
+        control_impacts=(control(0, "Z1", 0.2), control(0, "Z2", 0.1), control(1, "Z1", -0.1)),
+    )
+    controls = panel(snapshot, "control_impact")
+    units = trace(controls, "Each active control")
+    assert units["y"] == [0.2, 0.1, -0.1]
+    assert units["text"][:2] == [f"{RUN_ID}/task-00000/w0 Z1", f"{RUN_ID}/task-00000/w0 Z2"]
+    assert trace(controls, "All controls per world")["y"] == [0.3, -0.1]
+    baseline = panel(snapshot, "baseline")
+    assert trace(baseline, "Baseline per world")["y"] == [0.2, 0.85]
+    # Channels, controls and baseline keep one 0-100 % axis: the negative control share
+    # widens all three panels, not only the control panel.
+    ranges = {
+        tuple(panel(snapshot, panel_id)["figure"]["layout"]["yaxis"]["range"])
+        for panel_id in ("impact", "control_impact", "baseline")
+    }
+    assert len(ranges) == 1
+    ((low, high),) = ranges
+    assert low < -0.1 and high > 1.0
 
 
 def test_composition_triangle_places_corners_and_crosses_negative_parts():

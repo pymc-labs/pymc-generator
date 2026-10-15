@@ -28,6 +28,7 @@ from live_dashboard.extract import (
 from live_dashboard.snapshot import (
     AttemptView,
     CollectionSnapshot,
+    ControlUnit,
     ImpactUnit,
     RunSnapshot,
     RunState,
@@ -50,7 +51,9 @@ _RUN_STATE_OF_NEWEST_ATTEMPT: dict[str, RunState] = {
     "superseded": "stopped",
 }
 
-type _TaskResult = tuple[TaskState, tuple[WorldMetrics, ...], tuple[ImpactUnit, ...]]
+type _TaskResult = tuple[
+    TaskState, tuple[WorldMetrics, ...], tuple[ImpactUnit, ...], tuple[ControlUnit, ...]
+]
 
 
 def _describe(error: BaseException) -> str:
@@ -154,12 +157,15 @@ class Collector:
         tasks: list[TaskState] = []
         worlds: list[WorldMetrics] = []
         impacts: list[ImpactUnit] = []
+        controls: list[ControlUnit] = []
         for index, task_id in enumerate(task_ids):
             if task_id not in present:
                 tasks.append(TaskState(task_id, index, "pending", manifest.worlds_per_task))
                 continue
             try:
-                state, task_worlds, task_impacts = self._collect_task(manifest, task_id)
+                state, task_worlds, task_impacts, task_controls = self._collect_task(
+                    manifest, task_id
+                )
             except Exception as error:
                 state = TaskState(
                     task_id,
@@ -168,10 +174,11 @@ class Collector:
                     manifest.worlds_per_task,
                     detail=pub.clean_message(f"unexpected error: {_describe(error)}"),
                 )
-                task_worlds, task_impacts = (), ()
+                task_worlds, task_impacts, task_controls = (), (), ()
             tasks.append(state)
             worlds.extend(task_worlds)
             impacts.extend(task_impacts)
+            controls.extend(task_controls)
         attempts = self._attempts(manifest, now, issues)
         return RunSnapshot(
             run_id=manifest.run_id,
@@ -189,6 +196,7 @@ class Collector:
             impacts=tuple(impacts),
             attempts=attempts,
             issues=tuple(issues),
+            control_impacts=tuple(controls),
         )
 
     def _attempts(
@@ -271,13 +279,14 @@ class Collector:
         counts = Counter(kind for kind, _, _ in problems)
         if not records:
             if not problems:
-                return TaskState(task_id, index, "pending", target), (), ()
+                return TaskState(task_id, index, "pending", target), (), (), ()
             kind = next(kind for kind in _PROBLEMS if counts[kind])
             name, message = next((name, message) for k, name, message in problems if k == kind)
             detail = f"{name}: {message}"
             if len(problems) > 1:
                 detail += f"; problem records: {_count_text(counts)}"
-            return TaskState(task_id, index, kind, target, detail=pub.clean_message(detail)), (), ()
+            failed = TaskState(task_id, index, kind, target, detail=pub.clean_message(detail))
+            return failed, (), (), ()
         notes = [f"ignored problem records: {_count_text(counts)}"] if problems else []
         groups: dict[tuple[int, str | None], list[pub.TaskRecord]] = {}
         for record in sorted(records, key=lambda record: record.attempt_id):
@@ -291,7 +300,7 @@ class Collector:
             conflict = TaskState(
                 task_id, index, "conflict", target, detail=pub.clean_message(detail)
             )
-            return conflict, (), ()
+            return conflict, (), (), ()
         (group,) = groups.values()
         authoritative, duplicates = group[0], len(group) - 1
 
@@ -300,11 +309,12 @@ class Collector:
             return _record_state(authoritative, status, duplicates, detail)
 
         if authoritative.payload is None:
-            return state("zero"), (), ()
+            return state("zero"), (), (), ()
         key = (authoritative.payload.sha256, EXTRACTION_VERSION)
         found = self._verified_payload(group, need_bytes=key not in self._extracted)
         if found is None:
-            return state("unavailable", "no payload matches its recorded size and sha256"), (), ()
+            missing = "no payload matches its recorded size and sha256"
+            return state("unavailable", missing), (), (), ()
         record, data = found
         # Equal bytes under another path or task reuse the extraction; verifying this
         # path may still have read them.
@@ -314,15 +324,20 @@ class Collector:
                 result = self._extract(key, data)
             except Exception as error:
                 # Not a content verdict: reported now and retried on the next refresh.
-                return state("invalid", f"payload extraction failed: {_describe(error)}"), (), ()
+                return (
+                    state("invalid", f"payload extraction failed: {_describe(error)}"),
+                    (),
+                    (),
+                    (),
+                )
         if isinstance(result, ExtractionError):
-            return state("invalid", f"payload cannot be used: {result}"), (), ()
+            return state("invalid", f"payload cannot be used: {result}"), (), (), ()
         if result.n_worlds != record.accepted_worlds:
             mismatch = (
                 f"payload holds {result.n_worlds} worlds, the record accepts "
                 f"{record.accepted_worlds}"
             )
-            return state("invalid", mismatch), (), ()
+            return state("invalid", mismatch), (), (), ()
         return state("published"), *_world_metrics(record, result)
 
     def _verified_payload(
@@ -405,7 +420,7 @@ def _record_state(
 
 def _world_metrics(
     record: pub.TaskRecord, metrics: PayloadMetrics
-) -> tuple[tuple[WorldMetrics, ...], tuple[ImpactUnit, ...]]:
+) -> tuple[tuple[WorldMetrics, ...], tuple[ImpactUnit, ...], tuple[ControlUnit, ...]]:
     """Attach this task's world identities to identity-free payload metrics."""
     worlds = tuple(
         WorldMetrics(
@@ -433,7 +448,18 @@ def _world_metrics(
             metrics.impact_rows, metrics.impact_labels, metrics.impact_shares, strict=True
         )
     )
-    return worlds, impacts
+    controls = tuple(
+        ControlUnit(
+            world_id=record.world_ids[row], task_id=record.task_id, control=label, share=share
+        )
+        for row, label, share in zip(
+            metrics.control_impact_rows,
+            metrics.control_impact_labels,
+            metrics.control_impact_shares,
+            strict=True,
+        )
+    )
+    return worlds, impacts, controls
 
 
 def _run_state(tasks: Sequence[TaskState], attempts: Sequence[AttemptView]) -> RunState:
