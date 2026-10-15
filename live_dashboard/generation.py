@@ -257,13 +257,13 @@ _VARIETY_KNOBS: dict[str, Any] = {
     "rw_baseline_std_sigma": 0.8,
     "rw_outcome_std_sigma": 0.4,
     # Effect sizes: each input's contribution at its usual level; the baseline level.
-    # Channel effects span up to 100x (0.1-10) within a world, so a world mixes dominant
-    # and minor channels; with controls at 1-3 and the baseline at 2-20, channels,
-    # controls and baseline each stay within 5-90 % of the outcome in ~90 % of worlds.
-    "treatment_reference_contribution_range": (0.1, 10.0),
-    "covariate_reference_contribution_range": (1.0, 3.0),
+    # Channels and controls share one range with the mean of 1-3 (so neither dominates
+    # and the channel/control/baseline split stays even), widened around that mean down
+    # to a 0.1 floor: reference effects up to 39x apart within a world.
+    "treatment_reference_contribution_range": (0.1, 3.9),
+    "covariate_reference_contribution_range": (0.1, 3.9),
     "covariate_reference_scale": 5.5,  # controls sit near 5.5
-    "rw_baseline_mean_range": (2.0, 20.0),
+    "rw_baseline_mean_range": (2.0, 16.0),
     "baseline_floor": 0.0,
     # Channel levels; smoothness ~ Beta(0.6, 0.6): many very smooth and many jagged walks
     # (smoothness 1 is a 26-week moving average).

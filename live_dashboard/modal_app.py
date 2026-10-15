@@ -28,7 +28,10 @@ from live_dashboard.deployment import (
     APP_NAME,
     DASHBOARD_LABEL,
     ENVIRONMENT,
+    GENERATION_CPU,
+    GENERATION_MEMORY_MIB,
     GENERATION_TIMEOUT_S,
+    GENERATION_USD_PER_HOUR,
     REVISION_ENV,
     SECRET_NAME,
     VOLUME_NAME,
@@ -77,8 +80,8 @@ app = modal.App(APP_NAME, image=image)
 
 
 @app.function(
-    cpu=2.0,
-    memory=4096,
+    cpu=GENERATION_CPU,
+    memory=GENERATION_MEMORY_MIB,
     volumes={MOUNT: volume},
     timeout=GENERATION_TIMEOUT_S,
     retries=modal.Retries(max_retries=1, initial_delay=5.0),
@@ -114,6 +117,7 @@ def generate_run(
         cpu_count=os.cpu_count(),
         gpu_requested=None,
         gpu_name=None,
+        usd_per_hour=GENERATION_USD_PER_HOUR,
     )
     store = DirectoryStore(MOUNT, on_commit=volume.commit, on_refresh=volume.reload)
     try:

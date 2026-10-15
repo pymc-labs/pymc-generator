@@ -8,6 +8,7 @@ collector reads a frozen clock, so results never depend on how often it reads th
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
 import sys
@@ -20,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from live_dashboard import figures
 from live_dashboard import publication as pub
 from live_dashboard.collection import Collector
 from live_dashboard.extract import extract_payload
@@ -114,8 +116,10 @@ def _attempt(
     state: pub.AttemptState,
     *,
     started: float = 0.0,
+    updated: float | None = None,
     deadline: float | None = None,
     commit: bool = True,
+    worker: pub.WorkerInfo = support.WORKER,
 ) -> None:
     """Write attempt ``n``; times are seconds after ``EPOCH``."""
     started_at = EPOCH + timedelta(seconds=started)
@@ -124,13 +128,13 @@ def _attempt(
         attempt_id=_attempt_id(n),
         state=state,
         started_at=started_at,
-        updated_at=started_at,
+        updated_at=started_at if updated is None else EPOCH + timedelta(seconds=updated),
         deadline_at=None if deadline is None else EPOCH + timedelta(seconds=deadline),
         current_task_index=None,
         published_task_ids=(),
         reused_task_ids=(),
         error=pub.ErrorInfo("RuntimeError", "worker crashed") if state == "failed" else None,
-        worker=support.WORKER,
+        worker=worker,
     )
     path = pub.attempt_record_path(manifest.run_id, record.attempt_id)
     store.write_replace(path, record.encode())
@@ -462,6 +466,19 @@ def test_attempt_record_versions_and_damage(tmp_path, damage, visible):
         assert (run.attempts, run.state) == ((), "waiting")
         (issue,) = run.issues
         assert issue.startswith(f"attempts/{_attempt_id(1)}.json: ")
+
+
+def test_the_cost_card_prices_the_attempt_records_a_worker_wrote(tmp_path):
+    store = DirectoryStore(tmp_path)
+    manifest = _manifest(store)
+    _attempt(store, manifest, 1, "failed", updated=30.0)  # written before prices: unpriced
+    worker = dataclasses.replace(support.WORKER, usd_per_hour=0.126)
+    _attempt(store, manifest, 2, "running", started=60.0, updated=660.0, worker=worker)
+    cost = figures.cost_card(_run(_collector(store)))
+    assert (cost["value"], cost["text"]) == (pytest.approx(0.126 * 600 / 3600), "≥ $0.021")
+    assert cost["subtitle"] == (
+        "10.0 min of worker time at $0.126/h list price; 1 attempt without a price"
+    )
 
 
 def test_a_partial_record_is_unreadable_until_it_is_complete(tmp_path, payloads):

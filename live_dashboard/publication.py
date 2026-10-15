@@ -1,4 +1,4 @@
-"""Publication contract ``pymc-generator-live-publication`` v1.0.
+"""Publication contract ``pymc-generator-live-publication`` v1.1.
 
 Identities, the store layout and the three JSON records a generation run publishes:
 
@@ -12,6 +12,11 @@ Identities, the store layout and the three JSON records a generation run publish
   different content as a conflict;
 - ``runs/<run_id>/attempts/<attempt_id>.json``: provisional progress of one writer
   invocation, rewritten by that writer only and never authoritative.
+
+Every record's ``worker`` (task and attempt records) describes the machine. Since 1.1 it
+carries ``usd_per_hour``: the list price of the worker's reservation, or null for a
+worker that is not billed (a local run). 1.0 records omit it; readers treat null and
+absent alike.
 
 Payloads live at ``runs/<run_id>/payloads/<task_id>/<attempt_id>.npz``. Identities derive
 from the run request and task index only, never from scheduling, arrival order or paths.
@@ -36,9 +41,10 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 CONTRACT = "pymc-generator-live-publication"
-CONTRACT_VERSION = "1.0"
+CONTRACT_VERSION = "1.1"
 SUPPORTED_MAJOR = 1
 PAYLOAD_FORMAT = "pymc-generator-corpus-npz"
+MAX_USD_PER_HOUR = 1000.0  # far above any single Modal container's list price
 SEED_RULE = "seed + task_index (DataGenerator.iter_batches batches)"
 RUNS_DIR = "runs"
 MAX_TASKS = 100_000
@@ -281,6 +287,7 @@ class WorkerInfo:
     cpu_count: int | None
     gpu_requested: str | None
     gpu_name: str | None
+    usd_per_hour: float | None = None  # list price of the reservation; None if not billed
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -288,6 +295,7 @@ class WorkerInfo:
             "cpu_count": self.cpu_count,
             "gpu_requested": self.gpu_requested,
             "gpu_name": self.gpu_name,
+            "usd_per_hour": self.usd_per_hour,
         }
 
 
@@ -603,16 +611,16 @@ def _str(body: Mapping[str, Any], key: str, *, optional: bool = False) -> Any:
     return clean_message(value, limit=MAX_TEXT_CHARS)
 
 
-def _seconds(body: Mapping[str, Any], key: str) -> float | None:
+def _non_negative(body: Mapping[str, Any], key: str) -> float | None:
     value = body.get(key)
     if value is None:
         return None
     if type(value) not in (int, float):
         raise RecordError(f"{key} must be a number, got {value!r}")
-    seconds = float(value)
-    if not math.isfinite(seconds) or seconds < 0:
+    number = float(value) + 0.0  # + 0.0 turns -0.0 into 0.0
+    if not math.isfinite(number) or number < 0:
         raise RecordError(f"{key} must be a finite number >= 0, got {value!r}")
-    return seconds
+    return number
 
 
 def _error(value: Any, what: str) -> ErrorInfo | None:
@@ -630,11 +638,15 @@ def _worker(value: Any) -> WorkerInfo:
     platform = body.get("platform")
     if not isinstance(platform, str):
         raise RecordError(f"worker.platform must be a string, got {platform!r}")
+    usd_per_hour = _non_negative(body, "usd_per_hour")
+    if usd_per_hour is not None and usd_per_hour > MAX_USD_PER_HOUR:
+        raise RecordError(f"usd_per_hour must be at most {MAX_USD_PER_HOUR}, got {usd_per_hour}")
     return WorkerInfo(
         platform=clean_message(platform, limit=MAX_TEXT_CHARS),
         cpu_count=_int(body, "cpu_count", minimum=1, optional=True),
         gpu_requested=_str(body, "gpu_requested", optional=True),
         gpu_name=_str(body, "gpu_name", optional=True),
+        usd_per_hour=usd_per_hour,
     )
 
 
@@ -791,7 +803,7 @@ def _decode_task_record(
         accounting=accounting,
         started_at=started_at,
         finished_at=finished_at,
-        generation_seconds=_seconds(timing, "generation_seconds"),
+        generation_seconds=_non_negative(timing, "generation_seconds"),
         attempt_id=attempt_id,
         worker=_worker(body.get("worker")),
         contract_version=version,

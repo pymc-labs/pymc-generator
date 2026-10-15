@@ -3,7 +3,7 @@
 > **Experimental, internal tool.** `live_dashboard/` is a PyMC Labs repository tool, not
 > part of the installed `pymc-generator` package, and its publication protocol is an
 > interim single-writer design (see
-> [Publication protocol](#publication-protocol-pymc-generator-live-publication-10)).
+> [Publication protocol](#publication-protocol-pymc-generator-live-publication-11)).
 
 Follow a generation run while it happens. A generation worker publishes each completed
 task (a corpus payload plus a versioned JSON completion record) into a store; a separate
@@ -54,7 +54,7 @@ flowchart LR
    kill time, so `--resume` can continue it.
 4. **Store** (Modal Volume `pymc-generator-live-dashboard`). Plain files under
    `runs/<run_id>/`; nothing is ever overwritten. A retry writes under its own attempt
-   id. The layout is under [Publication protocol](#publication-protocol-pymc-generator-live-publication-10).
+   id. The layout is under [Publication protocol](#publication-protocol-pymc-generator-live-publication-11).
 5. **Read** (the `dashboard` container: `collection.py`, `extract.py`). A poller thread
    reloads the read-only Volume, every 3 s while a run is generating and every 10 s
    otherwise. On each poll it:
@@ -78,6 +78,7 @@ reads it.
 |---|---|
 | Card: worlds generated | Consumable worlds (published, verified, extracted) of the run's target. |
 | Card: generation speed | Consumable worlds per minute of active generation time (the union of task start–finish intervals, so gaps between attempts do not count). |
+| Card: estimated generation cost | The run's attempts summed: each attempt's recorded time (from its start to its latest update, which the worker writes before every task) at the hourly list price its worker recorded ($0.126/h for 2 cores and 4 GiB). A lower bound of Modal's bill: container start-up, scale-down and the time after an attempt's last update (the task in progress, or a killed container) are not counted; "≥" marks a total that also misses attempts without a price. Runs made before workers recorded a price, and local runs, show —. |
 | Speed over time | Per-task rate (worlds ÷ generation time) and the cumulative average. |
 | Worlds over time | Cumulative consumable worlds at each publication, with the target. |
 | Channel impact | Two distributions: each active channel's direct contribution share of its world's outcome (pooled), and each world's total channel share (direct + indirect). |
@@ -283,16 +284,17 @@ together (`geometric-mm-logistic`) as one dataset:
   late starts and early stops (15 % each), trends, yearly seasonality, a level jump,
   weekly jitter and pulses, on random walks whose smoothness runs from raw to a 26-week
   moving average.
-- **Baseline:** a random walk (level 2–20, spread ~ HalfNormal(0.8)) with its own
+- **Baseline:** a random walk (level 2–16, spread ~ HalfNormal(0.8)) with its own
   smoothness, plus weekly noise (in target units: `outcome_std_mode="absolute"`).
-- **Shares:** each channel contributes 0.1–10 target units at its usual level (up to
-  100× apart within a world, so dominant and minor channels mix) and each control 1–3;
-  the baseline level is 2–20. The channel, control and baseline shares follow the
-  active counts and the baseline level.
+- **Shares:** each channel and each control contributes 0.1–3.9 target units at its
+  usual level: the mean of 1–3, so neither side dominates and the channel / control /
+  baseline split stays even, but effects up to 39× apart within a world. The baseline
+  level is 2–16. The three shares follow the active counts and the baseline level.
 
-Measured on the Modal run `two-styles-radical-5860b66184a8` (`geometric-mm-logistic`,
-240 worlds, 2 per task, seed 1000), from its published payloads read on Modal through the
-dashboard's verified reader:
+Measured with the previous ranges (channels 0.1–10, controls 1–3, baseline 2–20) on the
+Modal run `two-styles-radical-5860b66184a8` (`geometric-mm-logistic`, 240 worlds, 2 per
+task, seed 1000), from its published payloads read on Modal through the dashboard's
+verified reader:
 
 | Property | Result |
 |---|---|
@@ -321,9 +323,9 @@ by less than 3 % of its mean, a jagged one is a nearly unsmoothed walk.
 **Limits.** The library has no setting that targets shares, so a component can fall
 under 5 % (10.4 % of this run's worlds): controls in 21 worlds, all with 1–3 active
 controls; channels in 2 worlds with one channel; the baseline in 2 worlds where 7–10
-channels take 69–80 %. Each channel's reference effect is drawn uniformly, so those
-differ by at most 100× within a world (realized channel totals differ more: a median of
-12× and up to 241× here); a log-uniform draw over 0.05–20 (a library change) gave a 95th
+channels take 69–80 %. In that run each channel's reference effect was drawn uniformly,
+up to 100× apart within a world (realized channel totals differed more: a median of
+12× and up to 241×); a log-uniform draw over 0.05–20 (a library change) gave a 95th
 percentile near 30 % in a rescaling test, with many more near-zero channels (median
 2 %). The baseline is one smoothed random walk plus noise: isolated spikes and set
 trends would need a library change. Control positivity is a margin, not a floor (no
@@ -397,13 +399,16 @@ the same containers.
 PyTensor mode:
 
 1. Add `gpu=...` to the `@app.function` of `generate_run` in `modal_app.py`.
-2. Record the GPU in its `WorkerInfo` (`gpu_requested`, `gpu_name`).
+2. Record the GPU in its `WorkerInfo` (`gpu_requested`, `gpu_name`) and add the GPU's
+   list price to `GENERATION_USD_PER_HOUR` in `deployment.py`, so the cost card stays
+   right.
 3. Re-measure the same way: at least 6 runs per hardware, launched concurrently, with
-   the same image, request and CPU/memory. Compare the dashboard's speed card.
+   the same image, request and CPU/memory. Compare the dashboard's speed and cost cards.
 
-**Running costs.** The dashboard container costs about $0.06 per hour while a page is
-open, and scales to zero 10 minutes after the last request. To see spend per app and
-resource (completed hours only), run
+**Running costs.** The generation cost card shows each run's worker cost as it runs
+(an estimate at list prices). The dashboard container costs about $0.06 per hour while
+a page is open, and scales to zero 10 minutes after the last request. To see spend per
+app and resource (completed hours only), run
 `modal billing report --for today -r h --show-resources`.
 
 ### Housekeeping
@@ -414,7 +419,7 @@ resource (completed hours only), run
   launches use the new code.
 - **Rotate credentials:** see [Modal deployment](#modal-deployment-environment-pfn).
 
-## Publication protocol (`pymc-generator-live-publication` 1.0)
+## Publication protocol (`pymc-generator-live-publication` 1.1)
 
 This is the demo's **single-writer** protocol: correctness relies on one writer per run
 (`generate_run` runs one container at a time and processes tasks in order; launch runs
@@ -437,6 +442,10 @@ runs/<run_id>/attempts/<attempt_id>.json            provisional progress of one 
 The manifest records the effective configuration, a digest of the generating source,
 the numerical package versions and the git revision; resuming a run with a different
 configuration, code or environment is refused, so a changed generator needs a new run.
+Every record's worker (task and attempt records) describes the machine; since 1.1 (an
+additive minor version) it carries `usd_per_hour`, the list price of the worker's
+reservation, or null for a worker that is not billed (a local run), which the cost card
+uses. 1.0 records omit it; readers treat null and absent alike.
 
 **Writer.** Each task's payload is saved and verified (reloaded and validated) in a
 temporary directory, then written create-only under its attempt's own path and

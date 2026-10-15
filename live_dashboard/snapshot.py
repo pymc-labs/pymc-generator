@@ -109,6 +109,7 @@ class AttemptView:
     error: str | None
     gpu_requested: str | None
     gpu_name: str | None
+    usd_per_hour: float | None = None  # the worker's recorded list price, if billed
 
 
 @dataclass(frozen=True)

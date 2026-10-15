@@ -25,6 +25,16 @@ GENERATION_TIMEOUT_S = 1800
 DEMO_MAX_WORLDS = 400
 DEMO_MAX_WORLDS_PER_TASK = 20
 
+# The generation worker's reservation and its Modal list price (modal.com/pricing, October
+# 2026: $0.0000131 per physical core-second and $0.00000222 per GiB-second; Modal bills
+# the larger of reservation and use). Each attempt records this hourly price, and the
+# dashboard's cost card multiplies it by the attempt's recorded time.
+GENERATION_CPU = 2.0
+GENERATION_MEMORY_MIB = 4096
+GENERATION_USD_PER_HOUR = 3600 * (
+    GENERATION_CPU * 0.0000131 + GENERATION_MEMORY_MIB / 1024 * 0.00000222
+)
+
 
 def check_demo_bounds(request: RunRequest) -> None:
     """Refuse requests too large for one bounded demo worker attempt."""

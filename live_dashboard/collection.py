@@ -238,6 +238,7 @@ class Collector:
                     error=None if record.error is None else record.error.describe(),
                     gpu_requested=record.worker.gpu_requested,
                     gpu_name=record.worker.gpu_name,
+                    usd_per_hour=record.worker.usd_per_hour,
                 )
             )
         return tuple(views)

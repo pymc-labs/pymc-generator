@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
 import math
@@ -106,6 +107,8 @@ def zero(index: int, span: tuple[float, float], **fields: Any) -> TaskState:
 
 def attempt(status: str = "running", **fields: Any) -> AttemptView:
     values = {
+        "started_at": support.EPOCH,
+        "updated_at": support.EPOCH,
         "deadline_at": None,
         "current_task_index": None,
         "error": None,
@@ -113,13 +116,7 @@ def attempt(status: str = "running", **fields: Any) -> AttemptView:
         "gpu_name": None,
         **fields,
     }
-    return AttemptView(
-        attempt_id=ATTEMPT,
-        status=status,  # type: ignore[arg-type]
-        started_at=support.EPOCH,
-        updated_at=support.EPOCH,
-        **values,
-    )
+    return AttemptView(attempt_id=ATTEMPT, status=status, **values)  # type: ignore[arg-type]
 
 
 def world(
@@ -240,6 +237,44 @@ def test_speed_card_is_a_dash_without_positive_active_time():
     speed = card(instantaneous, "speed")
     assert (speed["value"], speed["text"], speed["subtitle"]) == (None, "—", "latest task: —")
     assert card(instantaneous, "worlds")["text"] == "2 / 2"
+
+
+def test_cost_card_prices_each_attempt_time_and_grows_with_progress():
+    def priced(minutes: float, price: float | None, attempt_id: str = ATTEMPT) -> AttemptView:
+        view = attempt("running", updated_at=at(60 * minutes), usd_per_hour=price)
+        return dataclasses.replace(view, attempt_id=attempt_id)
+
+    tasks = [published(0, (0, 60))]
+    # The current attempt, 12 minutes in at $0.126/h, and a refused one that recorded
+    # neither time nor a price: the total is exact.
+    early = run(tasks, attempts=(priced(12, 0.126), priced(0, None, "refused")))
+    cost = card(early, "cost")
+    assert cost["title"] == "Estimated generation cost"
+    assert cost["value"] == pytest.approx(0.126 * 12 / 60)
+    assert cost["text"] == "$0.025"
+    assert cost["subtitle"] == (
+        "12.0 min of worker time at $0.126/h list price; 1 attempt without a price"
+    )
+    # The worker rewrites its record at every task, so the cost follows the run.
+    later = run(tasks, attempts=(priced(24, 0.126), priced(0, None, "refused")))
+    assert card(later, "cost")["value"] == pytest.approx(2 * cost["value"])
+    # An unpriced attempt that spent time (made before prices were recorded) makes the
+    # total a lower bound.
+    legacy = run(tasks, attempts=(priced(12, 0.126), priced(30, None, "older")))
+    assert card(legacy, "cost")["text"] == "≥ $0.025"
+    # Attempts at different prices add up.
+    mixed = run(tasks, attempts=(priced(30, 0.126), priced(10, 2.25, "a100")))
+    mixed_cost = card(mixed, "cost")
+    assert mixed_cost["value"] == pytest.approx(0.126 / 2 + 2.25 / 6)
+    assert mixed_cost["subtitle"] == "40.0 min of worker time at their list prices"
+
+
+def test_cost_card_is_a_dash_without_a_recorded_price():
+    waiting = card(run([task(0, "pending")], state="waiting"), "cost")
+    assert (waiting["value"], waiting["text"], waiting["subtitle"]) == (None, "—", "no attempt yet")
+    legacy = card(run([published(0, (0, 60))], attempts=(attempt(updated_at=at(600)),)), "cost")
+    assert (legacy["value"], legacy["text"]) == (None, "—")
+    assert legacy["subtitle"] == "no worker price recorded"
 
 
 def test_speed_figure_divides_by_the_union_of_task_intervals():
@@ -711,11 +746,14 @@ def test_run_body_is_plain_strict_json_even_from_numpy_and_nan_inputs():
             world(2, np.float64(0.1), np.float64(-0.2), np.float64(1.1)),
         ),
         impacts=(impact(0, "C1", np.float64(0.5)), impact(1, "C1", np.float64(-math.inf))),
+        # A price whose product overflows must not break strict JSON.
+        attempts=(attempt(updated_at=at(7200), usd_per_hour=1e308),),
     )
     body = figures.run_body(snapshot)
     _plain_values(body)
     text = json.dumps(body, allow_nan=False)
     assert "bdata" not in text
+    assert next(item for item in body["cards"] if item["id"] == "cost")["text"] == "—"
     assert body["run"] == {
         "run_id": RUN_ID,
         "label": "demo",

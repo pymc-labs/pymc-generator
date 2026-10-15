@@ -234,8 +234,46 @@ def speed_card(run: RunSnapshot) -> dict[str, Any]:
     }
 
 
+def cost_card(run: RunSnapshot) -> dict[str, Any]:
+    """Estimated cost of the generation worker: each attempt's recorded time (its start to
+    its latest update, which the worker rewrites before every task) at the hourly list
+    price its worker recorded. A lower bound of the bill: container start-up, scale-down
+    and the time after an attempt's last update are not counted. Attempts without a price
+    that spent time make the total a lower bound too ("≥")."""
+    title = "Estimated generation cost"
+    timed = [
+        (max(0.0, (attempt.updated_at - attempt.started_at).total_seconds()), attempt.usd_per_hour)
+        for attempt in run.attempts
+    ]
+    priced = [(seconds, price) for seconds, price in timed if price is not None]
+    cost = _finite(sum(seconds / 3600 * price for seconds, price in priced))
+    if not priced or cost is None:
+        if not run.attempts:
+            subtitle = "no attempt yet"
+        elif not priced:
+            subtitle = "no worker price recorded"
+        else:
+            subtitle = "recorded prices give no finite cost"
+        return {"id": "cost", "title": title, "value": None, "text": "—", "subtitle": subtitle}
+    minutes = sum(seconds for seconds, _ in priced) / 60
+    prices = {price for _, price in priced}
+    rate = f"${prices.pop():.3f}/h list price" if len(prices) == 1 else "their list prices"
+    subtitle = f"{minutes:.1f} min of worker time at {rate}"
+    unpriced = [seconds for seconds, price in timed if price is None]
+    if unpriced:
+        subtitle += f"; {_plural(len(unpriced), 'attempt')} without a price"
+    partial = any(seconds > 0 for seconds in unpriced)
+    return {
+        "id": "cost",
+        "title": title,
+        "value": cost,
+        "text": f"{'≥ ' if partial else ''}${cost:.3f}",
+        "subtitle": subtitle,
+    }
+
+
 def cards(run: RunSnapshot) -> list[dict[str, Any]]:
-    return [worlds_card(run), speed_card(run)]
+    return [worlds_card(run), speed_card(run), cost_card(run)]
 
 
 def empty_state(run: RunSnapshot) -> str:

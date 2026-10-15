@@ -1,4 +1,4 @@
-"""Publication contract v1.0: run identities, record round trips and rejection classes.
+"""Publication contract v1.1: run identities, record round trips and rejection classes.
 
 Readers rely on these properties to discover, deduplicate and reject records without
 guessing; a change to the identity digest would orphan every published run.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -147,7 +148,7 @@ def test_records_round_trip_exactly():
         published_task_ids=("task-00000",),
         reused_task_ids=(),
         error=None,
-        worker=WORKER,
+        worker=dataclasses.replace(WORKER, usd_per_hour=0.126),
     )
     assert pub.decode_attempt_record(attempt.encode(), manifest=manifest, attempt_id=ATTEMPT) == (
         attempt
@@ -165,6 +166,55 @@ def test_additive_minor_versions_are_accepted():
     manifest = _manifest()
     data = _edit(_task(manifest).encode(), contract_version="1.9", future_field={"x": 1})
     assert _decode_task(data, manifest).accepted_worlds == 2
+
+
+def _attempt_record(manifest: pub.RunManifest, worker: pub.WorkerInfo) -> bytes:
+    return pub.AttemptRecord(
+        run_id=manifest.run_id,
+        attempt_id=ATTEMPT,
+        state="finished",
+        started_at=NOW,
+        updated_at=NOW + timedelta(minutes=25),
+        deadline_at=None,
+        current_task_index=None,
+        published_task_ids=(),
+        reused_task_ids=(),
+        error=None,
+        worker=worker,
+    ).encode()
+
+
+def test_records_from_before_the_worker_price_decode_as_unpriced():
+    manifest = _manifest()
+    body = json.loads(_attempt_record(manifest, WORKER))
+    del body["worker"]["usd_per_hour"]
+    body["contract_version"] = "1.0"
+    decoded = pub.decode_attempt_record(
+        json.dumps(body).encode(), manifest=manifest, attempt_id=ATTEMPT
+    )
+    assert decoded.worker == WORKER and decoded.worker.usd_per_hour is None
+
+
+def _decoded_price(price: object) -> float | None:
+    manifest = _manifest()
+    body = json.loads(_attempt_record(manifest, WORKER))
+    body["worker"]["usd_per_hour"] = price
+    data = json.dumps(body).encode()
+    return pub.decode_attempt_record(
+        data, manifest=manifest, attempt_id=ATTEMPT
+    ).worker.usd_per_hour
+
+
+@pytest.mark.parametrize("price", [-0.01, "0.126", True, [0.126], pub.MAX_USD_PER_HOUR * 1.5])
+def test_invalid_worker_prices_are_rejected(price):
+    with pytest.raises(pub.RecordError, match="usd_per_hour"):
+        _decoded_price(price)
+
+
+def test_worker_prices_at_the_bounds_decode_as_non_negative_numbers():
+    assert _decoded_price(pub.MAX_USD_PER_HOUR) == pub.MAX_USD_PER_HOUR
+    zero = _decoded_price(-0.0)
+    assert zero == 0.0 and math.copysign(1.0, zero) == 1.0  # never shown as "$-0.000/h"
 
 
 @pytest.mark.parametrize(
