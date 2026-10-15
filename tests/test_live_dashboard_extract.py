@@ -212,6 +212,43 @@ def test_column_and_effect_counts_are_row_sums_of_the_masks_and_their_edges(payl
     assert saw_padding
 
 
+def test_zero_weeks_count_each_active_column_s_exact_zeros_per_third(
+    payloads, tmp_path, lenient_validation
+):
+    corpus = _corpus(payloads[0], tmp_path)
+    channels = np.asarray(corpus["treatment_active_mask"]) == 1
+    controls = np.asarray(corpus["covariate_active_mask"]) == 1
+    assert not channels.all()  # precondition: a padded slot, zero-filled, must not count
+    weeks = corpus["treatment_raw"].shape[1]
+    bounds = (0, weeks // 3, 2 * weeks // 3, weeks)
+    channel = int(np.flatnonzero(channels[0])[0])
+    control = int(np.flatnonzero(controls[0])[0])
+    corpus["treatment_raw"][0, : bounds[1], channel] = 0.0  # off for the whole first third
+    corpus["treatment_raw"][0, bounds[2] : bounds[2] + 3, channel] = 0.0
+    corpus["covariates"][0, bounds[1] : bounds[1] + 5, control] = 0.0
+    metrics = extract_payload(_saved(corpus, tmp_path))
+    assert metrics.third_weeks == (bounds[1], bounds[2] - bounds[1], weeks - bounds[2])
+    for key, active, found in (
+        ("treatment_raw", channels, metrics.channel_zero_weeks),
+        ("covariates", controls, metrics.control_zero_weeks),
+    ):
+        zero = np.asarray(corpus[key]) == 0
+        expected = tuple(
+            tuple(
+                tuple(
+                    int(zero[row, start:stop, slot].sum())
+                    for start, stop in zip(bounds, bounds[1:])
+                )
+                for slot in np.flatnonzero(active[row])
+            )
+            for row in range(active.shape[0])
+        )
+        assert found == expected
+    first, _, last = metrics.channel_zero_weeks[0][0]
+    assert first == bounds[1] and last >= 3
+    assert metrics.control_zero_weeks[0][0][1] >= 5
+
+
 def test_a_column_without_a_direct_edge_has_no_effect_and_no_impact_unit(
     payloads, tmp_path, lenient_validation
 ):

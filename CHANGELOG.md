@@ -42,8 +42,10 @@ read the migration notes before upgrading.
   (impact counted for the inputs with an effect), the channel/control/baseline
   composition triangle, worlds per saturation and adstock family (every library family
   on the x axis, read from each payload), a heatmap of worlds per saturation x adstock
-  split, a heatmap of worlds per channel-column x control-column combination, and worlds
-  per number of columns and of inputs with an effect, redrawn as tasks publish without
+  split, a heatmap of worlds per channel-column x control-column combination, worlds
+  per number of columns and of inputs with an effect, the channels and controls per share
+  of their weeks at exactly zero, and how those weeks fall over the first, middle and last
+  third of the series, redrawn as tasks publish without
   rerunning generation. Presets `geometric-mm` and `geometric-logistic` (10 channels and
   10 controls acting only on the target, geometric adstock with Michaelis-Menten or
   logistic saturation, wide trajectory and share variety, channel and control effects up

@@ -54,6 +54,8 @@ PANELS = (
     "splits",
     "combinations",
     "active_counts",
+    "zeros",
+    "zero_thirds",
 )
 
 
@@ -133,6 +135,8 @@ def world(
     *,
     effects: tuple[int, int] | None = None,
     pairs: tuple[tuple[str, str], ...] | None = None,
+    zeros: tuple[tuple[tuple[int, int, int], ...], tuple[tuple[int, int, int], ...]] = ((), ()),
+    thirds: tuple[int, int, int] = (69, 69, 70),
 ) -> WorldMetrics:
     """A consumable world. Unless given, every column has an effect and the structural
     pairs are every (saturation, adstock) combination of its forms (``None`` when its
@@ -155,6 +159,9 @@ def world(
         effect_controls=controls_with_effect,
         channel_slots=slots[0],
         control_slots=slots[1],
+        third_weeks=thirds,
+        channel_zero_weeks=zeros[0],
+        control_zero_weeks=zeros[1],
     )
 
 
@@ -650,6 +657,65 @@ def test_active_count_bars_count_worlds_per_number_of_columns_and_of_inputs_with
     assert figure["layout"]["barmode"] == "group"
     axis = figure["layout"]["yaxis"]
     assert axis["tick0"] == 0 and isinstance(axis["dtick"], int)
+
+
+def test_zero_bars_count_each_role_s_series_per_tenth_of_weeks_at_zero():
+    thirds = (10, 10, 10)  # 30 weeks: 3 weeks at zero are exactly a tenth
+    worlds = (
+        world(
+            0,
+            0.4,
+            0.3,
+            0.3,
+            zeros=(((0, 0, 0), (1, 1, 1), (2, 1, 1)), ((10, 10, 10),)),
+            thirds=thirds,
+        ),
+        world(1, 0.4, 0.3, 0.3, zeros=(((0, 0, 1),), ((0, 0, 0),)), thirds=thirds),
+    )
+    found = panel(run([published(0, (0, 60))], worlds=worlds), "zeros")
+    bars = {
+        item["name"]: dict(zip(item["x"], item["y"], strict=True))
+        for item in found["figure"]["data"]
+    }
+    labels = ["none", "≤ 10 %"] + [f"{10 * t}–{10 * t + 10} %" for t in range(1, 10)]
+    assert list(bars["channels"]) == list(bars["controls"]) == labels
+    # A tenth exactly (3 of 30 weeks) falls in "≤ 10 %"; 4 of 30 in "10–20 %".
+    assert {k: v for k, v in bars["channels"].items() if v} == {
+        "none": 25.0,
+        "≤ 10 %": 50.0,
+        "10–20 %": 25.0,
+    }
+    assert {k: v for k, v in bars["controls"].items() if v} == {"none": 50.0, "90–100 %": 50.0}
+    assert trace(found, "channels")["customdata"][:3] == [1, 2, 1]
+    assert found["note"] == "3 of 4 channels have weeks at zero; 1 of 2 controls have weeks at zero"
+
+
+def test_zero_thirds_split_each_role_s_weeks_at_zero_over_the_parts_of_the_series():
+    worlds = (world(0, 0.4, 0.3, 0.3, zeros=(((6, 0, 2), (0, 2, 0)), ((0, 0, 0),))),)
+    found = panel(run([published(0, (0, 60), accepted=1)], worlds=worlds), "zero_thirds")
+    figure = found["figure"]
+    # Controls have no week at zero, so only the channels are drawn.
+    assert [item["name"] for item in figure["data"]] == ["channels"]
+    channels = trace(found, "channels")
+    assert channels["x"] == [
+        "first third<br>weeks 1–69",
+        "middle third<br>weeks 70–138",
+        "last third<br>weeks 139–208",
+    ]
+    assert channels["y"] == pytest.approx([60.0, 20.0, 20.0])
+    # Per third: its weeks at zero and their share of the third's weeks of all series.
+    weeks, shares = zip(*channels["customdata"], strict=True)
+    assert weeks == (6, 2, 2)
+    assert shares == pytest.approx((100 * 6 / 138, 100 * 2 / 138, 100 * 2 / 140))
+    (line,) = figure["layout"]["shapes"]
+    assert line["y0"] == line["y1"] == pytest.approx(100 / 3)
+    assert found["note"] == "channels: 10 weeks at zero"
+    mixed = worlds + (world(1, 0.4, 0.3, 0.3, zeros=(((1, 0, 0),), ()), thirds=(10, 10, 10)),)
+    split = panel(run([published(0, (0, 60))], worlds=mixed), "zero_thirds")
+    assert trace(split, "channels")["x"] == ["first third", "middle third", "last third"]
+    flat = (world(0, 0.4, 0.3, 0.3, zeros=(((0, 0, 0),), ((0, 0, 0),))),)
+    empty = panel(run([published(0, (0, 60), accepted=1)], worlds=flat), "zero_thirds")
+    assert (empty["figure"], empty["empty"]) == (None, "no channel or control has a week at zero")
 
 
 WAITING = "waiting for the first publication"

@@ -903,6 +903,173 @@ def active_counts_figure(run: RunSnapshot) -> dict[str, Any]:
     return _panel("active_counts", title, figure, None, None)
 
 
+# -- weeks at zero -------------------------------------------------------------------------
+
+# Each active channel and control of a consumable world is one series: (name, field, color).
+_ZERO_ROLES = (
+    ("channels", "channel_zero_weeks", _WORLD_COLOR),
+    ("controls", "control_zero_weeks", _CONTROL_COLOR),
+)
+# A series' share of weeks at exactly 0: none, then tenths with their upper bound included.
+_ZERO_BINS = ("none", "≤ 10 %") + tuple(f"{10 * t}–{10 * t + 10} %" for t in range(1, 10))
+_THIRDS = ("first third", "middle third", "last third")
+
+
+def _zero_series(
+    run: RunSnapshot, field_name: str
+) -> list[tuple[tuple[int, int, int], tuple[int, int, int]]]:
+    """(weeks at zero per third, weeks per third) of every channel or control series."""
+    return [
+        (zeros, world.third_weeks)
+        for world in run.worlds
+        for zeros in getattr(world, field_name)
+        if sum(world.third_weeks)
+    ]
+
+
+def _zero_tenth(zeros: int, weeks: int) -> int:
+    """0 for a series without a week at zero, else the tenth of the series (1..10, upper
+    bound included) its weeks at zero fill: ceil(10 * zeros / weeks), in integers."""
+    return -(-10 * zeros // weeks) if zeros else 0
+
+
+def zeros_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 12: channel and control series per share of their weeks at exactly 0.
+
+    Each role's bars are percentages of its series, so channels and controls compare
+    even when a run has more of one than of the other.
+    """
+    title = "Channels and controls per share of their weeks at zero"
+    if not run.worlds:
+        return _panel("zeros", title, None, empty_state(run), None)
+    traces, notes = [], []
+    for name, field_name, color in _ZERO_ROLES:
+        series = _zero_series(run, field_name)
+        counts = Counter(_zero_tenth(sum(zeros), sum(weeks)) for zeros, weeks in series)
+        per_bin = [counts.get(index, 0) for index in range(len(_ZERO_BINS))]
+        traces.append(
+            go.Bar(
+                name=name,
+                x=list(_ZERO_BINS),
+                y=[100.0 * count / len(series) if series else 0.0 for count in per_bin],
+                customdata=per_bin,
+                marker={"color": color},
+                hovertemplate=(
+                    f"%{{x}} of the weeks at zero: %{{y:.1f}} % of the {name} "
+                    "(%{customdata})<extra></extra>"
+                ),
+            )
+        )
+        notes.append(f"{len(series) - per_bin[0]} of {len(series)} {name} have weeks at zero")
+    figure = go.Figure(
+        data=traces,
+        layout=_layout(
+            barmode="group",
+            xaxis={
+                "title": {"text": "weeks at exactly 0, share of the series"},
+                "type": "category",
+            },
+            yaxis={"title": {"text": "series"}, "rangemode": "tozero", "ticksuffix": " %"},
+        ),
+    )
+    return _panel("zeros", title, figure, None, "; ".join(notes))
+
+
+def _third_labels(run: RunSnapshot) -> list[str]:
+    """The thirds, with their weeks when every world splits its series alike."""
+    lengths = {world.third_weeks for world in run.worlds if sum(world.third_weeks)}
+    if len(lengths) != 1:
+        return list(_THIRDS)
+    (first, middle, last) = lengths.pop()
+    starts = (1, first + 1, first + middle + 1)
+    ends = (first, first + middle, first + middle + last)
+    return [
+        f"{third}<br>weeks {start}–{end}"
+        for third, start, end in zip(_THIRDS, starts, ends, strict=True)
+    ]
+
+
+def zero_thirds_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 13: where the weeks at zero of channels and controls fall in their series.
+
+    The weeks split into a first, middle and last third; each role's bars are the share
+    of its weeks at zero that fall in each third, so an even spread puts a third in each
+    (the dashed line). The hover adds the share of the third's weeks that are zero.
+    """
+    title = "Where the weeks at zero fall: first, middle and last third"
+    if not run.worlds:
+        return _panel("zero_thirds", title, None, empty_state(run), None)
+    labels = _third_labels(run)
+    traces, notes = [], []
+    for name, field_name, color in _ZERO_ROLES:
+        zeros, weeks = [0, 0, 0], [0, 0, 0]
+        for counts, lengths in _zero_series(run, field_name):
+            for third in range(3):
+                zeros[third] += counts[third]
+                weeks[third] += lengths[third]
+        total = sum(zeros)
+        if not total:
+            continue
+        traces.append(
+            go.Bar(
+                name=name,
+                x=labels,
+                y=[100.0 * count / total for count in zeros],
+                customdata=[
+                    [count, 100.0 * count / length]
+                    for count, length in zip(zeros, weeks, strict=True)
+                ],
+                marker={"color": color},
+                hovertemplate=(
+                    f"%{{x}}: %{{y:.1f}} % of the {name}' weeks at zero (%{{customdata[0]}}), "
+                    "%{customdata[1]:.1f} % of its weeks<extra></extra>"
+                ),
+            )
+        )
+        notes.append(f"{name}: {total} weeks at zero")
+    if not traces:
+        return _panel("zero_thirds", title, None, "no channel or control has a week at zero", None)
+    even = 100.0 / 3.0
+    figure = go.Figure(
+        data=traces,
+        layout=_layout(
+            barmode="group",
+            xaxis={"title": {"text": "part of the series"}, "type": "category"},
+            yaxis={
+                "title": {"text": "weeks at zero"},
+                "rangemode": "tozero",
+                "ticksuffix": " %",
+            },
+            shapes=[
+                {
+                    "type": "line",
+                    "xref": "paper",
+                    "x0": 0,
+                    "x1": 1,
+                    "yref": "y",
+                    "y0": even,
+                    "y1": even,
+                    "line": {"dash": "dash", "color": _TARGET_COLOR},
+                }
+            ],
+            annotations=[
+                {
+                    "xref": "paper",
+                    "x": 1,
+                    "yref": "y",
+                    "y": even,
+                    "text": "even",
+                    "showarrow": False,
+                    "xanchor": "right",
+                    "yanchor": "bottom",
+                    "font": {"color": _TARGET_COLOR},
+                }
+            ],
+        ),
+    )
+    return _panel("zero_thirds", title, figure, None, "; ".join(notes))
+
+
 # -- status ------------------------------------------------------------------------------
 
 
@@ -972,6 +1139,8 @@ _FIGURES: tuple[Callable[[RunSnapshot], dict[str, Any]], ...] = (
     splits_figure,
     combinations_figure,
     active_counts_figure,
+    zeros_figure,
+    zero_thirds_figure,
 )
 
 

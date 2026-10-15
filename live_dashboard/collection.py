@@ -494,6 +494,9 @@ def _world_metrics(
             effect_controls=metrics.effect_controls[row],
             channel_slots=metrics.channel_slots,
             control_slots=metrics.control_slots,
+            third_weeks=metrics.third_weeks,
+            channel_zero_weeks=metrics.channel_zero_weeks[row],
+            control_zero_weeks=metrics.control_zero_weeks[row],
         )
         for row in range(metrics.n_worlds)
     )

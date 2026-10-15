@@ -65,7 +65,9 @@ class WorldMetrics:
     payload does not record saturation families. ``active_channels`` of ``channel_slots``
     channels and ``active_controls`` of ``control_slots`` controls are active (its
     columns); ``effect_channels`` and ``effect_controls`` of them have an effect (a direct
-    edge to the target).
+    edge to the target). ``third_weeks`` are the weeks of the first, middle and last third
+    of its series, and ``channel_zero_weeks`` / ``control_zero_weeks`` hold, per active
+    channel / control in slot order, its weeks at exactly 0 in each third.
     """
 
     world_id: str
@@ -82,6 +84,9 @@ class WorldMetrics:
     effect_controls: int
     channel_slots: int
     control_slots: int
+    third_weeks: tuple[int, int, int] = (0, 0, 0)
+    channel_zero_weeks: tuple[tuple[int, int, int], ...] = ()
+    control_zero_weeks: tuple[tuple[int, int, int], ...] = ()
 
 
 @dataclass(frozen=True)

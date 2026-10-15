@@ -3,8 +3,9 @@
 ``extract_payload`` turns a ``save_corpus`` archive into identity-free numbers: every
 world's composition (the trajectory-showcase notebook's channel / control / baseline
 split of total outcome), its channels and controls with an effect (a direct edge to the
-target) and their direct contribution shares, and the adstock and saturation families
-(and their pairs) its active channels use. The collector attaches run, task and world
+target) and their direct contribution shares, the adstock and saturation families (and
+their pairs) its active channels use, and the weeks at exactly zero of each active channel
+and control per third of the series. The collector attaches run, task and world
 identities afterwards, so equal bytes published by different attempts share one cached
 result keyed by digest and ``EXTRACTION_VERSION``.
 
@@ -31,7 +32,7 @@ from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
 from pymc_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 # Part of the collector's cache key: bump whenever the same bytes would yield other metrics.
-EXTRACTION_VERSION = 5
+EXTRACTION_VERSION = 6
 
 # Every adstock (carryover) and saturation family of the library, in its own order: the
 # corpus stores a channel's family as an index into these.
@@ -71,7 +72,10 @@ class PayloadMetrics:
     configurations with mechanism priors). ``active_channels`` and ``active_controls``
     count each row's columns, out of the payload's ``channel_slots`` and
     ``control_slots``; ``effect_channels`` and ``effect_controls`` count its inputs with
-    an effect.
+    an effect. ``third_weeks`` splits the reported weeks into a first, middle and last
+    third (at ``weeks // 3`` and ``2 * weeks // 3``); ``channel_zero_weeks`` and
+    ``control_zero_weeks`` hold, per corpus row and active column in slot order, the
+    weeks its series (``treatment_raw`` or ``covariates``) is exactly 0 in each third.
     """
 
     n_worlds: int
@@ -93,6 +97,9 @@ class PayloadMetrics:
     effect_controls: tuple[int, ...]
     channel_slots: int
     control_slots: int
+    third_weeks: tuple[int, int, int]
+    channel_zero_weeks: tuple[tuple[tuple[int, int, int], ...], ...]
+    control_zero_weeks: tuple[tuple[tuple[int, int, int], ...], ...]
 
 
 def extract_payload(data: bytes) -> PayloadMetrics:
@@ -132,6 +139,8 @@ def extract_payload(data: bytes) -> PayloadMetrics:
         if "sat_family" in corpus
         else None
     )
+    weeks = int(np.asarray(corpus["treatment_raw"]).shape[1])
+    bounds = (0, weeks // 3, 2 * weeks // 3, weeks)
     return PayloadMetrics(
         n_worlds=int(channel.size),
         channel=tuple(channel.tolist()),
@@ -152,6 +161,9 @@ def extract_payload(data: bytes) -> PayloadMetrics:
         effect_controls=tuple(int(count) for count in control_edges.sum(axis=1)),
         channel_slots=int(active.shape[1]),
         control_slots=int(controls.shape[1]),
+        third_weeks=(bounds[1] - bounds[0], bounds[2] - bounds[1], bounds[3] - bounds[2]),
+        channel_zero_weeks=_zero_weeks(corpus["treatment_raw"], active, bounds),
+        control_zero_weeks=_zero_weeks(corpus["covariates"], controls, bounds),
     )
 
 
@@ -231,6 +243,28 @@ def _pairs(
     return tuple(
         tuple(sorted(set(zip(row_saturation, row_adstock, strict=True))))
         for row_saturation, row_adstock in zip(saturation, adstock, strict=True)
+    )
+
+
+def _zero_weeks(
+    series: Any, active: np.ndarray, bounds: tuple[int, int, int, int]
+) -> tuple[tuple[tuple[int, int, int], ...], ...]:
+    """Per corpus row and active column (slot order), its weeks at exactly 0 per third.
+
+    ``series`` is (rows, weeks, slots); padded slots never count.
+    """
+    zero = np.asarray(series) == 0
+    if zero.shape[::2] != active.shape:
+        raise ExtractionError(f"series of shape {zero.shape} do not match slots {active.shape}")
+    per_third = np.stack(
+        [zero[:, start:stop, :].sum(axis=1) for start, stop in zip(bounds, bounds[1:])], axis=-1
+    )
+    return tuple(
+        tuple(
+            (int(first), int(middle), int(last))
+            for first, middle, last in per_third[row][active[row]].tolist()
+        )
+        for row in range(active.shape[0])
     )
 
 
