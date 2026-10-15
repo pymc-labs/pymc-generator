@@ -1,0 +1,686 @@
+[
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "linear_none",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/linear_none/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.09363148100000007,
+          "build_s": 1.456428206,
+          "compile_s": 132.51058798,
+          "draw_s": 1.0908490799998276,
+          "invariants_and_hash_s": 0.06550752300003637,
+          "acceptance_and_packing_s": 0.0819124690001729,
+          "normalization_and_diagnostics_s": 0.19041907099997957
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 139.43758001799998,
+    "partition": 0,
+    "started_at": 1792049193.1337385,
+    "finished_at": 1792049340.4891987,
+    "container_id": "ta-01M4Z7962YZ854Z7ZPFVP9D7XR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "linear_geometric",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/linear_geometric/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.09597729600000005,
+          "build_s": 1.8266267799999998,
+          "compile_s": 134.186902575,
+          "draw_s": 1.0695127409999259,
+          "invariants_and_hash_s": 0.06462112300002332,
+          "acceptance_and_packing_s": 0.0809514310000452,
+          "normalization_and_diagnostics_s": 0.20396823900000527
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 142.470017945,
+    "partition": 1,
+    "started_at": 1792049193.1424446,
+    "finished_at": 1792049343.5329309,
+    "container_id": "ta-01M4Z795V6SZ1GRJGK79M3MX0R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "hill_geometric",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/hill_geometric/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.08046596600000022,
+          "build_s": 1.8518629330000005,
+          "compile_s": 138.042447761,
+          "draw_s": 1.100903473999864,
+          "invariants_and_hash_s": 0.06653749200000902,
+          "acceptance_and_packing_s": 0.0825329429999897,
+          "normalization_and_diagnostics_s": 0.1763364969999941
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 145.90380597200001,
+    "partition": 4,
+    "started_at": 1792049193.376358,
+    "finished_at": 1792049346.8671792,
+    "container_id": "ta-01M4Z79635HBDTE96PJQR7PA5R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "hill_none",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 2,
+          "surplus": 98,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/hill_none/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.0997180800000006,
+          "build_s": 1.5260835969999995,
+          "compile_s": 137.75661101100002,
+          "draw_s": 2.2068227100000684,
+          "invariants_and_hash_s": 0.13329637500027047,
+          "acceptance_and_packing_s": 0.1625011119999158,
+          "normalization_and_diagnostics_s": 0.3701866920000043
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 146.925737389,
+    "partition": 3,
+    "started_at": 1792049193.270073,
+    "finished_at": 1792049347.8017516,
+    "container_id": "ta-01M4Z7967645SEQDFX3VXNWK0R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "michaelis_menten_none",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 2,
+          "surplus": 98,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/michaelis_menten_none/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.11805431700000035,
+          "build_s": 1.401722769,
+          "compile_s": 137.86269000500002,
+          "draw_s": 2.0853471689999026,
+          "invariants_and_hash_s": 0.12966763699998296,
+          "acceptance_and_packing_s": 0.166290740000278,
+          "normalization_and_diagnostics_s": 0.36125922100004004
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 147.081973215,
+    "partition": 9,
+    "started_at": 1792049194.794353,
+    "finished_at": 1792049349.6016734,
+    "container_id": "ta-01M4Z797M4SWFD9426Y0VG9CNR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "tanh_geometric",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 1,
+          "surplus": 99,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/tanh_geometric/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.08953159299999935,
+          "build_s": 1.825897760000001,
+          "compile_s": 139.843484254,
+          "draw_s": 2.154939960000007,
+          "invariants_and_hash_s": 0.1324691800000437,
+          "acceptance_and_packing_s": 0.18739739099999042,
+          "normalization_and_diagnostics_s": 0.3857346479999819
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 149.61171001300002,
+    "partition": 13,
+    "started_at": 1792049195.3881602,
+    "finished_at": 1792049352.6464064,
+    "container_id": "ta-01M4Z79835V8P497B2548JPW5R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "hill_weibull",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 2,
+          "surplus": 98,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/hill_weibull/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.12416081000000023,
+          "build_s": 3.793326937,
+          "compile_s": 151.839412584,
+          "draw_s": 2.279668288999744,
+          "invariants_and_hash_s": 0.12828621099984616,
+          "acceptance_and_packing_s": 0.15597010699997327,
+          "normalization_and_diagnostics_s": 0.3997459910000032
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 163.829958966,
+    "partition": 5,
+    "started_at": 1792049193.6696625,
+    "finished_at": 1792049365.0476203,
+    "container_id": "ta-01M4Z7967HCQZQZM24K4QRC3RR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "logistic_weibull",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 2,
+          "surplus": 98,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/logistic_weibull/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.08240285499999978,
+          "build_s": 3.8656360219999994,
+          "compile_s": 154.94279907900003,
+          "draw_s": 2.3021488719999184,
+          "invariants_and_hash_s": 0.12760348499989504,
+          "acceptance_and_packing_s": 0.1535104380000405,
+          "normalization_and_diagnostics_s": 0.4194317380000143
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 166.825380661,
+    "partition": 8,
+    "started_at": 1792049194.439897,
+    "finished_at": 1792049368.5653431,
+    "container_id": "ta-01M4Z797G7A81RKHDKP389P76R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "michaelis_menten_weibull",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/michaelis_menten_weibull/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.1534418750000004,
+          "build_s": 3.6630150079999995,
+          "compile_s": 156.595717291,
+          "draw_s": 1.1731021909998844,
+          "invariants_and_hash_s": 0.06689480099990419,
+          "acceptance_and_packing_s": 0.08358477100011896,
+          "normalization_and_diagnostics_s": 0.27047701600000096
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 167.809261691,
+    "partition": 11,
+    "started_at": 1792049194.9123435,
+    "finished_at": 1792049370.2320385,
+    "container_id": "ta-01M4Z797SM18RFVCNABYNKMH3R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "michaelis_menten_geometric",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/michaelis_menten_geometric/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.09675411799999978,
+          "build_s": 2.6849383520000014,
+          "compile_s": 183.573163158,
+          "draw_s": 1.5045077539999738,
+          "invariants_and_hash_s": 0.08984069799998906,
+          "acceptance_and_packing_s": 0.1147807709999995,
+          "normalization_and_diagnostics_s": 0.3398541649999913
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 196.47535519299998,
+    "partition": 10,
+    "started_at": 1792049194.8437123,
+    "finished_at": 1792049401.9357646,
+    "container_id": "ta-01M4Z796SACQ37EQFK8CNF30CR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "logistic_none",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 3,
+          "surplus": 97,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/logistic_none/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.13850353800000015,
+          "build_s": 2.2435446819999996,
+          "compile_s": 184.31511147,
+          "draw_s": 3.655382801999906,
+          "invariants_and_hash_s": 0.20037508600020715,
+          "acceptance_and_packing_s": 0.24442218800010096,
+          "normalization_and_diagnostics_s": 0.582761228999999
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 197.67492997600002,
+    "partition": 6,
+    "started_at": 1792049193.693894,
+    "finished_at": 1792049403.5561292,
+    "container_id": "ta-01M4Z795V0CR96EF420Z0C67AR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "tanh_none",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/tanh_none/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.07946347899999928,
+          "build_s": 2.1197483439999996,
+          "compile_s": 193.610615956,
+          "draw_s": 1.448918412000097,
+          "invariants_and_hash_s": 0.0960881460001417,
+          "acceptance_and_packing_s": 0.11513843900010556,
+          "normalization_and_diagnostics_s": 0.2902687910000168
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 207.150763342,
+    "partition": 12,
+    "started_at": 1792049195.071896,
+    "finished_at": 1792049416.5874538,
+    "container_id": "ta-01M4Z7976VXKG3J5KJZQ4Z4E2R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "linear_weibull",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/linear_weibull/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.137474426999999,
+          "build_s": 5.613683302,
+          "compile_s": 199.425719158,
+          "draw_s": 1.6325468400000602,
+          "invariants_and_hash_s": 0.0902450860000954,
+          "acceptance_and_packing_s": 0.1154631649999942,
+          "normalization_and_diagnostics_s": 0.33448876500000324
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 214.05986067999999,
+    "partition": 2,
+    "started_at": 1792049193.2277744,
+    "finished_at": 1792049418.322284,
+    "container_id": "ta-01M4Z7962PQNKH3XNH01K7C54R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "root_geometric",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 3,
+          "surplus": 97,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/root_geometric/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.1214870819999998,
+          "build_s": 3.2777149110000003,
+          "compile_s": 193.429088069,
+          "draw_s": 3.1461315420001768,
+          "invariants_and_hash_s": 0.18507090999989373,
+          "acceptance_and_packing_s": 0.22501201199960974,
+          "normalization_and_diagnostics_s": 0.6928960729999858
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 209.633376076,
+    "partition": 16,
+    "started_at": 1792049196.5024574,
+    "finished_at": 1792049419.3432913,
+    "container_id": "ta-01M4Z798B5ZPY82Y6FD23MGJ2R"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "logistic_geometric",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 2,
+          "surplus": 98,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/logistic_geometric/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.10681542599999894,
+          "build_s": 2.802166067,
+          "compile_s": 198.752209262,
+          "draw_s": 3.0708992589995887,
+          "invariants_and_hash_s": 0.17792644399995083,
+          "acceptance_and_packing_s": 0.2395834370001353,
+          "normalization_and_diagnostics_s": 0.6755481249999775
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 214.62522879600002,
+    "partition": 7,
+    "started_at": 1792049194.4471447,
+    "finished_at": 1792049420.018001,
+    "container_id": "ta-01M4Z796355QQ5A0VJQJK76RFR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "root_none",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 2,
+          "surplus": 98,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/root_none/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.14919451199999934,
+          "build_s": 2.2361123040000006,
+          "compile_s": 209.962205466,
+          "draw_s": 3.463278178000081,
+          "invariants_and_hash_s": 0.20474630799975557,
+          "acceptance_and_packing_s": 0.24943678499991506,
+          "normalization_and_diagnostics_s": 0.5998555319999923
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 239.925880678,
+    "partition": 15,
+    "started_at": 1792049196.3129878,
+    "finished_at": 1792049449.9668822,
+    "container_id": "ta-01M4Z797ZN9HYZTFFYY4J5XMRR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "root_weibull",
+        "counts": {
+          "target": 100,
+          "candidates": 200,
+          "rejected": 1,
+          "surplus": 99,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/root_weibull/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.13549601800000133,
+          "build_s": 5.568669031000001,
+          "compile_s": 216.658375003,
+          "draw_s": 3.890554041000172,
+          "invariants_and_hash_s": 0.2086600209999574,
+          "acceptance_and_packing_s": 0.22981886399995233,
+          "normalization_and_diagnostics_s": 0.6785196319999898
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 251.65268789699996,
+    "partition": 17,
+    "started_at": 1792049196.6656837,
+    "finished_at": 1792049460.4401505,
+    "container_id": "ta-01M4Z796XA1MWV32Z4FH4017ZR"
+  },
+  {
+    "status": "pass",
+    "target": 100,
+    "published": 100,
+    "partitions": [
+      {
+        "task": "tanh_weibull",
+        "counts": {
+          "target": 100,
+          "candidates": 100,
+          "rejected": 0,
+          "surplus": 0,
+          "published": 100,
+          "shortfall": 0
+        },
+        "reference": "runs/modal_smoke_20261015a/tasks/tanh_weibull/attempts/first/completion.json",
+        "builds": 1,
+        "compilations": 1,
+        "stage_times": {
+          "model_release_s": 0.1292651849999995,
+          "build_s": 7.393877273999999,
+          "compile_s": 242.74052507200003,
+          "draw_s": 1.840062125999566,
+          "invariants_and_hash_s": 0.1020634700000187,
+          "acceptance_and_packing_s": 0.13576590299999225,
+          "normalization_and_diagnostics_s": 0.39744587000001275
+        }
+      }
+    ],
+    "snapshot": null,
+    "training": 0,
+    "validation": 0,
+    "elapsed_seconds": 262.55731713,
+    "partition": 14,
+    "started_at": 1792049195.8161721,
+    "finished_at": 1792049474.26433,
+    "container_id": "ta-01M4Z797B109Y15YH1N04FY4MR"
+  }
+]

@@ -2234,7 +2234,9 @@ def _recompute_retained_cell_split(corpus: dict) -> None:
     corpus["is_val"] = np.isin(cell_id, val_cells).astype(np.uint8)
 
 
-def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, Any]:
+def sample_prior_predictive(
+    prior: SCMPrior, n: int | None = None, *, defer_cell_split: bool = False
+) -> dict[str, Any]:
     """Draw a corpus of n_tasks SCMs: numerical arrays and nested diagnostic metadata.
 
     Each world routes through :func:`_generate_corpus_additive` — the additive
@@ -2256,21 +2258,30 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
         rows to span that grid. This observable effective grid is reported by
         ``diagnostics["draws_per_cell"]`` and ``cell_id``. ``n=1`` raises
         because one world cannot carry a cell-level train/validation split.
+    defer_cell_split : bool
+        Opt in to unassigned membership (``is_val=2`` plus explicit diagnostics).
+        Allows one retained world. Skips validation-only temporal-mask repair;
+        masks and normalization no longer depend on train/validation assignment.
+        The default legacy path is unchanged.
 
     Notes
     -----
     Priors with the flat (texture-free) treatment prior emit a ``FutureWarning``
     — build with ``make_scm_prior`` instead.
     """
+    if type(defer_cell_split) is not bool:
+        raise TypeError("defer_cell_split must be a bool")
     _warn_flat_texture(prior)
     prior.validate()
     if n is not None:
         if n <= 0:
             raise ValueError(f"n must be positive, got {n}")
-        if n == 1:
+        if n == 1 and not defer_cell_split:
             raise ValueError("n=1 cannot form a cell-level train/validation split; n must be >= 2")
         draws_per_cell = prior.draws_per_cell
-        if n <= draws_per_cell:
+        if defer_cell_split:
+            prior = replace(prior, n_cells=max(2, (n + draws_per_cell - 1) // draws_per_cell))
+        elif n <= draws_per_cell:
             effective_draws_per_cell = max(1, n // 2)
             n_cells = max(2, (n + effective_draws_per_cell - 1) // effective_draws_per_cell)
             prior = replace(
@@ -2280,13 +2291,17 @@ def sample_prior_predictive(prior: SCMPrior, n: int | None = None) -> dict[str, 
             )
         else:
             prior = replace(prior, n_cells=(n + draws_per_cell - 1) // draws_per_cell)
-    corpus = _generate_corpus_additive(prior)
+    corpus = _generate_corpus_additive(prior, defer_cell_split=defer_cell_split)
     if n is not None and corpus["treatment_raw"].shape[0] > n:
         actual = corpus["treatment_raw"].shape[0]
         for key, val in list(corpus.items()):
             if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == actual:
                 corpus[key] = val[:n]
-    _recompute_retained_cell_split(corpus)
+    if defer_cell_split:
+        corpus["is_val"][:] = 2  # Explicitly unassigned, never silently treated as training.
+        corpus["diagnostics"]["cell_split"] = {"mode": "deferred", "version": 1}
+    else:
+        _recompute_retained_cell_split(corpus)
     return _finalize_corpus(corpus, prior)
 
 
@@ -2511,7 +2526,7 @@ def _outcome_norm_overflows(outcome: np.ndarray, support_ends: tuple[int, ...]) 
     return False
 
 
-def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
+def _generate_corpus_additive(cfg: SCMPrior, *, defer_cell_split: bool = False) -> dict[str, Any]:
     """Generate a padded additive-SCM corpus.
 
     The public schema is documented by :func:`sample_prior_predictive`.
@@ -2992,7 +3007,9 @@ def _generate_corpus_additive(cfg: SCMPrior) -> dict[str, Any]:
     n_val_cells = max(1, int(round(cfg.val_cell_frac * cfg.n_cells)))
     if n_val_cells >= cfg.n_cells:
         n_val_cells = cfg.n_cells - 1
-    val_cells = rng.permutation(cfg.n_cells)[:n_val_cells]
+    val_cells = (
+        np.array([], dtype=int) if defer_cell_split else rng.permutation(cfg.n_cells)[:n_val_cells]
+    )
     corpus["is_val"][:] = np.isin(cell_id, val_cells)
     is_val = corpus["is_val"]
 
