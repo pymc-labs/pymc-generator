@@ -25,7 +25,7 @@ authentication. The same code runs locally against a folder.
 ```mermaid
 flowchart LR
     L["launch.py<br/>(your machine)"] -->|"spawn generate_run(request)"| W["generate_run<br/>(Modal CPU worker)"]
-    W -->|"1. payload .npz<br/>2. task record .json"| V[("Modal Volume<br/>runs/RUN_ID/")]
+    W -->|"pymc_generator.publication<br/>1. corpus.npz 2. completion.json"| V[("Modal Volume<br/>runs/RUN_ID/")]
     L -.->|"waits for run.json"| V
     V -->|"reload, verify, extract<br/>every 3-10 s"| D["dashboard<br/>(Modal CPU container)"]
     D -->|"cards and figures as JSON<br/>Basic auth, ETag"| B["browser page"]
@@ -41,14 +41,17 @@ flowchart LR
    deployed `generate_run`, prints the run id and its dashboard link, and for a new run
    waits until the run's manifest appears in the Volume.
 3. **Generate and publish** (`generate_run` calling `run_generation` in
-   `generation.py`, one container at a time). It writes the run manifest (effective
-   configuration, digest of the generating source, package versions, git revision).
-   Then, task by task:
-   - `DataGenerator.generate(n_tasks=worlds_per_task, seed=seed + i)` generates the
-     task's worlds (with the preset `cycle[i mod n]` of a [preset mix](#presets-and-mixes));
-   - the corpus is saved as `.npz`, reloaded and validated;
-   - it is written create-only and the Volume is committed;
-   - only then is the task's JSON completion record written and committed.
+   `generation.py`, one container at a time: the run's single driver). It writes the run
+   manifest (effective configuration, digest of the generating source, package
+   versions, git revision). Then, task by task:
+   - `DataGenerator.generate(n_tasks=worlds_per_task, seed=seed + i,
+     defer_cell_split=True)` generates the task's worlds (with the preset `cycle[i mod n]`
+     of a [preset mix](#presets-and-mixes)); their train/validation membership stays
+     unassigned (`is_val=2`) until a training snapshot assigns whole cells;
+   - `pymc_generator.publication` (#67) publishes them: it validates the corpus, saves
+     `corpus.npz` in the task attempt's own directory, commits the Volume, then writes the
+     task's version-1 `completion.json` (accounting, provenance, world ids) and commits
+     again.
 
    An attempt record tracks progress. The attempt stops starting tasks before Modal's
    kill time, so `--resume` can continue it.
@@ -58,7 +61,8 @@ flowchart LR
 5. **Read** (the `dashboard` container: `collection.py`, `extract.py`). A poller thread
    reloads the read-only Volume, every 3 s while a run is generating and every 10 s
    otherwise. On each poll it:
-   - lists every task and decodes the records;
+   - discovers each run's task completions through `pymc_generator.publication` (and
+     reads the task records of runs published before it);
    - checks each new payload's size and SHA-256;
    - extracts each new payload's metrics once: composition shares, channel and
      control impact through the library's `outcome_distributions`, and the adstock and
@@ -234,34 +238,31 @@ mkdir -p live-runs/runs
 modal volume get -e pfn pymc-generator-live-dashboard runs/<run_id>/ live-runs/runs
 ```
 
-Then, from the repository root (`live_dashboard` is not installed as a package):
+Then, from the repository root, read it through `pymc_generator.publication` (the
+consumer interface of #67):
 
 ```python
-from pathlib import Path
+from pymc_generator.publication import FilePublicationStore
 
-from live_dashboard.collection import Collector
-from live_dashboard.publication import payload_path
-from live_dashboard.storage import DirectoryStore
-from pymc_generator.data_generator import load_corpus
-
-root = Path("live-runs")
-collector = Collector(DirectoryStore(root))
-collector.refresh()
-run = collector.snapshot.run_index["<run_id>"]
-corpora = [  # the verified payload of every published task
-    load_corpus(root / payload_path(run.run_id, task.task_id, task.attempt_id))
-    for task in run.tasks
-    if task.status == "published"
-]
-# run.worlds, run.impacts and run.control_impacts hold what the share figures plot.
+store = FilePublicationStore("live-runs")
+outputs = store.validated_outputs("<run_id>")  # verified completions, retries deduplicated
+corpora = [store.read_output(item["reference"])[1] for item in outputs]
+corpora = [corpus for corpus in corpora if corpus is not None]  # zero-world tasks have none
+# A frozen training snapshot assigns train/validation membership by whole cells.
+snapshot = store.freeze_snapshot("<run_id>", "training", validation_fraction=0.2, split_seed=17)
+membership = store.read_training_split(snapshot)  # world id -> "train" or "validation"
 ```
 
-Reading through the dashboard's reader, rather than globbing `*.npz`, skips orphans of
-retried attempts and payloads that fail their digest. To browse the downloaded runs
-locally, run `serve --data-dir live-runs`. A mix run's payloads already hold every
-member's worlds, so `corpora` is the concatenated dataset; a world's member is its task
-index modulo the number of members, and its payload's `carryover_family` and
-`sat_family` record its functional form.
+Reading through it, rather than globbing `*.npz`, skips unfinished attempts (a payload
+without a completion) and refuses payloads that fail their digest; `validated_outputs`
+fails closed if any completion of the run is unresolved. A mix run's corpora already hold
+every member's worlds, so `corpora` is the concatenated dataset; a world's member is its
+task index modulo the number of members, and its corpus's `carryover_family` and
+`sat_family` record its functional form. The share figures' metrics come from the
+dashboard's reader: `Collector(DirectoryStore(Path("live-runs")))` then `refresh()`;
+`snapshot.run_index["<run_id>"]` holds `worlds`, `impacts` and `control_impacts`. That
+reader also reads runs published before #67 (task records next to `payloads/`). To
+browse downloaded runs locally, run `serve --data-dir live-runs`.
 
 ### Two-style variety (`geometric-mm`, `geometric-logistic`)
 
@@ -435,14 +436,29 @@ reader rules below are written so such a writer can replace this one.
 Identities derive from the request only: `run_id = <label>-<sha256(request)[:12]>`
 over (label, preset, worlds, worlds per task, seed); task `i` generates with seed
 `seed + i` (exactly batch `i` of `DataGenerator.iter_batches`, which is reproducible but
-not the same worlds as one larger call); world ids are `<run_id>/<task_id>/w<row>`.
+not the same worlds as one larger call); world ids are `<task_id>_w<row>`, unique within
+the run.
+
+Each task's output is a version-1 completion of `pymc_generator.publication` (#67,
+[its protocol](../docs/guide/publication-protocol.md)); this contract adds the driver's
+records around it:
 
 ```
-runs/<run_id>/run.json                              run manifest (create-only)
-runs/<run_id>/tasks/<task_id>/<attempt_id>.json     task completion record (create-only)
-runs/<run_id>/payloads/<task_id>/<attempt_id>.npz   corpus payload (create-only)
-runs/<run_id>/attempts/<attempt_id>.json            provisional progress of one attempt
+runs/<run_id>/run.json                                         run manifest (create-only)
+runs/<run_id>/attempts/<attempt_id>.json                       provisional progress of one attempt
+runs/<run_id>/tasks/<task_id>/attempts/<attempt_id>/corpus.npz      task payload (create-only)
+runs/<run_id>/tasks/<task_id>/attempts/<attempt_id>/completion.json task completion (create-only)
 ```
+
+A completion records the task's counts (target, candidates, rejected, surplus,
+published, shortfall; the library reports one rejection reason, `generator_filters`),
+world ids, payload digest and provenance: a run spec digest, the generation mode and
+code revision, the environment with the worker, the seed context, the member preset's
+effective configuration and a cell namespace for training snapshots. It also carries
+additive fields the dashboard reads: `timing`, `draw_failures` and
+`generation_failure`. Runs published before #67 keep this contract's own task records
+(`tasks/<task_id>/<attempt_id>.json` next to `payloads/`), which the dashboard still
+reads.
 
 The manifest records the effective configuration, a digest of the generating source,
 the numerical package versions and the git revision; resuming a run with a different
@@ -452,30 +468,36 @@ additive minor version) it carries `usd_per_hour`, the list price of the worker'
 reservation, or null for a worker that is not billed (a local run), which the cost card
 uses. 1.0 records omit it; readers treat null and absent alike.
 
-**Writer.** Each task's payload is saved and verified (reloaded and validated) in a
-temporary directory, then written create-only under its attempt's own path and
-committed; only then is the task record written and committed. Every record is decoded
-with the reader's decoder before it is written. A task that the library cannot fill
-within its bounded rounds publishes a zero-world record with the full shortfall and no
-payload; any other failure fails the attempt (recorded in its attempt record) and leaves
-the task for a retry. Resuming reuses a task when a record exists whose payload verifies
-(or that has no payload).
+**Writer.** `pymc_generator.publication` validates each task's corpus (deferred
+membership), saves it create-only under its attempt's own directory and commits, then
+writes the completion and commits again; it never overwrites an attempt. A task that the
+library cannot fill within its bounded rounds publishes a zero-world completion with the
+full shortfall, no payload, and the counts the library reports for the cell that could
+not fill; any other failure fails the attempt (recorded in its attempt record) and leaves
+the task for a retry. Resuming reuses a task whose completion verifies (record, payload
+and corpus). A task whose completion does not verify, or is unresolved (partial JSON),
+stops the resume before anything is generated: the publication never publishes past
+such an attempt until it is reconciled by hand.
 
-**Reader.** Every poll lists every task directory (no high-water cursor), so
-out-of-order publications are never skipped. Records with the same scientific content
-(accepted worlds and payload digest) are duplicates: the smallest attempt id is
-authoritative. Different content for one task is a **conflict**: the task is excluded
-and shown. A payload must match its recorded size and SHA-256; otherwise the task is
-**unavailable** and never silently replaced (it becomes available again only if bytes
-matching the original digest reappear). Unreadable JSON is treated as not yet
-published; unsupported contract major versions are rejected, not guessed; unknown
-fields are ignored. Files whose names start with `.` are staging files and are never
-read. Extraction runs once per payload and extraction version.
+**Reader.** Every poll discovers every completion of a run through
+`pymc_generator.publication` (no high-water cursor), so out-of-order publications are
+never skipped; discovery checks each completion's schema, accounting and location, and
+the reader checks it is a task of its run with that task's seed and target. Records with
+the same scientific content (accepted worlds and payload digest) are duplicates: the
+smallest attempt id is authoritative. Different content for one task is a **conflict**:
+the task is excluded and shown. A payload must match its recorded size and SHA-256;
+otherwise the task is **unavailable** and never silently replaced (it becomes available
+again only if bytes matching the original digest reappear). A completion that fails
+these checks makes its task **invalid**, with the reason. For runs published before #67,
+unreadable task-record JSON is treated as not yet published and unsupported contract
+major versions are rejected, not guessed; unknown fields are ignored. Files whose names
+start with `.` are staging files and are never read. Extraction runs once per payload
+and extraction version.
 
-Crash windows: until the task record is persisted, readers consume nothing of the task;
-a payload persisted before then (by its own commit or by a Volume background commit) is
-an orphan that readers never consume, and the retry writes its own. Once the record is
-persisted, readers consume the task and a retry reuses it.
+Crash windows: until a task's completion is persisted, readers consume nothing of the
+task; a payload persisted before then (by its own commit or by a Volume background
+commit) is an unfinished attempt that readers never consume, and the retry writes its
+own. Once the completion is persisted, readers consume the task and a retry reuses it.
 
 Known limits: an in-place modification of an already verified payload that keeps its
 size is not detected until the dashboard restarts; Volume v1 recommends at most five

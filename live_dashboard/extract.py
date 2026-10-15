@@ -166,7 +166,8 @@ def _load_valid_corpus(data: bytes) -> dict[str, Any]:
         path.write_bytes(data)
         try:
             corpus = load_corpus(path)
-            errors = DataGenerator.validate_corpus(corpus)
+            # Completions carry deferred (unassigned, is_val=2) train/validation membership.
+            errors = DataGenerator.validate_corpus(corpus, allow_deferred_split=True)
         except _CORPUS_ERRORS as error:
             # Messages may embed the random scratch path; cached errors must not.
             message = str(error).replace(str(path), "<payload>")

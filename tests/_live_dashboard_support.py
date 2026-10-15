@@ -65,8 +65,9 @@ class VolumeLikeStore(DirectoryStore):
     """Writer view of a Volume: a private working directory published by ``commit()``.
 
     Writing a task record asserts that its payload was already committed with the
-    recorded size and digest; every commit asserts that each committed task record has
-    a committed run manifest. ``reader()`` returns an independent view that changes only
+    recorded size and digest; every commit asserts that each committed task record or
+    completion has a committed run manifest, and that a completion's payload was committed
+    before the completion was. ``reader()`` returns an independent view that changes only
     when that view is refreshed (like ``Volume.reload``).
     """
 
@@ -90,6 +91,7 @@ class VolumeLikeStore(DirectoryStore):
         super().write_new(path, data)
 
     def _publish(self) -> None:
+        payloads_before = {path.relative_to(self.committed) for path in self._payloads()}
         _mirror(self.root, self.committed)
         for record in self.committed.glob("runs/*/tasks/*/*.json"):
             run_dir = record.parents[2]
@@ -97,6 +99,17 @@ class VolumeLikeStore(DirectoryStore):
             payload = json.loads(record.read_bytes())["payload"]
             if payload is not None:
                 assert (self.committed / payload["path"]).is_file()
+        for completion in self.committed.glob("runs/*/tasks/*/attempts/*/completion.json"):
+            run_dir = completion.parents[4]
+            assert (run_dir / "run.json").is_file(), f"{completion} committed without run.json"
+            if json.loads(completion.read_bytes())["payload"] is not None:
+                payload = completion.with_name(pub.COMPLETION_PAYLOAD_NAME)
+                assert payload.relative_to(self.committed) in payloads_before, (
+                    f"{completion} committed before its payload"
+                )
+
+    def _payloads(self) -> list[Path]:
+        return list(self.committed.glob(f"runs/*/tasks/*/attempts/*/{pub.COMPLETION_PAYLOAD_NAME}"))
 
     def reader(self, root: Path) -> DirectoryStore:
         root.mkdir(parents=True, exist_ok=True)
@@ -118,6 +131,10 @@ def copy_store(source: Path, target: Path) -> DirectoryStore:
 
 def task_record_files(root: Path, run_id: str, task_id: str) -> list[Path]:
     return sorted((root / pub.task_dir(run_id, task_id)).glob("*.json"))
+
+
+def completion_files(root: Path, run_id: str, task_id: str) -> list[Path]:
+    return sorted((root / pub.task_dir(run_id, task_id)).glob("attempts/*/completion.json"))
 
 
 def rewrite_json(path: Path, mutate: Callable[[dict[str, Any]], None]) -> None:

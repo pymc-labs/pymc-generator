@@ -7,6 +7,9 @@ is cached, per collector: payload digest verification (keyed by path and digest,
 while the file keeps its verified size) and extraction (keyed by digest and
 ``EXTRACTION_VERSION``). Nothing that failed for a possibly transient reason is cached.
 
+Task outputs are read as ``pymc_generator.publication`` completions (discovered through
+its consumer interface) and, for runs published before, as this contract's task records.
+
 Trade-off: an in-place, same-size change of an already verified payload is not noticed
 until the process restarts. The protocol never rewrites payloads (they are create-only
 and named by attempt), so this only matters for out-of-protocol edits.
@@ -15,7 +18,7 @@ and named by attempt), so this only matters for out-of-protocol edits.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 
 from live_dashboard import publication as pub
@@ -54,6 +57,7 @@ _RUN_STATE_OF_NEWEST_ATTEMPT: dict[str, RunState] = {
 type _TaskResult = tuple[
     TaskState, tuple[WorldMetrics, ...], tuple[ImpactUnit, ...], tuple[ControlUnit, ...]
 ]
+type _Problem = tuple[TaskStatus, str, str]  # (status, file name, message)
 
 
 def _describe(error: BaseException) -> str:
@@ -154,6 +158,7 @@ class Collector:
         present = set(self._store.list_dirs(pub.tasks_dir(name)))
         for stray in sorted(present.difference(task_ids)):
             issues.append(pub.clean_message(f"tasks/{stray}: not a task of this run (ignored)"))
+        completions, unresolved = self._completions(manifest, issues)
         tasks: list[TaskState] = []
         worlds: list[WorldMetrics] = []
         impacts: list[ImpactUnit] = []
@@ -164,7 +169,10 @@ class Collector:
                 continue
             try:
                 state, task_worlds, task_impacts, task_controls = self._collect_task(
-                    manifest, task_id
+                    manifest,
+                    task_id,
+                    completions.get(task_id, ()),
+                    unresolved.get(task_id, ()),
                 )
             except Exception as error:
                 state = TaskState(
@@ -245,6 +253,37 @@ class Collector:
 
     # -- tasks ---------------------------------------------------------------------
 
+    def _completions(
+        self, manifest: pub.RunManifest, issues: list[str]
+    ) -> tuple[dict[str, list[pub.TaskRecord]], dict[str, list[_Problem]]]:
+        """The run's ``pymc_generator.publication`` completions, by task.
+
+        Discovery checks each completion's schema, accounting and location; one that
+        fails there, or that is not a task of this run, is a problem record of its task.
+        """
+        from pymc_generator.publication import FilePublicationStore
+
+        # The store was refreshed for this poll: read its files without another reload.
+        try:
+            candidates, failed = FilePublicationStore(self._store.root).discover(manifest.run_id)
+        except Exception as error:
+            issues.append(pub.clean_message(f"completions: {_describe(error)}"))
+            return {}, {}
+        records: dict[str, list[pub.TaskRecord]] = {}
+        problems: dict[str, list[_Problem]] = {}
+        for reference, message in failed.items():
+            task_id, name = _completion_name(reference)
+            problems.setdefault(task_id, []).append(("invalid", name, message))
+        for candidate in candidates:
+            task_id, name = _completion_name(candidate["reference"])
+            try:
+                record = pub.task_record_from_completion(manifest, candidate["record"])
+            except pub.RecordError as error:
+                problems.setdefault(task_id, []).append(("invalid", name, str(error)))
+                continue
+            records.setdefault(record.task_id, []).append(record)
+        return records, problems
+
     def _task_record(
         self, manifest: pub.RunManifest, task_id: str, name: str
     ) -> pub.TaskRecord | tuple[TaskStatus, str] | None:
@@ -266,11 +305,17 @@ class Collector:
         except pub.RecordError as error:
             return "invalid", str(error)
 
-    def _collect_task(self, manifest: pub.RunManifest, task_id: str) -> _TaskResult:
+    def _collect_task(
+        self,
+        manifest: pub.RunManifest,
+        task_id: str,
+        completions: Iterable[pub.TaskRecord] = (),
+        unresolved: Iterable[_Problem] = (),
+    ) -> _TaskResult:
         index = pub.task_index_of(task_id)
         target = manifest.worlds_per_task
-        records: list[pub.TaskRecord] = []
-        problems: list[tuple[TaskStatus, str, str]] = []
+        records: list[pub.TaskRecord] = list(completions)
+        problems: list[_Problem] = list(unresolved)
         for name in self._store.list_files(pub.task_dir(manifest.run_id, task_id)):
             outcome = self._task_record(manifest, task_id, name)
             if isinstance(outcome, pub.TaskRecord):
@@ -383,6 +428,12 @@ class Collector:
             result = error
         self._extracted[key] = result
         return result
+
+
+def _completion_name(reference: str) -> tuple[str, str]:
+    """Task id and display name of ``runs/<run>/tasks/<task>/attempts/<attempt>/...``."""
+    parts = reference.split("/")
+    return parts[3], "/".join(parts[4:])
 
 
 def _count_text(counts: Counter[TaskStatus]) -> str:

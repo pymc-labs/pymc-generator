@@ -1,9 +1,10 @@
-"""Generation writer: layout, accounting, resume, self-healing, refusals and deadlines.
+"""Generation writer: layout, accounting, resume, refusals and deadlines.
 
 The writer runs the real generator (``small`` preset): byte-identical regeneration,
-exact accounting and zero-world exhaustion only exist in real output. Later writer calls
-start from a copy of the session's golden run (``live_golden``), never from the golden
-tree itself, with a clock that starts after the golden attempt.
+exact accounting and zero-world exhaustion only exist in real output. Tasks are published
+as ``pymc_generator.publication`` completions. Later writer calls start from a copy of
+the session's golden run (``live_golden``), never from the golden tree itself, with a
+clock that starts after the golden attempt.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.metadata
 import importlib.util
+import json
 import platform
 import re
 import shutil
@@ -40,6 +42,7 @@ from live_dashboard.generation import (
 )
 from live_dashboard.storage import DirectoryStore
 from pymc_generator.data_generator import DataGenerator, load_corpus, save_corpus
+from pymc_generator.publication import PublicationError
 from pymc_generator.sampler import SCMPrior
 
 
@@ -108,8 +111,8 @@ def _resume(store: DirectoryStore, golden: Any, hours: float = 1.0, **kwargs: An
 def _task_record(
     store: DirectoryStore, manifest: pub.RunManifest, task_id: str, attempt_id: str
 ) -> pub.TaskRecord:
-    data = store.read_bytes(pub.task_record_path(manifest.run_id, task_id, attempt_id))
-    return pub.decode_task_record(data, manifest=manifest, task_id=task_id, attempt_id=attempt_id)
+    data = store.read_bytes(pub.completion_path(manifest.run_id, task_id, attempt_id))
+    return pub.task_record_from_completion(manifest, json.loads(data))
 
 
 def _attempt_record(
@@ -147,8 +150,8 @@ def test_a_run_publishes_exactly_the_contract_layout(live_golden, tmp_path):
     run_id, attempt_id = live_golden.request.run_id, live_golden.attempt_id
     expected = {pub.run_manifest_path(run_id), pub.attempt_record_path(run_id, attempt_id)}
     for task_id in TASK_IDS:
-        expected.add(pub.task_record_path(run_id, task_id, attempt_id))
-        expected.add(pub.payload_path(run_id, task_id, attempt_id))
+        expected.add(pub.completion_path(run_id, task_id, attempt_id))
+        expected.add(pub.completion_payload_path(run_id, task_id, attempt_id))
     assert set(_tree(live_golden.root)) == expected
 
     store = DirectoryStore(live_golden.root)
@@ -164,7 +167,9 @@ def test_a_run_publishes_exactly_the_contract_layout(live_golden, tmp_path):
         data = store.read_bytes(record.payload.path)
         assert (len(data), pub.sha256_hex(data)) == (record.payload.size, record.payload.sha256)
         corpus = _corpus(data, tmp_path)
-        assert DataGenerator.validate_corpus(corpus) == []
+        # Membership is deferred: every world is unassigned (is_val=2) until a snapshot.
+        assert DataGenerator.validate_corpus(corpus, allow_deferred_split=True) == []
+        assert (corpus["is_val"] == 2).all()
         assert len(corpus["cell_id"]) == record.accepted_worlds == 2
 
 
@@ -192,7 +197,7 @@ def test_accounting_reports_the_generator_diagnostics_of_each_task(live_golden, 
             candidates_evaluated=evaluated,
             rejected_candidates=rejected,
             draw_failures=diagnostics["n_draw_failures"],
-            surplus_discarded=None,
+            surplus_discarded=evaluated - rejected - record.accepted_worlds,
             generation_failure=None,
         )
         assert evaluated == record.accepted_worlds + rejected
@@ -205,7 +210,7 @@ def test_each_task_publishes_the_independent_batch_of_its_seed(live_golden, tmp_
     manifest = support.load_manifest(store, live_golden.request.run_id)
     record = _task_record(store, manifest, "task-00002", live_golden.attempt_id)
     batch = DataGenerator(PRESETS["small"](2)).generate(
-        n_tasks=2, seed=live_golden.request.seed + 2
+        n_tasks=2, seed=live_golden.request.seed + 2, defer_cell_split=True
     )
     save_corpus(batch, tmp_path / "batch.npz")
     assert (tmp_path / "batch.npz").read_bytes() == store.read_bytes(record.payload.path)
@@ -249,29 +254,41 @@ def test_a_rerun_reuses_every_published_task_without_generating(
     )
 
 
-@pytest.mark.parametrize(
-    "lose",
-    [
-        pytest.param(lambda path: path.unlink(), id="record-never-written"),
-        pytest.param(lambda path: path.write_bytes(path.read_bytes()[:100]), id="record-partial"),
-    ],
-)
-def test_a_crash_before_the_record_is_resumed_with_identical_content(live_golden, tmp_path, lose):
+def test_a_crash_before_the_completion_is_resumed_with_identical_content(live_golden, tmp_path):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
     manifest = support.load_manifest(store, run_id)
     lost = _task_record(store, manifest, "task-00001", live_golden.attempt_id)
-    lose(store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id))
+    (store.root / pub.completion_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
     orphan = store.read_bytes(lost.payload.path)
 
     result = _resume(store, live_golden)
     assert (result["published"], result["reused"]) == (["task-00001"], ["task-00000", "task-00002"])
     record = _task_record(store, manifest, "task-00001", result["attempt_id"])
-    assert record.payload.path == pub.payload_path(run_id, "task-00001", result["attempt_id"])
+    assert record.payload.path == pub.completion_payload_path(
+        run_id, "task-00001", result["attempt_id"]
+    )
     # Same digest as the orphan: readers see one scientific content, never a conflict.
     assert record.payload.sha256 == pub.sha256_hex(orphan)
     assert (record.content_key, record.world_ids) == (lost.content_key, lost.world_ids)
     assert store.read_bytes(lost.payload.path) == orphan
+
+
+def test_a_partial_completion_stops_the_resume_until_reconciled(
+    live_golden, tmp_path, no_generation
+):
+    store = _golden_copy(live_golden, tmp_path)
+    run_id = live_golden.request.run_id
+    path = store.root / pub.completion_path(run_id, "task-00001", live_golden.attempt_id)
+    path.write_bytes(path.read_bytes()[:100])  # a crash while the completion was written
+    before = _tree(store.root)
+
+    # An unresolved completion is never overwritten or bypassed by a new attempt.
+    with pytest.raises(PublicationError, match="task-00001 has a completion that does not"):
+        _resume(store, live_golden)
+    (added,) = _new_files(before, _tree(store.root))
+    attempt = _attempt_record(store, support.load_manifest(store, run_id), Path(added).stem)
+    assert (attempt.state, attempt.reused_task_ids) == ("failed", ("task-00000",))
 
 
 @pytest.mark.parametrize(
@@ -286,26 +303,33 @@ def test_a_crash_before_the_record_is_resumed_with_identical_content(live_golden
         ),
     ],
 )
-def test_a_task_without_a_verifying_payload_is_regenerated_and_deduplicated(
-    live_golden, tmp_path, damage
+def test_a_task_whose_payload_no_longer_verifies_stops_the_resume_until_reconciled(
+    live_golden, tmp_path, damage, no_generation
 ):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
     manifest = support.load_manifest(store, run_id)
     damaged = _task_record(store, manifest, "task-00000", live_golden.attempt_id)
     damage(store.root / damaged.payload.path)
+    before = _tree(store.root)
 
-    result = _resume(store, live_golden)
-    assert (result["published"], result["reused"]) == (["task-00000"], TASK_IDS[1:])
-    healed = _task_record(store, manifest, "task-00000", result["attempt_id"])
-    assert healed.content_key == damaged.content_key
+    # pymc_generator.publication never publishes past an unusable earlier attempt: the
+    # resume stops before generating, and records why.
+    with pytest.raises(PublicationError, match="task-00000 has a completion that does not"):
+        _resume(store, live_golden)
+    (added,) = _new_files(before, _tree(store.root))
+    attempt = _attempt_record(store, manifest, Path(added).stem)
+    assert (attempt.state, attempt.error.type) == ("failed", "PublicationError")
+    assert support.completion_files(store.root, run_id, "task-00000") == [
+        store.root / pub.completion_path(run_id, "task-00000", live_golden.attempt_id)
+    ]
 
     collector = Collector(store, clock=support.clock_after(live_golden.end_time, hours=2))
     collector.refresh()
-    assert collector.snapshot.last_error is None
     run = collector.snapshot.run_index[run_id]
-    assert (run.tasks[0].status, run.tasks[0].duplicate_records) == ("published", 1)
-    assert run.published_worlds == 6
+    # Every task has a final record, so the run is complete; task 0's payload is shown
+    # unavailable rather than replaced.
+    assert (run.state, run.tasks[0].status, run.published_worlds) == ("complete", "unavailable", 4)
 
 
 # -- generation outcomes ---------------------------------------------------------------
@@ -325,17 +349,28 @@ def test_cells_that_cannot_fill_publish_a_zero_world_record(tmp_path, monkeypatc
     record = _task_record(store, manifest, "task-00000", result["attempt_id"])
     assert (record.status, record.shortfall_worlds, record.payload) == ("zero", 2, None)
     accounting = record.accounting
-    counts = (
+    failure = accounting.generation_failure
+    assert failure.type == "RuntimeError"
+    # The counts are the tallies the library reports for the cell that could not fill.
+    tally = re.search(
+        r"tasks accepted after \d+ rounds .*rejected (\d+)/(\d+) evaluated candidates, "
+        r"and (\d+)/\d+ rounds",
+        failure.message,
+    )
+    assert tally is not None
+    rejected, evaluated, failures = map(int, tally.groups())
+    assert evaluated > 0
+    assert (
         accounting.candidates_evaluated,
         accounting.rejected_candidates,
         accounting.draw_failures,
         accounting.surplus_discarded,
-    )
-    assert counts == (None, None, None, None)
-    assert accounting.generation_failure.type == "RuntimeError"
-    assert re.search(r"tasks accepted after \d+ rounds", accounting.generation_failure.message)
+    ) == (evaluated, rejected, failures, evaluated - rejected)
     assert record.generation_seconds > 0
-    assert store.list_dirs(f"{pub.RUNS_DIR}/{request.run_id}/payloads") == []
+    completion_dir = tmp_path / pub.completion_dir(
+        request.run_id, "task-00000", result["attempt_id"]
+    )
+    assert sorted(path.name for path in completion_dir.iterdir()) == [pub.COMPLETION_NAME]
 
     # A zero-world record is a completed task: a rerun reuses it.
     with monkeypatch.context() as patch:
@@ -381,7 +416,7 @@ def test_other_generation_failures_fail_the_attempt_without_a_record(
 ):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
-    (store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
+    (store.root / pub.completion_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
     before = _tree(store.root)
 
     def generate(self, *args, **kwargs):
@@ -407,7 +442,7 @@ def test_other_generation_failures_fail_the_attempt_without_a_record(
 def test_refusing_never_swallows_a_failure_a_retry_could_fix(live_golden, tmp_path, monkeypatch):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
-    (store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
+    (store.root / pub.completion_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
     before = _tree(store.root)
 
     def generate(self, *args, **kwargs):
@@ -427,10 +462,10 @@ def test_refusing_never_swallows_a_failure_a_retry_could_fix(live_golden, tmp_pa
     assert (attempt.state, attempt.error.type) == ("failed", "TypeError")
 
 
-def test_a_task_record_readers_would_reject_is_never_written(live_golden, tmp_path, monkeypatch):
+def test_a_completion_readers_would_reject_is_never_written(live_golden, tmp_path, monkeypatch):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
-    (store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
+    (store.root / pub.completion_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
     generate = DataGenerator.generate
 
     def miscounting(self, *args, **kwargs):
@@ -439,15 +474,15 @@ def test_a_task_record_readers_would_reject_is_never_written(live_golden, tmp_pa
         return corpus
 
     monkeypatch.setattr(DataGenerator, "generate", miscounting)
-    with pytest.raises(pub.RecordError):
+    with pytest.raises(PublicationError, match="Invalid count"):
         _resume(store, live_golden)
-    assert support.task_record_files(store.root, run_id, "task-00001") == []
+    assert support.completion_files(store.root, run_id, "task-00001") == []
     manifest = support.load_manifest(store, run_id)
     (attempt_name,) = set(store.list_files(pub.attempts_dir(run_id))) - {
         f"{live_golden.attempt_id}.json"
     }
     attempt = _attempt_record(store, manifest, attempt_name.removesuffix(".json"))
-    assert (attempt.state, attempt.error.type) == ("failed", "RecordError")
+    assert (attempt.state, attempt.error.type) == ("failed", "PublicationError")
 
 
 def test_an_attempt_record_readers_would_reject_is_never_written(tmp_path, no_generation):
@@ -725,7 +760,7 @@ def test_a_task_starts_only_with_at_least_90_seconds_left(
 ):
     store = _golden_copy(live_golden, tmp_path)
     run_id = live_golden.request.run_id
-    (store.root / pub.task_record_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
+    (store.root / pub.completion_path(run_id, "task-00001", live_golden.attempt_id)).unlink()
     # A stopped clock: exactly ``seconds_left`` remain when task 1 is due.
     clock = support.FakeClock(start=live_golden.end_time + timedelta(hours=1), step=0.0)
     deadline = clock.now + timedelta(seconds=seconds_left)
@@ -947,16 +982,22 @@ def test_resuming_a_mix_whose_member_changed_is_refused_before_any_write(tmp_pat
 def test_a_resumed_mix_keeps_every_task_on_its_member_and_seed(live_golden, tmp_path, monkeypatch):
     golden = _corpus(
         DirectoryStore(live_golden.root).read_bytes(
-            pub.payload_path(live_golden.request.run_id, "task-00000", live_golden.attempt_id)
+            pub.completion_payload_path(
+                live_golden.request.run_id, "task-00000", live_golden.attempt_id
+            )
         ),
         tmp_path,
     )
     # A saved corpus drops the in-memory timing a fresh generation carries.
-    golden["diagnostics"] = {**golden["diagnostics"], "timing": {"elapsed_s": 100.0}}
+    golden["diagnostics"] = {
+        **golden["diagnostics"],
+        "timing": {"elapsed_s": 100.0, "tasks_per_sec": 0.02},
+    }
     clock = support.FakeClock()
     calls: list[tuple[str, int]] = []
 
-    def recorded_generate(self, *, n_tasks, seed):
+    def recorded_generate(self, *, n_tasks, seed, defer_cell_split):
+        assert defer_cell_split  # membership is assigned later, by a training snapshot
         weibull = self.config.carryover_family_probs["weibull"] == 1.0
         calls.append(("wei" if weibull else "geo", seed))
         clock.advance(100)  # each task takes 100 s of the attempt's time

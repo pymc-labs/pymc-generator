@@ -217,6 +217,84 @@ def test_worker_prices_at_the_bounds_decode_as_non_negative_numbers():
     assert zero == 0.0 and math.copysign(1.0, zero) == 1.0  # never shown as "$-0.000/h"
 
 
+def _zero_world_completion(manifest: pub.RunManifest, worker: pub.WorkerInfo) -> dict:
+    return pub.completion_metadata(
+        manifest,
+        task_index=1,
+        member="small",
+        member_config=manifest.generator.config,
+        attempt_id=ATTEMPT,
+        worker=worker,
+        candidates=5,
+        rejected=5,
+        published=0,
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=3),
+        generation_seconds=2.5,
+        draw_failures=1,
+        generation_failure=pub.ErrorInfo("RuntimeError", "cell 0: only 0/1 tasks accepted"),
+    )
+
+
+def test_a_published_completion_reads_back_as_its_task_record(tmp_path):
+    from pymc_generator.publication import FilePublicationStore
+
+    manifest = _manifest()
+    worker = dataclasses.replace(WORKER, usd_per_hour=0.126)
+    store = FilePublicationStore(tmp_path)
+    reference = store.publish(_zero_world_completion(manifest, worker), None)
+    (candidate,), problems = store.discover(manifest.run_id)
+    assert problems == {}
+    assert (
+        candidate["reference"]
+        == reference
+        == pub.completion_path(manifest.run_id, "task-00001", ATTEMPT)
+    )
+    assert pub.task_record_from_completion(manifest, candidate["record"]) == pub.TaskRecord(
+        run_id=manifest.run_id,
+        task_id="task-00001",
+        task_index=1,
+        seed=manifest.request.task_seed(1),
+        target_worlds=2,
+        accepted_worlds=0,
+        world_ids=(),
+        payload=None,
+        accounting=pub.Accounting(
+            candidates_evaluated=5,
+            rejected_candidates=5,
+            draw_failures=1,
+            surplus_discarded=0,
+            generation_failure=pub.ErrorInfo("RuntimeError", "cell 0: only 0/1 tasks accepted"),
+        ),
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=3),
+        generation_seconds=2.5,
+        attempt_id=ATTEMPT,
+        worker=worker,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("provenance", "seed_context", "task_seed"), 999, "task_seed must be"),
+        (("counts", "target"), 3, "target must be 2"),
+        (("task_id",), "task-00009", "not a task of this run"),
+        (("timing",), None, "timing must be a JSON object"),
+        (("timing", "finished_at"), "2025-12-31T00:00:00.000Z", "precedes"),
+    ],
+)
+def test_completions_that_do_not_fit_their_run_are_refused(path, value, message):
+    manifest = _manifest()
+    completion = _zero_world_completion(manifest, WORKER)
+    target = completion
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    with pytest.raises(pub.RecordError, match=message):
+        pub.task_record_from_completion(manifest, completion)
+
+
 @pytest.mark.parametrize(
     ("mutate", "error"),
     [

@@ -846,3 +846,188 @@ def _decode_attempt_record(data: bytes, *, manifest: RunManifest, attempt_id: st
         worker=_worker(body.get("worker")),
         contract_version=version,
     )
+
+
+# -- task outputs as pymc_generator.publication completions ----------------------------
+#
+# Runs written by this worker publish each task through ``pymc_generator.publication``
+# (version-1 completion records): ``runs/<run_id>/tasks/<task_id>/attempts/<attempt_id>/``
+# holds ``corpus.npz`` and ``completion.json``. The run manifest and the attempt records
+# above stay the driver's records. Task records of the layout above (``<attempt_id>.json``
+# next to ``payloads/``) remain readable for runs published before.
+
+COMPLETION_NAME = "completion.json"
+COMPLETION_PAYLOAD_NAME = "corpus.npz"
+GENERATION_MODE = "DataGenerator.generate(defer_cell_split=True)"
+
+
+def completion_dir(run_id: str, task_id: str, attempt_id: str) -> str:
+    return f"{task_dir(run_id, task_id)}/attempts/{attempt_id}"
+
+
+def completion_path(run_id: str, task_id: str, attempt_id: str) -> str:
+    return f"{completion_dir(run_id, task_id, attempt_id)}/{COMPLETION_NAME}"
+
+
+def completion_payload_path(run_id: str, task_id: str, attempt_id: str) -> str:
+    return f"{completion_dir(run_id, task_id, attempt_id)}/{COMPLETION_PAYLOAD_NAME}"
+
+
+def completion_world_id(task_id: str, row: int) -> str:
+    """A world's id in a completion: unique within its run, and a publication identifier."""
+    return f"{task_id}_w{row}"
+
+
+def run_spec_sha256(manifest: RunManifest) -> str:
+    """Digest of what fixes a run's outputs: its request and its recorded generator."""
+    generator = manifest.generator
+    spec = {
+        "request_sha256": manifest.request.request_sha256,
+        "config_sha256": generator.config_sha256,
+        "code_sha256": generator.code_sha256,
+        "corpus_schema_version": generator.corpus_schema_version,
+        "environment": dict(generator.environment),
+    }
+    return sha256_hex(canonical_json(spec))
+
+
+def completion_metadata(
+    manifest: RunManifest,
+    *,
+    task_index: int,
+    member: str,
+    member_config: Mapping[str, Any],
+    attempt_id: str,
+    worker: WorkerInfo,
+    candidates: int,
+    rejected: int,
+    published: int,
+    started_at: datetime,
+    finished_at: datetime,
+    generation_seconds: float | None,
+    draw_failures: int | None,
+    generation_failure: ErrorInfo | None,
+) -> dict[str, Any]:
+    """What ``pymc_generator.publication`` publishes for one task (version 1).
+
+    ``member`` is the preset that generated the task (a mix's member) and
+    ``member_config`` its configuration as the manifest records it. Counts follow the
+    publication's accounting (candidates = rejected + surplus + published, target =
+    published + shortfall); the library reports no rejection reasons, so all rejected
+    candidates count under ``generator_filters``. ``timing``, ``draw_failures`` and
+    ``generation_failure`` are additive fields the dashboard reads.
+    """
+    request = manifest.request
+    run_id = manifest.run_id
+    task_id = task_id_for(task_index)
+    target = request.worlds_per_task
+    generator = manifest.generator
+    return {
+        "run_id": run_id,
+        "instruction_id": task_id,
+        "task_id": task_id,
+        "output_id": task_id,
+        "attempt_id": attempt_id,
+        "world_ids": [completion_world_id(task_id, row) for row in range(published)],
+        "counts": {
+            "target": target,
+            "candidates": candidates,
+            "rejected": rejected,
+            "surplus": candidates - rejected - published,
+            "published": published,
+            "shortfall": target - published,
+        },
+        "rejection_reasons": {"generator_filters": rejected} if rejected else {},
+        "provenance": {
+            "run_spec_sha256": run_spec_sha256(manifest),
+            "generation_mode": GENERATION_MODE,
+            "generation_version": generator.code_revision or generator.code_sha256,
+            "environment": {
+                **generator.environment,
+                "pymc_generator": generator.pymc_generator_version,
+                "code_sha256": generator.code_sha256,
+                "worker": worker.to_dict(),
+            },
+            "seed_context": {
+                "rule": SEED_RULE,
+                "base_seed": request.seed,
+                "task_index": task_index,
+                "task_seed": request.task_seed(task_index),
+            },
+            "effective_configuration": {
+                "run_preset": request.preset,
+                "preset": member,
+                "configuration": dict(member_config),
+            },
+            "cell_namespace": f"{run_id}_{task_id}",
+        },
+        "timing": {
+            "started_at": format_timestamp(started_at),
+            "finished_at": format_timestamp(finished_at),
+            "generation_seconds": generation_seconds,
+        },
+        "draw_failures": draw_failures,
+        "generation_failure": None if generation_failure is None else generation_failure.to_dict(),
+    }
+
+
+def task_record_from_completion(manifest: RunManifest, completion: Mapping[str, Any]) -> TaskRecord:
+    """The task record the dashboard reads for one completion of ``manifest``'s run.
+
+    ``completion`` has passed ``pymc_generator.publication`` discovery (schema, accounting
+    and location); this checks that it is a task of this run, with its seed and target,
+    and reads the fields this worker adds. Raises ``RecordError`` otherwise.
+    """
+    return _total(lambda: _task_record_from_completion(manifest, completion))
+
+
+def _task_record_from_completion(
+    manifest: RunManifest, completion: Mapping[str, Any]
+) -> TaskRecord:
+    request = manifest.request
+    task_id = completion["task_id"]
+    index = task_index_of(task_id)
+    if index >= manifest.n_tasks:
+        raise RecordError(f"{task_id} is not a task of this run")
+    if completion["run_id"] != manifest.run_id:
+        raise RecordError(f"run_id must be {manifest.run_id!r}, got {completion['run_id']!r}")
+    counts = completion["counts"]
+    _exact(counts, "target", manifest.worlds_per_task)
+    provenance = completion["provenance"]
+    _exact(provenance["seed_context"], "task_seed", request.task_seed(index))
+    timing = _as_object(completion.get("timing"), "timing")
+    started_at = parse_timestamp(timing.get("started_at"))
+    finished_at = parse_timestamp(timing.get("finished_at"))
+    if finished_at < started_at:
+        raise RecordError("timing.finished_at precedes timing.started_at")
+    attempt_id = completion["attempt_id"]
+    payload = None
+    if completion["payload"] is not None:
+        payload = PayloadRef(
+            path=completion_payload_path(manifest.run_id, task_id, attempt_id),
+            sha256=completion["payload"]["sha256"],
+            size=completion["payload"]["bytes"],
+            corpus_schema_version=completion["corpus_schema_version"],
+        )
+    return TaskRecord(
+        run_id=manifest.run_id,
+        task_id=task_id,
+        task_index=index,
+        seed=request.task_seed(index),
+        target_worlds=counts["target"],
+        accepted_worlds=counts["published"],
+        world_ids=tuple(completion["world_ids"]),
+        payload=payload,
+        accounting=Accounting(
+            candidates_evaluated=counts["candidates"],
+            rejected_candidates=counts["rejected"],
+            draw_failures=_int(completion, "draw_failures", optional=True),
+            surplus_discarded=counts["surplus"],
+            generation_failure=_error(completion.get("generation_failure"), "generation_failure"),
+        ),
+        started_at=started_at,
+        finished_at=finished_at,
+        generation_seconds=_non_negative(timing, "generation_seconds"),
+        attempt_id=attempt_id,
+        worker=_worker(provenance["environment"]["worker"]),
+    )

@@ -10,9 +10,11 @@ read the migration notes before upgrading.
 
 - **Experimental, internal live generation dashboard with a Modal CPU worker and an
   authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the
-  installed package) publishes each completed generation task, a corpus payload plus a
-  versioned JSON completion record, into a store and follows the publications from a
-  separate FastAPI + Plotly page behind HTTP Basic authentication: worlds-generated,
+  installed package) is the generation engine and UI on top of the publication of #67:
+  its Modal worker generates each task with deferred train/validation membership and
+  publishes it through `pymc_generator.publication` (a corpus payload plus a version-1
+  completion record), and a separate FastAPI + Plotly page behind HTTP Basic
+  authentication discovers and follows the publications: worlds-generated,
   generation-speed and generation-cost cards (the worker's attempt time at the list
   price it records, updated at every task), speed and cumulative worlds over time,
   channel impact, control impact and baseline share distributions on one 0-100 % axis,
@@ -28,11 +30,11 @@ read the migration notes before upgrading.
   (environment `pfn`) generation and the dashboard run on separate CPU containers, the
   dashboard at a stable URL. Workers use no GPU by decision: PyTensor 3.2 has no native
   CUDA backend, and CPU-only workers measured as fast as A100 workers for about 1/20 of
-  the cost. The interim single-writer publication protocol
-  (`pymc-generator-live-publication` 1.1) shows zero-world tasks, conflicting records
-  and unavailable payloads separately and never substitutes data; the multi-writer
-  mechanism remains open in #54. New optional extra `dashboard`; the `dev` extra gains
-  the web stack for the tests.
+  the cost. The interim single-writer driver records (`pymc-generator-live-publication`
+  1.1: run manifest and attempt progress around the #67 completions) show zero-world
+  tasks, conflicting records and unavailable payloads separately and never substitute
+  data; the multi-writer mechanism remains open in #54. New optional extra `dashboard`;
+  the `dev` extra gains the web stack for the tests.
 
 - **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not

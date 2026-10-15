@@ -59,7 +59,9 @@ def payloads(live_golden) -> tuple[bytes, ...]:
     store = DirectoryStore(live_golden.root)
     run_id = live_golden.request.run_id
     return tuple(
-        store.read_bytes(pub.payload_path(run_id, pub.task_id_for(index), live_golden.attempt_id))
+        store.read_bytes(
+            pub.completion_payload_path(run_id, pub.task_id_for(index), live_golden.attempt_id)
+        )
         for index in range(live_golden.request.n_tasks)
     )
 
@@ -285,7 +287,7 @@ def test_successful_extraction_leaves_no_scratch(payloads, tmp_path, monkeypatch
 @pytest.fixture
 def lenient_validation(monkeypatch):
     """Let corpora through validation, to reach the extraction's own guards."""
-    monkeypatch.setattr(DataGenerator, "validate_corpus", staticmethod(lambda corpus: []))
+    monkeypatch.setattr(DataGenerator, "validate_corpus", staticmethod(lambda corpus, **_: []))
 
 
 def test_worlds_without_positive_total_outcome_are_refused(payloads, tmp_path, lenient_validation):

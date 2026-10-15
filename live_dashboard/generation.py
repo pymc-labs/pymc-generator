@@ -2,14 +2,16 @@
 
 A run is a fixed list of logical tasks (``RunRequest``); task ``i`` generates
 ``worlds_per_task`` worlds with seed ``seed + i``, using the run's preset (a preset mix
-cycles through its member presets by task index). For each task the writer persists and
-commits the payload first and the immutable completion record second, so a reader never
-sees a record whose payload is not yet published. Every record is decoded with the
-contract decoder before it is written: the writer never publishes what readers would
-reject. Rerunning the same request reuses every task that already has a usable record,
-so a crashed or timed-out attempt is resumed by running it again. The run manifest pins
-the generator configuration, source digest and numerical environment; resuming with a
-different generator is refused because one run must never mix two generators' outputs.
+cycles through its member presets by task index). Each task is generated with deferred
+train/validation membership and published through ``pymc_generator.publication``: the
+payload is persisted and committed first and the immutable completion record second, so
+a reader never sees a completion whose payload is not yet published. This worker is the
+run's single driver: it writes the run manifest and its attempt record (progress,
+deadline, worker) around the publications. Rerunning the same request reuses every task
+that already has a verifying completion, so a crashed or timed-out attempt is resumed by
+running it again. The run manifest pins the generator configuration, source digest and
+numerical environment; resuming with a different generator is refused because one run
+must never mix two generators' outputs.
 
 ``pymc_generator`` is imported inside functions only, so importing this module (e.g. by
 the launcher, which the Modal CLI runs with its own interpreter) does not load PyMC or
@@ -26,7 +28,6 @@ import importlib.metadata
 import os
 import platform
 import re
-import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -38,44 +39,42 @@ from typing import TYPE_CHECKING, Any
 from live_dashboard.deployment import REVISION_ENV, check_demo_bounds
 from live_dashboard.publication import (
     MAX_RECORD_BYTES,
-    Accounting,
     AttemptRecord,
     AttemptState,
     ErrorInfo,
     GeneratorInfo,
-    PayloadRef,
     RecordError,
     RunManifest,
     RunRequest,
-    TaskRecord,
     WorkerInfo,
     attempt_record_path,
     clean_message,
+    completion_metadata,
     decode_attempt_record,
     decode_run_manifest,
-    decode_task_record,
     is_attempt_id,
     new_attempt_id,
-    payload_path,
     run_manifest_path,
-    sha256_hex,
-    task_dir,
     task_id_for,
-    task_record_path,
     utc_now,
-    world_id_for,
 )
 from live_dashboard.revision import code_revision
 from live_dashboard.storage import DirectoryStore
 
 if TYPE_CHECKING:
     from pymc_generator.data_generator import DataGenerator
+    from pymc_generator.publication import FilePublicationStore
     from pymc_generator.sampler import SCMPrior
 
 # The library's cell-fill failure: a cell could not accept its worlds within the top-up
 # rounds. Only this outcome is a scientific result (a task with zero accepted worlds);
-# any other exception is an infrastructure or code failure and fails the attempt.
-_EXHAUSTED = re.compile(r"tasks accepted after \d+ rounds")
+# any other exception is an infrastructure or code failure and fails the attempt. The
+# message carries the failing cell's tallies (the library reports no other cell's), which
+# the zero-world completion reports.
+_EXHAUSTED = re.compile(
+    r"tasks accepted after \d+ rounds\b.*?rejected (?P<rejected>\d+)/(?P<evaluated>\d+) "
+    r"evaluated candidates, and (?P<failures>\d+)/\d+ rounds"
+)
 # Stop before a task when less than this much time, or twice the longest task so far,
 # is left before the deadline (the time the platform kills the attempt), so the attempt
 # ends cleanly instead of being killed in the middle of a task.
@@ -545,122 +544,110 @@ class _Attempt:
 # -- tasks -----------------------------------------------------------------------------
 
 
-def _payload_verifies(store: DirectoryStore, payload: PayloadRef) -> bool:
-    return store.size(payload.path) == payload.size and (
-        sha256_hex(store.read_bytes(payload.path)) == payload.sha256
-    )
+class _Barriers:
+    """The store's commit and refresh, as the Volume handle ``pymc_generator.publication``
+    drives (no-ops for a local directory, ``volume.commit``/``reload`` on Modal)."""
+
+    def __init__(self, store: DirectoryStore) -> None:
+        self._store = store
+
+    def commit(self) -> None:
+        self._store.commit()
+
+    def reload(self) -> None:
+        self._store.refresh()
 
 
-def _already_published(store: DirectoryStore, manifest: RunManifest, task_id: str) -> bool:
-    """Whether a valid record of ``task_id`` exists that a reader can count as published.
+def _publication(store: DirectoryStore) -> FilePublicationStore:
+    """The task-output store over ``store``'s root, with ``store``'s barriers."""
+    from pymc_generator.publication import MountedVolumePublicationStore
 
-    A record whose payload is missing or damaged does not count: the task is generated
-    again, and the reader deduplicates the new record (same digest) or reports the
-    conflict (different digest).
+    return MountedVolumePublicationStore(store.root, _Barriers(store))
+
+
+def _published_tasks(
+    publication: FilePublicationStore, run_id: str
+) -> tuple[set[str], dict[str, str]]:
+    """Tasks with a completion whose record, payload and corpus verify, and the reason
+    each other task with a completion (or an unresolved one) cannot be reused.
+
+    ``pymc_generator.publication`` refuses to publish a task past an unresolved or
+    unusable earlier attempt until it is reconciled, so such a task stops the attempt
+    before anything is generated for it.
     """
-    for name in store.list_files(task_dir(manifest.run_id, task_id)):
-        attempt_id = name.removesuffix(".json")
-        if attempt_id == name or not is_attempt_id(attempt_id):
-            continue
-        path = task_record_path(manifest.run_id, task_id, attempt_id)
-        size = store.size(path)
-        if size is None or size > MAX_RECORD_BYTES:
+    candidates, unresolved = publication.discover(run_id)
+    published: set[str] = set()
+    unusable = {reference.split("/")[3]: message for reference, message in unresolved.items()}
+    for candidate in candidates:
+        task_id = candidate["record"]["task_id"]
+        if task_id in published:
             continue
         try:
-            record = decode_task_record(
-                store.read_bytes(path), manifest=manifest, task_id=task_id, attempt_id=attempt_id
-            )
-        except RecordError:
+            publication.read_output(candidate["reference"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            unusable.setdefault(task_id, f"{type(error).__name__}: {error}")
             continue
-        if record.payload is None or _payload_verifies(store, record.payload):
-            return True
-    return False
-
-
-def _payload_bytes(corpus: dict[str, Any], accepted: int) -> bytes:
-    """The saved ``.npz`` of ``corpus``, checked by reading it back like a reader will."""
-    from pymc_generator.data_generator import DataGenerator, load_corpus, save_corpus
-
-    with tempfile.TemporaryDirectory(prefix="live-dashboard-payload-") as directory:
-        path = Path(directory) / "payload.npz"
-        save_corpus(corpus, path)
-        loaded = load_corpus(path)
-        errors = DataGenerator.validate_corpus(loaded)
-        if errors:
-            raise ValueError("saved payload fails validation: " + "; ".join(errors))
-        rows = len(loaded["cell_id"])
-        if rows != accepted:
-            raise ValueError(f"saved payload has {rows} worlds, the generator accepted {accepted}")
-        return path.read_bytes()
+        published.add(task_id)
+    return published, {task: reason for task, reason in unusable.items() if task not in published}
 
 
 def _generate_task(
-    store: DirectoryStore,
+    publication: FilePublicationStore,
     manifest: RunManifest,
     generator: DataGenerator,
+    member: str,
+    member_config: Mapping[str, Any],
     index: int,
     attempt: _Attempt,
     clock: Callable[[], datetime],
-) -> TaskRecord:
-    """Generate task ``index``, publish its payload (if any), then its record."""
+) -> tuple[datetime, datetime]:
+    """Generate task ``index`` and publish it as a completion; returns its start and end."""
     request = manifest.request
-    run_id = manifest.run_id
-    task_id = task_id_for(index)
     started_at = clock()
     t0 = time.perf_counter()
+    corpus = None
     try:
-        corpus = generator.generate(n_tasks=request.worlds_per_task, seed=request.task_seed(index))
+        corpus = generator.generate(
+            n_tasks=request.worlds_per_task,
+            seed=request.task_seed(index),
+            defer_cell_split=True,
+        )
     except RuntimeError as error:
-        if type(error) is not RuntimeError or _EXHAUSTED.search(str(error)) is None:
+        tally = _EXHAUSTED.search(str(error)) if type(error) is RuntimeError else None
+        if tally is None:
             raise
-        accepted = 0
-        payload = None
-        accounting = Accounting(None, None, None, None, ErrorInfo.from_exception(error))
+        candidates, rejected, published = int(tally["evaluated"]), int(tally["rejected"]), 0
+        draw_failures = int(tally["failures"])
+        failure: ErrorInfo | None = ErrorInfo.from_exception(error)
         generation_seconds = time.perf_counter() - t0
     else:
         diagnostics = corpus["diagnostics"]
-        accepted = int(diagnostics["n_tasks"])
-        data = _payload_bytes(corpus, accepted)
-        path = payload_path(run_id, task_id, attempt.attempt_id)
-        store.write_new(path, data)
-        store.commit()
-        payload = PayloadRef(
-            path=path,
-            sha256=sha256_hex(data),
-            size=len(data),
-            corpus_schema_version=manifest.generator.corpus_schema_version,
-        )
-        evaluated = int(diagnostics["n_draws_evaluated"])
-        accounting = Accounting(
-            candidates_evaluated=evaluated,
-            # The library reports a rate; the count is exact for any realistic total.
-            rejected_candidates=round(float(diagnostics["rejection_rate"]) * evaluated),
-            draw_failures=int(diagnostics["n_draw_failures"]),
-            surplus_discarded=None,  # drawn-but-unevaluated candidates are not counted
-            generation_failure=None,
-        )
+        candidates = int(diagnostics["n_draws_evaluated"])
+        # The library reports a rate; the count is exact for any realistic total.
+        rejected = round(float(diagnostics["rejection_rate"]) * candidates)
+        published = int(diagnostics["n_tasks"])
+        draw_failures = int(diagnostics["n_draw_failures"])
+        failure = None
         generation_seconds = float(diagnostics["timing"]["elapsed_s"])
-    record = TaskRecord(
-        run_id=run_id,
-        task_id=task_id,
+    finished_at = max(clock(), started_at)
+    metadata = completion_metadata(
+        manifest,
         task_index=index,
-        seed=request.task_seed(index),
-        target_worlds=request.worlds_per_task,
-        accepted_worlds=accepted,
-        world_ids=tuple(world_id_for(run_id, task_id, row) for row in range(accepted)),
-        payload=payload,
-        accounting=accounting,
-        started_at=started_at,
-        finished_at=max(clock(), started_at),
-        generation_seconds=generation_seconds,
+        member=member,
+        member_config=member_config,
         attempt_id=attempt.attempt_id,
         worker=attempt.worker,
+        candidates=candidates,
+        rejected=rejected,
+        published=published,
+        started_at=started_at,
+        finished_at=finished_at,
+        generation_seconds=generation_seconds,
+        draw_failures=draw_failures,
+        generation_failure=failure,
     )
-    data = record.encode()
-    decode_task_record(data, manifest=manifest, task_id=task_id, attempt_id=attempt.attempt_id)
-    store.write_new(task_record_path(run_id, task_id, attempt.attempt_id), data)
-    store.commit()
-    return record
+    publication.publish(metadata, corpus)
+    return started_at, finished_at
 
 
 def _publish_tasks(
@@ -678,24 +665,47 @@ def _publish_tasks(
     """
     from pymc_generator.data_generator import DataGenerator
 
+    publication = _publication(store)
     generators = {name: DataGenerator(cfg) for name, cfg in configs.items()}
+    # Each completion records its member's configuration as the manifest stores it.
+    recorded = manifest.generator.config
+    member_configs = {
+        name: recorded if len(cycle) == 1 else recorded["presets"][name] for name in configs
+    }
+    published, unusable = _published_tasks(publication, manifest.run_id)
     longest = 0.0
     for index in range(manifest.n_tasks):
         task_id = task_id_for(index)
-        if _already_published(store, manifest, task_id):
+        if task_id in published:
             attempt.reused.append(task_id)
             continue
+        if task_id in unusable:
+            from pymc_generator.publication import PublicationError
+
+            raise PublicationError(
+                f"{task_id} has a completion that does not verify ({unusable[task_id]}); "
+                "reconcile it before resuming"
+            )
         if deadline is not None:
             remaining = (deadline - clock()).total_seconds()
             if remaining < max(_MIN_DEADLINE_MARGIN_S, 2 * longest):
                 return "stopped"
         attempt.current_task_index = index
         attempt.save("running", clock())
-        generator = generators[cycle[index % len(cycle)]]
-        record = _generate_task(store, manifest, generator, index, attempt, clock)
+        member = cycle[index % len(cycle)]
+        started_at, finished_at = _generate_task(
+            publication,
+            manifest,
+            generators[member],
+            member,
+            member_configs[member],
+            index,
+            attempt,
+            clock,
+        )
         attempt.published.append(task_id)
         # Measured on the deadline's clock, so both sides of the stop rule agree.
-        longest = max(longest, (record.finished_at - record.started_at).total_seconds())
+        longest = max(longest, (finished_at - started_at).total_seconds())
     return "finished"
 
 

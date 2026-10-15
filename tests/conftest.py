@@ -153,9 +153,11 @@ def live_golden(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GoldenRun]
         statuses = tuple(task.status for task in run.tasks)
         reader_views.append((run.state, statuses, run.attempts[0].current_task_index))
 
-    def spy(self, n_tasks=None, seed=None, validate=True):
+    def spy(self, n_tasks=None, seed=None, validate=True, *, defer_cell_split=False):
         observe()
-        corpus = generate(self, n_tasks=n_tasks, seed=seed, validate=validate)
+        corpus = generate(
+            self, n_tasks=n_tasks, seed=seed, validate=validate, defer_cell_split=defer_cell_split
+        )
         diagnostics[seed] = corpus["diagnostics"]
         return corpus
 

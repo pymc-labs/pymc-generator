@@ -72,7 +72,9 @@ def payloads(live_golden) -> tuple[bytes, ...]:
     store = DirectoryStore(live_golden.root)
     run_id = live_golden.request.run_id
     result = tuple(
-        store.read_bytes(pub.payload_path(run_id, pub.task_id_for(index), live_golden.attempt_id))
+        store.read_bytes(
+            pub.completion_payload_path(run_id, pub.task_id_for(index), live_golden.attempt_id)
+        )
         for index in range(live_golden.request.n_tasks)
     )
     assert len(set(result)) == len(result) == 3
@@ -262,6 +264,23 @@ def test_a_new_collector_has_not_refreshed_and_an_empty_store_has_no_runs(tmp_pa
     assert (snapshot.runs, snapshot.issues) == ((), ())
 
 
+def test_completions_that_fail_discovery_or_their_run_are_invalid_tasks(live_golden, tmp_path):
+    store = support.copy_store(live_golden.root, tmp_path / "store")
+    run_id, attempt_id = live_golden.request.run_id, live_golden.attempt_id
+    support.rewrite_json(
+        store.root / pub.completion_path(run_id, "task-00000", attempt_id),
+        lambda body: body["provenance"]["seed_context"].update(task_seed=999),
+    )
+    (store.root / pub.completion_path(run_id, "task-00001", attempt_id)).write_bytes(b"{")
+    run = _run(_collector(store))
+    assert [task.status for task in run.tasks] == ["invalid", "invalid", "published"]
+    # Schema-valid but not this task's seed: the run's own check refuses it.
+    assert "task_seed must be" in run.tasks[0].detail
+    # Not JSON: pymc_generator.publication discovery reports it, named by its attempt.
+    assert run.tasks[1].detail.startswith(f"attempts/{attempt_id}/completion.json: ")
+    assert run.published_worlds == 2
+
+
 def test_the_golden_run_reads_back_as_the_writer_published_it(live_golden, payloads):
     store = DirectoryStore(live_golden.root)  # read-only: the collector writes nothing
     snapshot = _collector(store).snapshot
@@ -278,13 +297,12 @@ def test_the_golden_run_reads_back_as_the_writer_published_it(live_golden, paylo
     assert [(attempt.attempt_id, attempt.status) for attempt in run.attempts] == [
         (live_golden.attempt_id, "finished")
     ]
+    manifest = support.load_manifest(store, run.run_id)
     for task in run.tasks:
-        record = pub.decode_task_record(
-            store.read_bytes(pub.task_record_path(run.run_id, task.task_id, task.attempt_id)),
-            manifest=support.load_manifest(store, run.run_id),
-            task_id=task.task_id,
-            attempt_id=live_golden.attempt_id,
+        completion = store.read_bytes(
+            pub.completion_path(run.run_id, task.task_id, task.attempt_id)
         )
+        record = pub.task_record_from_completion(manifest, json.loads(completion))
         accounting = record.accounting
         assert (task.status, task.duplicate_records, task.detail) == ("published", 0, None)
         assert (task.started_at, task.finished_at, task.generation_seconds) == (
@@ -304,7 +322,7 @@ def test_the_golden_run_reads_back_as_the_writer_published_it(live_golden, paylo
         task_id = pub.task_id_for(index)
         worlds = [world for world in run.worlds if world.task_id == task_id]
         assert [world.world_id for world in worlds] == [
-            pub.world_id_for(run.run_id, task_id, row) for row in range(2)
+            pub.completion_world_id(task_id, row) for row in range(2)
         ]
         assert [world.channel_share for world in worlds] == list(metrics.channel)
 
