@@ -1,0 +1,50 @@
+{
+  "status": "pass",
+  "run_id": "modal_smoke_20261015a",
+  "volume": "pymc-generator-smoke-20261015",
+  "environment": "main",
+  "partitions": 18,
+  "counts": {
+    "target": 1800,
+    "candidates": 2800,
+    "rejected": 20,
+    "surplus": 980,
+    "published": 1800,
+    "shortfall": 0
+  },
+  "peak_overlapping_worker_calls": 18,
+  "worker_container_ids": [
+    "ta-01M4Z7962YZ854Z7ZPFVP9D7XR",
+    "ta-01M4Z795V6SZ1GRJGK79M3MX0R",
+    "ta-01M4Z79635HBDTE96PJQR7PA5R",
+    "ta-01M4Z7967645SEQDFX3VXNWK0R",
+    "ta-01M4Z797M4SWFD9426Y0VG9CNR",
+    "ta-01M4Z79835V8P497B2548JPW5R",
+    "ta-01M4Z7967HCQZQZM24K4QRC3RR",
+    "ta-01M4Z797G7A81RKHDKP389P76R",
+    "ta-01M4Z797SM18RFVCNABYNKMH3R",
+    "ta-01M4Z796SACQ37EQFK8CNF30CR",
+    "ta-01M4Z795V0CR96EF420Z0C67AR",
+    "ta-01M4Z7976VXKG3J5KJZQ4Z4E2R",
+    "ta-01M4Z7962PQNKH3XNH01K7C54R",
+    "ta-01M4Z798B5ZPY82Y6FD23MGJ2R",
+    "ta-01M4Z796355QQ5A0VJQJK76RFR",
+    "ta-01M4Z797ZN9HYZTFFYY4J5XMRR",
+    "ta-01M4Z796XA1MWV32Z4FH4017ZR",
+    "ta-01M4Z797B109Y15YH1N04FY4MR"
+  ],
+  "worker_seconds": 3546.5096757411957,
+  "reader_seconds": 93.27361845970154,
+  "snapshot": "snapshots/training.json",
+  "training": 1440,
+  "validation": 360,
+  "bytes": 44190035,
+  "spend": {
+    "approved_threshold_usd": 5.0,
+    "preflight_reserved_estimate_usd": 1.48473544,
+    "requested_resource_compute_estimate_usd": 0.06385833711490631,
+    "note": "Estimate, not invoice or hard cap; startup/build/storage/billing lag separate",
+    "pricing_source": "https://modal.com/pricing",
+    "pricing_checked": "2026-10-15"
+  }
+}

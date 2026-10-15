@@ -765,6 +765,8 @@ class DataGenerator:
         n_tasks: int | None = None,
         seed: int | None = None,
         validate: bool = True,
+        *,
+        defer_cell_split: bool = False,
     ) -> dict[str, Any]:
         """Generate a corpus of synthetic MMM tasks.
 
@@ -776,6 +778,9 @@ class DataGenerator:
             Random seed. If None, uses config.seed.
         validate : bool
             Whether to validate the generated corpus.
+        defer_cell_split : bool
+            Leave train/validation membership explicitly unassigned. Allows one
+            world and keeps temporal masks independent of later membership.
 
         Returns
         -------
@@ -790,11 +795,11 @@ class DataGenerator:
         # sample_prior_predictive truncates before deriving retained-corpus
         # diagnostics and signal labels. Do not independently slice a finalized
         # corpus here, or those task-level summaries would become stale.
-        corpus = sample_prior_predictive(cfg, n=n_tasks)
+        corpus = sample_prior_predictive(cfg, n=n_tasks, defer_cell_split=defer_cell_split)
 
         # Validate if requested
         if validate:
-            errors = self.validate_corpus(corpus)
+            errors = self.validate_corpus(corpus, allow_deferred_split=defer_cell_split)
             if errors:
                 raise ValueError(
                     "Corpus validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -808,11 +813,14 @@ class DataGenerator:
         batch_size: int = 100,
         seed: int | None = None,
         validate: bool = True,
+        *,
+        defer_cell_split: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """Yield batches of at least two worlds without retaining earlier batches.
 
-        Every corpus carries its own cell-level train/validation split, so a
-        batch cannot be a single world.
+        By default each corpus carries a cell-level train/validation split.
+        With ``defer_cell_split=True``, one-world batches are permitted; assign
+        globally namespaced cell groups later when preparing a training snapshot.
 
         Parameters
         ----------
@@ -832,17 +840,17 @@ class DataGenerator:
         """
         if n_tasks <= 0:
             raise ValueError(f"n_tasks must be positive, got {n_tasks}")
-        if n_tasks == 1:
+        if n_tasks == 1 and not defer_cell_split:
             raise ValueError("n=1 cannot form a cell-level train/validation split; n must be >= 2")
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
-        if batch_size == 1:
+        if batch_size == 1 and not defer_cell_split:
             raise ValueError(
                 "batch_size must be at least 2 for a cell-level train/validation split"
             )
 
         n_batches = (n_tasks + batch_size - 1) // batch_size
-        if n_tasks % batch_size == 1 and n_batches > 1:
+        if not defer_cell_split and n_tasks % batch_size == 1 and n_batches > 1:
             n_batches -= 1
         base_seed = self.config.seed if seed is None else seed
         return (
@@ -850,6 +858,7 @@ class DataGenerator:
                 n_tasks=batch_size if i < n_batches - 1 else n_tasks - i * batch_size,
                 seed=base_seed + i,
                 validate=validate,
+                defer_cell_split=defer_cell_split,
             )
             for i in range(n_batches)
         )
@@ -860,6 +869,8 @@ class DataGenerator:
         n_tasks: int | None = None,
         seed: int | None = None,
         validate: bool = True,
+        *,
+        defer_cell_split: bool = False,
     ) -> dict[str, Any]:
         """Generate corpus and save to disk.
 
@@ -882,7 +893,9 @@ class DataGenerator:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        corpus = self.generate(n_tasks=n_tasks, seed=seed, validate=validate)
+        corpus = self.generate(
+            n_tasks=n_tasks, seed=seed, validate=validate, defer_cell_split=defer_cell_split
+        )
 
         # Save
         save_corpus(corpus, path)
@@ -890,13 +903,16 @@ class DataGenerator:
         return corpus
 
     @staticmethod
-    def validate_corpus(corpus: dict[str, Any]) -> list[str]:
+    def validate_corpus(corpus: dict[str, Any], *, allow_deferred_split: bool = False) -> list[str]:
         """Validate a generated corpus.
 
         Parameters
         ----------
         corpus : dict
             Corpus dictionary.
+        allow_deferred_split : bool
+            Accept explicitly marked, wholly unassigned ``is_val=2`` corpora.
+            Legacy validation remains strict by default.
 
         Returns
         -------
@@ -1195,7 +1211,15 @@ class DataGenerator:
                 errors.append("outcome_scale does not match supported outcome observations")
 
         is_val = corpus["is_val"]
-        if (is_val > 1).any():
+        split_metadata = diagnostics.get("cell_split") if isinstance(diagnostics, dict) else None
+        if split_metadata is not None:
+            if split_metadata != {"mode": "deferred", "version": 1}:
+                errors.append("unsupported cell_split metadata")
+            elif not allow_deferred_split:
+                errors.append("deferred cell split requires allow_deferred_split=True")
+            if not (is_val == 2).all():
+                errors.append("deferred is_val must contain only unassigned value 2")
+        elif (is_val > 1).any():
             errors.append("is_val is not binary")
         elif not 0 < is_val.sum() < n_tasks:
             errors.append("is_val must contain at least one training and one validation world")

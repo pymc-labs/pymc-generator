@@ -1,0 +1,425 @@
+{
+  "status": "pass",
+  "target": 180,
+  "published": 180,
+  "partitions": [
+    {
+      "task": "linear_none",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/linear_none/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.12104679830372334,
+        "build_s": 1.6732122977264225,
+        "compile_s": 22.54641927499324,
+        "draw_s": 0.15923592075705528,
+        "invariants_and_hash_s": 0.008441294077783823,
+        "acceptance_and_packing_s": 0.009431407786905766,
+        "normalization_and_diagnostics_s": 0.035143646877259016
+      }
+    },
+    {
+      "task": "linear_geometric",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/linear_geometric/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.3927601450122893,
+        "build_s": 2.2525808992795646,
+        "compile_s": 23.47305763233453,
+        "draw_s": 0.15899982815608382,
+        "invariants_and_hash_s": 0.00842937920242548,
+        "acceptance_and_packing_s": 0.009283809922635555,
+        "normalization_and_diagnostics_s": 0.03167442698031664
+      }
+    },
+    {
+      "task": "linear_weibull",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/linear_weibull/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.41205145278945565,
+        "build_s": 4.498339889105409,
+        "compile_s": 42.851785174105316,
+        "draw_s": 0.17529512895271182,
+        "invariants_and_hash_s": 0.00836883531883359,
+        "acceptance_and_packing_s": 0.009164582472294569,
+        "normalization_and_diagnostics_s": 0.044266071170568466
+      }
+    },
+    {
+      "task": "hill_none",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/hill_none/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.4519589599221945,
+        "build_s": 1.884198579005897,
+        "compile_s": 31.26704979222268,
+        "draw_s": 0.17263361252844334,
+        "invariants_and_hash_s": 0.00880050752311945,
+        "acceptance_and_packing_s": 0.009918198455125093,
+        "normalization_and_diagnostics_s": 0.03197635803371668
+      }
+    },
+    {
+      "task": "hill_geometric",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/hill_geometric/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.4114573299884796,
+        "build_s": 2.3655547853559256,
+        "compile_s": 25.874273512978107,
+        "draw_s": 0.16990482807159424,
+        "invariants_and_hash_s": 0.00821706373244524,
+        "acceptance_and_packing_s": 0.009292250033468008,
+        "normalization_and_diagnostics_s": 0.02528655482456088
+      }
+    },
+    {
+      "task": "hill_weibull",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/hill_weibull/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.42944421572610736,
+        "build_s": 4.584126809146255,
+        "compile_s": 31.252606817055494,
+        "draw_s": 0.18088856060057878,
+        "invariants_and_hash_s": 0.0084054134786129,
+        "acceptance_and_packing_s": 0.009488803800195456,
+        "normalization_and_diagnostics_s": 0.027964069973677397
+      }
+    },
+    {
+      "task": "logistic_none",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/logistic_none/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.4658735329285264,
+        "build_s": 1.9056898807175457,
+        "compile_s": 29.61798310885206,
+        "draw_s": 0.16445318004116416,
+        "invariants_and_hash_s": 0.008425050880759954,
+        "acceptance_and_packing_s": 0.009254822973161936,
+        "normalization_and_diagnostics_s": 0.027124840766191483
+      }
+    },
+    {
+      "task": "logistic_geometric",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/logistic_geometric/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.43165860418230295,
+        "build_s": 2.3957958607934415,
+        "compile_s": 27.474792371038347,
+        "draw_s": 0.1719484766945243,
+        "invariants_and_hash_s": 0.008567450102418661,
+        "acceptance_and_packing_s": 0.009621392469853163,
+        "normalization_and_diagnostics_s": 0.03084243508055806
+      }
+    },
+    {
+      "task": "logistic_weibull",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/logistic_weibull/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.45275878300890326,
+        "build_s": 4.615318716969341,
+        "compile_s": 32.33661432703957,
+        "draw_s": 0.1827329881489277,
+        "invariants_and_hash_s": 0.008359537459909916,
+        "acceptance_and_packing_s": 0.009436445776373148,
+        "normalization_and_diagnostics_s": 0.02317349100485444
+      }
+    },
+    {
+      "task": "michaelis_menten_none",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/michaelis_menten_none/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.48646356305107474,
+        "build_s": 1.874513927847147,
+        "compile_s": 24.232547607738525,
+        "draw_s": 0.16278655687347054,
+        "invariants_and_hash_s": 0.008318435866385698,
+        "acceptance_and_packing_s": 0.009311743080615997,
+        "normalization_and_diagnostics_s": 0.022998212836682796
+      }
+    },
+    {
+      "task": "michaelis_menten_geometric",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/michaelis_menten_geometric/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.41550476010888815,
+        "build_s": 2.320406710729003,
+        "compile_s": 24.70268749911338,
+        "draw_s": 0.165993245318532,
+        "invariants_and_hash_s": 0.008256993722170591,
+        "acceptance_and_packing_s": 0.009081937372684479,
+        "normalization_and_diagnostics_s": 0.03226335719227791
+      }
+    },
+    {
+      "task": "michaelis_menten_weibull",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/michaelis_menten_weibull/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.4296525870449841,
+        "build_s": 4.631209819111973,
+        "compile_s": 32.5124416439794,
+        "draw_s": 0.1779000530950725,
+        "invariants_and_hash_s": 0.008400680497288704,
+        "acceptance_and_packing_s": 0.00942124193534255,
+        "normalization_and_diagnostics_s": 0.042200660798698664
+      }
+    },
+    {
+      "task": "tanh_none",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/tanh_none/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.47544046584516764,
+        "build_s": 1.8843276272527874,
+        "compile_s": 25.539561142213643,
+        "draw_s": 0.16180837340652943,
+        "invariants_and_hash_s": 0.008203363046050072,
+        "acceptance_and_packing_s": 0.009033864364027977,
+        "normalization_and_diagnostics_s": 0.02240663394331932
+      }
+    },
+    {
+      "task": "tanh_geometric",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/tanh_geometric/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.4161773510277271,
+        "build_s": 2.358668067958206,
+        "compile_s": 25.489787864964455,
+        "draw_s": 0.16366678988561034,
+        "invariants_and_hash_s": 0.008204534649848938,
+        "acceptance_and_packing_s": 0.009214124642312527,
+        "normalization_and_diagnostics_s": 0.032265348825603724
+      }
+    },
+    {
+      "task": "tanh_weibull",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/tanh_weibull/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.41418756591156125,
+        "build_s": 4.55814220989123,
+        "compile_s": 31.246395274065435,
+        "draw_s": 0.17760732071474195,
+        "invariants_and_hash_s": 0.008290073368698359,
+        "acceptance_and_packing_s": 0.009081139229238033,
+        "normalization_and_diagnostics_s": 0.03915528813377023
+      }
+    },
+    {
+      "task": "root_none",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/root_none/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.47056946298107505,
+        "build_s": 1.953785845078528,
+        "compile_s": 28.117191730998456,
+        "draw_s": 0.16405481658875942,
+        "invariants_and_hash_s": 0.00816630944609642,
+        "acceptance_and_packing_s": 0.009086163248866796,
+        "normalization_and_diagnostics_s": 0.03325663087889552
+      }
+    },
+    {
+      "task": "root_geometric",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/root_geometric/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.42777094803750515,
+        "build_s": 2.426373564172536,
+        "compile_s": 26.005423612892628,
+        "draw_s": 0.16962835006415844,
+        "invariants_and_hash_s": 0.008253266103565693,
+        "acceptance_and_packing_s": 0.009209137875586748,
+        "normalization_and_diagnostics_s": 0.02805262804031372
+      }
+    },
+    {
+      "task": "root_weibull",
+      "counts": {
+        "target": 10,
+        "candidates": 10,
+        "rejected": 0,
+        "surplus": 0,
+        "published": 10,
+        "shortfall": 0
+      },
+      "reference": "runs/structural_smoke/tasks/root_weibull/attempts/first/completion.json",
+      "builds": 1,
+      "compilations": 1,
+      "stage_times": {
+        "model_release_s": 0.4347562873736024,
+        "build_s": 4.658151584211737,
+        "compile_s": 31.791092108003795,
+        "draw_s": 0.1853810246102512,
+        "invariants_and_hash_s": 0.008514247369021177,
+        "acceptance_and_packing_s": 0.009560303762555122,
+        "normalization_and_diagnostics_s": 0.03188925189897418
+      }
+    }
+  ],
+  "snapshot": "snapshots/training.json",
+  "training": 144,
+  "validation": 36,
+  "elapsed_seconds": 608.3097359212115
+}
