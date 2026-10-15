@@ -9,10 +9,12 @@ while the file keeps its verified size), extraction (keyed by digest and
 Nothing that failed for a possibly transient reason is cached.
 
 An ``extraction_budget_s`` bounds the time a refresh spends reading and extracting
-payloads it has not extracted yet (at least one per refresh, so every refresh makes
-progress): a cold collector over a large store then publishes a snapshot within that
-budget, with the tasks it has not read yet as ``loading``, and reads the rest over the
-following refreshes. Without a budget a refresh reads everything.
+payloads it has not extracted yet (store listings and records are not counted). It goes
+on until it caches one such payload's outcome, so every refresh makes progress and a
+payload that keeps failing cannot hold the rest back. A cold collector over a large store
+thus publishes a snapshot once its records are read, with the tasks it has not read yet
+as ``loading``, and reads the rest over the following refreshes. Without a budget a
+refresh reads everything.
 
 Task outputs are read as ``pymc_generator.publication`` completions (discovered through
 its consumer interface) and, for runs published before, as this contract's task records.
@@ -98,23 +100,27 @@ class Collector:
         # (payload path, sha256) -> size of the bytes whose digest matched.
         self._verified: dict[tuple[str, str], int] = {}
         # (sha256, EXTRACTION_VERSION) -> metrics, or the deterministic content error.
+        # Pruned to the keys of the latest successful refresh's tasks.
         self._extracted: dict[tuple[str, int], PayloadMetrics | ExtractionError] = {}
-        # (task, attempt, extraction key) -> the task's worlds and units: immutable, so a
-        # refresh reuses them instead of rebuilding every world of an unchanged task.
+        # (run, task, attempt, extraction key) -> the task's worlds and units: immutable, so
+        # a refresh reuses them instead of rebuilding every world of an unchanged task.
         # Only the latest successful refresh's entries are kept.
-        self._built: dict[tuple[str, str, tuple[str, int]], _Built] = {}
-        self._building: dict[tuple[str, str, tuple[str, int]], _Built] = {}
-        self._budget_ends: float | None = None
-        self._payloads_read = 0
+        self._built: dict[tuple[str, str, str, tuple[str, int]], _Built] = {}
+        self._building: dict[tuple[str, str, str, tuple[str, int]], _Built] = {}
+        self._keys_seen: set[tuple[str, int]] = set()
+        # This refresh's time reading and extracting unread payloads, and whether one of
+        # them reached a cached outcome (the progress every refresh must make).
+        self._payload_seconds = 0.0
+        self._progressed = False
         self.snapshot = CollectionSnapshot(sequence=0, refreshed_at=None, last_error=None, runs=())
 
     def refresh(self) -> None:
         """Re-read the store and replace ``snapshot``."""
         previous = self.snapshot
-        started = time.monotonic()
-        self._budget_ends = None if self._budget is None else started + self._budget
-        self._payloads_read = 0
+        self._payload_seconds = 0.0
+        self._progressed = False
         self._building = {}
+        self._keys_seen = set()
         try:
             self._store.refresh()
             now = self._clock()
@@ -129,6 +135,9 @@ class Collector:
             )
             return
         self._built = self._building
+        self._extracted = {
+            key: value for key, value in self._extracted.items() if key in self._keys_seen
+        }
         self.snapshot = CollectionSnapshot(
             sequence=previous.sequence + 1,
             refreshed_at=now,
@@ -138,33 +147,44 @@ class Collector:
         )
 
     def _budget_spent(self) -> bool:
-        """Whether this refresh must leave further unread payloads to the next one."""
+        """Whether this refresh leaves further unread payloads to the next one: it spent
+        its budget on payload reads and extractions and cached at least one outcome."""
         return (
-            self._budget_ends is not None
-            and self._payloads_read > 0
-            and time.monotonic() >= self._budget_ends
+            self._budget is not None and self._progressed and self._payload_seconds >= self._budget
         )
 
     # -- runs ----------------------------------------------------------------------
 
     def _collect(self, now: datetime) -> tuple[tuple[RunSnapshot, ...], tuple[str, ...]]:
-        runs: list[RunSnapshot] = []
         issues: list[str] = []
+        manifests: list[pub.RunManifest] = []
         for name in self._store.list_dirs(pub.RUNS_DIR):
             if not pub.is_run_id(name):
                 issues.append(pub.clean_message(f"{pub.RUNS_DIR}/{name}: not a run id (ignored)"))
                 continue
             try:
-                run = self._collect_run(name, now)
+                data = self._read_record(pub.run_manifest_path(name))
+                if data is not None:  # else not published yet: the writer commits run.json first
+                    manifests.append(pub.decode_run_manifest(data, run_id=name))
             except pub.RecordError as error:
                 issues.append(pub.clean_message(f"{pub.RUNS_DIR}/{name}/run.json: {error}"))
-                continue
             except Exception as error:
                 issues.append(pub.clean_message(f"{pub.RUNS_DIR}/{name}: {_describe(error)}"))
-                continue
-            if run is not None:
-                runs.append(run)
-        runs.sort(key=lambda run: (run.created_at, run.run_id), reverse=True)
+        # Newest first, as the run list shows them: a bounded refresh then reads the newest
+        # run's payloads (the one generating) before older runs'.
+        manifests.sort(key=lambda manifest: (manifest.created_at, manifest.run_id), reverse=True)
+        runs: list[RunSnapshot] = []
+        for manifest in manifests:
+            try:
+                runs.append(self._collect_run(manifest, now))
+            except pub.RecordError as error:
+                issues.append(
+                    pub.clean_message(f"{pub.RUNS_DIR}/{manifest.run_id}/run.json: {error}")
+                )
+            except Exception as error:
+                issues.append(
+                    pub.clean_message(f"{pub.RUNS_DIR}/{manifest.run_id}: {_describe(error)}")
+                )
         return tuple(runs), tuple(issues)
 
     def _read_record(self, path: str) -> bytes | None:
@@ -179,11 +199,8 @@ class Collector:
         except FileNotFoundError:
             return None
 
-    def _collect_run(self, name: str, now: datetime) -> RunSnapshot | None:
-        data = self._read_record(pub.run_manifest_path(name))
-        if data is None:
-            return None  # not published yet: the writer commits run.json first
-        manifest = pub.decode_run_manifest(data, run_id=name)
+    def _collect_run(self, manifest: pub.RunManifest, now: datetime) -> RunSnapshot:
+        name = manifest.run_id
         issues: list[str] = []
         task_ids = [pub.task_id_for(index) for index in range(manifest.n_tasks)]
         present = set(self._store.list_dirs(pub.tasks_dir(name)))
@@ -388,30 +405,35 @@ class Collector:
         if authoritative.payload is None:
             return state("zero"), (), (), ()
         key = (authoritative.payload.sha256, EXTRACTION_VERSION)
+        self._keys_seen.add(key)
         unread = key not in self._extracted
         if unread and self._budget_spent():
             return state("loading"), (), (), ()
-        if unread:
-            self._payloads_read += 1
-        found = self._verified_payload(group, need_bytes=unread)
-        if found is None:
-            missing = "no payload matches its recorded size and sha256"
-            return state("unavailable", missing), (), (), ()
-        record, data = found
-        # Equal bytes under another path or task reuse the extraction; verifying this
-        # path may still have read them.
-        result = self._extracted.get(key)
-        if result is None:
-            try:
-                result = self._extract(key, data)
-            except Exception as error:
-                # Not a content verdict: reported now and retried on the next refresh.
-                return (
-                    state("invalid", f"payload extraction failed: {_describe(error)}"),
-                    (),
-                    (),
-                    (),
-                )
+        started = time.monotonic()
+        try:
+            found = self._verified_payload(group, need_bytes=unread)
+            if found is None:
+                missing = "no payload matches its recorded size and sha256"
+                return state("unavailable", missing), (), (), ()
+            record, data = found
+            # Equal bytes under another path or task reuse the extraction; verifying this
+            # path may still have read them.
+            result = self._extracted.get(key)
+            if result is None:
+                try:
+                    result = self._extract(key, data)
+                except Exception as error:
+                    # Not a content verdict: reported now and retried on the next refresh.
+                    return (
+                        state("invalid", f"payload extraction failed: {_describe(error)}"),
+                        (),
+                        (),
+                        (),
+                    )
+        finally:
+            if unread:
+                self._payload_seconds += time.monotonic() - started
+                self._progressed |= key in self._extracted
         if isinstance(result, ExtractionError):
             return state("invalid", f"payload cannot be used: {result}"), (), (), ()
         if result.n_worlds != record.accepted_worlds:
@@ -420,7 +442,7 @@ class Collector:
                 f"{record.accepted_worlds}"
             )
             return state("invalid", mismatch), (), (), ()
-        built_key = (record.task_id, record.attempt_id, key)
+        built_key = (record.run_id, record.task_id, record.attempt_id, key)
         built = self._built.get(built_key)
         if built is None:
             built = _world_metrics(record, result)

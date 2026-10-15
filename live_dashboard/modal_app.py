@@ -44,11 +44,12 @@ _REPO = _PACKAGE_DIR.parent
 _IGNORE = ["**/__pycache__", "**/__pycache__/**", "**/*.pyc"]
 # A cold dashboard container rereads the whole store: about 30 ms per file on the Volume,
 # so minutes for a 200,000-world run. DASHBOARD_KEEP_WARM=1 at deploy time keeps one
-# container running (and its caches) while a large run is supervised; redeploy without
-# it to scale to zero again.
+# container running (and its caches) while a large run is supervised; any deploy without
+# it scales to zero again (and restarts the container cold).
 _KEEP_WARM = os.environ.get("DASHBOARD_KEEP_WARM", "0") == "1"
-# Seconds a refresh spends reading and extracting payloads it has not read yet; the rest
-# show as loading and are read by the next refreshes (live_dashboard.collection).
+# Seconds of payload reads and extractions per refresh (listings and records not
+# counted), going on until one unread payload's outcome is cached; the rest show as
+# loading and are read by the next refreshes, newest run first (live_dashboard.collection).
 DASHBOARD_EXTRACTION_BUDGET_S = 10.0
 _base_image = modal.Image.debian_slim(python_version="3.13")
 if modal.is_local():

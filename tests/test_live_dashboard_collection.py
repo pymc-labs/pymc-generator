@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -787,6 +787,90 @@ def test_a_budgeted_refresh_reads_one_new_payload_at_least_and_shows_the_rest_lo
     ]
     assert sum(calls.values()) == 3  # each payload read and extracted once
     assert _run(collector).worlds == _run(_collector(store)).worlds  # as without a budget
+
+
+class _Seconds:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _SlowReloadStore(DirectoryStore):
+    """Every reload takes 100 s on ``seconds``: listing and reading a large store's records."""
+
+    def __init__(self, root: Path, seconds: _Seconds) -> None:
+        super().__init__(root)
+        self.seconds = seconds
+
+    def refresh(self) -> None:
+        super().refresh()
+        self.seconds.now += 100.0
+
+
+def test_the_budget_counts_payload_reads_and_extractions_only(tmp_path, payloads, monkeypatch):
+    seconds = _Seconds()
+    monkeypatch.setattr("live_dashboard.collection.time", SimpleNamespace(monotonic=seconds))
+    store = _SlowReloadStore(tmp_path, seconds)
+    manifest = _manifest(store, worlds=6)
+    for index in range(3):
+        _publish(store, manifest, index, 1, payloads[index])
+    spy = _spy(Counter())
+
+    def extractor(data: bytes) -> object:
+        seconds.now += 1.0  # each extraction takes 1 s
+        return spy(data)
+
+    collector = Collector(store, clock=_clock(), extractor=extractor, extraction_budget_s=1.5)
+    collector.refresh()
+    # The 100 s reload does not count: two extractions fit in 1.5 s (the second ends it).
+    assert _statuses(collector) == ["published", "published", "loading"]
+
+
+def test_a_payload_that_keeps_failing_does_not_hold_back_the_others(tmp_path, payloads):
+    store = DirectoryStore(tmp_path)
+    manifest = _manifest(store, worlds=6)
+    for index in range(3):
+        _publish(store, manifest, index, 1, payloads[index])
+    extractor = _spy(Counter(), failing=payloads[0])  # not cached: retried every refresh
+    collector = Collector(store, clock=_clock(), extractor=extractor, extraction_budget_s=0.0)
+    seen = []
+    for _ in range(2):
+        collector.refresh()
+        seen.append(_statuses(collector))
+    # Every refresh still reads one payload it can show.
+    assert seen == [["invalid", "published", "loading"], ["invalid", "published", "published"]]
+
+
+def test_runs_with_equal_tasks_and_payloads_keep_their_own_world_ids(tmp_path, payloads):
+    store = DirectoryStore(tmp_path)
+    alpha = _manifest(store, label="alpha")
+    beta = _manifest(store, label="beta")
+    for manifest in (alpha, beta):
+        _publish(store, manifest, 0, 1, payloads[0])  # same task, attempt id and bytes
+    collector = Collector(store, clock=_clock())
+    for _ in range(2):  # the second refresh reuses the worlds the first one built
+        collector.refresh()
+        for manifest in (alpha, beta):
+            worlds = _run_of(collector.snapshot, manifest).worlds
+            assert {world.world_id.split("/")[0] for world in worlds} == {manifest.run_id}
+
+
+def test_a_budgeted_refresh_reads_the_newest_run_first(tmp_path, payloads):
+    store = DirectoryStore(tmp_path)
+    older = _manifest(store, label="aaa-older", worlds=2)
+    newer = _manifest(store, label="zzz-newer", worlds=2, created_at=EPOCH + timedelta(hours=1))
+    _publish(store, older, 0, 1, payloads[0])
+    _publish(store, newer, 0, 1, payloads[1])
+    collector = Collector(store, clock=_clock(), extraction_budget_s=0.0)
+    collector.refresh()
+    snapshot = collector.snapshot
+    assert [run.run_id for run in snapshot.runs] == [newer.run_id, older.run_id]
+    assert _run_of(snapshot, newer).tasks[0].status == "published"
+    assert _run_of(snapshot, older).tasks[0].status == "loading"
 
 
 def test_a_shortfall_task_publishes_its_accepted_worlds(tmp_path, payloads):

@@ -507,6 +507,22 @@ def test_startup_does_not_wait_for_a_slow_first_refresh(credentials):
     assert collector.calls == 1
 
 
+def test_startup_does_not_wait_out_a_first_refresh_that_raised(credentials):
+    collector = StubCollector(RuntimeError("collector bug"))
+    app = web.create_app(
+        collector,
+        credentials=credentials,
+        poll_seconds=SLOW,
+        active_poll_seconds=SLOW,
+        startup_wait_seconds=SLOW,
+    )
+    started = time.monotonic()
+    with TestClient(app) as client:
+        assert time.monotonic() - started < 5.0  # serving once the first refresh ended
+        assert client.get("/api/runs", headers=AUTH).status_code == 503
+    assert collector.calls == 1
+
+
 def test_unknown_run_is_not_found_after_authentication(credentials):
     with serve(StubCollector(make_snapshot(1, make_run(1))), credentials) as client:
         response = client.get("/api/runs/other-000000000000", headers=AUTH)
@@ -531,6 +547,29 @@ def test_run_etag_changes_when_a_task_is_published(credentials):
     assert second.status_code == 200
     assert second.headers["etag"] != first.headers["etag"]
     assert strict_json(second)["cards"][0]["value"] == 4
+
+
+def test_an_unchanged_run_reuses_its_body_across_refreshes(credentials, monkeypatch):
+    built: list[str] = []
+    build = web.figures.run_body
+
+    def counting(run: RunSnapshot) -> dict[str, Any]:
+        built.append(run.run_id)
+        return build(run)
+
+    monkeypatch.setattr(web.figures, "run_body", counting)
+    collector = StubCollector(make_snapshot(1, make_run(1)))
+    url = f"/api/runs/{RUN_ID}"
+    with serve(collector, credentials) as client:
+        first = client.get(url, headers=AUTH).headers["etag"]
+        collector.outcomes.append(make_snapshot(2, make_run(1)))  # equal, not the same object
+        collector.refresh()
+        same = client.get(url, headers=AUTH).headers["etag"]
+        collector.outcomes.append(make_snapshot(3, make_run(2)))
+        collector.refresh()
+        changed = client.get(url, headers=AUTH).headers["etag"]
+    assert same == first != changed
+    assert built == [RUN_ID, RUN_ID]  # for the first run and the changed one only
 
 
 @pytest.mark.parametrize(

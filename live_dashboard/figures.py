@@ -214,21 +214,36 @@ def run_summary(run: RunSnapshot) -> dict[str, Any]:
         "code_revision": run.code_revision,
         "published_worlds": run.published_worlds,
         "recorded_tasks": run.recorded_tasks,
+        "loading_tasks": run.loading_tasks,
     }
 
 
 def worlds_card(run: RunSnapshot) -> dict[str, Any]:
+    subtitle = f"{run.recorded_tasks}/{run.n_tasks} tasks recorded"
+    if run.loading_tasks:
+        subtitle += f", {run.loading_tasks} not read yet"
     return {
         "id": "worlds",
         "title": "Worlds generated",
         "value": run.published_worlds,
         "text": f"{run.published_worlds} / {run.target_worlds}",
-        "subtitle": f"{run.recorded_tasks}/{run.n_tasks} tasks recorded",
+        "subtitle": subtitle,
     }
 
 
 def speed_card(run: RunSnapshot) -> dict[str, Any]:
-    """Consumable worlds per minute of active generation, plus the latest task's rate."""
+    """Consumable worlds per minute of active generation, plus the latest task's rate.
+
+    A dash while published payloads are still being read: the tasks read first would
+    give a rate that is not the run's."""
+    if run.loading_tasks:
+        return {
+            "id": "speed",
+            "title": "Generation speed",
+            "value": None,
+            "text": "—",
+            "subtitle": f"reading published payloads: {_plural(run.loading_tasks, 'task')} left",
+        }
     timed = _timed_tasks(run)
     rate = _rate(run.published_worlds, _active_seconds(timed))
     published = [item for item in timed if item.task.status == "published"]
@@ -419,10 +434,24 @@ def _evenly_spaced(count: int, limit: int) -> list[int]:
     included."""
     if count <= limit:
         return list(range(count))
+    if limit < 2:
+        return list(range(max(limit, 0)))
     return [(k * (count - 1)) // (limit - 1) for k in range(limit)]
 
 
-def _violin(name: str, values: list[float], text: list[str]) -> go.Violin:
+def _bandwidth(values: list[float]) -> float | None:
+    """Plotly's own violin bandwidth rule, applied to every value rather than the points
+    drawn: max(1.059 min(sd, IQR / 1.349) n^(-1/5), range / 100); ``None`` if it is 0."""
+    data = np.asarray(values, dtype=np.float64)
+    low, high = np.quantile(data, [0.25, 0.75])
+    spread = min(float(data.std()), float(high - low) / 1.349)
+    bandwidth = max(1.059 * spread * data.size**-0.2, float(data.max() - data.min()) / 100)
+    return bandwidth if bandwidth > 0 else None
+
+
+def _violin(
+    name: str, values: list[float], text: list[str], bandwidth: float | None = None
+) -> go.Violin:
     return go.Violin(
         y=values,
         text=text,
@@ -431,6 +460,7 @@ def _violin(name: str, values: list[float], text: list[str]) -> go.Violin:
         jitter=0.4,
         pointpos=0.0,
         spanmode="hard",
+        bandwidth=bandwidth,
         box={"visible": True},
         marker={"opacity": 0.4, "size": 5},
         hoveron="points",
@@ -468,8 +498,9 @@ def _shares_figure(
     run's share axis; non-finite shares are left out and counted in the note.
 
     A violin draws at most ``MAX_VIOLIN_POINTS`` of its shares, at evenly spaced ranks
-    (the smallest and largest included), so its shape and box follow every share; the
-    drawn points keep their run order.
+    (the smallest and largest included), with the outline's bandwidth computed from
+    every share, so its outline and box follow all of them; the drawn points keep their
+    run order.
     """
     traces: list[go.Violin] = []
     dropped = 0
@@ -485,11 +516,20 @@ def _shares_figure(
                 values.append(value)
                 kept.append(item)
         picks = list(range(len(values)))
+        bandwidth = None
         if len(values) > MAX_VIOLIN_POINTS:
             order = np.argsort(np.asarray(values, dtype=np.float64), kind="stable").tolist()
             picks = sorted(order[rank] for rank in _evenly_spaced(len(values), MAX_VIOLIN_POINTS))
+            bandwidth = _bandwidth(values)  # the outline as smooth as for every value
             drawn.append(f"{name.lower()} {len(picks):,} of {len(values):,}")
-        traces.append(_violin(name, [values[i] for i in picks], [text_of(kept[i]) for i in picks]))
+        traces.append(
+            _violin(
+                name,
+                [values[i] for i in picks],
+                [text_of(kept[i]) for i in picks],
+                bandwidth,
+            )
+        )
     figure = go.Figure(data=traces, layout=_layout(showlegend=False, yaxis=_share_axis(run)))
     notes = []
     if drawn:
@@ -602,25 +642,20 @@ class _Points:
     symbol: str
     opacity: float
     color: str
+    total: int = 0  # every placed world of this kind, drawn or not
     x: list[float] = field(default_factory=list)
     y: list[float] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
     shares: list[list[float]] = field(default_factory=list)
 
-    @property
-    def drawn(self) -> list[int]:
-        """The points drawn: at most ``MAX_TRIANGLE_POINTS``, evenly spaced in run order."""
-        return _evenly_spaced(len(self.x), MAX_TRIANGLE_POINTS)
-
     def trace(self) -> go.Scatter:
-        keep = self.drawn
         return go.Scatter(
-            x=[self.x[i] for i in keep],
-            y=[self.y[i] for i in keep],
-            text=[self.text[i] for i in keep],
-            customdata=[self.shares[i] for i in keep],
+            x=self.x,
+            y=self.y,
+            text=self.text,
+            customdata=self.shares,
             mode="markers",
-            name=f"{self.name} ({len(self.x):,})",  # every world, also those not drawn
+            name=f"{self.name} ({self.total:,})",
             marker={"symbol": self.symbol, "opacity": self.opacity, "color": self.color, "size": 9},
             hovertemplate=(
                 "%{text}<br>channels %{customdata[0]:.1%}<br>controls %{customdata[1]:.1%}"
@@ -633,26 +668,33 @@ def composition_figure(run: RunSnapshot) -> dict[str, Any]:
     """Fig 6: each world's channel / control / baseline split of its outcome.
 
     Worlds with a negative part lie outside the triangle and are drawn as crosses;
-    worlds with a missing or non-finite share cannot be placed and are only counted.
+    worlds with a missing or non-finite share cannot be placed and are only counted. At
+    most ``MAX_TRIANGLE_POINTS`` worlds are drawn, evenly spaced in run order over all
+    placed worlds (so circles and crosses keep their proportions); legends count all.
     """
     title = "Outcome composition per world"
     if not run.worlds:
         return _panel("composition", title, None, empty_state(run), None)
     inside = _Points("worlds", "circle", 0.35, _WORLD_COLOR)
     outside = _Points("worlds with a negative part", "x", 0.8, _NEGATIVE_COLOR)
-    excluded = 0
+    placed: list[tuple[str, float, float, float]] = []
     for world in run.worlds:
         channel = _finite(world.channel_share)
         control = _finite(world.control_share)
         baseline = _finite(world.baseline_share)
-        if channel is None or control is None or baseline is None:
-            excluded += 1
-            continue
+        if channel is not None and control is not None and baseline is not None:
+            placed.append((world.world_id, channel, control, baseline))
+    excluded = len(run.worlds) - len(placed)
+    drawn = set(_evenly_spaced(len(placed), MAX_TRIANGLE_POINTS))
+    for position, (world_id, channel, control, baseline) in enumerate(placed):
         points = outside if min(channel, control, baseline) < 0 else inside
+        points.total += 1
+        if position not in drawn:
+            continue
         point_x, point_y = _triangle_point(control, baseline)
         points.x.append(point_x)
         points.y.append(point_y)
-        points.text.append(world.world_id)
+        points.text.append(world_id)
         points.shares.append([channel, control, baseline])
     grid_x, grid_y = _grid_lines()
     corners = (
@@ -691,9 +733,8 @@ def composition_figure(run: RunSnapshot) -> dict[str, Any]:
         ),
     )
     notes = []
-    drawn, placed = len(inside.drawn) + len(outside.drawn), len(inside.x) + len(outside.x)
-    if drawn < placed:
-        notes.append(f"{drawn:,} of {placed:,} worlds drawn, evenly spaced in run order")
+    if len(drawn) < len(placed):
+        notes.append(f"{len(drawn):,} of {len(placed):,} worlds drawn, evenly spaced in run order")
     if excluded:
         notes.append(f"{_plural(excluded, 'world')} with non-finite shares not shown")
     return _panel("composition", title, figure, None, "; ".join(notes) or None)
@@ -1213,10 +1254,20 @@ _FIGURES: tuple[Callable[[RunSnapshot], dict[str, Any]], ...] = (
 
 
 def run_body(run: RunSnapshot) -> dict[str, Any]:
-    """Everything the page shows for one run; ``json.dumps(allow_nan=False)`` safe."""
+    """Everything the page shows for one run; ``json.dumps(allow_nan=False)`` safe.
+
+    While published payloads are still being read, every drawn panel says it is partial.
+    """
+    panels = [build(run) for build in _FIGURES]
+    if run.loading_tasks:
+        read = sum(task.status == "published" for task in run.tasks)
+        partial = f"partial: {read:,} of {read + run.loading_tasks:,} published tasks read so far"
+        for panel in panels:
+            if panel["figure"] is not None:
+                panel["note"] = "; ".join(note for note in (partial, panel["note"]) if note)
     return {
         "run": run_summary(run),
         "cards": cards(run),
-        "figures": [build(run) for build in _FIGURES],
+        "figures": panels,
         "status": status(run),
     }

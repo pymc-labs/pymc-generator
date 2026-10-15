@@ -72,7 +72,8 @@ function updateAge() {
 function renderSelector() {
   const options = view.runs.map((run) => [
     run.run_id,
-    `${run.label} · ${run.run_id} · ${run.state} · ${run.published_worlds}/${run.target_worlds} worlds`,
+    `${run.label} · ${run.run_id} · ${run.state} · ${run.published_worlds}/${run.target_worlds} worlds` +
+      (run.loading_tasks ? ` · ${run.loading_tasks} tasks loading` : ""),
   ]);
   if (view.selected !== null && !view.runs.some((run) => run.run_id === view.selected)) {
     options.unshift([view.selected, `${view.selected} (not published yet)`]);

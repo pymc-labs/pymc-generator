@@ -158,6 +158,11 @@ class RunSnapshot:
         """Tasks with any record (every status except pending)."""
         return sum(task.status != "pending" for task in self.tasks)
 
+    @property
+    def loading_tasks(self) -> int:
+        """Published tasks whose payloads the collector has not read yet."""
+        return sum(task.status == "loading" for task in self.tasks)
+
 
 @dataclass(frozen=True)
 class CollectionSnapshot:
@@ -182,4 +187,4 @@ class CollectionSnapshot:
     @property
     def loading(self) -> bool:
         """Whether published payloads still wait to be read (a bounded refresh)."""
-        return any(task.status == "loading" for run in self.runs for task in run.tasks)
+        return any(run.loading_tasks for run in self.runs)

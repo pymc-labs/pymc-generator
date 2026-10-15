@@ -112,7 +112,7 @@ reads it.
 | Worlds per number of columns and of inputs with an effect | Consumable worlds per number of channel columns, of channels with an effect (a direct edge to the target), of control columns and of controls with an effect, side by side; the column bars are the matrix's two margins. |
 | Channels and controls per share of their weeks at zero | Every active channel and control of a consumable world is one series (`treatment_raw`, `covariates`); its share of weeks at exactly 0 falls in "none" or a tenth of the series (upper bound included: 3 of 30 weeks is "≤ 10 %"). Bars are percentages of each role's series, side by side; the note counts the series with any week at zero. |
 | Where the weeks at zero fall | The weeks of each series split into a first, middle and last third (at `weeks // 3` and `2 × weeks // 3`: 69, 69 and 70 of 208). Each role's bars are the share of its weeks at zero in each third, so an even spread puts a third in each (dashed line); the hover adds the weeks at zero and their share of that third's weeks. |
-| Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, and the newest attempt (with its GPU, for the early runs that had one). |
+| Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, tasks still `loading` (published, not read yet), and the newest attempt (with its GPU, for the early runs that had one). |
 
 Shares use the trajectory-showcase notebook's definitions (`realized_shares`):
 channel = Σ treatment contributions + Σ indirect effects, control = Σ covariate
@@ -129,14 +129,18 @@ Only published worlds enter the distributions. Pending, zero-world, unavailable,
 conflicting and invalid tasks appear in the status line instead.
 
 Large runs. A violin draws at most 2,000 of its values, at evenly spaced ranks (the
-smallest and largest included), and the composition triangle at most 4,000 worlds per
-marker type, evenly spaced in run order; the panel note says how many were drawn of how
-many, and counts, legends and axes still cover every value. (A 200,000-world run has
-about 1.3 million channel and control units: drawing them all made a 105 MB body per
+smallest and largest included), with its outline's bandwidth computed from every value;
+the composition triangle draws at most 4,000 worlds, evenly spaced in run order over all
+of them, so dots and × keep their proportions. The panel note says how many were drawn
+of how many, and counts, legends and axes still cover every value. (A 200,000-world run
+has about 1.3 million channel and control units: drawing them all made a 105 MB body per
 poll and 15 s of work per refresh, measured on Modal.) A refresh spends at most 10 s
-reading and extracting payloads it has not read yet: a cold container over a large store
-shows the rest as `loading` (status line, and the empty panels say so), counts only the
-worlds it has read, and reads the rest in the following refreshes, every 3 s.
+reading and extracting payloads it has not read yet (store listings and records do not
+count, and it goes on until one payload is read), newest run first. A cold container
+over a large store therefore shows the rest as `loading`: the worlds card and run list
+count them as "not read yet", the speed card shows — until all are read, and every drawn
+panel's note says how many tasks it covers. Each following refresh (one every few
+seconds plus the 10 s) reads more. The body of a run that did not change is reused.
 
 ## Local use
 
@@ -200,12 +204,14 @@ redraw) unless max(90 s, twice its longest draw) is left; a resumed run continue
 the unpublished tasks. The dashboard uses one CPU core and 4 GiB, one container, and scales
 to zero after 10 idle minutes; `DASHBOARD_KEEP_WARM=1 modal deploy ...` keeps it running
 (about $0.08/h) while a large run is supervised, and a deploy without it scales to zero
-again. A cold container rereads the whole store (about 30 ms per file on the Volume:
-5 minutes for today's 1,300 tasks); it starts serving after at most 60 s, answers "waiting
-for the first store refresh" until that first read ends, then fills in as above. Polling
-is every 3 s while a run is generating, while payloads are loading (or while the store
-cannot be read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up to one
-browser poll; this is a refresh cadence, not a latency guarantee.
+again. A cold container rereads the whole store (about 30 ms per file on the Volume);
+measured for today's 1,272 tasks: first data after 180 s, everything read after 525 s.
+It starts serving after at most 60 s, answers "waiting for the first store refresh" until
+that first read of every record ends (about 141 ms per task cold, so roughly 8 minutes
+with a 200,000-world run in the store), then fills in as above. Polling is every 3 s
+while a run is generating, while payloads are loading (or while the store cannot be
+read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up to one browser poll;
+this is a refresh cadence, not a latency guarantee.
 
 ## Running future generations
 
@@ -611,17 +617,19 @@ PyTensor mode:
    the same image, request and CPU/memory. Compare the dashboard's speed and cost cards.
 
 **Running costs.** The generation cost card shows each run's worker cost as it runs
-(an estimate at list prices). The dashboard container costs about $0.06 per hour while
-a page is open, and scales to zero 10 minutes after the last request. To see spend per
-app and resource (completed hours only), run
+(an estimate at list prices). The dashboard container costs about $0.08 per hour while
+it runs: while a page is open, or always when deployed with `DASHBOARD_KEEP_WARM=1`;
+otherwise it scales to zero 10 minutes after the last request. To see spend per app and
+resource (completed hours only), run
 `modal billing report --for today -r h --show-resources`.
 
 ### Housekeeping
 
 - **Delete a run:** `modal volume rm -e pfn pymc-generator-live-dashboard runs/<run_id> -r`.
   It leaves the page at the next refresh. Never delete a run that is generating.
-- **Deploy code changes:** `modal deploy -e pfn live_dashboard/modal_app.py`. New
-  launches use the new code.
+- **Deploy code changes:** `modal deploy -e pfn live_dashboard/modal_app.py` (prefix
+  `DASHBOARD_KEEP_WARM=1` while a large run is supervised: a deploy without it lets the
+  dashboard scale to zero, and any deploy restarts it cold). New launches use the new code.
 - **Rotate credentials:** see [Modal deployment](#modal-deployment-environment-pfn).
 
 ## Publication protocol (`pymc-generator-live-publication` 1.2)

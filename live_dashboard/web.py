@@ -149,31 +149,31 @@ def _etag_matches(header: str | None, etag: str) -> bool:
 
 
 class _RunBodies:
-    """Encoded run bodies and their ETags for the newest snapshot sequence only.
+    """Encoded run bodies and their ETags, one per run.
 
-    A body is a pure function of its run snapshot, so caching per sequence is exact;
-    older sequences are dropped as soon as a newer snapshot is served.
+    A body is a pure function of its run snapshot, so it is reused for as long as the run
+    equals the one it was built for: an unchanged large run is not rebuilt on every
+    refresh. The comparison is cheap because the collector reuses the world and unit
+    objects of unchanged tasks. Bodies built for an older snapshot than the newest one
+    served are not kept.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._sequence = -1
-        self._bodies: dict[str, tuple[bytes, str]] = {}
+        self._bodies: dict[str, tuple[RunSnapshot, bytes, str]] = {}
 
     def get(self, sequence: int, run: RunSnapshot) -> tuple[bytes, str]:
         with self._lock:
-            if sequence > self._sequence:
-                self._sequence = sequence
-                self._bodies = {}
-            current = sequence == self._sequence
-            cached = self._bodies.get(run.run_id) if current else None
-            if cached is not None:
-                return cached
+            self._sequence = max(self._sequence, sequence)
+            cached = self._bodies.get(run.run_id)
+            if cached is not None and (cached[0] is run or cached[0] == run):
+                return cached[1], cached[2]
             body = _json_bytes(figures.run_body(run))
-            entry = (body, f'"{hashlib.sha256(body).hexdigest()[:24]}"')
-            if current:
-                self._bodies[run.run_id] = entry
-            return entry
+            etag = f'"{hashlib.sha256(body).hexdigest()[:24]}"'
+            if sequence == self._sequence:
+                self._bodies[run.run_id] = (run, body, etag)
+            return body, etag
 
 
 def _poll(
@@ -250,27 +250,29 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stop = threading.Event()
         poller = None
-        if start_poller:
-            first_refresh = threading.Event()
-            poller = threading.Thread(
-                target=_poll,
-                args=(collector, stop, poll_seconds, active_poll_seconds, first_refresh),
-                name=POLLER_THREAD_NAME,
-                daemon=True,
-            )
-            poller.start()
-            await anyio.to_thread.run_sync(first_refresh.wait, startup_wait_seconds)
-        else:
-            try:
-                await anyio.to_thread.run_sync(collector.refresh)
-            except Exception:
-                logger.exception("first collector refresh raised; serving 503 until one succeeds")
-        app.state.poller = poller
         try:
+            if start_poller:
+                first_refresh = threading.Event()
+                poller = threading.Thread(
+                    target=_poll,
+                    args=(collector, stop, poll_seconds, active_poll_seconds, first_refresh),
+                    name=POLLER_THREAD_NAME,
+                    daemon=True,
+                )
+                poller.start()
+                await anyio.to_thread.run_sync(first_refresh.wait, startup_wait_seconds)
+            else:
+                try:
+                    await anyio.to_thread.run_sync(collector.refresh)
+                except Exception:
+                    logger.exception(
+                        "first collector refresh raised; serving 503 until one succeeds"
+                    )
+            app.state.poller = poller
             yield
         finally:
             stop.set()
-            if poller is not None:
+            if poller is not None and poller.ident is not None:  # started
                 await anyio.to_thread.run_sync(poller.join)
 
     app = FastAPI(

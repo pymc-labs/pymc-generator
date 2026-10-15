@@ -472,14 +472,36 @@ def test_a_large_distribution_draws_evenly_ranked_points_in_run_order(monkeypatc
     assert found["note"] == "drawn at evenly spaced ranks: each channel with an effect 5 of 21"
 
 
-def test_a_large_triangle_draws_evenly_spaced_worlds_and_counts_all(monkeypatch):
-    monkeypatch.setattr(figures, "MAX_TRIANGLE_POINTS", 3)
-    worlds = tuple(world(k, 0.5, 0.25, 0.25) for k in range(7)) + (world(7, 1.2, -0.3, 0.1),)
+def test_a_large_triangle_draws_one_run_order_sample_that_keeps_proportions(monkeypatch):
+    monkeypatch.setattr(figures, "MAX_TRIANGLE_POINTS", 10)
+    worlds = tuple(  # every tenth world has a negative part: 10 of 100
+        world(k, 1.2, -0.3, 0.1) if k % 10 == 9 else world(k, 0.5, 0.25, 0.25) for k in range(100)
+    )
     found = panel(run([published(0, (0, 60))], worlds=worlds), "composition")
-    circles = trace(found, "worlds (7)")  # the legend counts every world
-    assert [text.rsplit("/", 1)[-1] for text in circles["text"]] == ["w0", "w3", "w6"]
-    assert trace(found, "worlds with a negative part (1)")["text"][0].endswith("/w7")
-    assert found["note"] == "4 of 8 worlds drawn, evenly spaced in run order"
+    circles = trace(found, "worlds (90)")  # the legends count every world
+    crosses = trace(found, "worlds with a negative part (10)")
+    # Positions 0, 11, ..., 99 of all 100 worlds: one cross in ten drawn, as in the run.
+    assert [text.rsplit("/", 1)[-1] for text in circles["text"]] == [f"w{11 * k}" for k in range(9)]
+    assert [text.rsplit("/", 1)[-1] for text in crosses["text"]] == ["w99"]
+    assert found["note"] == "10 of 100 worlds drawn, evenly spaced in run order"
+
+
+def test_a_partly_read_run_says_so_on_its_cards_and_drawn_panels():
+    snapshot = run(
+        [published(0, (0, 60)), task(1, "loading", (60, 120), accepted=2, attempt=ATTEMPT)],
+        worlds=(world(0, 0.5, 0.3, 0.2), world(1, 0.4, 0.3, 0.3)),
+        attempts=(attempt(),),
+    )
+    body = figures.run_body(snapshot)
+    assert body["run"]["loading_tasks"] == 1
+    cards = {item["id"]: item for item in body["cards"]}
+    assert cards["worlds"]["subtitle"] == "2/2 tasks recorded, 1 not read yet"
+    # The tasks read first would give a rate that is not the run's.
+    assert (cards["speed"]["value"], cards["speed"]["text"]) == (None, "—")
+    drawn = [item for item in body["figures"] if item["figure"] is not None]
+    assert drawn
+    for item in drawn:
+        assert item["note"].startswith("partial: 1 of 2 published tasks read so far")
 
 
 def test_composition_grid_lines_stay_on_the_triangle():
@@ -956,5 +978,6 @@ def test_run_body_is_plain_strict_json_even_from_numpy_and_nan_inputs():
         "code_revision": None,
         "published_worlds": 4,
         "recorded_tasks": 2,
+        "loading_tasks": 0,
     }
     assert [item["id"] for item in body["figures"]] == list(PANELS)

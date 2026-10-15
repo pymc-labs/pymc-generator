@@ -101,7 +101,7 @@ def coordinate(
             "running",
             now,
             now,
-            now + timedelta(seconds=waves * (WORKER_TIMEOUT + 600) + 1200),
+            now + timedelta(seconds=waves * (WORKER_TIMEOUT + 600) + COORDINATOR_TIMEOUT + 600),
             None,
             (),
             (),
