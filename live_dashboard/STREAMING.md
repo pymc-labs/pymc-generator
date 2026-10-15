@@ -91,6 +91,10 @@ STREAM_WORKERS=5 uv run --with modal modal run --env pfn --detach \
   first), so a run that is still going is not balanced over regimes: rate finished runs.
 - **Budget.** The envelope counts every partition at its full timeouts: 50 partitions
   reserve about $2.65 with 1 CPU / 2 GiB each.
+- **Measured.** Run `stream-structural-splits-2-e7a58a3635c9` (the command above): 1,000
+  worlds in 8.3 minutes on 5 workers (the dashboard's speed card 120 worlds/min against
+  25 for the legacy run), $0.04 billed, distributions matching the legacy run; see
+  [Structural splits](README.md#structural-splits-structural-splits).
 
 ## Execution, memory and storage
 

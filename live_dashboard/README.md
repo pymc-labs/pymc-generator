@@ -439,6 +439,45 @@ level).
   The platform interrupted the first attempt after 217 tasks (`KeyboardInterrupt`);
   Modal's retry reused those tasks and finished the run.
 
+**Streamed with the compile-once backend.** The same design ran through
+`scripts/modal_streaming.py --design structural-splits --compile-mode python`
+([STREAMING.md](STREAMING.md#the-structural-split-design---design-structural-splits)):
+run `stream-structural-splits-2-e7a58a3635c9`, base seed 20261015191940, 50 partitions
+(one compiled model per split × regime) on 5 workers of 1 CPU / 2 GiB. Measured on Modal
+like the run above:
+
+| | `structural-splits-f481c0a8fb17` | `stream-structural-splits-2-e7a58a3635c9` |
+|---|---|---|
+| First task start to last publication | 79.4 min (one platform interruption) | 8.3 min |
+| Dashboard speed card | 25 worlds/min | 120 worlds/min |
+| Worker time | 79.4 min on 2 CPU / 4 GiB | 36.7 min on 1 CPU / 2 GiB |
+| Generation cost | $0.17 (cost card) | $0.04 (Modal bill of the streaming app) |
+| Rejected candidates | 2 | 5 (3 by the generator's filters, 2 with a negative control) |
+| Channels: up / flat / down | 34 / 32 / 34 % | 34 / 33 / 33 % |
+| Channels: smooth / medium / hectic | 46 / 3 / 52 % | 48 / 3 / 49 % |
+| Controls: up / flat / down | 30 / 38 / 33 % | 30 / 37 / 33 % |
+| Controls: smooth / medium / hectic | 55 / 15 / 30 % | 55 / 14 / 31 % |
+| Baseline: up / flat / down | 28 / 43 / 29 % | 30 / 41 / 28 % |
+| Baseline: smooth / medium / hectic | 59 / 16 / 26 % | 59 / 17 / 24 % |
+| Median shares channel / control / baseline | 26 / 27 / 40 % | 29 / 25 / 40 % |
+| Lowest target | 0.21 | 0.34 |
+
+- Every split has 100 worlds and every (split, regime) pair 20; each completion's split
+  seed matches the manifest (`generator.config.structural_splits`). No control value or
+  contribution is below zero.
+- 44 two-sample tests between the runs (chi-square on column, effect, trajectory and
+  texture counts, overall and per regime; Kolmogorov-Smirnov on the shares and the lowest
+  target): smallest p = 0.02, none significant after a Holm correction. Series of one
+  world are not independent, so these p-values, if anything, are too small.
+- Each worker compiled once: 13–41 s (median 19 s), then drew 20 worlds at about 0.43 s
+  each and published two ten-world batches; median worker 42 s, longest 71 s, peak memory
+  0.77 GiB plus a 0.74 GiB child process.
+- A first streamed run, `stream-structural-splits-c81811b5c30e`, stopped at 940 worlds:
+  the three linear × none workers of the textured regimes failed a corpus check on
+  rounding residue (about 1e-15) in the indirect effects through the absent C→C edges.
+  The fix changes the code, which refuses a resume, so the run was redone under a new
+  label.
+
 **Limits.** The library has no baseline trend or spike setting: the baseline moves up or
 down only by its walk's drift and is hectic only as a raw walk, which is visibly jagged
 in about 60 % of `hectic` and `hectic-baseline` worlds (the others swing too little next
