@@ -1,0 +1,7 @@
+{
+  "status": "pass",
+  "verification": "authenticated Modal CLI download then local frozen-snapshot readback",
+  "members": 18,
+  "worlds": 1800,
+  "seconds": 6.859273299109191
+}

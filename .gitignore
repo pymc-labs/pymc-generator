@@ -28,6 +28,7 @@ htmlcov/
 .dev/
 *.npz
 .showcase-output/
+/local-runs/
 # main checkout for tests/test_main_reproduction.py (as CI lays it out)
 .baseline/
 
