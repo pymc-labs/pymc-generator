@@ -504,6 +504,16 @@ the run above predicted the result). Run `stream-structural-splits-baseline-half
   effect (`*_reference_contribution_range`, now from 0.1) would.
 - 8.3 minutes, 120 worlds/min, 36.7 minutes of worker time, as before.
 
+**Weeks at zero.** A channel or control is exactly 0 only while an on/off gate holds it
+off, and only `hectic`, `mixed` and `spiky-inputs` have gates. In all three 1,000-world
+runs about 67 % of the series have no week at zero; the others spread from ≤ 10 % to 90 %
+of their weeks (3–5 % of the series per tenth, about 1 % above 90 %). The zero weeks fall
+unevenly: 32 / 27.5 / 40.5 % of the channels' in the first / middle / last third (weeks
+1–69, 70–138, 139–208; controls alike). Late starts (`*_onset_frac_range` 0.05–0.25, the
+library default) zero only the first third; early stops (`*_offset_frac_range` 0.6–0.9)
+zero 10–40 % of a series at its end; only the on/off blocks (`*_flighting_*`) reach the
+middle.
+
 **Limits.** The library has no baseline trend or spike setting: the baseline moves up or
 down only by its walk's drift and is hectic only as a raw walk, which is visibly jagged
 in about 60 % of `hectic` and `hectic-baseline` worlds (the others swing too little next
