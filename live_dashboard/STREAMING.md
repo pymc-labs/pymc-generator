@@ -105,6 +105,23 @@ STREAM_WORKERS=5 uv run --with modal modal run --env pfn --detach \
   worlds in 8.3 minutes on 5 workers (the dashboard's speed card 120 worlds/min against
   25 for the legacy run), $0.04 billed, distributions matching the legacy run; see
   [Structural splits](README.md#structural-splits-structural-splits).
+- **Measured at 200,000 worlds.** Run `stream-splits-baseline-half-200k-1f4e757b6851`
+  (`--baseline-scale 0.5 --worlds-per-split 20000 --batch-size 100 --compile-mode cvm`,
+  5 workers): 75 minutes of generation (about 2,660 worlds/min), 4,000 worlds in each of
+  the 50 members (20,000 per split, 40,000 per regime), the split seeds of `run.json` in
+  every completion, 1,675 rejected candidates (1,552 generator filters, 123 negative
+  controls), no shortfall or draw failure, at most 619 s and 898 MiB per partition (plus
+  800 MiB for the C compiler), about $0.38 billed. Two partitions reused 23 batches that an
+  earlier execution of the same partition had published.
+- **Validation depends on the CPU.** That run's final report failed: `validate_corpus`
+  requires the stored `identifiability.signal_metrics` to equal a recomputation exactly,
+  and `contrib_r2_explained_by_rest` comes from `np.linalg.lstsq`, whose last bits depend
+  on the host's OpenBLAS kernel (SkylakeX on AVX-512 hosts, Haswell otherwise). In 0.1–0.4 %
+  of the payloads one of their 9,000 values differs, by at most 3e-14 (1–1,024 float32
+  ULPs of R² values near 0); each passes on hosts with its writer's kernel and fails on
+  the others (re-validated on 36 fresh containers). A payload that passes one host can fail
+  another, so `validated_outputs` and the dashboard reject a few tasks depending on where
+  they run (the dashboard: 7 tasks).
 
 ## Execution, memory and storage
 
@@ -191,15 +208,17 @@ are dispatched automatically. Per-worker reports include duration, compilation c
 peak RSS and requested-resource compute estimates. The local coordinator is not billed
 as a generation worker; the dashboard's legacy attempt-cost card may show no estimate.
 
-For a separately approved 200k-world plan with two splits, use
-`--worlds-per-split 100000` and keep batches small. Multiple bounded resume waves may
-be needed. Do **not** infer a total-run bill from one wave's estimate.
+For a separately approved 200k-world plan, set `--worlds-per-split` to 200,000 divided by
+the number of splits (20,000 for the structural-split design) and use 100-world batches.
+Multiple bounded resume waves may be needed. Do **not** infer a total-run bill from one
+wave's estimate.
 
-Bounded raw-data memory and compilation reuse are tested. **200k-world production
-throughput/storage/dashboard scalability is not yet qualified**: resume validation
-reads completed payloads one at a time; metadata and dashboard extracted metrics grow
-with the run; 10-world batches create 20,000 publications. Benchmark storage/file-count
-limits and dashboard refresh time before choosing full-scale shard sizes.
+Bounded raw-data memory and compilation reuse are tested. A 200,000-world structural-split
+run with 100-world batches (2,000 publications) has been measured once (see
+[the design section](#the-structural-split-design---design-structural-splits)): 75 minutes
+on 5 workers, and the dashboard kept up with a 30 s read budget. Its final validation
+depends on the CPU (same section). 10-world batches would create 20,000 publications:
+more than a worker can publish before its timeout and far slower dashboard cold starts.
 
 ## What to verify
 
