@@ -762,6 +762,33 @@ def test_each_payload_is_extracted_once_and_identities_attached_per_task(tmp_pat
     assert [world.channel_share for world in second] == [world.channel_share for world in first]
 
 
+def test_a_budgeted_refresh_reads_one_new_payload_at_least_and_shows_the_rest_loading(
+    tmp_path, payloads
+):
+    store = DirectoryStore(tmp_path)
+    manifest = _manifest(store, worlds=6)
+    for index in range(3):
+        _publish(store, manifest, index, 1, payloads[index])
+    calls: Counter[str] = Counter()
+    collector = Collector(store, clock=_clock(), extractor=_spy(calls), extraction_budget_s=0.0)
+    seen = []
+    for _ in range(3):
+        collector.refresh()
+        run = _run(collector)
+        seen.append(([task.status for task in run.tasks], len(run.worlds), run.published_worlds))
+        loading = [task for task in run.tasks if task.status == "loading"]
+        assert collector.snapshot.loading == bool(loading)
+        # A loading task keeps its record's timing and accounting, but no worlds yet.
+        assert all(task.has_timing and task.attempt_id == _attempt_id(1) for task in loading)
+    assert seen == [
+        (["published", "loading", "loading"], 2, 2),
+        (["published", "published", "loading"], 4, 4),
+        (["published", "published", "published"], 6, 6),
+    ]
+    assert sum(calls.values()) == 3  # each payload read and extracted once
+    assert _run(collector).worlds == _run(_collector(store)).worlds  # as without a budget
+
+
 def test_a_shortfall_task_publishes_its_accepted_worlds(tmp_path, payloads):
     store = DirectoryStore(tmp_path)
     manifest = _manifest(store, worlds=4, worlds_per_task=4)

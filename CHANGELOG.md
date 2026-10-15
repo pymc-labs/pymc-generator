@@ -28,6 +28,13 @@ read the migration notes before upgrading.
   does), skips a candidate on a retryable numeric draw failure (stopping the worker when
   no candidate of a task draws), validates only a worker's own tasks before it starts,
   and records a stopped attempt as `finished` (the dashboard could not read `stopped`).
+  For runs of 200,000 worlds the dashboard draws at most 2,000 points per violin (evenly
+  spaced ranks) and 4,000 worlds per triangle marker type (evenly spaced in run order),
+  reads at most 10 s of unread payloads per refresh (the rest show as `loading`), starts
+  serving after at most 60 s however long its first read of the store takes, reuses the
+  worlds of unchanged tasks between refreshes, and runs with 4 GiB
+  (`DASHBOARD_KEEP_WARM=1` at deploy keeps it running). The streaming coordinator may run
+  an hour, to re-validate every payload of a large run in its final report.
 
 - **Experimental, internal live generation dashboard with a Modal CPU worker and an
   authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the

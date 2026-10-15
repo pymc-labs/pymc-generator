@@ -458,6 +458,30 @@ def test_composition_triangle_places_corners_and_crosses_negative_parts():
     }
 
 
+def test_a_large_distribution_draws_evenly_ranked_points_in_run_order(monkeypatch):
+    monkeypatch.setattr(figures, "MAX_VIOLIN_POINTS", 5)
+    order = [7, 3, 20, 0, 15, 11, 1, 19, 4, 9, 13, 2, 17, 5, 8, 18, 6, 10, 14, 12, 16]
+    impacts = tuple(impact(0, f"C{rank}", 0.01 * rank) for rank in order)
+    snapshot = run([published(0, (0, 60))], worlds=(world(0, 0.5, 0.3, 0.2),), impacts=impacts)
+    found = panel(snapshot, "impact")
+    units = trace(found, "Each channel with an effect")
+    # Ranks 0, 5, 10, 15 and 20 of 21 (smallest and largest included), in run order.
+    assert units["y"] == pytest.approx([0.20, 0.00, 0.15, 0.05, 0.10])
+    assert [text.split()[-1] for text in units["text"]] == ["C20", "C0", "C15", "C5", "C10"]
+    assert trace(found, "All channels per world")["y"] == [0.5]  # under the limit: all drawn
+    assert found["note"] == "drawn at evenly spaced ranks: each channel with an effect 5 of 21"
+
+
+def test_a_large_triangle_draws_evenly_spaced_worlds_and_counts_all(monkeypatch):
+    monkeypatch.setattr(figures, "MAX_TRIANGLE_POINTS", 3)
+    worlds = tuple(world(k, 0.5, 0.25, 0.25) for k in range(7)) + (world(7, 1.2, -0.3, 0.1),)
+    found = panel(run([published(0, (0, 60))], worlds=worlds), "composition")
+    circles = trace(found, "worlds (7)")  # the legend counts every world
+    assert [text.rsplit("/", 1)[-1] for text in circles["text"]] == ["w0", "w3", "w6"]
+    assert trace(found, "worlds with a negative part (1)")["text"][0].endswith("/w7")
+    assert found["note"] == "4 of 8 worlds drawn, evenly spaced in run order"
+
+
 def test_composition_grid_lines_stay_on_the_triangle():
     snapshot = run([published(0, (0, 60))], worlds=(world(0, 0.4, 0.3, 0.3),))
     data = panel(snapshot, "composition")["figure"]["data"]
@@ -776,6 +800,14 @@ WAITING = "waiting for the first publication"
             dict.fromkeys(PANELS, "no consumable worlds: 1 unavailable, 1 unreadable"),
             id="unusable-records",
         ),
+        pytest.param(
+            run(
+                [task(0, "loading", (0, 60), accepted=2, attempt=ATTEMPT), task(1, "pending")],
+                attempts=(attempt(),),
+            ),
+            dict.fromkeys(PANELS, "loading published payloads: 1 task not read yet"),
+            id="payloads-not-read-yet",
+        ),
     ],
 )
 def test_empty_states_explain_why_a_figure_is_empty(snapshot, expected):
@@ -807,6 +839,15 @@ def test_status_line_reports_every_category():
             task(6, "unsupported", detail="contract 2.0"),
             task(7, "unreadable"),
             task(8, "pending"),
+            task(
+                9,
+                "loading",
+                (240, 300),
+                accepted=2,
+                attempt=ATTEMPT,
+                rejected_candidates=0,
+                draw_failures=0,
+            ),
         ],
         attempts=(attempt(gpu_requested="A100", gpu_name="NVIDIA A100-SXM4-40GB"),),
         issues=("attempt record x is not JSON",),
@@ -814,11 +855,12 @@ def test_status_line_reports_every_category():
     status = figures.status(snapshot)
     assert status["line"] == [
         "state: running",
-        "tasks recorded: 8/9",
+        "tasks recorded: 9/10",
         "zero-world tasks: 1",
         "shortfall: 3 worlds",
         "rejected candidates: ≥ 6; unknown for 1 task",
         "draw failures: ≥ 1; unknown for 1 task",
+        "loading: 1 task",
         "unavailable: 1",
         "conflict: 1",
         "invalid: 1",

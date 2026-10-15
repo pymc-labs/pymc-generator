@@ -4,8 +4,15 @@ The collector re-derives everything from the store on every refresh, so arrival 
 restarts and several readers cannot change what it shows: two collectors refreshing the
 same store at the same time produce equal runs. Only expensive, content-addressed work
 is cached, per collector: payload digest verification (keyed by path and digest, trusted
-while the file keeps its verified size) and extraction (keyed by digest and
-``EXTRACTION_VERSION``). Nothing that failed for a possibly transient reason is cached.
+while the file keeps its verified size), extraction (keyed by digest and
+``EXTRACTION_VERSION``) and the worlds built from an extraction for a task's record.
+Nothing that failed for a possibly transient reason is cached.
+
+An ``extraction_budget_s`` bounds the time a refresh spends reading and extracting
+payloads it has not extracted yet (at least one per refresh, so every refresh makes
+progress): a cold collector over a large store then publishes a snapshot within that
+budget, with the tasks it has not read yet as ``loading``, and reads the rest over the
+following refreshes. Without a budget a refresh reads everything.
 
 Task outputs are read as ``pymc_generator.publication`` completions (discovered through
 its consumer interface) and, for runs published before, as this contract's task records.
@@ -17,6 +24,7 @@ and named by attempt), so this only matters for out-of-protocol edits.
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
@@ -54,6 +62,7 @@ _RUN_STATE_OF_NEWEST_ATTEMPT: dict[str, RunState] = {
     "superseded": "stopped",
 }
 
+type _Built = tuple[tuple[WorldMetrics, ...], tuple[ImpactUnit, ...], tuple[ControlUnit, ...]]
 type _TaskResult = tuple[
     TaskState, tuple[WorldMetrics, ...], tuple[ImpactUnit, ...], tuple[ControlUnit, ...]
 ]
@@ -80,19 +89,32 @@ class Collector:
         *,
         clock: Callable[[], datetime] = pub.utc_now,
         extractor: Callable[[bytes], PayloadMetrics] = extract_payload,
+        extraction_budget_s: float | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._extractor = extractor
+        self._budget = extraction_budget_s
         # (payload path, sha256) -> size of the bytes whose digest matched.
         self._verified: dict[tuple[str, str], int] = {}
         # (sha256, EXTRACTION_VERSION) -> metrics, or the deterministic content error.
         self._extracted: dict[tuple[str, int], PayloadMetrics | ExtractionError] = {}
+        # (task, attempt, extraction key) -> the task's worlds and units: immutable, so a
+        # refresh reuses them instead of rebuilding every world of an unchanged task.
+        # Only the latest successful refresh's entries are kept.
+        self._built: dict[tuple[str, str, tuple[str, int]], _Built] = {}
+        self._building: dict[tuple[str, str, tuple[str, int]], _Built] = {}
+        self._budget_ends: float | None = None
+        self._payloads_read = 0
         self.snapshot = CollectionSnapshot(sequence=0, refreshed_at=None, last_error=None, runs=())
 
     def refresh(self) -> None:
         """Re-read the store and replace ``snapshot``."""
         previous = self.snapshot
+        started = time.monotonic()
+        self._budget_ends = None if self._budget is None else started + self._budget
+        self._payloads_read = 0
+        self._building = {}
         try:
             self._store.refresh()
             now = self._clock()
@@ -106,12 +128,21 @@ class Collector:
                 issues=previous.issues,
             )
             return
+        self._built = self._building
         self.snapshot = CollectionSnapshot(
             sequence=previous.sequence + 1,
             refreshed_at=now,
             last_error=None,
             runs=runs,
             issues=issues,
+        )
+
+    def _budget_spent(self) -> bool:
+        """Whether this refresh must leave further unread payloads to the next one."""
+        return (
+            self._budget_ends is not None
+            and self._payloads_read > 0
+            and time.monotonic() >= self._budget_ends
         )
 
     # -- runs ----------------------------------------------------------------------
@@ -357,7 +388,12 @@ class Collector:
         if authoritative.payload is None:
             return state("zero"), (), (), ()
         key = (authoritative.payload.sha256, EXTRACTION_VERSION)
-        found = self._verified_payload(group, need_bytes=key not in self._extracted)
+        unread = key not in self._extracted
+        if unread and self._budget_spent():
+            return state("loading"), (), (), ()
+        if unread:
+            self._payloads_read += 1
+        found = self._verified_payload(group, need_bytes=unread)
         if found is None:
             missing = "no payload matches its recorded size and sha256"
             return state("unavailable", missing), (), (), ()
@@ -384,7 +420,12 @@ class Collector:
                 f"{record.accepted_worlds}"
             )
             return state("invalid", mismatch), (), (), ()
-        return state("published"), *_world_metrics(record, result)
+        built_key = (record.task_id, record.attempt_id, key)
+        built = self._built.get(built_key)
+        if built is None:
+            built = _world_metrics(record, result)
+        self._building[built_key] = built
+        return state("published"), *built
 
     def _verified_payload(
         self, group: Sequence[pub.TaskRecord], *, need_bytes: bool

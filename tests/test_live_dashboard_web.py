@@ -462,6 +462,51 @@ def test_run_list_reports_refresh_state_and_poll_interval(
     ]
 
 
+def test_polling_stays_fast_while_published_payloads_are_loading(credentials):
+    complete = make_run(1, state="complete")
+    loading = dataclasses.replace(
+        complete.tasks[1], status="loading", accepted_worlds=2, attempt_id=ATTEMPT
+    )
+    run = dataclasses.replace(complete, tasks=(complete.tasks[0], loading, *complete.tasks[2:]))
+    with serve(StubCollector(make_snapshot(1, run)), credentials) as client:
+        body = strict_json(client.get("/api/runs", headers=AUTH))
+    assert body["poll_seconds"] == web.DEFAULT_ACTIVE_POLL_SECONDS  # an idle run: 10 s
+
+
+class _GatedCollector(StubCollector):
+    """Its first refresh waits for ``release``: a cold container reading a large store."""
+
+    def __init__(self, *outcomes: CollectionSnapshot) -> None:
+        super().__init__(*outcomes)
+        self.release = threading.Event()
+
+    def refresh(self) -> None:
+        if self.calls == 0:
+            assert self.release.wait(timeout=5.0)
+        super().refresh()
+
+
+def test_startup_does_not_wait_for_a_slow_first_refresh(credentials):
+    collector = _GatedCollector(make_snapshot(1, make_run(1, state="complete")))
+    app = web.create_app(
+        collector,
+        credentials=credentials,
+        poll_seconds=SLOW,
+        active_poll_seconds=SLOW,
+        startup_wait_seconds=0.05,
+    )
+    with TestClient(app) as client:
+        # Serving already, while the first refresh is still reading the store.
+        assert client.get("/api/runs", headers=AUTH).status_code == 503
+        assert client.get("/", headers=AUTH).status_code == 200
+        collector.release.set()
+        deadline = time.monotonic() + 5.0
+        while client.get("/api/runs", headers=AUTH).status_code != 200:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    assert collector.calls == 1
+
+
 def test_unknown_run_is_not_found_after_authentication(credentials):
     with serve(StubCollector(make_snapshot(1, make_run(1))), credentials) as client:
         response = client.get("/api/runs/other-000000000000", headers=AUTH)

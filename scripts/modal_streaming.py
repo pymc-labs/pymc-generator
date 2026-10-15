@@ -25,6 +25,9 @@ WORKERS = int(os.environ.get("STREAM_WORKERS", "2"))
 if not 1 <= WORKERS <= 16:
     raise ValueError("STREAM_WORKERS must be 1..16")
 WORKER_TIMEOUT = 1800
+# The final report re-validates every published payload of the run (about 1,000 s for
+# 200,000 worlds), so the coordinator may run far longer than a worker's batch.
+COORDINATOR_TIMEOUT = 3600
 RATE = (0.0000131 + 2 * 0.00000222) * 3600
 app = modal.App("pymc-generator-streaming")
 volume = modal.Volume.from_name("pymc-generator-live-dashboard", environment_name=ENVIRONMENT)
@@ -62,7 +65,7 @@ def parse_plan(data):
     volumes={MOUNT: volume},
     cpu=(1, 1),
     memory=(2048, 2048),
-    timeout=600,
+    timeout=COORDINATOR_TIMEOUT,
     startup_timeout=600,
     retries=0,
     max_containers=1,
@@ -240,7 +243,7 @@ def main(
         raise ValueError("queue_size must be 1..8")
     # Reserve a complete bounded wave, not an optimistic throughput extrapolation.
     estimate = (
-        len(plan.partitions) * (WORKER_TIMEOUT + 600 + 2) + 2 * (600 + 600 + 2)
+        len(plan.partitions) * (WORKER_TIMEOUT + 600 + 2) + 2 * (COORDINATOR_TIMEOUT + 600 + 2)
     ) * RATE / 3600 + 0.5
     if not math.isfinite(max_cost) or max_cost <= 0 or estimate > max_cost:
         raise ValueError(f"reserved estimate ${estimate:.3f} exceeds approved ${max_cost:.3f}")

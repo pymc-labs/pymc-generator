@@ -128,6 +128,16 @@ never per slot.
 Only published worlds enter the distributions. Pending, zero-world, unavailable,
 conflicting and invalid tasks appear in the status line instead.
 
+Large runs. A violin draws at most 2,000 of its values, at evenly spaced ranks (the
+smallest and largest included), and the composition triangle at most 4,000 worlds per
+marker type, evenly spaced in run order; the panel note says how many were drawn of how
+many, and counts, legends and axes still cover every value. (A 200,000-world run has
+about 1.3 million channel and control units: drawing them all made a 105 MB body per
+poll and 15 s of work per refresh, measured on Modal.) A refresh spends at most 10 s
+reading and extracting payloads it has not read yet: a cold container over a large store
+shows the rest as `loading` (status line, and the empty panels say so), counts only the
+worlds it has read, and reads the rest in the following refreshes, every 3 s.
+
 ## Local use
 
 `live_dashboard` is a repository tool (it is not part of the installed `pymc-generator`
@@ -187,10 +197,15 @@ too large, a different generator than the stored run) are refused without a retr
 refusal is recorded as a failed attempt when the run exists. Each attempt records its
 kill time as `deadline_at` and stops starting a draw (a task's first, or a design's
 redraw) unless max(90 s, twice its longest draw) is left; a resumed run continues with
-the unpublished tasks. The dashboard uses one CPU core and 2 GiB, one container, and scales
-to zero after 10 idle minutes. Polling is every 3 s while a run is generating (or while
-the store cannot be read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up
-to one browser poll; this is a refresh cadence, not a latency guarantee.
+the unpublished tasks. The dashboard uses one CPU core and 4 GiB, one container, and scales
+to zero after 10 idle minutes; `DASHBOARD_KEEP_WARM=1 modal deploy ...` keeps it running
+(about $0.08/h) while a large run is supervised, and a deploy without it scales to zero
+again. A cold container rereads the whole store (about 30 ms per file on the Volume:
+5 minutes for today's 1,300 tasks); it starts serving after at most 60 s, answers "waiting
+for the first store refresh" until that first read ends, then fills in as above. Polling
+is every 3 s while a run is generating, while payloads are loading (or while the store
+cannot be read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up to one
+browser poll; this is a refresh cadence, not a latency guarantee.
 
 ## Running future generations
 

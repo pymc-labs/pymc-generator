@@ -1,9 +1,11 @@
 """The dashboard web app: one page, its assets and a small JSON API, all behind Basic auth.
 
-Request handlers never touch the store. Startup refreshes the collector once (the first
-request after a cold start waits for it); then one poller thread refreshes it (faster
-while a run is generating) and handlers read its latest immutable ``CollectionSnapshot``,
-so after startup a slow or failing store can delay data but never a response.
+Request handlers never touch the store. With the poller, startup lets it refresh first
+and waits at most ``STARTUP_WAIT_SECONDS`` for that refresh (a cold container reading a
+large store must not exceed the platform's startup limit; the API answers 503 until the
+first refresh); without it, startup refreshes once itself. Handlers read the collector's
+latest immutable ``CollectionSnapshot``, so a slow or failing store can delay data but
+never a response.
 
 Every JSON body this module builds is serialised with ``ensure_ascii=True,
 allow_nan=False``: lone surrogates from record text are escaped instead of failing the
@@ -45,6 +47,8 @@ MIN_POLL_SECONDS = 1.0
 MAX_POLL_SECONDS = 300.0
 POLLER_THREAD_NAME = "live-dashboard-poller"
 RETRY_AFTER_SECONDS = 2
+# The longest startup waits for the poller's first refresh before serving 503s.
+STARTUP_WAIT_SECONDS = 60.0
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 PLOTLY_PATH = f"/static/plotly-{figures.PLOTLY_VERSION}.min.js"
 _PLOTLY_PLACEHOLDER = b"__PLOTLY_PATH__"  # in index.html, replaced by PLOTLY_PATH
@@ -108,11 +112,17 @@ def poll_interval(
 ) -> float:
     """How long to wait before the next refresh, for the poller and the page alike.
 
-    Fast while a run is generating (new tasks are expected) and while the store has
-    never been read or its latest read failed: a transient failure, typically at cold
-    start, then recovers within seconds instead of after a full idle interval.
+    Fast while a run is generating (new tasks are expected), while published payloads
+    still wait to be read (a bounded refresh), and while the store has never been read
+    or its latest read failed: a transient failure, typically at cold start, then
+    recovers within seconds instead of after a full idle interval.
     """
-    fast = snapshot.generating or snapshot.refreshed_at is None or snapshot.last_error is not None
+    fast = (
+        snapshot.generating
+        or snapshot.loading
+        or snapshot.refreshed_at is None
+        or snapshot.last_error is not None
+    )
     return active_poll_seconds if fast else poll_seconds
 
 
@@ -171,18 +181,23 @@ def _poll(
     stop: threading.Event,
     poll_seconds: float,
     active_poll_seconds: float,
+    first_refresh: threading.Event | None = None,
 ) -> None:
     """Refresh until ``stop`` is set; nothing else ends the loop.
 
-    Each step (choose the interval, wait, refresh) is guarded as a whole: an exception is
-    logged and the next step waits the active interval, as after a refresh that recorded
-    a store error. A misbehaving collector can thus neither end the thread nor make it
-    spin, and setting ``stop`` still ends any wait at once.
+    The first refresh starts at once and sets ``first_refresh`` when it ends, however it
+    ends. Each step (choose the interval, wait, refresh) is guarded as a whole: an
+    exception is logged and the next step waits the active interval, as after a refresh
+    that recorded a store error. A misbehaving collector can thus neither end the thread
+    nor make it spin, and setting ``stop`` still ends any wait at once.
     """
     failed = False
+    first = True
     while True:
         try:
-            if failed:
+            if first:
+                interval = 0.0
+            elif failed:
                 interval = active_poll_seconds
             else:
                 interval = poll_interval(collector.snapshot, poll_seconds, active_poll_seconds)
@@ -193,6 +208,11 @@ def _poll(
         except Exception:
             logger.exception("poller step failed; retrying after the active interval")
             failed = True
+        finally:
+            if first:
+                first = False
+                if first_refresh is not None:
+                    first_refresh.set()
 
 
 def _static(name: str) -> bytes:
@@ -206,12 +226,14 @@ def create_app(
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     active_poll_seconds: float = DEFAULT_ACTIVE_POLL_SECONDS,
     start_poller: bool = True,
+    startup_wait_seconds: float = STARTUP_WAIT_SECONDS,
 ) -> FastAPI:
     """The dashboard app over ``collector`` (anything with ``.snapshot`` and ``.refresh()``).
 
-    Startup refreshes once (a failure leaves the API answering 503 until a refresh
-    succeeds) and then, if ``start_poller``, runs the poller thread ``app.state.poller``
-    (waiting :func:`poll_interval` between refreshes) until shutdown stops and joins it.
+    If ``start_poller``, startup runs the poller thread ``app.state.poller`` (its first
+    refresh at once, then waiting :func:`poll_interval` between refreshes) and waits at
+    most ``startup_wait_seconds`` for that first refresh; shutdown stops and joins it.
+    Otherwise startup refreshes once. Until a refresh succeeds the API answers 503.
     Both intervals must be finite, positive and at most ``MAX_POLL_SECONDS``: a longer
     wait would leave the page stale (and a huge one overflows the poller's timer). The
     operator range ``[MIN_POLL_SECONDS, MAX_POLL_SECONDS]`` applies to
@@ -226,20 +248,23 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        try:
-            await anyio.to_thread.run_sync(collector.refresh)
-        except Exception:
-            logger.exception("first collector refresh raised; serving 503 until one succeeds")
         stop = threading.Event()
         poller = None
         if start_poller:
+            first_refresh = threading.Event()
             poller = threading.Thread(
                 target=_poll,
-                args=(collector, stop, poll_seconds, active_poll_seconds),
+                args=(collector, stop, poll_seconds, active_poll_seconds, first_refresh),
                 name=POLLER_THREAD_NAME,
                 daemon=True,
             )
             poller.start()
+            await anyio.to_thread.run_sync(first_refresh.wait, startup_wait_seconds)
+        else:
+            try:
+                await anyio.to_thread.run_sync(collector.refresh)
+            except Exception:
+                logger.exception("first collector refresh raised; serving 503 until one succeeds")
         app.state.poller = poller
         try:
             yield

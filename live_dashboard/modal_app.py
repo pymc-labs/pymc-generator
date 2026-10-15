@@ -42,6 +42,14 @@ MOUNT = "/publications"
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _REPO = _PACKAGE_DIR.parent
 _IGNORE = ["**/__pycache__", "**/__pycache__/**", "**/*.pyc"]
+# A cold dashboard container rereads the whole store: about 30 ms per file on the Volume,
+# so minutes for a 200,000-world run. DASHBOARD_KEEP_WARM=1 at deploy time keeps one
+# container running (and its caches) while a large run is supervised; redeploy without
+# it to scale to zero again.
+_KEEP_WARM = os.environ.get("DASHBOARD_KEEP_WARM", "0") == "1"
+# Seconds a refresh spends reading and extracting payloads it has not read yet; the rest
+# show as loading and are read by the next refreshes (live_dashboard.collection).
+DASHBOARD_EXTRACTION_BUDGET_S = 10.0
 _base_image = modal.Image.debian_slim(python_version="3.13")
 if modal.is_local():
     if modal.config.config.get("environment") != ENVIRONMENT:
@@ -132,7 +140,7 @@ def generate_run(
 
 @app.function(
     cpu=1.0,
-    memory=2048,
+    memory=4096,  # a 200,000-world run's snapshot, extraction cache and figures
     volumes={MOUNT: dashboard_volume},
     secrets=[
         modal.Secret.from_name(
@@ -141,7 +149,7 @@ def generate_run(
             required_keys=["DASHBOARD_USERNAME", "DASHBOARD_PASSWORD_HASH"],
         )
     ],
-    min_containers=0,
+    min_containers=1 if _KEEP_WARM else 0,
     max_containers=1,
     scaledown_window=600,
     timeout=300,
@@ -157,7 +165,7 @@ def dashboard():
     settings = settings_from_env()
     store = DirectoryStore(MOUNT, on_refresh=dashboard_volume.reload)
     return create_app(
-        Collector(store),
+        Collector(store, extraction_budget_s=DASHBOARD_EXTRACTION_BUDGET_S),
         credentials=settings.credentials,
         poll_seconds=settings.poll_seconds,
         active_poll_seconds=settings.active_poll_seconds,

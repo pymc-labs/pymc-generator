@@ -14,6 +14,7 @@ from typing import Literal
 
 TaskStatus = Literal[
     "published",  # authoritative record, payload verified and extracted: worlds consumable
+    "loading",  # authoritative record whose payload this collector has not read yet
     "zero",  # authoritative record that accepted no world (completed, full shortfall)
     "pending",  # no record yet
     "unreadable",  # record file(s) present but not decodable as JSON (e.g. still partial)
@@ -177,3 +178,8 @@ class CollectionSnapshot:
     def generating(self) -> bool:
         """Whether any run currently has a live writer."""
         return any(run.state == "running" for run in self.runs)
+
+    @property
+    def loading(self) -> bool:
+        """Whether published payloads still wait to be read (a bounded refresh)."""
+        return any(task.status == "loading" for run in self.runs for task in run.tasks)
