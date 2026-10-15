@@ -17,24 +17,34 @@ read the migration notes before upgrading.
   authentication discovers and follows the publications: worlds-generated,
   generation-speed and generation-cost cards (the worker's attempt time at the list
   price it records, updated at every task), speed and cumulative worlds over time,
-  channel impact, control impact and baseline share distributions on one 0-100 % axis,
-  the channel/control/baseline composition triangle, worlds per saturation and adstock
-  family (every library family on the x axis, read from each payload), and a heatmap of
-  worlds per active-channel x active-control combination with its two margins, redrawn
-  as tasks publish without rerunning generation. Presets `geometric-mm` and
-  `geometric-logistic` (10 channels and 10 controls acting only on the target, geometric
-  adstock with Michaelis-Menten or logistic saturation, wide trajectory and share
-  variety, channel and control effects up to 39x apart within a world with an even
-  channel/control/baseline split) and preset mixes, which alternate presets by task in
-  one run (`geometric-mm-logistic`), so one run is the concatenated dataset. On Modal
-  (environment `pfn`) generation and the dashboard run on separate CPU containers, the
-  dashboard at a stable URL. Workers use no GPU by decision: PyTensor 3.2 has no native
-  CUDA backend, and CPU-only workers measured as fast as A100 workers for about 1/20 of
-  the cost. The interim single-writer driver records (`pymc-generator-live-publication`
-  1.1: run manifest and attempt progress around the #67 completions) show zero-world
-  tasks, conflicting records and unavailable payloads separately and never substitute
-  data; the multi-writer mechanism remains open in #54. New optional extra `dashboard`;
-  the `dev` extra gains the web stack for the tests.
+  channel impact, control impact and baseline share distributions on one 0-100 % axis
+  (impact counted for the inputs with an effect), the channel/control/baseline
+  composition triangle, worlds per saturation and adstock family (every library family
+  on the x axis, read from each payload), a heatmap of worlds per saturation x adstock
+  split, a heatmap of worlds per channel-column x control-column combination, and worlds
+  per number of columns and of inputs with an effect, redrawn as tasks publish without
+  rerunning generation. Presets `geometric-mm` and `geometric-logistic` (10 channels and
+  10 controls acting only on the target, geometric adstock with Michaelis-Menten or
+  logistic saturation, wide trajectory and share variety, channel and control effects up
+  to 39x apart within a world with an even channel/control/baseline split) and preset
+  mixes, which alternate presets by task in one run (`geometric-mm-logistic`), so one run
+  is the concatenated dataset. The structural-split design `structural-splits` spreads
+  one run evenly over every saturation family but root x adstock none or geometric (10
+  splits, 100 worlds each at 1,000 worlds) and five texture regimes (everything smooth,
+  everything hectic, each input on its own, spiky inputs over a smooth baseline, a
+  jagged baseline under smooth inputs), on 208 weeks, with 1-10 channel and control
+  columns of which 1 to all have an effect, symmetric trends, and controls whose values
+  and contributions are never negative (a draw with a negative control is drawn again);
+  every split has its own seed derived from the launch time and its families, recorded
+  in the manifest and in every completion. On Modal (environment `pfn`) generation and
+  the dashboard run on separate CPU containers, the dashboard at a stable URL. Workers
+  use no GPU by decision: PyTensor 3.2 has no native CUDA backend, and CPU-only workers
+  measured as fast as A100 workers for about 1/20 of the cost. The interim single-writer
+  driver records (`pymc-generator-live-publication` 1.2: run manifest and attempt
+  progress around the #67 completions) show zero-world tasks, conflicting records and
+  unavailable payloads separately and never substitute data; the multi-writer mechanism
+  remains open in #54. New optional extra `dashboard`; the `dev` extra gains the web
+  stack for the tests.
 
 - **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not

@@ -122,17 +122,22 @@ def _serve(args: argparse.Namespace) -> None:
 
 
 def _generate(args: argparse.Namespace) -> None:
+    from live_dashboard import structural
     from live_dashboard.generation import run_generation
     from live_dashboard.publication import RunRequest, WorkerInfo, utc_now
     from live_dashboard.storage import DirectoryStore
 
+    seed = args.seed
+    if seed is None:
+        # A structural-split design seeds from the launch time; other presets from 29.
+        seed = structural.launch_seed(utc_now()) if args.preset in structural.DESIGNS else 29
     try:
         request = RunRequest(
             label=args.label,
             preset=args.preset,
             worlds=args.worlds,
             worlds_per_task=args.worlds_per_task,
-            seed=args.seed,
+            seed=seed,
         )
     except ValueError as error:
         raise _RefusedError(str(error)) from error
@@ -140,6 +145,7 @@ def _generate(args: argparse.Namespace) -> None:
         platform=platform.platform(), cpu_count=os.cpu_count(), gpu_requested=None, gpu_name=None
     )
     print(f"run {request.run_id}: {request.n_tasks} tasks x {request.worlds_per_task} worlds")
+    print(f"seed {request.seed} (rerun with --seed {request.seed} to resume)")
     try:
         summary = run_generation(
             DirectoryStore(args.data_dir),
@@ -180,7 +186,12 @@ def main(argv: list[str] | None = None) -> None:
     generating.add_argument("--preset", default="showcase-variety")
     generating.add_argument("--worlds", type=int, default=20)
     generating.add_argument("--worlds-per-task", type=int, default=2)
-    generating.add_argument("--seed", type=int, default=29)
+    generating.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="base seed (default 29; a structural-split design: the UTC time, YYYYMMDDHHMMSS)",
+    )
     generating.add_argument(
         "--max-seconds",
         type=_time_limit,

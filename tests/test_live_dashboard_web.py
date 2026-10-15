@@ -137,8 +137,11 @@ def make_run(
                         0.25,
                         ("geometric",),
                         ("logistic",),
+                        structural_pairs=(("logistic", "geometric"),),
                         active_channels=1,
                         active_controls=2,
+                        effect_channels=1,
+                        effect_controls=2,
                         channel_slots=10,
                         control_slots=10,
                     )

@@ -3,7 +3,7 @@
 > **Experimental, internal tool.** `live_dashboard/` is a PyMC Labs repository tool, not
 > part of the installed `pymc-generator` package, and its publication protocol is an
 > interim single-writer design (see
-> [Publication protocol](#publication-protocol-pymc-generator-live-publication-11)).
+> [Publication protocol](#publication-protocol-pymc-generator-live-publication-12)).
 
 Follow a generation run while it happens. A generation worker publishes each completed
 task (a corpus payload plus a versioned JSON completion record) into a store; a separate
@@ -35,7 +35,9 @@ flowchart LR
    worlds per task and a seed. The run id is `<label>-<sha256(request)[:12]>`, so the
    same request always names the same run (that is how `--resume` finds it) and a new
    label starts a new run. The run is split into `worlds ÷ worlds_per_task` tasks, and
-   task `i` generates with seed `seed + i`.
+   task `i` generates with seed `seed + i` (a
+   [structural-split design](#structural-splits-structural-splits) seeds each split on
+   its own).
 2. **Launch** (`launch.py`, an ephemeral Modal app run from your machine). It checks the
    request and the demo bounds, refuses an existing run unless `--resume`, spawns the
    deployed `generate_run`, prints the run id and its dashboard link, and for a new run
@@ -47,7 +49,9 @@ flowchart LR
    - `DataGenerator.generate(n_tasks=worlds_per_task, seed=seed + i,
      defer_cell_split=True)` generates the task's worlds (with the preset `cycle[i mod n]`
      of a [preset mix](#presets-and-mixes)); their train/validation membership stays
-     unassigned (`is_val=2`) until a training snapshot assigns whole cells;
+     unassigned (`is_val=2`) until a training snapshot assigns whole cells. A
+     structural-split design draws a task again, with a new seed, when one of its
+     controls goes below zero or the library cannot fill it;
    - `pymc_generator.publication` (#67) publishes them: it validates the corpus, saves
      `corpus.npz` in the task attempt's own directory, commits the Volume, then writes the
      task's version-1 `completion.json` (accounting, provenance, world ids) and commits
@@ -57,7 +61,7 @@ flowchart LR
    kill time, so `--resume` can continue it.
 4. **Store** (Modal Volume `pymc-generator-live-dashboard`). Plain files under
    `runs/<run_id>/`; nothing is ever overwritten. A retry writes under its own attempt
-   id. The layout is under [Publication protocol](#publication-protocol-pymc-generator-live-publication-11).
+   id. The layout is under [Publication protocol](#publication-protocol-pymc-generator-live-publication-12).
 5. **Read** (the `dashboard` container: `collection.py`, `extract.py`). A poller thread
    reloads the read-only Volume, every 3 s while a run is generating and every 10 s
    otherwise. On each poll it:
@@ -65,8 +69,9 @@ flowchart LR
      reads the task records of runs published before it);
    - checks each new payload's size and SHA-256;
    - extracts each new payload's metrics once: composition shares, channel and
-     control impact through the library's `outcome_distributions`, and the adstock and
-     saturation families of each world's active channels.
+     control impact through the library's `outcome_distributions`, the adstock and
+     saturation families (and their pairs) of each world's active channels, and how
+     many of its channels and controls have an effect (an arrow to the target in `g`).
 
    The result is an immutable snapshot; requests never touch the Volume.
 6. **Show** (`figures.py`, `web.py`, `static/`). The page polls the JSON API with an
@@ -85,14 +90,15 @@ reads it.
 | Card: estimated generation cost | The run's attempts summed: each attempt's recorded time (from its start to its latest update, which the worker writes before every task) at the hourly list price its worker recorded ($0.126/h for 2 cores and 4 GiB). A lower bound of Modal's bill: container start-up, scale-down and the time after an attempt's last update (the task in progress, or a killed container) are not counted; "≥" marks a total that also misses attempts without a price. Runs made before workers recorded a price, and local runs, show —. |
 | Speed over time | Per-task rate (worlds ÷ generation time) and the cumulative average. |
 | Worlds over time | Cumulative consumable worlds at each publication, with the target. |
-| Channel impact | Two distributions: each active channel's direct contribution share of its world's outcome (pooled), and each world's total channel share (direct + indirect). |
-| Control impact | The same for controls: each active control's direct contribution share (pooled), and each world's total control share (net, can be negative). |
+| Channel impact | Two distributions: the direct contribution share of each channel with an effect (an active channel with a direct edge to the target) in its world's outcome (pooled), and each world's total channel share (direct + indirect). |
+| Control impact | The same for controls: the direct contribution share of each control with an effect (pooled), and each world's total control share (net, can be negative). |
 | Baseline | Each world's baseline share. Channel impact, control impact and baseline share one 0–100 % axis (widened only to fit a value outside it), so the three compare at a glance. |
 | Composition triangle | Each world's channel / control / baseline shares of its total outcome, at its exact barycentric position (corner = 100 %). Semi-transparent dots, so overlap shows density; worlds with a negative part sit outside and are drawn as ×. |
 | Worlds per saturation form | Consumable worlds per saturation family their active channels use, with all six library families on the x axis (linear, Hill, logistic, Michaelis-Menten, tanh, root); a world whose channels mix families counts once in each. Read from each payload's `sat_family`, which the library records only for configurations with mechanism priors; worlds without it are noted, not counted. |
 | Worlds per adstock form | The same for the adstock (carryover) family: none, geometric, Weibull (`carryover_family`, recorded in every payload). |
-| Worlds per active channels × active controls | Heatmap of consumable worlds per combination of active-channel and active-control counts. Every combination the layout allows has a cell (1 to the slot count on each axis, 0 too when some world has none active); absent combinations stay blank, and the note counts how many are present. |
-| Worlds per number of active inputs | Consumable worlds per number of active channels and per number of active controls, side by side: the matrix's two margins. |
+| Worlds per structural split | Heatmap of consumable worlds per (saturation, adstock) family pair of their active channels: every library saturation family (rows) × every adstock family (columns), so absent splits stay blank and the note counts the splits present; a world whose channels use several pairs counts once in each (noted). Read from `sat_family` and `carryover_family`; as in the saturation panel, worlds without `sat_family` are noted, not counted. |
+| Worlds per channel columns × control columns | Heatmap of consumable worlds per combination of channel-column and control-column counts (a world's columns are its active channels and controls, with or without an effect). Every combination the layout allows has a cell (1 to the slot count on each axis, 0 too when some world has no column); absent combinations stay blank, and the note counts how many are present. |
+| Worlds per number of columns and of inputs with an effect | Consumable worlds per number of channel columns, of channels with an effect (a direct edge to the target), of control columns and of controls with an effect, side by side; the column bars are the matrix's two margins. |
 | Status line | Run state, recorded tasks, zero-world tasks and shortfalls, rejected candidates, draw failures, unavailable/conflicting/invalid outputs, duplicates, and the newest attempt (with its GPU, for the early runs that had one). |
 
 Shares use the trajectory-showcase notebook's definitions (`realized_shares`):
@@ -100,9 +106,11 @@ channel = Σ treatment contributions + Σ indirect effects, control = Σ covaria
 contributions (net, can be negative), baseline = Σ intrinsic baseline + Σ latent
 contributions + Σ observation noise, each divided by Σ outcome. Channel and control
 impact are the library's `outcome_distributions(...)` `unit_share` of
-`"treatment_contribution"` and `"covariate_contribution"`. Slots are activated as a
-prefix (channel slot k is active only in worlds with at least k channels; controls
-likewise), so impact is shown pooled, never per slot.
+`"treatment_contribution"` and `"covariate_contribution"`, kept for the inputs with an
+effect (a `C→Y` or `Z→Y` edge in the payload's graph `g`): a column without one
+contributes nothing directly. Slots are activated as a prefix (channel slot k is active
+only in worlds with at least k channels; controls likewise), so impact is shown pooled,
+never per slot.
 
 Only published worlds enter the distributions. Pending, zero-world, unavailable,
 conflicting and invalid tasks appear in the status line instead.
@@ -127,7 +135,8 @@ uv run --no-sync python -m live_dashboard generate --data-dir /tmp/live-runs \
 
 Presets and mixes: see [Presets and mixes](#presets-and-mixes). `generate --max-seconds`
 (default 3600) is the attempt's time limit; rerun the same command to resume a stopped
-run.
+run (for a structural-split design, add `--seed <the printed seed>`: without it the
+command seeds a new run from the current time).
 
 ## Modal deployment (environment `pfn`)
 
@@ -157,14 +166,15 @@ same behaviour because the dashboard never writes. Rotate credentials with
 `modal secret create --force ...` and redeploy.
 
 Limits: `generate_run` uses 2 CPU cores and 4 GiB (no GPU), one container at a time, a
-1800 s timeout and one retry. So one launch costs at most about two attempts of 30
-minutes, ≈ $0.13 at Modal's October 2026 list prices; a 20-world run costs about $0.003. A
-run is capped at 400 worlds and 20 worlds per task. Requests the worker can never
-satisfy (unknown preset, too large, a different generator than the stored run) are
-refused without a retry; the refusal is recorded as a failed attempt when the run
-exists. Each attempt records its kill time as `deadline_at` and stops starting tasks at
-least max(90 s, twice its longest task) before it; a resumed run continues with the
-unpublished tasks. The dashboard uses one CPU core and 2 GiB, one container, and scales
+3-hour (10,800 s) timeout and one retry. So one launch costs at most about two attempts
+of 3 hours, ≈ $0.76 at Modal's October 2026 list prices; a 20-world run costs about
+$0.003 and the 1,000-world structural-split run about $0.2. A run is capped at 1,000
+worlds and 20 worlds per task. Requests the worker can never satisfy (unknown preset,
+too large, a different generator than the stored run) are refused without a retry; the
+refusal is recorded as a failed attempt when the run exists. Each attempt records its
+kill time as `deadline_at` and stops starting a draw (a task's first, or a design's
+redraw) unless max(90 s, twice its longest draw) is left; a resumed run continues with
+the unpublished tasks. The dashboard uses one CPU core and 2 GiB, one container, and scales
 to zero after 10 idle minutes. Polling is every 3 s while a run is generating (or while
 the store cannot be read) and every 10 s otherwise (`DASHBOARD_POLL_SECONDS`), plus up
 to one browser poll; this is a refresh cadence, not a latency guarantee.
@@ -180,9 +190,9 @@ request options:
 |---|---|---|
 | `--label` | required | Part of the run id; use a new label for a fresh run. |
 | `--preset` | `showcase-variety` | A preset from `PRESETS` or a mix from `MIXES` in `generation.py` (see below). |
-| `--worlds` | 20 | Target worlds. Must be a multiple of `--worlds-per-task`, and at most 400 (`DEMO_MAX_WORLDS`). |
+| `--worlds` | 20 | Target worlds. Must be a multiple of `--worlds-per-task` (and, for a design, of its splits × worlds per task), and at most 1,000 (`DEMO_MAX_WORLDS`). |
 | `--worlds-per-task` | 2 | Worlds per published task, at most 20 (`DEMO_MAX_WORLDS_PER_TASK`). The page updates once per task, so smaller tasks show progress more often. |
-| `--seed` | 29 | Base seed; task `i` uses `seed + i`. |
+| `--seed` | 29; a design: the launch time | Base seed; task `i` uses `seed + i`. A structural-split design defaults to the UTC launch time as `YYYYMMDDHHMMSS` and derives each split's seed from it; the launcher prints the seed, which `--resume` needs again. |
 
 ### Presets and mixes
 
@@ -192,6 +202,7 @@ request options:
 | `geometric-mm` | preset | [Two-style variety](#two-style-variety-geometric-mm-geometric-logistic) with Michaelis-Menten saturation. |
 | `geometric-logistic` | preset | Two-style variety with logistic saturation. |
 | `geometric-mm-logistic` | mix | `geometric-mm` and `geometric-logistic`, alternating by task. |
+| `structural-splits` | design | [Structural splits](#structural-splits-structural-splits): every saturation family but root × adstock none or geometric, five texture regimes, 208 weeks, columns with and without an effect, positive controls. |
 | `small` | preset | A tiny configuration for tests and smoke runs. |
 
 A **mix** is one run whose tasks cycle through its member presets: task `i` uses member
@@ -211,11 +222,12 @@ modal run -e pfn live_dashboard/launch.py --label <label> --worlds 100 --worlds-
 
 Open the printed link, or pick the run in the page's run menu.
 
-- **Timing.** On Modal a world takes about 4–6.5 s of wall-clock time (generation plus
-  about 2.7 s per task of Volume commits, which the speed card leaves out), so 20 worlds
-  take 1.5–2.5 minutes. The two-style presets measured 5–15 % slower than
-  `showcase-variety` per world (ten tasks of each on one laptop).
-- **Attempt length.** One attempt lasts at most 30 minutes, roughly 260–420 worlds. A
+- **Timing.** On Modal a 104-week world takes about 4–6.5 s of wall-clock time
+  (generation plus about 2.7 s per task of Volume commits, which the speed card leaves
+  out), so 20 worlds take 1.5–2.5 minutes; a 208-week structural-split world about 5 s
+  of generation. The two-style presets measured 5–15 % slower than `showcase-variety`
+  per world (ten tasks of each on one laptop).
+- **Attempt length.** One attempt lasts at most 3 hours, roughly 1,500–2,500 worlds. A
   larger run stops cleanly; finish it by rerunning the same command with `--resume`.
 - **Changed generator.** Resuming with a different configuration, code or environment
   is refused, so start a run with changed code under a new label.
@@ -339,6 +351,83 @@ margin, not a floor (no negative value in 5,000+ sampled control series); a hard
 guarantee needs a covariate floor in the library. Controls trend less than channels,
 because their down-trends are capped to keep them positive.
 
+### Structural splits (`structural-splits`)
+
+One run over every structural split: each library saturation family except root
+(linear, Hill, logistic, Michaelis-Menten, tanh) with each adstock, none and geometric,
+so 10 splits, on 208 weekly points per world. It keeps the two-style variety's idea
+(run `two-styles-64091b9843a5`): every channel and control acts only on the target,
+effects are positive, controls stay positive and the baseline is floored at 0. On top of
+it:
+
+- **Splits and tasks.** Task `i` belongs to split `i mod 10`, is that split's task
+  `j = i div 10` and uses texture regime `j mod 5`. At 1,000 worlds and 2 per task every
+  split gets 100 worlds and every (split, regime) pair 20, and the splits fill evenly
+  while the run progresses. The task's configuration is the member preset
+  `<saturation>-<adstock>-<regime>` (`DESIGN_PRESETS`; members never run on their own).
+- **Seeds.** Every split has its own generative seed: the first 31 bits of
+  `sha256("<base seed>:<saturation>:<adstock>")`, with the base seed the launch time
+  (`YYYYMMDDHHMMSS`, UTC) unless `--seed` is given. Task `j` of a split uses split seed +
+  `j`. `run.json` lists every split's seed (`structural_splits`) and the rule
+  (`seed_rule`); every completion records its split, split seed, regime, task seed and
+  the seed that generated it. The design is part of the run contract: the reader
+  re-derives each task's seed and member from it and refuses a run whose recorded splits,
+  rule or member cycle differ, so a changed design needs a new name.
+- **Columns and effects.** Each world has 1–10 channel columns and 1–10 control columns
+  (uniform); 1 to that many of each have an effect (uniform; an arrow to the target), so
+  there is always at least one channel and one control with an effect. The other columns
+  are in the data with no effect at all.
+- **Positive controls.** Control coefficients are positive and the worker publishes
+  only worlds whose every control value and contribution is ≥ 0: a draw with a control
+  below zero, or that the library cannot fill, is discarded and the task drawn again with
+  seed task seed + k·2³² (k ≤ 5; then the task is published with no worlds). Control
+  levels (6–10) sit above their deepest down-trend (−4.5), season (0.6) and drop (0.5),
+  so redraws stay rare. Nothing else can lower the outcome below zero: channels are
+  non-negative, the baseline is floored at 0, and the library rejects any world whose
+  target goes below 0.
+- **Trajectories.** Channels trend on 45 % of their columns (log change −1.2…1.2),
+  controls on all (−4.5…4.5 units around a level of 6–10), and both get seasons and
+  level jumps; the baseline moves only through its walk's drift (the library has no
+  baseline trend), with a spread drawn from HalfNormal(1.5) around a level of 3–9.
+- **Texture regimes.** The library draws every walk of a world (each channel, each
+  control and the baseline) from one smoothness prior, so smoothness is set per task:
+
+  | Regime | Walks | Channels and controls | Baseline |
+  |---|---|---|---|
+  | `calm` | near a 26-week moving average (Beta(15, 1)) | no jitter, pulses, on/off blocks, starts, stops or jumps | smooth |
+  | `hectic` | near-raw (Beta(1, 20)) | weekly jitter and pulses on every input; some on/off blocks, late starts, early stops, jumps | jagged (spread HalfNormal(2.5) around 5–11), loud noise |
+  | `mixed` | each walk smooth or raw on its own (Beta(0.6, 0.6)) | the reference's on/off blocks, starts, stops and jumps, less jitter | smooth or jagged |
+  | `spiky-inputs` | smooth | jitter and pulses on every input | smooth |
+  | `hectic-baseline` | raw | none; their walks are nearly flat, so trends and seasons carry them | jagged |
+
+Pilot on Modal (the final configuration: 200 worlds, 2 per task of every member, read
+from the generated corpora). A trajectory is the fitted linear change over the weeks a
+series is on, relative to its mean (up above +20 %, down below −20 %). A series is
+smooth when its week-to-week changes are smooth (std of second differences ÷ 2 std of
+first differences below 0.3, about a ≥ 6-week moving average of a random walk) or
+invisible (below 0.5 % of its level), and hectic when they are jagged (above 0.45) and
+visible (above 2 % of its level).
+
+| | Channels | Controls | Baseline |
+|---|---|---|---|
+| Up / flat / down | 36 / 32 / 33 % | 29 / 38 / 33 % | 27 / 44 / 29 % |
+| Smooth / medium / hectic | 48 / 3 / 49 % | 52 / 15 / 33 % | 59 / 16 / 26 % |
+| Hectic in `calm` / `hectic` / `mixed` / `spiky-inputs` / `hectic-baseline` (worlds) | 0 / 100 / 95 / 100 / 0 % | 0 / 95 / 60 / 100 / 0 % | 0 / 60 / 8 / 0 / 60 % |
+
+Every input and the baseline are smooth at once in every `calm` world (22 % of all
+worlds). The shares stay even (medians: channels 29 %, controls 27 %, baseline 39 %),
+every control value and contribution is ≥ 0, no task needed a redraw, and a world
+takes about 5 s of generation.
+
+**Limits.** The library has no baseline trend or spike setting: the baseline moves up or
+down only by its walk's drift and is hectic only as a raw walk, which is visibly jagged
+in about 60 % of `hectic` and `hectic-baseline` worlds (the others swing too little next
+to their level). One world cannot mix smooth channels with a jagged baseline except
+through `hectic-baseline` (raw walks made nearly flat for the inputs) or by chance in
+`mixed`. Redraws discard whole tasks, so a frequent redraw would favour worlds with
+fewer controls; none was needed in the pilot. A task whose six draws all fail is
+published with no worlds and leaves its split short.
+
 ### A new generator configuration
 
 1. Add a function to `PRESETS` in `live_dashboard/generation.py`. It must return the
@@ -366,9 +455,9 @@ reads any corpus that passes validation.
 
 The limits live in `live_dashboard/deployment.py`:
 
-- `DEMO_MAX_WORLDS` (400);
+- `DEMO_MAX_WORLDS` (1,000);
 - `DEMO_MAX_WORLDS_PER_TASK` (20);
-- `GENERATION_TIMEOUT_S` (1800 s per attempt).
+- `GENERATION_TIMEOUT_S` (10,800 s per attempt).
 
 Raising them raises the worst case of one launch, which is two attempts of the full
 timeout. Redeploy after changing them. Volume v1 recommends at most about 50,000 files,
@@ -425,7 +514,7 @@ app and resource (completed hours only), run
   launches use the new code.
 - **Rotate credentials:** see [Modal deployment](#modal-deployment-environment-pfn).
 
-## Publication protocol (`pymc-generator-live-publication` 1.1)
+## Publication protocol (`pymc-generator-live-publication` 1.2)
 
 This is the demo's **single-writer** protocol: correctness relies on one writer per run
 (`generate_run` runs one container at a time and processes tasks in order; launch runs
@@ -436,7 +525,8 @@ reader rules below are written so such a writer can replace this one.
 Identities derive from the request only: `run_id = <label>-<sha256(request)[:12]>`
 over (label, preset, worlds, worlds per task, seed); task `i` generates with seed
 `seed + i` (exactly batch `i` of `DataGenerator.iter_batches`, which is reproducible but
-not the same worlds as one larger call); world ids are `<task_id>_w<row>`, unique within
+not the same worlds as one larger call), or, for a structural-split design, with its
+split's seed + its index in the split; world ids are `<task_id>_w<row>`, unique within
 the run.
 
 Each task's output is a version-1 completion of `pymc_generator.publication` (#67,
@@ -451,7 +541,9 @@ runs/<run_id>/tasks/<task_id>/attempts/<attempt_id>/completion.json task complet
 ```
 
 A completion records the task's counts (target, candidates, rejected, surplus,
-published, shortfall; the library reports one rejection reason, `generator_filters`),
+published, shortfall; rejected candidates are `generator_filters` for the library's
+filters and, for a design, `negative_controls` for worlds discarded with a control
+below zero; the other worlds of a discarded draw are surplus),
 world ids, payload digest and provenance: a run spec digest, the generation mode and
 code revision, the environment with the worker, the seed context, the member preset's
 effective configuration and a cell namespace for training snapshots. It also carries
@@ -466,18 +558,25 @@ configuration, code or environment is refused, so a changed generator needs a ne
 Every record's worker (task and attempt records) describes the machine; since 1.1 (an
 additive minor version) it carries `usd_per_hour`, the list price of the worker's
 reservation, or null for a worker that is not billed (a local run), which the cost card
-uses. 1.0 records omit it; readers treat null and absent alike.
+uses. 1.0 records omit it; readers treat null and absent alike. Since 1.2, a
+structural-split design run records `seed_rule` and `structural_splits` in its
+manifest, and every completion's seed context records `redraws` (the index of the
+task's last draw) and `generation_seed` (that draw's seed), plus a design task's split
+and regime; the reader checks all of them. A 1.1 reader would reject every task of a
+design run, so the dashboard and the worker deploy together (one Modal app).
 
 **Writer.** `pymc_generator.publication` validates each task's corpus (deferred
 membership), saves it create-only under its attempt's own directory and commits, then
 writes the completion and commits again; it never overwrites an attempt. A task that the
 library cannot fill within its bounded rounds publishes a zero-world completion with the
 full shortfall, no payload, and the counts the library reports for the cell that could
-not fill; any other failure fails the attempt (recorded in its attempt record) and leaves
-the task for a retry. Resuming reuses a task whose completion verifies (record, payload
-and corpus). A task whose completion does not verify, or is unresolved (partial JSON),
-stops the resume before anything is generated: the publication never publishes past
-such an attempt until it is reconciled by hand.
+not fill (a design first draws it again, up to five times, as it does a draw with a
+negative control; its completion counts every draw); any other failure fails the
+attempt (recorded in its attempt record) and leaves the task for a retry. Resuming
+reuses a task whose completion verifies (record, payload, corpus, and the reader's own
+checks of seed, split and target). A task whose completion does not verify, or is
+unresolved (partial JSON), stops the resume before anything is generated: the
+publication never publishes past such an attempt until it is reconciled by hand.
 
 **Reader.** Every poll discovers every completion of a run through
 `pymc_generator.publication` (no high-water cursor), so out-of-order publications are

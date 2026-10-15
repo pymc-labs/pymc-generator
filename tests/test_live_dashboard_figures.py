@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib.util
+import itertools
 import json
 import math
 import sys
@@ -50,6 +51,7 @@ PANELS = (
     "composition",
     "saturation",
     "adstock",
+    "splits",
     "combinations",
     "active_counts",
 )
@@ -128,17 +130,31 @@ def world(
     saturation: tuple[str, ...] | None = ("michaelis_menten",),
     active: tuple[int, int] = (3, 2),
     slots: tuple[int, int] = (10, 10),
+    *,
+    effects: tuple[int, int] | None = None,
+    pairs: tuple[tuple[str, str], ...] | None = None,
 ) -> WorldMetrics:
+    """A consumable world. Unless given, every column has an effect and the structural
+    pairs are every (saturation, adstock) combination of its forms (``None`` when its
+    saturation forms are unrecorded, as extraction does)."""
+    if pairs is None and saturation is not None:
+        pairs = tuple(sorted(itertools.product(saturation, adstock)))
+    channels_with_effect, controls_with_effect = active if effects is None else effects
     return WorldMetrics(
-        f"{RUN_ID}/task-00000/w{row}",
-        "task-00000",
-        channel,
-        control,
-        baseline,
-        adstock,
-        saturation,
-        *active,
-        *slots,
+        world_id=f"{RUN_ID}/task-00000/w{row}",
+        task_id="task-00000",
+        channel_share=channel,
+        control_share=control,
+        baseline_share=baseline,
+        adstock_forms=adstock,
+        saturation_forms=saturation,
+        structural_pairs=pairs,
+        active_channels=active[0],
+        active_controls=active[1],
+        effect_channels=channels_with_effect,
+        effect_controls=controls_with_effect,
+        channel_slots=slots[0],
+        control_slots=slots[1],
     )
 
 
@@ -346,7 +362,7 @@ def test_impact_figure_shows_channel_units_and_world_totals_as_percentages():
         ),
     )
     found = panel(snapshot, "impact")
-    units = trace(found, "Each active channel")
+    units = trace(found, "Each channel with an effect")
     assert units["y"] == [0.3, 0.15, 0.2]
     assert units["text"] == [
         f"{RUN_ID}/task-00000/w0 C1",
@@ -378,7 +394,7 @@ def test_control_and_baseline_panels_show_the_same_picture_on_a_shared_axis():
         control_impacts=(control(0, "Z1", 0.2), control(0, "Z2", 0.1), control(1, "Z1", -0.1)),
     )
     controls = panel(snapshot, "control_impact")
-    units = trace(controls, "Each active control")
+    units = trace(controls, "Each control with an effect")
     assert units["y"] == [0.2, 0.1, -0.1]
     assert units["text"][:2] == [f"{RUN_ID}/task-00000/w0 Z1", f"{RUN_ID}/task-00000/w0 Z2"]
     assert trace(controls, "All controls per world")["y"] == [0.3, -0.1]
@@ -492,22 +508,73 @@ def test_form_panel_ticks_are_whole_worlds(worlds):
     assert worlds <= 8 * axis["dtick"]
 
 
-def test_saturation_panel_counts_only_worlds_whose_payload_records_families():
+def _splits(snapshot: RunSnapshot) -> dict[tuple[str, str], int]:
+    """The splits heatmap's counts keyed by (saturation, adstock) family."""
+    (cells,) = panel(snapshot, "splits")["figure"]["data"]
+    return {
+        (saturation, adstock): count
+        for saturation, row in zip(cells["y"], cells["z"], strict=True)
+        for adstock, count in zip(cells["x"], row, strict=True)
+    }
+
+
+# Every (saturation, adstock) pair of the library's families.
+SPLITS = len(SATURATION_FAMILY_KEYS) * len(CARRYOVER_FAMILY_KEYS)
+
+
+def test_saturation_and_splits_panels_count_only_worlds_whose_payloads_record_families():
     unrecorded = world(0, 0.4, 0.3, 0.3, saturation=None)
     snapshot = run([published(0, (0, 60), accepted=1)], worlds=(unrecorded,))
-    found = panel(snapshot, "saturation")
-    assert (found["figure"], found["empty"]) == (
-        None,
-        "this run's payloads do not record these families",
-    )
+    for panel_id in ("saturation", "splits"):
+        found = panel(snapshot, panel_id)
+        assert (found["figure"], found["empty"]) == (
+            None,
+            "this run's payloads do not record these families",
+        )
     assert _bars(snapshot, "adstock")["geometric"] == 1  # the adstock family is always stored
     mixed = run([published(0, (0, 60))], worlds=(unrecorded, world(1, 0.4, 0.3, 0.3)))
     assert panel(mixed, "saturation")["note"] == "1 world without recorded families not counted"
     assert _bars(mixed, "saturation")["michaelis_menten"] == 1
+    assert panel(mixed, "splits")["note"] == (
+        f"1 of {SPLITS} splits present; 1 world without recorded families not counted"
+    )
+    assert _splits(mixed)["michaelis_menten", "geometric"] == 1
+
+
+def test_the_splits_heatmap_counts_worlds_per_saturation_and_adstock_pair():
+    worlds = (
+        world(0, 0.4, 0.3, 0.3, pairs=(("logistic", "geometric"),)),
+        world(1, 0.4, 0.3, 0.3, pairs=(("logistic", "geometric"),)),
+        world(2, 0.4, 0.3, 0.3, pairs=(("hill", "none"),)),
+        # A world whose channels use two pairs counts once in each of them.
+        world(3, 0.4, 0.3, 0.3, pairs=(("hill", "none"), ("tanh", "geometric"))),
+    )
+    snapshot = run([published(0, (0, 60)), published(1, (60, 120))], worlds=worlds)
+    splits = _splits(snapshot)
+    # Every pair of library families has a cell, in the library's orders; absent pairs
+    # count zero.
+    assert list(splits) == list(itertools.product(SATURATION_FAMILY_KEYS, CARRYOVER_FAMILY_KEYS))
+    assert {pair: n for pair, n in splits.items() if n} == {
+        ("logistic", "geometric"): 2,
+        ("hill", "none"): 2,
+        ("tanh", "geometric"): 1,
+    }
+    found = panel(snapshot, "splits")
+    assert found["note"] == (
+        f"3 of {SPLITS} splits present; 1 world using several splits, counted once per split"
+    )
+    (cells,) = found["figure"]["data"]
+    # Present splits show their count; absent ones stay blank.
+    for text_row, count_row in zip(cells["text"], cells["z"], strict=True):
+        assert text_row == [str(count) if count else "" for count in count_row]
+    assert "saturation %{y}" in cells["hovertemplate"]
+    assert "adstock %{x}" in cells["hovertemplate"]
+    colorbar = cells["colorbar"]
+    assert colorbar["tick0"] == 0 and isinstance(colorbar["dtick"], int)
 
 
 def _matrix(snapshot: RunSnapshot) -> dict[tuple[int, int], int]:
-    """The heatmap's counts keyed by (active channels, active controls)."""
+    """The heatmap's counts keyed by (channel columns, control columns)."""
     (cells,) = panel(snapshot, "combinations")["figure"]["data"]
     return {
         (channels, controls): count
@@ -520,7 +587,8 @@ def test_the_combination_matrix_has_a_cell_for_every_allowed_pair():
     worlds = (
         world(0, 0.4, 0.3, 0.3, active=(2, 5), slots=(4, 6)),
         world(1, 0.4, 0.3, 0.3, active=(2, 5), slots=(4, 6)),
-        world(2, 0.4, 0.3, 0.3, active=(4, 1), slots=(4, 6)),
+        # Columns, not inputs with an effect: none of its controls has one.
+        world(2, 0.4, 0.3, 0.3, active=(4, 1), slots=(4, 6), effects=(1, 0)),
     )
     snapshot = run([published(0, (0, 60)), published(1, (60, 120), accepted=1)], worlds=worlds)
     matrix = _matrix(snapshot)
@@ -528,14 +596,15 @@ def test_the_combination_matrix_has_a_cell_for_every_allowed_pair():
     assert sorted(matrix) == [(c, m) for c in range(1, 5) for m in range(1, 7)]
     assert {pair: n for pair, n in matrix.items() if n} == {(2, 5): 2, (4, 1): 1}
     found = panel(snapshot, "combinations")
+    assert found["title"] == "Worlds per channel columns × control columns"
     assert found["note"] == "2 of 24 combinations present"
     (cells,) = found["figure"]["data"]
     layout = found["figure"]["layout"]
-    # Channels run up the rows and controls across the columns, in the axes and the hover.
-    assert "channels" in layout["yaxis"]["title"]["text"]
-    assert "controls" in layout["xaxis"]["title"]["text"]
-    assert "%{y} channels" in cells["hovertemplate"]
-    assert "%{x} controls" in cells["hovertemplate"]
+    # Channel columns run up the rows and control columns across, in the axes and hover.
+    assert layout["yaxis"]["title"]["text"] == "channel columns (treatments)"
+    assert layout["xaxis"]["title"]["text"] == "control columns (covariates)"
+    assert "%{y} channel columns" in cells["hovertemplate"]
+    assert "%{x} control columns" in cells["hovertemplate"]
     # Present combinations show their count; absent ones stay blank.
     for text_row, count_row in zip(cells["text"], cells["z"], strict=True):
         assert text_row == [str(count) if count else "" for count in count_row]
@@ -550,24 +619,36 @@ def test_a_world_without_active_controls_adds_a_zero_column():
     assert sorted(_matrix(snapshot)) == [(c, m) for c in (1, 2) for m in (0, 1, 2)]
 
 
-def test_active_count_bars_count_worlds_per_number_of_channels_and_controls():
+def test_active_count_bars_count_worlds_per_number_of_columns_and_of_inputs_with_an_effect():
     worlds = (
-        world(0, 0.4, 0.3, 0.3, active=(2, 5), slots=(3, 6)),
-        world(1, 0.4, 0.3, 0.3, active=(2, 1), slots=(3, 6)),
-        world(2, 0.4, 0.3, 0.3, active=(3, 5), slots=(3, 6)),
+        world(0, 0.4, 0.3, 0.3, active=(2, 5), slots=(3, 6), effects=(1, 5)),
+        world(1, 0.4, 0.3, 0.3, active=(2, 1), slots=(3, 6), effects=(2, 0)),
+        world(2, 0.4, 0.3, 0.3, active=(3, 5), slots=(3, 6), effects=(1, 2)),
     )
     snapshot = run([published(0, (0, 60)), published(1, (60, 120), accepted=1)], worlds=worlds)
-    found = panel(snapshot, "active_counts")["figure"]
+    found = panel(snapshot, "active_counts")
+    assert found["title"] == "Worlds per number of columns and of inputs with an effect"
+    figure = found["figure"]
     bars = {
-        trace["name"]: dict(zip(trace["x"], trace["y"], strict=True)) for trace in found["data"]
+        trace["name"]: dict(zip(trace["x"], trace["y"], strict=True)) for trace in figure["data"]
     }
+    assert [trace["name"] for trace in figure["data"]] == [
+        "channel columns",
+        "channels with an effect",
+        "control columns",
+        "controls with an effect",
+    ]
+    # World 1 has no control with an effect, so the shared axis starts at 0.
     assert bars == {
-        "channels (treatments)": {1: 0, 2: 2, 3: 1, 4: 0, 5: 0, 6: 0},
-        "controls (covariates)": {1: 1, 2: 0, 3: 0, 4: 0, 5: 2, 6: 0},
+        "channel columns": {0: 0, 1: 0, 2: 2, 3: 1, 4: 0, 5: 0, 6: 0},
+        "channels with an effect": {0: 0, 1: 2, 2: 1, 3: 0, 4: 0, 5: 0, 6: 0},
+        "control columns": {0: 0, 1: 1, 2: 0, 3: 0, 4: 0, 5: 2, 6: 0},
+        "controls with an effect": {0: 1, 1: 0, 2: 1, 3: 0, 4: 0, 5: 1, 6: 0},
     }
-    for trace in found["data"]:  # each bar's hover names its own input
-        assert trace["name"].split()[0] in trace["hovertemplate"]
-    axis = found["layout"]["yaxis"]
+    for trace in figure["data"]:  # each bar's hover names what it counts
+        assert trace["name"] in trace["hovertemplate"]
+    assert figure["layout"]["barmode"] == "group"
+    axis = figure["layout"]["yaxis"]
     assert axis["tick0"] == 0 and isinstance(axis["dtick"], int)
 
 

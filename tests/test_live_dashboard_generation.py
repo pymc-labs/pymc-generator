@@ -9,6 +9,7 @@ clock that starts after the golden attempt.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import importlib.metadata
 import importlib.util
@@ -23,14 +24,18 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import numpy as np
 import pytest
 
 import pymc_generator
 from live_dashboard import publication as pub
+from live_dashboard import structural
 from live_dashboard.collection import Collector
 from live_dashboard.deployment import DEMO_MAX_WORLDS, DEMO_MAX_WORLDS_PER_TASK
 from live_dashboard.extract import extract_payload
+from live_dashboard.figures import status
 from live_dashboard.generation import (
+    DESIGN_PRESETS,
     MIXES,
     PRESETS,
     RequestError,
@@ -1039,3 +1044,435 @@ def test_an_unusable_mix_is_refused_before_any_write(tmp_path, mixes, message):
     with pytest.raises(RequestError, match=message):
         run_generation(store, request, worker=support.WORKER, presets=MIX_PRESETS, mixes=mixes)
     assert not (tmp_path / "store").exists()
+
+
+# -- structural-split designs ----------------------------------------------------------
+
+DESIGN = structural.DESIGNS["structural-splits"]
+DESIGN_SEED = 20261015121429
+
+
+def _split_of(member: str) -> structural.StructuralSplit:
+    (split,) = [s for s in DESIGN.splits if member.startswith(f"{s.name}-")]
+    return split
+
+
+@pytest.mark.parametrize("member", DESIGN.members)
+def test_each_design_member_is_configured_for_its_split(member):
+    cfg = DESIGN_PRESETS[member](2)  # make_scm_prior validates the configuration
+    split = _split_of(member)
+    assert {k for k, p in cfg.saturation_family_probs.items() if p} == {split.saturation}
+    assert {k for k, p in cfg.carryover_family_probs.items() if p} == {split.adstock}
+    # Payloads record each channel's saturation family (the splits panel reads it).
+    assert cfg.mechanism_priors_enabled
+    assert (cfg.n_time_steps, cfg.n_cells, cfg.draws_per_cell) == (208, 2, 1)
+    # 1-10 columns per axis; 1..columns of them with an effect (an arrow to the target),
+    # and no other arrow: inputs without an effect have none at all.
+    assert (cfg.n_treatments, cfg.n_covariates) == (10, 10)
+    assert cfg.n_treatments_active_range == cfg.n_covariates_active_range == (1, 10)
+    assert {edge: n for edge, n in cfg.edge_budget.items() if n != (0, 0)} == {
+        "cy": (1, 10),
+        "zy": (1, 10),
+    }
+    # Effects are positive, and trends go up as far as down.
+    assert cfg.treatment_reference_contribution_range[0] > 0
+    assert cfg.covariate_reference_contribution_range[0] > 0
+    for low, high in (cfg.treatment_trend_log_change_range, cfg.covariate_trend_change_range):
+        assert low == -high and high > 0
+
+
+def test_regimes_order_how_smooth_and_how_jagged_the_components_are():
+    def config(regime: str) -> SCMPrior:
+        return DESIGN_PRESETS[structural.member_name(DESIGN.splits[0], regime)](2)
+
+    def walks(regime: str) -> float:  # mean walk smoothness (1: a 26-week average)
+        cfg = config(regime)
+        return cfg.rw_smoothness_alpha / (cfg.rw_smoothness_alpha + cfg.rw_smoothness_beta)
+
+    def texture(regime: str) -> set[float]:
+        probs = config(regime).trajectory_inclusion_probs()
+        return {probs[x][c] for x in probs for c in ("hf", "pulse")}
+
+    # Smooth walks (calm, spiky-inputs) > per-input mix > raw walks (hectic, hectic-baseline).
+    assert min(walks("calm"), walks("spiky-inputs")) > walks("mixed")
+    assert walks("mixed") > max(walks("hectic"), walks("hectic-baseline"))
+    # Jitter and pulses on every input when inputs are spiky, never when they are smooth.
+    assert texture("hectic") == texture("spiky-inputs") == {1.0}
+    assert texture("calm") == texture("hectic-baseline") == {0.0}
+    assert texture("mixed") - {0.0, 1.0}
+    # Every walk of hectic-baseline is raw, so its baseline is jagged: the baseline swings
+    # wider than in calm while the channels' and controls' walks are made nearly flat.
+    calm, jagged = config("calm"), config("hectic-baseline")
+    assert jagged.rw_baseline_std_sigma > calm.rw_baseline_std_sigma
+    assert jagged.rw_treatment_std_range[1] < calm.rw_treatment_std_range[0]
+    assert jagged.rw_std_sigma < calm.rw_std_sigma
+
+
+def test_a_design_member_cannot_run_on_its_own():
+    with pytest.raises(RequestError, match="unknown preset"):
+        preset_cycle(DESIGN.members[0])
+    assert preset_cycle("structural-splits") == DESIGN.cycle
+
+
+def _controls_at(level: tuple[float, float]) -> SCMPrior:
+    """The small preset with both controls held near ``level`` (walk spread 0.01) and no
+    arrow into or between them, so nothing else moves them."""
+    return dataclasses.replace(
+        PRESETS["small"](2),
+        rw_covariate_mean_range=level,
+        rw_std_sigma=0.01,
+        n_covariates_active_range=(2, 2),
+        edge_budget={"zc": (0, 0), "zz": (0, 0), "dz": (0, 0)},
+    )
+
+
+def _present_controls(corpus: dict[str, Any]) -> np.ndarray:
+    values = corpus["covariates"]
+    mask = np.broadcast_to(corpus["covariate_active_mask"][:, None, :] == 1, values.shape)
+    return values[mask]
+
+
+@pytest.fixture(scope="module")
+def control_corpora() -> dict[str, dict[str, Any]]:
+    """Two real two-world corpora: every control positive, and every control negative."""
+    corpora = {
+        name: DataGenerator(_controls_at(level)).generate(n_tasks=2, seed=3, defer_cell_split=True)
+        for name, level in (("positive", (20.0, 30.0)), ("negative", (-0.5, -0.1)))
+    }
+    assert (_present_controls(corpora["positive"]) > 0).all()
+    assert (_present_controls(corpora["negative"]) < 0).all()
+    return corpora
+
+
+def _draws(corpora: dict[str, dict[str, Any]], negative: set[int], calls: list[int]):
+    """A generator that answers seed ``s`` with the negative corpus when ``s`` is in
+    ``negative`` and the positive one otherwise (a deep copy each time)."""
+
+    def generate(self, *, n_tasks, seed, defer_cell_split):
+        assert (n_tasks, defer_cell_split) == (2, True)
+        calls.append(seed)
+        return copy.deepcopy(corpora["negative" if seed in negative else "positive"])
+
+    return generate
+
+
+def _completion(store: DirectoryStore, run_id: str, task_id: str, attempt_id: str) -> dict:
+    return json.loads(store.read_bytes(pub.completion_path(run_id, task_id, attempt_id)))
+
+
+def _tally(corpus: dict[str, Any]) -> tuple[int, int, int, float]:
+    """Candidates evaluated, rejected, draw failures and seconds of one library draw."""
+    diagnostics = corpus["diagnostics"]
+    evaluated = int(diagnostics["n_draws_evaluated"])
+    rejected = round(float(diagnostics["rejection_rate"]) * evaluated)
+    seconds = float(diagnostics["timing"]["elapsed_s"])
+    return evaluated, rejected, int(diagnostics["n_draw_failures"]), seconds
+
+
+def test_a_design_run_publishes_every_split_and_redraws_negative_controls(
+    tmp_path, monkeypatch, control_corpora
+):
+    request = pub.RunRequest("splits", "structural-splits", 20, 2, DESIGN_SEED)  # 10 tasks
+    first = request.task_seed(0)
+    calls: list[int] = []
+    monkeypatch.setattr(DataGenerator, "generate", _draws(control_corpora, {first}, calls))
+    store = DirectoryStore(tmp_path)
+    result = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert (result["status"], len(result["published"])) == ("finished", 10)
+    # Task 0's first draw had negative controls: it was drawn again with its redraw seed.
+    assert calls == [first, first + 2**32, *(request.task_seed(i) for i in range(1, 10))]
+
+    body = json.loads(store.read_bytes(pub.run_manifest_path(request.run_id)))
+    assert body["seed_rule"] == structural.SEED_RULE
+    assert [split["seed"] for split in body["structural_splits"]][:2] == [57402002, 303994010]
+    for index in range(10):
+        completion = _completion(
+            store, request.run_id, pub.task_id_for(index), result["attempt_id"]
+        )
+        context = completion["provenance"]["seed_context"]
+        split = DESIGN.splits[index]  # one task per split, in design order, all "calm"
+        assert (context["split"]["saturation"], context["split"]["adstock"]) == (
+            split.saturation,
+            split.adstock,
+        )
+        assert context["regime"] == "calm"
+        assert completion["provenance"]["effective_configuration"]["preset"] == (
+            structural.member_name(split, "calm")
+        )
+        assert context["redraws"] == (1 if index == 0 else 0)
+
+    # The reader counts both draws of task 0: the discarded draw's two worlds with
+    # negative controls are rejected candidates, and its time is generation time.
+    collector = Collector(store)
+    collector.refresh()
+    run = collector.snapshot.run_index[request.run_id]
+    assert (run.state, run.published_worlds) == ("complete", 20)
+    neg_evaluated, neg_rejected, neg_failures, neg_seconds = _tally(control_corpora["negative"])
+    pos_evaluated, pos_rejected, pos_failures, pos_seconds = _tally(control_corpora["positive"])
+    task = run.tasks[0]
+    assert (task.candidates_evaluated, task.rejected_candidates, task.draw_failures) == (
+        neg_evaluated + pos_evaluated,
+        neg_rejected + 2 + pos_rejected,
+        neg_failures + pos_failures,
+    )
+    assert task.generation_seconds == pytest.approx(neg_seconds + pos_seconds)
+    for task in run.tasks:
+        data = store.read_bytes(
+            pub.completion_payload_path(request.run_id, task.task_id, task.attempt_id)
+        )
+        corpus = _corpus(data, tmp_path)
+        assert (_present_controls(corpus) >= 0).all()
+        assert (corpus["covariate_contribution"] >= 0).all()
+
+
+@pytest.mark.parametrize("cell", ["value", "contribution", "nan"])
+def test_one_negative_control_cell_redraws_its_task_and_rejects_only_its_world(
+    tmp_path, monkeypatch, control_corpora, cell
+):
+    positive = control_corpora["positive"]
+    damaged = copy.deepcopy(positive)
+    # World 1 (the last), its last control column, the last week.
+    column = int(np.flatnonzero(damaged["covariate_active_mask"][1])[-1])
+    if cell == "contribution":
+        damaged["covariate_contribution"][1, -1, column] = -1e-6
+    else:
+        damaged["covariates"][1, -1, column] = np.nan if cell == "nan" else -1e-6
+    request = pub.RunRequest("splits", "structural-splits", 20, 2, DESIGN_SEED)
+    first = request.task_seed(0)
+    calls: list[int] = []
+
+    def generate(self, *, n_tasks, seed, defer_cell_split):
+        calls.append(seed)
+        return copy.deepcopy(damaged if seed == first else positive)
+
+    monkeypatch.setattr(DataGenerator, "generate", generate)
+    store = DirectoryStore(tmp_path)
+    result = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert calls[:2] == [first, first + 2**32]
+    completion = _completion(store, request.run_id, "task-00000", result["attempt_id"])
+    evaluated, rejected, _, _ = _tally(positive)
+    assert completion["rejection_reasons"]["negative_controls"] == 1
+    # The damaged draw's healthy world is surplus: accepted, but not published.
+    assert completion["counts"]["surplus"] == 2 * (evaluated - rejected) - 1 - 2
+    assert completion["provenance"]["seed_context"]["redraws"] == 1
+
+
+def test_a_task_whose_every_draw_has_negative_controls_publishes_no_world(
+    tmp_path, monkeypatch, control_corpora
+):
+    request = pub.RunRequest("splits", "structural-splits", 20, 2, DESIGN_SEED)
+    first = request.task_seed(0)
+    seeds = {first + k * 2**32 for k in range(structural.MAX_REDRAWS + 1)}
+    calls: list[int] = []
+    monkeypatch.setattr(DataGenerator, "generate", _draws(control_corpora, seeds, calls))
+    store = DirectoryStore(tmp_path)
+    result = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert calls[: structural.MAX_REDRAWS + 1] == sorted(seeds)
+    completion = _completion(store, request.run_id, "task-00000", result["attempt_id"])
+    context = completion["provenance"]["seed_context"]
+    assert (context["redraws"], context["generation_seed"]) == (
+        structural.MAX_REDRAWS,
+        first + structural.MAX_REDRAWS * 2**32,
+    )
+    assert completion["generation_failure"]["type"] == "NegativeControls"
+    assert completion["rejection_reasons"]["negative_controls"] == 2 * (structural.MAX_REDRAWS + 1)
+    manifest = support.load_manifest(store, request.run_id)
+    record = _task_record(store, manifest, "task-00000", result["attempt_id"])
+    assert (record.status, record.accepted_worlds, record.payload) == ("zero", 0, None)
+    collector = Collector(store)
+    collector.refresh()
+    run = collector.snapshot.run_index[request.run_id]
+    # The run completes; its first split is two worlds short, and the status says why.
+    assert (run.state, run.published_worlds) == ("complete", 18)
+    (problem,) = status(run)["problems"]
+    assert (problem["task_id"], problem["status"]) == ("task-00000", "zero")
+    assert problem["detail"].startswith("NegativeControls")
+    # A zero-world task is final: a rerun reuses it without drawing again.
+    monkeypatch.setattr(DataGenerator, "generate", _forbidden_generate)
+    rerun = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert (rerun["published"], len(rerun["reused"])) == ([], 10)
+
+
+def test_a_design_draws_an_unfillable_task_again_and_counts_every_draw(
+    tmp_path, monkeypatch, control_corpora
+):
+    request = pub.RunRequest("splits", "structural-splits", 20, 2, DESIGN_SEED)
+    first = request.task_seed(0)
+    negative, positive = control_corpora["negative"], control_corpora["positive"]
+    unfillable = DataGenerator(_unfillable(2))
+    real_generate = DataGenerator.generate
+    messages: list[str] = []
+
+    def generate(self, *, n_tasks, seed, defer_cell_split):
+        if seed == first:  # negative controls
+            return copy.deepcopy(negative)
+        if seed == first + 2**32:  # the library cannot fill the cells (a real draw)
+            try:
+                return real_generate(
+                    unfillable, n_tasks=n_tasks, seed=seed, defer_cell_split=defer_cell_split
+                )
+            except RuntimeError as error:
+                messages.append(str(error))
+                raise
+        return copy.deepcopy(positive)
+
+    monkeypatch.setattr(DataGenerator, "generate", generate)
+    store = DirectoryStore(tmp_path)
+    result = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    completion = _completion(store, request.run_id, "task-00000", result["attempt_id"])
+    (message,) = messages
+    tally = re.search(
+        r"tasks accepted after \d+ rounds .*rejected (\d+)/(\d+) evaluated candidates, "
+        r"and (\d+)/\d+ rounds",
+        message,
+    )
+    assert tally is not None
+    cell_rejected, cell_evaluated, cell_failures = map(int, tally.groups())
+    neg_evaluated, neg_rejected, neg_failures, _ = _tally(negative)
+    pos_evaluated, pos_rejected, pos_failures, _ = _tally(positive)
+    assert completion["counts"] == {
+        "target": 2,
+        "candidates": neg_evaluated + cell_evaluated + pos_evaluated,
+        "rejected": neg_rejected + 2 + cell_rejected + pos_rejected,
+        # The negative draw's two accepted worlds are its negative-control rejections.
+        "surplus": (neg_evaluated - neg_rejected - 2)
+        + (cell_evaluated - cell_rejected)
+        + (pos_evaluated - pos_rejected - 2),
+        "published": 2,
+        "shortfall": 0,
+    }
+    assert completion["rejection_reasons"] == {
+        "generator_filters": neg_rejected + cell_rejected + pos_rejected,
+        "negative_controls": 2,
+    }
+    assert completion["draw_failures"] == neg_failures + cell_failures + pos_failures
+    assert completion["provenance"]["seed_context"]["redraws"] == 2
+    assert completion["generation_failure"] is None
+
+
+def test_a_design_run_stops_before_a_redraw_the_deadline_leaves_no_time_for(
+    tmp_path, monkeypatch, control_corpora
+):
+    clock = support.FakeClock(step=0.0)
+    request = pub.RunRequest("splits", "structural-splits", 20, 2, DESIGN_SEED)
+    first = request.task_seed(0)
+    calls: list[int] = []
+    draw = _draws(control_corpora, {first}, calls)
+
+    def slow(self, **kwargs):
+        clock.advance(100)  # one draw takes 100 s of the attempt's time
+        return draw(self, **kwargs)
+
+    monkeypatch.setattr(DataGenerator, "generate", slow)
+    store = DirectoryStore(tmp_path)
+    deadline = clock.now + timedelta(seconds=250)
+    result = run_generation(store, request, worker=support.WORKER, clock=clock, deadline=deadline)
+    # 150 s are left after the discarded first draw: less than twice its 100 s.
+    assert (result["status"], result["published"]) == ("stopped", [])
+    assert calls == [first]
+    assert support.completion_files(store.root, request.run_id, "task-00000") == []
+    # The next attempt draws the task again from its first seed and counts each draw once.
+    resumed = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert (resumed["status"], len(resumed["published"])) == ("finished", 10)
+    assert calls[1:3] == [first, first + 2**32]
+    completion = _completion(store, request.run_id, "task-00000", resumed["attempt_id"])
+    neg_evaluated, *_ = _tally(control_corpora["negative"])
+    pos_evaluated, *_ = _tally(control_corpora["positive"])
+    assert completion["provenance"]["seed_context"]["redraws"] == 1
+    assert completion["counts"]["candidates"] == neg_evaluated + pos_evaluated
+
+
+def _jitter(series: np.ndarray) -> float | None:
+    """Week-to-week change of a series' on-weeks relative to its level (``None`` for a
+    series with fewer than 8 steps between consecutive on-weeks)."""
+    on = series != 0
+    steps = np.diff(series)[on[1:] & on[:-1]]
+    return float(steps.std() / series[on].mean()) if steps.size >= 8 else None
+
+
+@pytest.mark.slow  # five real 208-week tasks and one regeneration: about a minute
+def test_a_split_publishes_real_208_week_worlds_in_every_regime(tmp_path, monkeypatch):
+    split = structural.StructuralSplit("logistic", "geometric")
+    design = structural.SplitDesign(splits=(split,), regimes=DESIGN.regimes)
+    monkeypatch.setattr(structural, "DESIGNS", {"structural-splits": design})
+    request = pub.RunRequest("real", "structural-splits", 10, 2, DESIGN_SEED)  # 1 task/regime
+    store = DirectoryStore(tmp_path / "store")
+    result = run_generation(store, request, worker=support.WORKER, clock=support.FakeClock())
+    assert (result["status"], len(result["published"])) == ("finished", 5)
+    collector = Collector(store)
+    collector.refresh()
+    run = collector.snapshot.run_index[request.run_id]
+    assert (run.state, run.published_worlds) == ("complete", 10)
+    for world in run.worlds:
+        assert world.structural_pairs == (("logistic", "geometric"),)
+        assert 1 <= world.effect_channels <= world.active_channels <= 10
+        assert 1 <= world.effect_controls <= world.active_controls <= 10
+    jitter: dict[str, float] = {}
+    for task in run.tasks:
+        path = pub.completion_payload_path(request.run_id, task.task_id, task.attempt_id)
+        corpus = _corpus(store.read_bytes(path), tmp_path)
+        assert corpus["outcome_raw"].shape[1] == 208
+        assert (_present_controls(corpus) >= 0).all()
+        assert (corpus["covariate_contribution"] >= 0).all()
+        assert not corpus["indirect_effects"].any()  # no arrow but channel/control -> target
+        regime = DESIGN.regimes[task.task_index]
+        channels = corpus["treatment_active_mask"] == 1
+        values = [
+            _jitter(corpus["treatment_raw"][row, :, column])
+            for row, column in zip(*np.nonzero(channels), strict=True)
+        ]
+        jitter[regime] = float(np.mean([value for value in values if value is not None]))
+    # Channels jitter more where inputs are spiky than where every input is smooth.
+    assert min(jitter["hectic"], jitter["spiky-inputs"]) > max(
+        jitter["calm"], jitter["hectic-baseline"]
+    )
+    # A published task is exactly the draw its completion records.
+    completion = _completion(store, request.run_id, "task-00002", result["attempt_id"])
+    seed = completion["provenance"]["seed_context"]["generation_seed"]
+    member = completion["provenance"]["effective_configuration"]["preset"]
+    redrawn = DataGenerator(DESIGN_PRESETS[member](2)).generate(
+        n_tasks=2, seed=seed, defer_cell_split=True
+    )
+    published = _corpus(
+        store.read_bytes(
+            pub.completion_payload_path(request.run_id, "task-00002", result["attempt_id"])
+        ),
+        tmp_path,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(redrawn["outcome_raw"], dtype=np.float32), published["outcome_raw"]
+    )
+
+
+def test_rebuilding_a_design_yields_the_same_recorded_generator():
+    request = pub.RunRequest("design", "structural-splits", 40, 4, DESIGN_SEED)
+    cycle = preset_cycle(request.preset)
+
+    def recorded() -> pub.GeneratorInfo:
+        return generator_info(
+            request.preset, cycle, {name: DESIGN_PRESETS[name](4) for name in cycle}
+        )
+
+    manifest = pub.RunManifest(
+        run_id=request.run_id, created_at=support.EPOCH, request=request, generator=recorded()
+    )
+    data = manifest.encode()
+    assert len(data) < pub.MAX_RECORD_BYTES
+    decoded = pub.decode_run_manifest(data, run_id=request.run_id)
+    assert decoded.generator.config_sha256 == recorded().config_sha256
+    assert decoded.generator.config["cycle"] == list(DESIGN.cycle)
+
+
+def test_the_code_digest_covers_the_structural_designs(tmp_path, monkeypatch):
+    from live_dashboard import generation
+
+    cfg = PRESETS["small"](2)
+    original = _single("small", cfg).code_sha256
+    copied = tmp_path / "live_dashboard"
+    shutil.copytree(
+        Path(generation.__file__).parent, copied, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    monkeypatch.setattr(generation, "__file__", str(copied / "generation.py"))
+    assert _single("small", cfg).code_sha256 == original
+    (copied / "structural.py").write_bytes((copied / "structural.py").read_bytes() + b"\n")
+    assert _single("small", cfg).code_sha256 != original

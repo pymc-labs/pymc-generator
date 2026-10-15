@@ -1,4 +1,5 @@
-"""extract_payload: the notebook's composition shares and per-channel impact of a payload.
+"""extract_payload: the notebook's composition shares, the inputs with an effect and their
+impact, and the functional forms of a payload.
 
 Payloads are the real corpora of the session's golden run (``small`` preset, two worlds
 per task), so every check runs against genuine float32 decompositions; expected values
@@ -11,6 +12,7 @@ import dataclasses
 import importlib.util
 import io
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -25,6 +27,7 @@ from live_dashboard import publication as pub
 from live_dashboard.extract import ExtractionError, extract_payload
 from live_dashboard.storage import DirectoryStore
 from pymc_generator.data_generator import DataGenerator, load_corpus, save_corpus
+from pymc_generator.slots import SlotLayout
 
 
 def _load(name: str) -> ModuleType:
@@ -82,6 +85,15 @@ def _f64(corpus: dict[str, Any], key: str) -> np.ndarray:
     return np.asarray(corpus[key], dtype=np.float64)
 
 
+def _layout(corpus: dict[str, Any]) -> SlotLayout:
+    """The library's edge layout of the corpus's channel, control and latent slots."""
+    return SlotLayout(
+        n_treatments=corpus["treatment_active_mask"].shape[1],
+        n_covariates=corpus["covariate_active_mask"].shape[1],
+        n_latent=corpus["latent_active_mask"].shape[1],
+    )
+
+
 def test_composition_matches_the_raw_array_formula_within_the_closure_bound(payloads, tmp_path):
     largest_indirect_share = 0.0
     for data in payloads:
@@ -123,14 +135,14 @@ def test_composition_matches_the_raw_array_formula_within_the_closure_bound(payl
 
 
 @pytest.mark.parametrize(
-    ("field", "mask", "contribution", "letter"),
+    ("field", "mask", "edge", "contribution", "letter"),
     [
-        ("impact", "treatment_active_mask", "treatment_contribution_raw", "C"),
-        ("control_impact", "covariate_active_mask", "covariate_contribution", "Z"),
+        ("impact", "treatment_active_mask", "cy", "treatment_contribution_raw", "C"),
+        ("control_impact", "covariate_active_mask", "zy", "covariate_contribution", "Z"),
     ],
 )
-def test_impact_units_are_the_active_slots_with_their_direct_share(
-    payloads, tmp_path, field, mask, contribution, letter
+def test_impact_units_are_the_active_slots_with_an_edge_and_their_direct_share(
+    payloads, tmp_path, field, mask, edge, contribution, letter
 ):
     saw_inactive_slot = False
     for data in payloads:
@@ -138,7 +150,7 @@ def test_impact_units_are_the_active_slots_with_their_direct_share(
         corpus = _corpus(data, tmp_path)
         active = np.asarray(corpus[mask]) == 1
         saw_inactive_slot |= not active.all()
-        rows, slots = np.nonzero(active)
+        rows, slots = np.nonzero(active & (_layout(corpus).unpack(corpus["g"])[edge] == 1))
         assert getattr(metrics, f"{field}_rows") == tuple(rows.tolist())
         labels = tuple(f"{letter}{slot + 1}" for slot in slots.tolist())
         assert getattr(metrics, f"{field}_labels") == labels
@@ -146,7 +158,7 @@ def test_impact_units_are_the_active_slots_with_their_direct_share(
         total = _f64(corpus, "outcome_raw").sum(axis=1)
         expected = direct[rows, slots] / total[rows]
         shares = np.asarray(getattr(metrics, f"{field}_shares"))
-        assert np.max(np.abs(shares - expected)) <= 1e-7
+        assert np.all(np.abs(shares - expected) <= 1e-7)
     # Precondition: padding slots exist, so including them would change the units.
     assert saw_inactive_slot
 
@@ -171,27 +183,82 @@ def test_functional_forms_are_the_families_of_the_active_channels(payloads, tmp_
         )
         assert metrics.adstock_forms == expected
         # The small preset has no mechanism priors, so its payloads do not store sat_family.
-        assert "sat_family" not in corpus and metrics.saturation_forms is None
+        assert "sat_family" not in corpus
+        assert (metrics.saturation_forms, metrics.structural_pairs) == (None, None)
     # Precondition: padding holds code 0 (also "none"), so counting it would add "none".
     assert saw_inactive_zero
 
 
-def test_active_counts_are_the_masks_row_sums_out_of_their_slots(payloads, tmp_path):
+def test_column_and_effect_counts_are_row_sums_of_the_masks_and_their_edges(payloads, tmp_path):
     saw_padding = False
     for data in payloads:
         metrics = extract_payload(data)
         corpus = _corpus(data, tmp_path)
         channels = np.asarray(corpus["treatment_active_mask"]) == 1
         controls = np.asarray(corpus["covariate_active_mask"]) == 1
+        graph = _layout(corpus).unpack(corpus["g"])
         saw_padding |= not (channels.all() and controls.all())
         assert metrics.active_channels == tuple(channels.sum(axis=1).tolist())
         assert metrics.active_controls == tuple(controls.sum(axis=1).tolist())
+        channel_edges = (graph["cy"] == 1) & channels
+        control_edges = (graph["zy"] == 1) & controls
+        assert metrics.effect_channels == tuple(channel_edges.sum(axis=1).tolist())
+        assert metrics.effect_controls == tuple(control_edges.sum(axis=1).tolist())
         assert (metrics.channel_slots, metrics.control_slots) == (
             channels.shape[1],
             controls.shape[1],
         )
     # Precondition: some worlds leave slots inactive, so counting slots would differ.
     assert saw_padding
+
+
+def test_a_column_without_a_direct_edge_has_no_effect_and_no_impact_unit(
+    payloads, tmp_path, lenient_validation
+):
+    corpus = _corpus(payloads[0], tmp_path)
+    channels = np.asarray(corpus["treatment_active_mask"]) == 1
+    controls = np.asarray(corpus["covariate_active_mask"]) == 1
+    # Preconditions: C1 and Z1 are columns of both worlds, and a padded channel slot exists.
+    assert channels[:, 0].all() and controls[:, 0].all() and not channels.all()
+    layout = _layout(corpus)
+    graph = layout.unpack(corpus["g"])
+    # Every column points to the target except world 0's C1 and world 1's Z1. A padded
+    # slot gets an edge too: it is no column, so it has no effect either.
+    graph["cy"] = channels.astype(np.uint8)
+    graph["zy"] = controls.astype(np.uint8)
+    graph["cy"][0, 0] = 0
+    graph["zy"][1, 0] = 0
+    graph["cy"][tuple(np.argwhere(~channels)[0])] = 1
+    corpus["g"] = layout.pack(**{f"g_{edge}": block for edge, block in graph.items()})
+    metrics = extract_payload(_saved(corpus, tmp_path))
+    channel_effects, control_effects = channels.copy(), controls.copy()
+    channel_effects[0, 0] = False
+    control_effects[1, 0] = False
+    assert metrics.active_channels == tuple(channels.sum(axis=1).tolist())
+    assert metrics.effect_channels == tuple(channel_effects.sum(axis=1).tolist())
+    assert metrics.active_controls == tuple(controls.sum(axis=1).tolist())
+    assert metrics.effect_controls == tuple(control_effects.sum(axis=1).tolist())
+    total = _f64(corpus, "outcome_raw").sum(axis=1)
+    for field, effects, contribution, letter in (
+        ("impact", channel_effects, "treatment_contribution_raw", "C"),
+        ("control_impact", control_effects, "covariate_contribution", "Z"),
+    ):
+        rows, slots = np.nonzero(effects)
+        assert getattr(metrics, f"{field}_rows") == tuple(rows.tolist())
+        labels = tuple(f"{letter}{slot + 1}" for slot in slots.tolist())
+        assert getattr(metrics, f"{field}_labels") == labels
+        expected = _f64(corpus, contribution).sum(axis=1)[rows, slots] / total[rows]
+        shares = np.asarray(getattr(metrics, f"{field}_shares"))
+        assert np.all(np.abs(shares - expected) <= 1e-7)
+
+
+def test_an_edge_vector_of_another_layout_is_refused(payloads, tmp_path, lenient_validation):
+    corpus = _corpus(payloads[0], tmp_path)
+    worlds, width = corpus["g"].shape
+    corpus["g"] = corpus["g"][:, :-1]
+    expected = f"g has shape ({worlds}, {width - 1}), expected ({worlds}, {width})"
+    with pytest.raises(ExtractionError, match=re.escape(expected)):
+        extract_payload(_saved(corpus, tmp_path))
 
 
 def test_recorded_saturation_families_skip_padded_slots(payloads, tmp_path, lenient_validation):
@@ -205,6 +272,34 @@ def test_recorded_saturation_families_skip_padded_slots(payloads, tmp_path, leni
     corpus["sat_family"] = codes
     metrics = extract_payload(_saved(corpus, tmp_path))
     assert metrics.saturation_forms == (("logistic",), ("michaelis_menten", "root"))
+
+
+def test_structural_pairs_are_the_distinct_families_of_each_active_channel(
+    payloads, tmp_path, lenient_validation
+):
+    corpus = _corpus(payloads[0], tmp_path)
+    active = np.asarray(corpus["treatment_active_mask"]) == 1
+    # Preconditions: C1 and another channel are active in world 1; a padded slot exists.
+    assert active[:, 0].all() and active[1].sum() >= 2 and not active.all()
+    saturation = np.full(active.shape, 4, dtype=np.uint8)  # tanh, left only in padded slots
+    adstock = np.full(active.shape, 2, dtype=np.uint8)  # weibull, likewise
+    saturation[active] = 3  # michaelis_menten
+    adstock[active] = 1  # geometric
+    saturation[0][active[0]] = 2  # world 0: every channel logistic-geometric, one pair
+    saturation[1, 0] = 5  # world 1: C1 root-none, the others michaelis_menten-geometric
+    adstock[1, 0] = 0
+    corpus["sat_family"] = saturation
+    corpus["carryover_family"] = adstock
+    metrics = extract_payload(_saved(corpus, tmp_path))
+    assert metrics.structural_pairs == (
+        (("logistic", "geometric"),),
+        (("michaelis_menten", "geometric"), ("root", "none")),
+    )
+    # Pairs, not every combination of the world's forms: no channel is root-geometric.
+    assert (metrics.saturation_forms[1], metrics.adstock_forms[1]) == (
+        ("michaelis_menten", "root"),
+        ("none", "geometric"),
+    )
 
 
 @pytest.mark.parametrize("key", ["carryover_family", "sat_family"])
@@ -224,7 +319,13 @@ def test_metrics_are_deterministic_plain_python_values(payloads):
     fields = dataclasses.asdict(metrics)
     shares = metrics.channel + metrics.impact_shares + metrics.control_impact_shares
     assert {type(value) for value in shares} == {float}
-    assert {type(value) for value in metrics.impact_rows + metrics.control_impact_rows} == {int}
+    counts = (
+        metrics.impact_rows
+        + metrics.control_impact_rows
+        + metrics.effect_channels
+        + metrics.effect_controls
+    )
+    assert {type(value) for value in counts} == {int}
     json.dumps(fields, allow_nan=False)  # figures serialise these without numpy
 
 

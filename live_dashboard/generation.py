@@ -2,13 +2,16 @@
 
 A run is a fixed list of logical tasks (``RunRequest``); task ``i`` generates
 ``worlds_per_task`` worlds with seed ``seed + i``, using the run's preset (a preset mix
-cycles through its member presets by task index). Each task is generated with deferred
-train/validation membership and published through ``pymc_generator.publication``: the
-payload is persisted and committed first and the immutable completion record second, so
-a reader never sees a completion whose payload is not yet published. This worker is the
-run's single driver: it writes the run manifest and its attempt record (progress,
-deadline, worker) around the publications. Rerunning the same request reuses every task
-that already has a verifying completion, so a crashed or timed-out attempt is resumed by
+cycles through its member presets by task index; a structural-split design spreads its
+tasks over saturation x adstock splits and texture regimes, seeds each split on its own
+and publishes only worlds whose controls stay non-negative, see
+``live_dashboard.structural``). Each task is generated with deferred train/validation
+membership and published through ``pymc_generator.publication``: the payload is
+persisted and committed first and the immutable completion record second, so a reader
+never sees a completion whose payload is not yet published. This worker is the run's
+single driver: it writes the run manifest and its attempt record (progress, deadline,
+worker) around the publications. Rerunning the same request reuses every task that
+already has a verifying completion, so a crashed or timed-out attempt is resumed by
 running it again. The run manifest pins the generator configuration, source digest and
 numerical environment; resuming with a different generator is refused because one run
 must never mix two generators' outputs.
@@ -36,6 +39,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from live_dashboard import structural
 from live_dashboard.deployment import REVISION_ENV, check_demo_bounds
 from live_dashboard.publication import (
     MAX_RECORD_BYTES,
@@ -56,6 +60,7 @@ from live_dashboard.publication import (
     new_attempt_id,
     run_manifest_path,
     task_id_for,
+    task_record_from_completion,
     utc_now,
 )
 from live_dashboard.revision import code_revision
@@ -332,6 +337,199 @@ def _variety(saturation: str, worlds_per_task: int) -> SCMPrior:
     )
 
 
+# Structural splits (live_dashboard.structural): the two-style variety above (run
+# two-styles-64091b9843a5) on 208 weeks, for every saturation x adstock split of a design,
+# in five texture regimes, with columns that may carry no effect. Every world has 1-10
+# channel columns and 1-10 control columns; a uniform 1..columns of each have an effect
+# (an arrow to the target) and the others are data without effect.
+def _per_input(**knobs: Any) -> dict[str, Any]:
+    """``name=value`` for channels (``treatment_name``) and controls (``covariate_name``)."""
+    return {
+        f"{role}_{key}": value
+        for role in ("treatment", "covariate")
+        for key, value in knobs.items()
+    }
+
+
+_SPLIT_KNOBS: dict[str, Any] = {
+    "n_treatments": 10,
+    "n_covariates": 10,
+    "n_latent": 1,  # the library needs >= 1; the edge budget gives it no arrows
+    "n_time_steps": 208,
+    "n_treatments_active_range": (1, 10),
+    "n_covariates_active_range": (1, 10),
+    "draws_per_cell": 1,
+    "outcome_std_mode": "absolute",
+    # Effects at the usual level of each input with an effect; baseline level and spread.
+    "treatment_reference_contribution_range": (0.1, 3.9),
+    "covariate_reference_contribution_range": (0.1, 3.9),
+    "covariate_reference_scale": 8.0,  # controls sit near 8
+    "rw_baseline_mean_range": (3.0, 9.0),
+    "rw_baseline_std_sigma": 1.5,
+    "baseline_floor": 0.0,
+    # Channel levels and walk spread (relative to the level); small spreads keep many
+    # channels flat. No floor on a channel's variation: the library applies it only to
+    # channels with an effect, so a flat column would reveal that it has none.
+    "rw_positive_mean_range": (0.3, 6.0),
+    "rw_treatment_std_range": (0.05, 0.5),
+    "treatment_cv_floor": 0.0,
+    "rw_smoothness_max_weeks": 26,
+    # Controls are additive and signed in the library: a level of 6-10 keeps a control
+    # above zero through a 4.5 down-trend, a 0.6 season and a 0.5 drop; the worker
+    # discards the rare world whose control still goes below zero.
+    "rw_covariate_mean_range": (6.0, 10.0),
+    "rw_std_sigma": 0.2,
+    # Trajectories: symmetric trends (up, flat or down), seasons and level jumps.
+    "treatment_trend_inclusion_prob": 0.45,
+    "covariate_trend_inclusion_prob": 1.0,
+    "treatment_trend_log_change_range": (-1.2, 1.2),
+    "covariate_trend_change_range": (-4.5, 4.5),
+    "treatment_seasonal_amplitude_range": (0.1, 0.6),
+    "covariate_seasonal_amplitude_range": (0.2, 0.6),
+    "treatment_level_jump_factor_range": (0.5, 2.0),
+    "covariate_level_jump_size_range": (-0.5, 1.5),
+    "carryover_alpha_range": (0.05, 0.9),  # geometric adstock decay
+    # Texture magnitudes of the reference (the hectic regime widens them).
+    "treatment_hf_sigma_range": (0.03, 0.6),
+    "treatment_pulse_prob_range": (0.02, 0.25),
+    "treatment_pulse_amp_range": (0.4, 2.5),
+    "covariate_hf_sigma_range": (0.2, 1.6),
+    "covariate_pulse_prob_range": (0.02, 0.25),
+    "covariate_pulse_amp_range": (0.5, 3.0),
+    **_per_input(
+        flighting_period_weeks_range=(4, 16),
+        flighting_duty_range=(0.05, 0.95),
+        seasonal_inclusion_prob=0.4,
+        seasonal_period_weeks_range=(52.0, 52.0),
+        level_jump_count=1,
+    ),
+}
+# Walk smoothness ~ Beta(alpha, beta) per walk; smoothness 1 is a 26-week moving average,
+# 0 a raw random walk. The library draws every walk of a world (each channel, each control
+# and the baseline) from one prior, so walk smoothness is set per regime.
+_SMOOTH_WALKS = {"rw_smoothness_alpha": 15.0, "rw_smoothness_beta": 1.0}  # 96 % above 0.8
+_RAW_WALKS = {"rw_smoothness_alpha": 1.0, "rw_smoothness_beta": 20.0}  # 91 % below 0.115
+# Jitter and pulses on every channel and control, with on/off blocks, starts, stops, jumps.
+_SPIKY_INPUTS: dict[str, Any] = {
+    "treatment_hf_sigma_range": (0.2, 0.8),
+    "treatment_pulse_prob_range": (0.05, 0.3),
+    "treatment_pulse_amp_range": (0.8, 3.0),
+    "covariate_hf_sigma_range": (0.8, 2.0),
+    "covariate_pulse_prob_range": (0.05, 0.3),
+    "covariate_pulse_amp_range": (1.0, 3.0),
+    **_per_input(
+        hf_inclusion_prob=1.0,
+        pulse_inclusion_prob=1.0,
+        flighting_inclusion_prob=0.3,
+        onset_inclusion_prob=0.15,
+        offset_inclusion_prob=0.15,
+        level_jump_inclusion_prob=0.4,
+    ),
+}
+# No jitter, pulses, on/off blocks, late starts, early stops or jumps.
+_PLAIN_INPUTS = _per_input(
+    hf_inclusion_prob=0.0,
+    pulse_inclusion_prob=0.0,
+    flighting_inclusion_prob=0.0,
+    onset_inclusion_prob=0.0,
+    offset_inclusion_prob=0.0,
+    level_jump_inclusion_prob=0.0,
+)
+# A jagged baseline is visible only when its walk is large next to its level: these
+# regimes draw its spread from HalfNormal(2.5) around a level of 5-11.
+_JAGGED_BASELINE = {"rw_baseline_mean_range": (5.0, 11.0), "rw_baseline_std_sigma": 2.5}
+# Texture regime -> knobs (structural.REGIMES).
+_REGIMES: Mapping[str, dict[str, Any]] = MappingProxyType(
+    {
+        # Channels, controls and baseline all smooth at once.
+        "calm": {**_SMOOTH_WALKS, **_PLAIN_INPUTS, "rw_outcome_std_sigma": 0.15},
+        # All hectic at once: raw walks, spiky channels and controls, loud outcome noise.
+        "hectic": {
+            **_RAW_WALKS,
+            **_SPIKY_INPUTS,
+            **_JAGGED_BASELINE,
+            "rw_outcome_std_sigma": 0.8,
+        },
+        # Spiky channels and controls over a smooth baseline.
+        "spiky-inputs": {**_SMOOTH_WALKS, **_SPIKY_INPUTS, "rw_outcome_std_sigma": 0.4},
+        # A jagged baseline under smooth channels and controls: every walk is raw, so the
+        # channels' and controls' walks are made nearly flat (their trends and seasons
+        # carry them).
+        "hectic-baseline": {
+            **_RAW_WALKS,
+            **_PLAIN_INPUTS,
+            **_JAGGED_BASELINE,
+            "rw_outcome_std_sigma": 0.8,
+            "rw_treatment_std_range": (0.01, 0.04),
+            "rw_std_sigma": 0.02,
+            **_per_input(seasonal_inclusion_prob=0.6),
+        },
+        # Each input on its own (the reference's walks and gates, less jitter): Beta(0.6,
+        # 0.6) gives many very smooth and many raw walks in one world.
+        "mixed": {
+            "rw_smoothness_alpha": 0.6,
+            "rw_smoothness_beta": 0.6,
+            "rw_outcome_std_sigma": 0.4,
+            **_per_input(
+                hf_inclusion_prob=0.25,
+                pulse_inclusion_prob=0.2,
+                flighting_inclusion_prob=0.5,
+                onset_inclusion_prob=0.15,
+                offset_inclusion_prob=0.15,
+                level_jump_inclusion_prob=0.3,
+            ),
+        },
+    }
+)
+_SPLIT_SHAPES: dict[str, dict[str, tuple[float, float]]] = {
+    **_VARIETY_SHAPES,  # hill and tanh keep the library's shape ranges
+}
+
+
+def _structural(saturation: str, adstock: str, regime: str, worlds_per_task: int) -> SCMPrior:
+    """One split's configuration in one texture regime, one world per cell."""
+    from pymc_generator import make_scm_prior
+    from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS, SCMPrior
+
+    shapes = SCMPrior().saturation_prior_ranges
+    for family, ranges in _SPLIT_SHAPES.items():
+        shapes[family].update(ranges)
+    # Channels and controls with an effect point only to the target; how many of a world's
+    # columns have one is uniform in 1..columns (the library caps the budget at the columns).
+    edges: dict[str, int | tuple[int, int]] = dict.fromkeys(
+        ("cy", "dc", "dz", "dy", "zy", "zc", "cc", "zz"), (0, 0)
+    )
+    edges.update(cy=(1, 10), zy=(1, 10))
+    return make_scm_prior(
+        **{**_SPLIT_KNOBS, **_REGIMES[regime]},
+        n_cells=worlds_per_task,
+        edge_budget=edges,
+        trajectories="composable",
+        active_count_allocation="independent",
+        carryover_family_probs={name: float(name == adstock) for name in CARRYOVER_FAMILY_KEYS},
+        saturation_family_probs={
+            name: float(name == saturation) for name in SATURATION_FAMILY_KEYS
+        },
+        saturation_prior_ranges=shapes,
+        mm_scale_prior="log_uniform",
+        record_walk_parameters=True,
+    )
+
+
+# Member presets of every structural-split design, ``<saturation>-<adstock>-<regime>``.
+# Only their design runs them (with its seeds and its control filter), never a run alone.
+DESIGN_PRESETS: Mapping[str, Callable[[int], SCMPrior]] = MappingProxyType(
+    {
+        structural.member_name(split, regime): functools.partial(
+            _structural, split.saturation, split.adstock, regime
+        )
+        for design in structural.DESIGNS.values()
+        for split in design.splits
+        for regime in design.regimes
+    }
+)
+
+
 # Preset name -> configuration for a task of ``worlds_per_task`` worlds (one per cell, so
 # a successful task accepts exactly its target). Read-only: runs are named by preset.
 PRESETS: Mapping[str, Callable[[int], SCMPrior]] = MappingProxyType(
@@ -356,10 +554,20 @@ def preset_cycle(
 ) -> tuple[str, ...]:
     """The presets a run's tasks cycle through: task ``i`` uses ``cycle[i % len(cycle)]``.
 
-    A preset is a one-preset cycle. ``RequestError`` if ``name`` is neither a preset nor a
-    mix, is both, or is a mix that does not name one or more known presets (a mix of
-    mixes included).
+    A preset is a one-preset cycle and a structural-split design (``structural.DESIGNS``)
+    the cycle of its members (``DESIGN_PRESETS``). ``RequestError`` if ``name`` is none of
+    these, is more than one, or is a mix that does not name one or more known presets (a
+    mix of mixes included).
     """
+    design = structural.DESIGNS.get(name)
+    if design is not None:
+        if name in presets or name in mixes:
+            raise RequestError(f"{name!r} names both a structural-split design and a preset")
+        cycle = design.cycle
+        unknown = sorted({member for member in cycle if member not in DESIGN_PRESETS})
+        if unknown:
+            raise RequestError(f"design {name!r} needs unknown presets: {unknown}")
+        return cycle
     if name in mixes:
         if name in presets:
             raise RequestError(f"{name!r} names both a preset and a preset mix")
@@ -373,7 +581,7 @@ def preset_cycle(
         return cycle
     if name in presets:
         return (name,)
-    known = ", ".join(sorted({*presets, *mixes}))
+    known = ", ".join(sorted({*presets, *mixes, *structural.DESIGNS}))
     raise RequestError(f"unknown preset {name!r}; known: {known}")
 
 
@@ -383,10 +591,10 @@ def preset_cycle(
 def _code_sha256() -> str:
     """Digest of the source that determines generated bytes and published records.
 
-    Covers every ``*.py`` of the imported ``pymc_generator`` package plus this module and
-    the contract, by relative POSIX path, so the digest is the same on a laptop and in a
-    container that copied the same sources. Each file is framed by its path and length,
-    which keeps the concatenation unambiguous.
+    Covers every ``*.py`` of the imported ``pymc_generator`` package plus this module, the
+    contract and the structural-split designs, by relative POSIX path, so the digest is the
+    same on a laptop and in a container that copied the same sources. Each file is framed
+    by its path and length, which keeps the concatenation unambiguous.
     """
     import pymc_generator
 
@@ -397,7 +605,7 @@ def _code_sha256() -> str:
         if "__pycache__" not in path.relative_to(package).parts
     }
     here = Path(__file__).resolve().parent
-    for name in ("generation.py", "publication.py"):
+    for name in ("generation.py", "publication.py", "structural.py"):
         files[f"{here.name}/{name}"] = here / name
     digest = hashlib.sha256()
     for name in sorted(files):
@@ -566,16 +774,18 @@ def _publication(store: DirectoryStore) -> FilePublicationStore:
 
 
 def _published_tasks(
-    publication: FilePublicationStore, run_id: str
+    publication: FilePublicationStore, manifest: RunManifest
 ) -> tuple[set[str], dict[str, str]]:
     """Tasks with a completion whose record, payload and corpus verify, and the reason
     each other task with a completion (or an unresolved one) cannot be reused.
 
+    A completion must also be a task of this run as the dashboard reads it (its seed,
+    split, target and timing), so a run is never resumed past a task the reader rejects.
     ``pymc_generator.publication`` refuses to publish a task past an unresolved or
     unusable earlier attempt until it is reconciled, so such a task stops the attempt
     before anything is generated for it.
     """
-    candidates, unresolved = publication.discover(run_id)
+    candidates, unresolved = publication.discover(manifest.run_id)
     published: set[str] = set()
     unusable = {reference.split("/")[3]: message for reference, message in unresolved.items()}
     for candidate in candidates:
@@ -583,12 +793,52 @@ def _published_tasks(
         if task_id in published:
             continue
         try:
+            task_record_from_completion(manifest, candidate["record"])
             publication.read_output(candidate["reference"])
         except (OSError, ValueError, KeyError, TypeError) as error:
             unusable.setdefault(task_id, f"{type(error).__name__}: {error}")
             continue
         published.add(task_id)
     return published, {task: reason for task, reason in unusable.items() if task not in published}
+
+
+def _negative_worlds(corpus: Mapping[str, Any]) -> int:
+    """How many worlds have a control value or a control contribution below zero.
+
+    Checks every column of every world (columns without an effect too: a control's sign
+    must not reveal whether it acts) on the arrays as published. NaN counts as negative;
+    padded slots are zero.
+    """
+    import numpy as np
+
+    present = np.asarray(corpus["covariate_active_mask"]) == 1
+    values = np.where(present[:, None, :], np.asarray(corpus["covariates"]), 0.0)
+    contributions = np.asarray(corpus["covariate_contribution"])
+    usable = (values >= 0.0).all(axis=(1, 2)) & (contributions >= 0.0).all(axis=(1, 2))
+    return int((~usable).sum())
+
+
+@dataclass
+class _Budget:
+    """The deadline stop rule: no draw starts unless 90 s, and twice the longest draw so
+    far, are left (both measured on the deadline's clock)."""
+
+    clock: Callable[[], datetime]
+    deadline: datetime | None
+    longest_draw: float = 0.0
+
+    def allows_a_draw(self) -> bool:
+        if self.deadline is None:
+            return True
+        remaining = (self.deadline - self.clock()).total_seconds()
+        return remaining >= max(_MIN_DEADLINE_MARGIN_S, 2 * self.longest_draw)
+
+    def timed(self, draw: Callable[[], Any]) -> Any:
+        started = self.clock()
+        try:
+            return draw()
+        finally:
+            self.longest_draw = max(self.longest_draw, (self.clock() - started).total_seconds())
 
 
 def _generate_task(
@@ -599,36 +849,76 @@ def _generate_task(
     member_config: Mapping[str, Any],
     index: int,
     attempt: _Attempt,
-    clock: Callable[[], datetime],
-) -> tuple[datetime, datetime]:
-    """Generate task ``index`` and publish it as a completion; returns its start and end."""
+    budget: _Budget,
+) -> bool:
+    """Generate task ``index`` and publish it as a completion; ``False`` if it stopped.
+
+    A structural-split design publishes only worlds whose controls stay non-negative and
+    aims at every task's target: a draw with a control below zero, or whose cells the
+    library could not fill, is discarded and the task drawn again with its next redraw
+    seed, at most ``structural.MAX_REDRAWS`` times; a task whose every draw is discarded
+    is published with no worlds (other runs publish an unfillable task at once). Counts
+    add up over every draw: worlds with a negative control are rejected candidates and
+    the other worlds of a discarded draw are surplus. A redraw the deadline does not
+    leave time for stops the task unpublished (a resume draws it again from its first
+    seed).
+    """
     request = manifest.request
+    clock = budget.clock
+    max_redraws = 0 if request.design is None else structural.MAX_REDRAWS
     started_at = clock()
     t0 = time.perf_counter()
     corpus = None
-    try:
-        corpus = generator.generate(
-            n_tasks=request.worlds_per_task,
-            seed=request.task_seed(index),
-            defer_cell_split=True,
-        )
-    except RuntimeError as error:
-        tally = _EXHAUSTED.search(str(error)) if type(error) is RuntimeError else None
-        if tally is None:
-            raise
-        candidates, rejected, published = int(tally["evaluated"]), int(tally["rejected"]), 0
-        draw_failures = int(tally["failures"])
-        failure: ErrorInfo | None = ErrorInfo.from_exception(error)
-        generation_seconds = time.perf_counter() - t0
-    else:
+    candidates = rejected = draw_failures = published = negative_worlds = 0
+    generation_seconds = 0.0
+    failure: ErrorInfo | None = None
+    exhausted = False
+    redraw = 0
+    for redraw in range(max_redraws + 1):
+        if redraw and not budget.allows_a_draw():
+            return False
+        seed = structural.redraw_seed(request.task_seed(index), redraw)
+        try:
+            corpus = budget.timed(
+                functools.partial(
+                    generator.generate,
+                    n_tasks=request.worlds_per_task,
+                    seed=seed,
+                    defer_cell_split=True,
+                )
+            )
+        except RuntimeError as error:
+            tally = _EXHAUSTED.search(str(error)) if type(error) is RuntimeError else None
+            if tally is None:
+                raise
+            candidates += int(tally["evaluated"])
+            rejected += int(tally["rejected"])
+            draw_failures += int(tally["failures"])
+            failure = ErrorInfo.from_exception(error)
+            exhausted = True
+            corpus = None
+            continue
         diagnostics = corpus["diagnostics"]
-        candidates = int(diagnostics["n_draws_evaluated"])
+        evaluated = int(diagnostics["n_draws_evaluated"])
+        candidates += evaluated
         # The library reports a rate; the count is exact for any realistic total.
-        rejected = round(float(diagnostics["rejection_rate"]) * candidates)
-        published = int(diagnostics["n_tasks"])
-        draw_failures = int(diagnostics["n_draw_failures"])
-        failure = None
-        generation_seconds = float(diagnostics["timing"]["elapsed_s"])
+        rejected += round(float(diagnostics["rejection_rate"]) * evaluated)
+        draw_failures += int(diagnostics["n_draw_failures"])
+        generation_seconds += float(diagnostics["timing"]["elapsed_s"])
+        negative = _negative_worlds(corpus) if max_redraws else 0
+        if not negative:
+            published = int(diagnostics["n_tasks"])
+            failure = None
+            break
+        negative_worlds += negative
+        failure = ErrorInfo(
+            type="NegativeControls",
+            message=f"draw {redraw + 1} of {max_redraws + 1} had a control below zero",
+        )
+        corpus = None
+    if exhausted:
+        # An unfillable draw reports no time of its own: count the task's wall time.
+        generation_seconds = time.perf_counter() - t0
     finished_at = max(clock(), started_at)
     metadata = completion_metadata(
         manifest,
@@ -645,9 +935,11 @@ def _generate_task(
         generation_seconds=generation_seconds,
         draw_failures=draw_failures,
         generation_failure=failure,
+        redraws=redraw,
+        negative_controls=negative_worlds,
     )
     publication.publish(metadata, corpus)
-    return started_at, finished_at
+    return True
 
 
 def _publish_tasks(
@@ -672,8 +964,8 @@ def _publish_tasks(
     member_configs = {
         name: recorded if len(cycle) == 1 else recorded["presets"][name] for name in configs
     }
-    published, unusable = _published_tasks(publication, manifest.run_id)
-    longest = 0.0
+    published, unusable = _published_tasks(publication, manifest)
+    budget = _Budget(clock, deadline)
     for index in range(manifest.n_tasks):
         task_id = task_id_for(index)
         if task_id in published:
@@ -686,14 +978,12 @@ def _publish_tasks(
                 f"{task_id} has a completion that does not verify ({unusable[task_id]}); "
                 "reconcile it before resuming"
             )
-        if deadline is not None:
-            remaining = (deadline - clock()).total_seconds()
-            if remaining < max(_MIN_DEADLINE_MARGIN_S, 2 * longest):
-                return "stopped"
+        if not budget.allows_a_draw():
+            return "stopped"
         attempt.current_task_index = index
         attempt.save("running", clock())
         member = cycle[index % len(cycle)]
-        started_at, finished_at = _generate_task(
+        if not _generate_task(
             publication,
             manifest,
             generators[member],
@@ -701,11 +991,10 @@ def _publish_tasks(
             member_configs[member],
             index,
             attempt,
-            clock,
-        )
+            budget,
+        ):
+            return "stopped"
         attempt.published.append(task_id)
-        # Measured on the deadline's clock, so both sides of the stop rule agree.
-        longest = max(longest, (finished_at - started_at).total_seconds())
     return "finished"
 
 
@@ -758,7 +1047,8 @@ def run_generation(
     """
     cycle = _check_request(request, attempt_id, presets, mixes)
     store.refresh()
-    configs = {name: presets[name](request.worlds_per_task) for name in dict.fromkeys(cycle)}
+    source = DESIGN_PRESETS if request.design is not None else presets
+    configs = {name: source[name](request.worlds_per_task) for name in dict.fromkeys(cycle)}
     started_at = clock()
     manifest = _open_run(store, request, generator_info(request.preset, cycle, configs), started_at)
     attempt = _Attempt(

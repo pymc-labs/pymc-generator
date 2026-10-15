@@ -1,4 +1,4 @@
-"""Publication contract ``pymc-generator-live-publication`` v1.1.
+"""Publication contract ``pymc-generator-live-publication`` v1.2.
 
 Identities, the store layout and the three JSON records a generation run publishes:
 
@@ -17,6 +17,14 @@ Every record's ``worker`` (task and attempt records) describes the machine. Sinc
 carries ``usd_per_hour``: the list price of the worker's reservation, or null for a
 worker that is not billed (a local run). 1.0 records omit it; readers treat null and
 absent alike.
+
+Since 1.2, a run whose preset names a structural-split design (``live_dashboard.structural``)
+seeds its tasks per split instead of ``seed + task_index``: the manifest's ``seed_rule``
+states the rule and its ``structural_splits`` lists every split's seed. Every completion's
+``seed_context`` records the index of the task's last draw (``redraws``: draws the worker
+discarded before it) and that draw's seed (``generation_seed``); a design task also
+records its split and regime. A 1.1 reader would reject every task of a design run (it
+re-derives seeds the old way); the dashboard and the worker deploy together, as one app.
 
 Payloads live at ``runs/<run_id>/payloads/<task_id>/<attempt_id>.npz``. Identities derive
 from the run request and task index only, never from scheduling, arrival order or paths.
@@ -40,8 +48,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from live_dashboard import structural
+
 CONTRACT = "pymc-generator-live-publication"
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
 SUPPORTED_MAJOR = 1
 PAYLOAD_FORMAT = "pymc-generator-corpus-npz"
 MAX_USD_PER_HOUR = 1000.0  # far above any single Modal container's list price
@@ -204,8 +214,10 @@ class RunRequest:
     ``worlds`` accepted worlds are split into ``worlds // worlds_per_task`` logical tasks.
     Task ``i`` generates with seed ``seed + i``: exactly batch ``i`` of
     ``DataGenerator.iter_batches(n_tasks=worlds, batch_size=worlds_per_task, seed=seed)``
-    (reproducible, but not the same worlds as one larger generation call). The code and
-    environment that generate a run are recorded in its manifest and checked on resume.
+    (reproducible, but not the same worlds as one larger generation call). A preset that
+    names a structural-split design (``structural.DESIGNS``) seeds per split instead, and
+    its tasks must divide evenly over the splits. The code and environment that generate
+    a run are recorded in its manifest and checked on resume.
     """
 
     label: str
@@ -238,13 +250,39 @@ class RunRequest:
             raise ValueError(f"at most {MAX_WORLDS_PER_TASK} worlds per task")
         if not 0 <= self.seed <= MAX_SEED:
             raise ValueError(f"seed must be in [0, {MAX_SEED}], got {self.seed}")
+        if self.design is not None:
+            self.design.check(self.seed, self.n_tasks)
 
     @property
     def n_tasks(self) -> int:
         return self.worlds // self.worlds_per_task
 
+    @property
+    def design(self) -> structural.SplitDesign | None:
+        """The structural-split design the preset names, if any."""
+        return structural.DESIGNS.get(self.preset)
+
+    @property
+    def seed_rule(self) -> str:
+        return SEED_RULE if self.design is None else structural.SEED_RULE
+
     def task_seed(self, index: int) -> int:
-        return self.seed + index
+        """The seed of task ``index``'s first draw."""
+        if self.design is None:
+            return self.seed + index
+        return self.design.task_seed(self.seed, index)
+
+    def seed_context(self, index: int) -> dict[str, Any]:
+        """How task ``index`` is seeded: rule, base seed, task seed (and split, regime)."""
+        context: dict[str, Any] = {
+            "rule": self.seed_rule,
+            "base_seed": self.seed,
+            "task_index": index,
+            "task_seed": self.task_seed(index),
+        }
+        if self.design is not None:
+            context.update(self.design.seed_context(self.seed, index))
+        return context
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -375,20 +413,23 @@ class RunManifest:
         return self.request.worlds
 
     def encode(self) -> bytes:
-        return _encode(
-            "run",
-            {
-                "run_id": self.run_id,
-                "created_at": format_timestamp(self.created_at),
-                "request": self.request.to_dict(),
-                "request_sha256": self.request.request_sha256,
-                "n_tasks": self.n_tasks,
-                "worlds_per_task": self.worlds_per_task,
-                "target_worlds": self.target_worlds,
-                "seed_rule": SEED_RULE,
-                "generator": self.generator.to_dict(),
-            },
-        )
+        request = self.request
+        body: dict[str, Any] = {
+            "run_id": self.run_id,
+            "created_at": format_timestamp(self.created_at),
+            "request": request.to_dict(),
+            "request_sha256": request.request_sha256,
+            "n_tasks": self.n_tasks,
+            "worlds_per_task": self.worlds_per_task,
+            "target_worlds": self.target_worlds,
+            "seed_rule": request.seed_rule,
+        }
+        if request.design is not None:
+            body["structural_splits"] = [
+                split.to_dict(request.seed) for split in request.design.splits
+            ]
+        body["generator"] = self.generator.to_dict()
+        return _encode("run", body)
 
 
 @dataclass(frozen=True)
@@ -697,6 +738,17 @@ def _decode_run_manifest(data: bytes, *, run_id: str) -> RunManifest:
     if generator.preset != request.preset:
         raise RecordError("generator.preset does not match the request")
     _exact(generator_body, "config_sha256", generator.config_sha256)
+    design = request.design
+    if design is not None:
+        # The reader re-derives every task's seed and member from the design: a run whose
+        # recorded splits, rule or cycle differ was made by another version of it.
+        _exact(body, "seed_rule", request.seed_rule)
+        if body.get("structural_splits") != [
+            split.to_dict(request.seed) for split in design.splits
+        ]:
+            raise RecordError("structural_splits do not match the design: it changed since the run")
+        if generator.config.get("cycle") != list(design.cycle):
+            raise RecordError("generator.config.cycle does not match the design's member cycle")
     return RunManifest(
         run_id=run_id,
         created_at=parse_timestamp(body.get("created_at")),
@@ -907,21 +959,29 @@ def completion_metadata(
     generation_seconds: float | None,
     draw_failures: int | None,
     generation_failure: ErrorInfo | None,
+    redraws: int = 0,
+    negative_controls: int = 0,
 ) -> dict[str, Any]:
     """What ``pymc_generator.publication`` publishes for one task (version 1).
 
     ``member`` is the preset that generated the task (a mix's member) and
     ``member_config`` its configuration as the manifest records it. Counts follow the
     publication's accounting (candidates = rejected + surplus + published, target =
-    published + shortfall); the library reports no rejection reasons, so all rejected
-    candidates count under ``generator_filters``. ``timing``, ``draw_failures`` and
-    ``generation_failure`` are additive fields the dashboard reads.
+    published + shortfall). ``rejected`` counts the candidates the library's filters
+    rejected (the library reports no finer reasons: ``generator_filters``) and
+    ``negative_controls`` the worlds the library accepted but the worker discarded
+    because one of their controls went below zero (rejected too). ``redraws`` is the
+    index of the task's last draw (0: its first), whose seed ``seed_context`` records as
+    ``generation_seed``. ``timing``, ``draw_failures`` and ``generation_failure`` are
+    additive fields the dashboard reads.
     """
     request = manifest.request
     run_id = manifest.run_id
     task_id = task_id_for(task_index)
     target = request.worlds_per_task
     generator = manifest.generator
+    reasons = {"generator_filters": rejected, "negative_controls": negative_controls}
+    rejected += negative_controls
     return {
         "run_id": run_id,
         "instruction_id": task_id,
@@ -937,7 +997,7 @@ def completion_metadata(
             "published": published,
             "shortfall": target - published,
         },
-        "rejection_reasons": {"generator_filters": rejected} if rejected else {},
+        "rejection_reasons": {reason: count for reason, count in reasons.items() if count},
         "provenance": {
             "run_spec_sha256": run_spec_sha256(manifest),
             "generation_mode": GENERATION_MODE,
@@ -949,10 +1009,9 @@ def completion_metadata(
                 "worker": worker.to_dict(),
             },
             "seed_context": {
-                "rule": SEED_RULE,
-                "base_seed": request.seed,
-                "task_index": task_index,
-                "task_seed": request.task_seed(task_index),
+                **request.seed_context(task_index),
+                "generation_seed": structural.redraw_seed(request.task_seed(task_index), redraws),
+                "redraws": redraws,
             },
             "effective_configuration": {
                 "run_preset": request.preset,
@@ -994,7 +1053,19 @@ def _task_record_from_completion(
     counts = completion["counts"]
     _exact(counts, "target", manifest.worlds_per_task)
     provenance = completion["provenance"]
-    _exact(provenance["seed_context"], "task_seed", request.task_seed(index))
+    context = provenance["seed_context"]
+    task_seed = request.task_seed(index)
+    _exact(context, "task_seed", task_seed)
+    design = request.design
+    if design is not None or "redraws" in context:  # 1.2 records; earlier ones omit them
+        redraws = _int(context, "redraws")
+        if redraws > (0 if design is None else structural.MAX_REDRAWS):
+            raise RecordError(f"redraws {redraws} exceeds what this run allows")
+        _exact(context, "generation_seed", structural.redraw_seed(task_seed, redraws))
+    if design is not None:
+        expected = design.seed_context(request.seed, index)
+        if context.get("split") != expected["split"] or context.get("regime") != expected["regime"]:
+            raise RecordError(f"{task_id}'s split or regime is not the design's")
     timing = _as_object(completion.get("timing"), "timing")
     started_at = parse_timestamp(timing.get("started_at"))
     finished_at = parse_timestamp(timing.get("finished_at"))

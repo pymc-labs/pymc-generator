@@ -485,8 +485,13 @@ def _world_metrics(
             saturation_forms=(
                 None if metrics.saturation_forms is None else metrics.saturation_forms[row]
             ),
+            structural_pairs=(
+                None if metrics.structural_pairs is None else metrics.structural_pairs[row]
+            ),
             active_channels=metrics.active_channels[row],
             active_controls=metrics.active_controls[row],
+            effect_channels=metrics.effect_channels[row],
+            effect_controls=metrics.effect_controls[row],
             channel_slots=metrics.channel_slots,
             control_slots=metrics.control_slots,
         )

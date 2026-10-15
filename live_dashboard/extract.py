@@ -2,10 +2,11 @@
 
 ``extract_payload`` turns a ``save_corpus`` archive into identity-free numbers: every
 world's composition (the trajectory-showcase notebook's channel / control / baseline
-split of total outcome), every active channel's direct contribution share, and the
-adstock and saturation families every world's active channels use. The
-collector attaches run, task and world identities afterwards, so equal bytes published
-by different attempts share one cached result keyed by digest and ``EXTRACTION_VERSION``.
+split of total outcome), its channels and controls with an effect (a direct edge to the
+target) and their direct contribution shares, and the adstock and saturation families
+(and their pairs) its active channels use. The collector attaches run, task and world
+identities afterwards, so equal bytes published by different attempts share one cached
+result keyed by digest and ``EXTRACTION_VERSION``.
 
 Every problem with the content raises ``ExtractionError``. Those failures are
 deterministic (same bytes, same code, same error), so the collector caches them instead
@@ -25,11 +26,12 @@ from typing import Any
 import numpy as np
 
 from pymc_generator.data_generator import DataGenerator, load_corpus
-from pymc_generator.outcomes import outcome_distributions
+from pymc_generator.outcomes import QuantityDistribution, outcome_distributions
 from pymc_generator.sampler import CARRYOVER_FAMILY_KEYS, SATURATION_FAMILY_KEYS
+from pymc_generator.slots import EDGE_TYPES_EXTENDED, SlotLayout
 
 # Part of the collector's cache key: bump whenever the same bytes would yield other metrics.
-EXTRACTION_VERSION = 4
+EXTRACTION_VERSION = 5
 
 # Every adstock (carryover) and saturation family of the library, in its own order: the
 # corpus stores a channel's family as an index into these.
@@ -56,16 +58,20 @@ class PayloadMetrics:
     """Metrics of one payload, free of run/task/world identities.
 
     ``channel``, ``control`` and ``baseline`` hold one signed share of total outcome per
-    corpus row. The ``impact_*`` tuples describe one unit per active treatment slot,
-    world-major then slot order: its corpus row, slot label ("C1".."CK") and direct
-    contribution share; the ``control_impact_*`` tuples do the same for every active
-    covariate slot ("Z1".."ZM"). ``adstock_forms`` and ``saturation_forms`` hold, per
-    corpus row, the families its active channels use (in the library's order);
-    ``saturation_forms`` is ``None`` when the payload does not record saturation families
-    (the library writes them only for configurations with mechanism priors).
-    ``active_channels`` and
-    ``active_controls`` count each row's active channels and controls, out of the
-    payload's ``channel_slots`` and ``control_slots``.
+    corpus row. A row's columns are its active channel and control slots; an input with
+    an effect is a column with a direct edge to the target (``C->Y`` for a channel,
+    ``Z->Y`` for a control). The ``impact_*`` tuples describe one unit per channel with
+    an effect, world-major then slot order: its corpus row, slot label ("C1".."CK") and
+    direct contribution share; the ``control_impact_*`` tuples do the same for every
+    control with an effect ("Z1".."ZM"). ``adstock_forms`` and ``saturation_forms`` hold,
+    per corpus row, the families its active channels use (in the library's order), and
+    ``structural_pairs`` the distinct (saturation, adstock) family pairs of its active
+    channels, sorted; ``saturation_forms`` and ``structural_pairs`` are ``None`` when the
+    payload does not record saturation families (the library writes them only for
+    configurations with mechanism priors). ``active_channels`` and ``active_controls``
+    count each row's columns, out of the payload's ``channel_slots`` and
+    ``control_slots``; ``effect_channels`` and ``effect_controls`` count its inputs with
+    an effect.
     """
 
     n_worlds: int
@@ -80,8 +86,11 @@ class PayloadMetrics:
     control_impact_shares: tuple[float, ...]
     adstock_forms: tuple[tuple[str, ...], ...]
     saturation_forms: tuple[tuple[str, ...], ...] | None
+    structural_pairs: tuple[tuple[tuple[str, str], ...], ...] | None
     active_channels: tuple[int, ...]
     active_controls: tuple[int, ...]
+    effect_channels: tuple[int, ...]
+    effect_controls: tuple[int, ...]
     channel_slots: int
     control_slots: int
 
@@ -108,13 +117,18 @@ def extract_payload(data: bytes) -> PayloadMetrics:
             "channel shares disagree with the library's treatment_total_contribution share "
             f"in worlds {disagreeing.tolist()}"
         )
-    impact = distributions["treatment_contribution"]
-    control_impact = distributions["covariate_contribution"]
     active = np.asarray(corpus["treatment_active_mask"]) == 1
     controls = np.asarray(corpus["covariate_active_mask"]) == 1
-    adstock = _families(corpus, "carryover_family", active, ADSTOCK_FAMILIES)
+    channel_edges, control_edges = _direct_edges(corpus, active, controls)
+    impact_rows, impact_labels, impact_shares = _units_with_effect(
+        distributions["treatment_contribution"], channel_edges
+    )
+    control_rows, control_labels, control_shares = _units_with_effect(
+        distributions["covariate_contribution"], control_edges
+    )
+    adstock = _channel_families(corpus, "carryover_family", active, ADSTOCK_FAMILIES)
     saturation = (
-        _families(corpus, "sat_family", active, SATURATION_FAMILIES)
+        _channel_families(corpus, "sat_family", active, SATURATION_FAMILIES)
         if "sat_family" in corpus
         else None
     )
@@ -123,39 +137,101 @@ def extract_payload(data: bytes) -> PayloadMetrics:
         channel=tuple(channel.tolist()),
         control=tuple(control.tolist()),
         baseline=tuple(baseline.tolist()),
-        impact_rows=tuple(impact.world_index.tolist()),
-        impact_labels=impact.labels(),
-        impact_shares=tuple(impact.unit_share.tolist()),
-        control_impact_rows=tuple(control_impact.world_index.tolist()),
-        control_impact_labels=control_impact.labels(),
-        control_impact_shares=tuple(control_impact.unit_share.tolist()),
-        adstock_forms=adstock,
-        saturation_forms=saturation,
+        impact_rows=impact_rows,
+        impact_labels=impact_labels,
+        impact_shares=impact_shares,
+        control_impact_rows=control_rows,
+        control_impact_labels=control_labels,
+        control_impact_shares=control_shares,
+        adstock_forms=_forms(adstock, ADSTOCK_FAMILIES),
+        saturation_forms=None if saturation is None else _forms(saturation, SATURATION_FAMILIES),
+        structural_pairs=None if saturation is None else _pairs(saturation, adstock),
         active_channels=tuple(int(count) for count in active.sum(axis=1)),
         active_controls=tuple(int(count) for count in controls.sum(axis=1)),
+        effect_channels=tuple(int(count) for count in channel_edges.sum(axis=1)),
+        effect_controls=tuple(int(count) for count in control_edges.sum(axis=1)),
         channel_slots=int(active.shape[1]),
         control_slots=int(controls.shape[1]),
     )
 
 
-def _families(
+def _direct_edges(
+    corpus: dict[str, Any], channels: np.ndarray, controls: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per corpus row and slot, the inputs with an effect: active channels with a direct
+    ``C->Y`` edge and active controls with a direct ``Z->Y`` edge.
+
+    The edges are the ``cy`` and ``zy`` blocks of the corpus edge vector ``g``, located
+    by the library's canonical layout of the payload's channel, control and latent slots.
+    """
+    layout = SlotLayout(
+        n_treatments=channels.shape[1],
+        n_covariates=controls.shape[1],
+        n_latent=np.asarray(corpus["latent_active_mask"]).shape[1],
+        edge_types=EDGE_TYPES_EXTENDED,
+    )
+    g = np.asarray(corpus["g"])
+    expected = (channels.shape[0], layout.n_slots)
+    if g.shape != expected:
+        raise ExtractionError(f"g has shape {g.shape}, expected {expected}")
+    return (
+        (g[:, layout.slices["cy"]] == 1) & channels,
+        (g[:, layout.slices["zy"]] == 1) & controls,
+    )
+
+
+def _units_with_effect(
+    units: QuantityDistribution, edges: np.ndarray
+) -> tuple[tuple[int, ...], tuple[str, ...], tuple[float, ...]]:
+    """Corpus rows, slot labels and direct shares of the units whose slot has an effect.
+
+    ``outcome_distributions`` makes one unit per active slot, world-major then slot
+    order: ``world_index`` is its corpus row (every row is analysed) and
+    ``column_index`` its slot. The kept units stay in that order.
+    """
+    keep = edges[units.world_index, units.column_index]
+    return (
+        tuple(units.world_index[keep].tolist()),
+        tuple(label for label, kept in zip(units.labels(), keep.tolist(), strict=True) if kept),
+        tuple(units.unit_share[keep].tolist()),
+    )
+
+
+def _channel_families(
     corpus: dict[str, Any], key: str, active: np.ndarray, names: tuple[str, ...]
 ) -> tuple[tuple[str, ...], ...]:
-    """Per corpus row, the families its active channels use, in the library's order.
+    """Per corpus row, the family of each active channel, in slot order.
 
     Inactive (padded) slots never count: their zero fill is also a real family's id.
     """
     codes = np.asarray(corpus[key])
     if codes.shape != active.shape:
         raise ExtractionError(f"{key} has shape {codes.shape}, expected {active.shape}")
-    forms = []
+    families = []
     for row_codes, row_active in zip(codes, active, strict=True):
-        used = {int(code) for code in row_codes[row_active]}
-        unknown = sorted(code for code in used if not 0 <= code < len(names))
+        used = [int(code) for code in row_codes[row_active]]
+        unknown = sorted({code for code in used if not 0 <= code < len(names)})
         if unknown:
             raise ExtractionError(f"{key} holds unknown family ids {unknown}")
-        forms.append(tuple(name for code, name in enumerate(names) if code in used))
-    return tuple(forms)
+        families.append(tuple(names[code] for code in used))
+    return tuple(families)
+
+
+def _forms(
+    families: tuple[tuple[str, ...], ...], names: tuple[str, ...]
+) -> tuple[tuple[str, ...], ...]:
+    """Per corpus row, the families its active channels use, once each, in ``names`` order."""
+    return tuple(tuple(name for name in names if name in row) for row in families)
+
+
+def _pairs(
+    saturation: tuple[tuple[str, ...], ...], adstock: tuple[tuple[str, ...], ...]
+) -> tuple[tuple[tuple[str, str], ...], ...]:
+    """Per corpus row, the distinct (saturation, adstock) pairs of its active channels, sorted."""
+    return tuple(
+        tuple(sorted(set(zip(row_saturation, row_adstock, strict=True))))
+        for row_saturation, row_adstock in zip(saturation, adstock, strict=True)
+    )
 
 
 def _load_valid_corpus(data: bytes) -> dict[str, Any]:

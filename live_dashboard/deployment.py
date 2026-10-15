@@ -18,11 +18,12 @@ GENERATE_FUNCTION = "generate_run"
 DASHBOARD_FUNCTION = "dashboard"
 REVISION_ENV = "LIVE_DASHBOARD_CODE_REVISION"
 
-GENERATION_TIMEOUT_S = 1800
-# Demo bounds. One attempt covers roughly 260-420 worlds on Modal (4-6.5 s of wall-clock
-# time per world); a larger run stops before the timeout and finishes with
-# `launch.py --resume`.
-DEMO_MAX_WORLDS = 400
+GENERATION_TIMEOUT_S = 3 * 3600
+# Demo bounds. One attempt generates a world in 3-6 s of wall-clock time (more at 208
+# weeks than at 104) plus about 2 s of publication per task, so the 1,000 worlds of a
+# structural-split run fit one attempt with room to spare; a larger run stops before the
+# timeout and finishes with `launch.py --resume`.
+DEMO_MAX_WORLDS = 1000
 DEMO_MAX_WORLDS_PER_TASK = 20
 
 # The generation worker's reservation and its Modal list price (modal.com/pricing, October

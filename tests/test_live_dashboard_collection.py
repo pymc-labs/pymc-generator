@@ -806,15 +806,19 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
             zip(metrics.channel, metrics.control, metrics.baseline, strict=True)
         )
         saturation = metrics.saturation_forms or (None,) * metrics.n_worlds
-        assert [
-            (w.adstock_forms, w.saturation_forms, w.active_channels, w.active_controls)
+        pairs = metrics.structural_pairs or (None,) * metrics.n_worlds
+        forms = [(w.adstock_forms, w.saturation_forms, w.structural_pairs) for w in worlds]
+        assert forms == list(zip(metrics.adstock_forms, saturation, pairs, strict=True))
+        counts = [
+            (w.active_channels, w.active_controls, w.effect_channels, w.effect_controls)
             for w in worlds
-        ] == list(
+        ]
+        assert counts == list(
             zip(
-                metrics.adstock_forms,
-                saturation,
                 metrics.active_channels,
                 metrics.active_controls,
+                metrics.effect_channels,
+                metrics.effect_controls,
                 strict=True,
             )
         )
@@ -840,6 +844,21 @@ def test_out_of_order_arrival_is_shown_in_task_and_row_order(tmp_path, payloads)
         ]
     for units in (run.impacts, run.control_impacts):
         assert [unit.task_id for unit in units] == sorted(unit.task_id for unit in units)
+
+
+def test_recorded_structural_pairs_reach_their_worlds(tmp_path, payloads):
+    # The golden payloads record no saturation families: give each row its own pairs.
+    pairs = ((("logistic", "geometric"),), (("hill", "none"), ("tanh", "geometric")))
+
+    def extractor(data: bytes):
+        return dataclasses.replace(extract_payload(data), structural_pairs=pairs)
+
+    store = DirectoryStore(tmp_path)
+    manifest = _manifest(store, worlds=2)
+    _publish(store, manifest, 0, 1, payloads[0])
+    collector = Collector(store, clock=_clock(), extractor=extractor)
+    collector.refresh()
+    assert [world.structural_pairs for world in _run(collector).worlds] == list(pairs)
 
 
 def test_idle_refreshes_and_independent_collectors_agree(tmp_path, payloads):

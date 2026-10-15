@@ -60,9 +60,12 @@ class WorldMetrics:
     """Composition of one consumable world: signed shares of its total outcome.
 
     ``adstock_forms`` and ``saturation_forms`` are the families its active channels use,
-    in the library's order; ``saturation_forms`` is ``None`` when its payload does not
-    record them. ``active_channels`` of ``channel_slots`` channels and
-    ``active_controls`` of ``control_slots`` controls are active.
+    in the library's order, and ``structural_pairs`` their distinct (saturation, adstock)
+    pairs, sorted; ``saturation_forms`` and ``structural_pairs`` are ``None`` when its
+    payload does not record saturation families. ``active_channels`` of ``channel_slots``
+    channels and ``active_controls`` of ``control_slots`` controls are active (its
+    columns); ``effect_channels`` and ``effect_controls`` of them have an effect (a direct
+    edge to the target).
     """
 
     world_id: str
@@ -72,15 +75,21 @@ class WorldMetrics:
     baseline_share: float  # intrinsic baseline + latent contributions + noise
     adstock_forms: tuple[str, ...]
     saturation_forms: tuple[str, ...] | None
+    structural_pairs: tuple[tuple[str, str], ...] | None
     active_channels: int
     active_controls: int
+    effect_channels: int
+    effect_controls: int
     channel_slots: int
     control_slots: int
 
 
 @dataclass(frozen=True)
 class ImpactUnit:
-    """One active channel of one consumable world: its direct contribution share."""
+    """One channel with an effect of one consumable world: its direct contribution share.
+
+    Channels with an effect are the active channels with a direct edge to the target.
+    """
 
     world_id: str
     task_id: str
@@ -90,7 +99,10 @@ class ImpactUnit:
 
 @dataclass(frozen=True)
 class ControlUnit:
-    """One active control of one consumable world: its direct contribution share."""
+    """One control with an effect of one consumable world: its direct contribution share.
+
+    Controls with an effect are the active controls with a direct edge to the target.
+    """
 
     world_id: str
     task_id: str
@@ -126,10 +138,10 @@ class RunSnapshot:
     code_revision: str | None
     tasks: tuple[TaskState, ...]  # one per task index, pending placeholders included
     worlds: tuple[WorldMetrics, ...]  # consumable worlds, ordered by (task_index, row)
-    impacts: tuple[ImpactUnit, ...]  # consumable worlds' active channels, same order
+    impacts: tuple[ImpactUnit, ...]  # consumable worlds' channels with an effect, same order
     attempts: tuple[AttemptView, ...]  # newest first
     issues: tuple[str, ...] = ()  # e.g. undecodable attempt records
-    control_impacts: tuple[ControlUnit, ...] = ()  # consumable worlds' active controls
+    control_impacts: tuple[ControlUnit, ...] = ()  # consumable worlds' controls with an effect
 
     @property
     def published_worlds(self) -> int:

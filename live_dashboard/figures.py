@@ -49,12 +49,16 @@ _GRID_LEVELS = (0.2, 0.4, 0.6, 0.8)
 _TEMPLATE = "plotly_white"  # explicit: the global plotly default is mutable process state
 _WORLD_COLOR = "#306998"
 _CONTROL_COLOR = "#e07b39"
+# Lighter tints of the two input colors: the inputs with an effect, beside their columns.
+_CHANNEL_EFFECT_COLOR = "#98b4cc"
+_CONTROL_EFFECT_COLOR = "#f0bd9c"
 _NEGATIVE_COLOR = "#c0392b"
 _TARGET_COLOR = "#7f7f7f"
 _GRID_COLOR = "#d9d9d9"
 _OUTLINE_COLOR = "#444444"
 # Axis labels of the library's family keys (the hover text shows the key itself).
 _FAMILY_LABELS = {"michaelis_menten": "Michaelis-Menten", "hill": "Hill", "weibull": "Weibull"}
+_UNRECORDED_FAMILIES = "this run's payloads do not record these families"
 
 
 def plotly_js() -> bytes:
@@ -463,7 +467,7 @@ def _shares_figure(
 
 
 def impact_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 3: direct share of each active channel, and all channels' share per world."""
+    """Fig 3: direct share of each channel with an effect, and all channels' share per world."""
     title = "Channel impact (share of outcome)"
     if not run.worlds:
         return _panel("impact", title, None, empty_state(run), None)
@@ -472,14 +476,17 @@ def impact_figure(run: RunSnapshot) -> dict[str, Any]:
         "impact",
         title,
         [
-            ("Each active channel", ((u.share, f"{u.world_id} {u.channel}") for u in run.impacts)),
+            (
+                "Each channel with an effect",
+                ((u.share, f"{u.world_id} {u.channel}") for u in run.impacts),
+            ),
             ("All channels per world", ((w.channel_share, w.world_id) for w in run.worlds)),
         ],
     )
 
 
 def control_impact_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 4: direct share of each active control, and all controls' share per world."""
+    """Fig 4: direct share of each control with an effect, and all controls' share per world."""
     title = "Control impact (share of outcome)"
     if not run.worlds:
         return _panel("control_impact", title, None, empty_state(run), None)
@@ -489,7 +496,7 @@ def control_impact_figure(run: RunSnapshot) -> dict[str, Any]:
         title,
         [
             (
-                "Each active control",
+                "Each control with an effect",
                 ((u.share, f"{u.world_id} {u.control}") for u in run.control_impacts),
             ),
             ("All controls per world", ((w.control_share, w.world_id) for w in run.worlds)),
@@ -652,9 +659,7 @@ def _forms_figure(
         return _panel(panel_id, title, None, empty_state(run), None)
     recorded = [forms for forms in map(forms_of, run.worlds) if forms is not None]
     if not recorded:
-        return _panel(
-            panel_id, title, None, "this run's payloads do not record these families", None
-        )
+        return _panel(panel_id, title, None, _UNRECORDED_FAMILIES, None)
     counts = [sum(family in forms for forms in recorded) for family in families]
     figure = go.Figure(
         data=[
@@ -712,28 +717,99 @@ def adstock_figure(run: RunSnapshot) -> dict[str, Any]:
     )
 
 
-def _active_axes(run: RunSnapshot) -> tuple[list[int], list[int]]:
-    """Every active-channel count and every active-control count the layouts allow.
+def _family_axis(title: str, families: tuple[str, ...]) -> dict[str, Any]:
+    """A category axis of library family keys in the library's order, ticked with labels
+    (the margin grows to fit them)."""
+    return {
+        "title": {"text": title},
+        "type": "category",
+        "tickmode": "array",
+        "tickvals": list(families),
+        "ticktext": [_FAMILY_LABELS.get(family, family) for family in families],
+        "automargin": True,
+        "showgrid": False,
+    }
 
-    Counts run from 1 (from 0 when some world has none active) up to the most slots.
+
+def splits_figure(run: RunSnapshot) -> dict[str, Any]:
+    """Fig 9: consumable worlds per structural split, a (saturation, adstock) family pair
+    of their active channels.
+
+    Every pair of library families has a cell, so absent splits show as empty; a world
+    whose channels use several pairs counts once in each of them.
     """
+    title = "Worlds per structural split (saturation × adstock)"
+    if not run.worlds:
+        return _panel("splits", title, None, empty_state(run), None)
+    recorded = [w.structural_pairs for w in run.worlds if w.structural_pairs is not None]
+    if not recorded:
+        return _panel("splits", title, None, _UNRECORDED_FAMILIES, None)
+    counts = Counter(pair for pairs in recorded for pair in set(pairs))
+    z = [
+        [counts[saturation, adstock] for adstock in ADSTOCK_FAMILIES]
+        for saturation in SATURATION_FAMILIES
+    ]
+    figure = go.Figure(
+        data=[
+            go.Heatmap(
+                x=list(ADSTOCK_FAMILIES),
+                y=list(SATURATION_FAMILIES),
+                z=z,
+                text=[[str(value) if value else "" for value in row] for row in z],
+                texttemplate="%{text}",
+                colorscale="Blues",
+                zmin=0,
+                xgap=2,
+                ygap=2,
+                colorbar={
+                    "title": {"text": "worlds"},
+                    "tick0": 0,
+                    "dtick": _count_step(max(max(row) for row in z)),
+                    "tickformat": "d",
+                },
+                hovertemplate="saturation %{y}, adstock %{x}: %{z} worlds<extra></extra>",
+            )
+        ],
+        layout=_layout(
+            xaxis=_family_axis("adstock (carryover)", ADSTOCK_FAMILIES),
+            yaxis={**_family_axis("saturation", SATURATION_FAMILIES), "autorange": "reversed"},
+        ),
+    )
+    present = sum(count > 0 for row in z for count in row)
+    notes = [f"{present} of {len(SATURATION_FAMILIES) * len(ADSTOCK_FAMILIES)} splits present"]
+    unrecorded = len(run.worlds) - len(recorded)
+    if unrecorded:
+        notes.append(f"{_plural(unrecorded, 'world')} without recorded families not counted")
+    several = sum(len(set(pairs)) > 1 for pairs in recorded)
+    if several:
+        notes.append(f"{_plural(several, 'world')} using several splits, counted once per split")
+    return _panel("splits", title, figure, None, "; ".join(notes))
 
-    def axis(active: list[int], slots: list[int]) -> list[int]:
-        return list(range(0 if min(active) == 0 else 1, max(*active, *slots) + 1))
 
+def _count_axis(counts: list[int], slots: list[int]) -> list[int]:
+    """Every count from 1 (from 0 when some count is 0) up to the most slots."""
+    return list(range(0 if min(counts) == 0 else 1, max([*counts, *slots]) + 1))
+
+
+def _active_axes(run: RunSnapshot) -> tuple[list[int], list[int]]:
+    """Every channel-column count and every control-column count the layouts allow.
+
+    Counts run from 1 (from 0 when some world has no column) up to the most slots.
+    """
     worlds = run.worlds
     return (
-        axis([w.active_channels for w in worlds], [w.channel_slots for w in worlds]),
-        axis([w.active_controls for w in worlds], [w.control_slots for w in worlds]),
+        _count_axis([w.active_channels for w in worlds], [w.channel_slots for w in worlds]),
+        _count_axis([w.active_controls for w in worlds], [w.control_slots for w in worlds]),
     )
 
 
 def combinations_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 9: consumable worlds per (active channels, active controls) combination.
+    """Fig 10: consumable worlds per (channel columns, control columns) combination.
 
+    A world's columns are its active channels and controls, with or without an effect.
     Every combination the layout allows has a cell, so absent combinations show as empty.
     """
-    title = "Worlds per active channels × active controls"
+    title = "Worlds per channel columns × control columns"
     if not run.worlds:
         return _panel("combinations", title, None, empty_state(run), None)
     channels, controls = _active_axes(run)
@@ -757,17 +833,19 @@ def combinations_figure(run: RunSnapshot) -> dict[str, Any]:
                     "dtick": _count_step(max(counts.values())),
                     "tickformat": "d",
                 },
-                hovertemplate="%{y} channels, %{x} controls: %{z} worlds<extra></extra>",
+                hovertemplate=(
+                    "%{y} channel columns, %{x} control columns: %{z} worlds<extra></extra>"
+                ),
             )
         ],
         layout=_layout(
             xaxis={
-                "title": {"text": "active controls (covariates)"},
+                "title": {"text": "control columns (covariates)"},
                 "dtick": 1,
                 "showgrid": False,
             },
             yaxis={
-                "title": {"text": "active channels (treatments)"},
+                "title": {"text": "channel columns (treatments)"},
                 "dtick": 1,
                 "showgrid": False,
             },
@@ -778,33 +856,41 @@ def combinations_figure(run: RunSnapshot) -> dict[str, Any]:
 
 
 def active_counts_figure(run: RunSnapshot) -> dict[str, Any]:
-    """Fig 10: consumable worlds per number of active channels and of active controls."""
-    title = "Worlds per number of active inputs"
+    """Fig 11: consumable worlds per number of columns and of inputs with an effect.
+
+    A world's columns are its active channels and controls; its inputs with an effect
+    are the columns with a direct edge to the target.
+    """
+    title = "Worlds per number of columns and of inputs with an effect"
     if not run.worlds:
         return _panel("active_counts", title, None, empty_state(run), None)
-    channel_axis, control_axis = _active_axes(run)
-    axis = sorted({*channel_axis, *control_axis})
-    channels = Counter(w.active_channels for w in run.worlds)
-    controls = Counter(w.active_controls for w in run.worlds)
-    traces = [
-        ("channels (treatments)", channels, _WORLD_COLOR),
-        ("controls (covariates)", controls, _CONTROL_COLOR),
+    worlds = run.worlds
+    inputs = [
+        ("channel columns", [w.active_channels for w in worlds], _WORLD_COLOR),
+        ("channels with an effect", [w.effect_channels for w in worlds], _CHANNEL_EFFECT_COLOR),
+        ("control columns", [w.active_controls for w in worlds], _CONTROL_COLOR),
+        ("controls with an effect", [w.effect_controls for w in worlds], _CONTROL_EFFECT_COLOR),
     ]
-    top = max(max(channels.values()), max(controls.values()))
+    axis = _count_axis(
+        [count for _, counts, _ in inputs for count in counts],
+        [slots for w in worlds for slots in (w.channel_slots, w.control_slots)],
+    )
+    bars = [(name, Counter(counts), color) for name, counts, color in inputs]
+    top = max(max(per_count.values()) for _, per_count, _ in bars)
     figure = go.Figure(
         data=[
             go.Bar(
                 name=name,
                 x=axis,
-                y=[counts.get(n, 0) for n in axis],
+                y=[per_count.get(n, 0) for n in axis],
                 marker={"color": color},
-                hovertemplate="%{x} active " + name.split()[0] + ": %{y} worlds<extra></extra>",
+                hovertemplate="%{x} " + name + ": %{y} worlds<extra></extra>",
             )
-            for name, counts, color in traces
+            for name, per_count, color in bars
         ],
         layout=_layout(
             barmode="group",
-            xaxis={"title": {"text": "active inputs"}, "dtick": 1},
+            xaxis={"title": {"text": "inputs per world"}, "dtick": 1},
             yaxis={
                 "title": {"text": "worlds"},
                 "rangemode": "tozero",
@@ -883,6 +969,7 @@ _FIGURES: tuple[Callable[[RunSnapshot], dict[str, Any]], ...] = (
     composition_figure,
     saturation_figure,
     adstock_figure,
+    splits_figure,
     combinations_figure,
     active_counts_figure,
 )
