@@ -386,6 +386,16 @@ read the migration notes before upgrading.
 
 ### Fixed
 
+- **`validate_corpus` no longer rejects signal labels written on another CPU.** It
+  required `identifiability.signal_metrics` to equal their recomputation exactly, but
+  `contrib_r2_explained_by_rest` comes from `np.linalg.lstsq`, whose last bits depend
+  on the host's OpenBLAS kernel (SkylakeX on AVX-512 hosts, Haswell otherwise). On a
+  200,000-world run 0.1–0.4 % of payloads failed on hosts other than their writer's (1
+  to 1,024 float32 steps, at most 3e-14 apart), so `FilePublicationStore.validated_outputs`
+  failed closed. Labels now match within `SIGNAL_METRIC_RTOL` (2.5e-7) plus
+  `SIGNAL_METRIC_ATOL` (1e-9); validity flags still match exactly, and the signal summary
+  is checked against the stored labels it was derived from. Generated corpora are unchanged.
+
 - **`sample_scm` with a texture term off keeps main's leftover streams (#28).**
   #27 appended every primitive random variable to the world's draw request.
   PyMC's draw walk reaches the last-requested names first and appends streams

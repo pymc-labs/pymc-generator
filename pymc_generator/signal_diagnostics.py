@@ -41,7 +41,9 @@ __all__ = [
     "DEFAULT_GATE",
     "FRAC_KEYS",
     "METRIC_KEYS",
+    "SIGNAL_METRIC_ATOL",
     "SIGNAL_METRIC_LAYOUT",
+    "SIGNAL_METRIC_RTOL",
     "SIGNAL_METRIC_VERSION",
     "admitted_response_support_weeks",
     "check_signal_gate",
@@ -73,6 +75,17 @@ METRIC_KEYS: tuple[str, ...] = (
 
 # This is a persisted feature layout: append only.
 SIGNAL_METRIC_LAYOUT: tuple[str, ...] = METRIC_KEYS
+
+#: How closely persisted float32 metrics must match their recomputation. Least
+#: squares and BLAS dot products round differently on different CPUs (OpenBLAS picks
+#: its kernels per host), so a metric written on one host can differ from its
+#: recomputation on another by float64 rounding. Measured over 200,000 worlds on
+#: SkylakeX and Haswell kernels: only ``contrib_r2_explained_by_rest`` differed, by
+#: 1 to 1,024 float32 steps (the most for an R² near zero) and at most 3e-14 absolute.
+#: Two float32 steps (relative) plus 1e-9 absolute leave room for least squares on
+#: nearly collinear inputs and stay far below any metric's meaningful resolution.
+SIGNAL_METRIC_RTOL = 2.5e-7
+SIGNAL_METRIC_ATOL = 1e-9
 
 _FRACTION_SPECS: dict[str, tuple[str, Callable[[np.ndarray], np.ndarray]]] = {
     "frac_contrib_cv_lt_005": ("contrib_cv", lambda x: x < 0.05),
