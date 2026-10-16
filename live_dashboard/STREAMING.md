@@ -112,16 +112,19 @@ STREAM_WORKERS=5 uv run --with modal modal run --env pfn --detach \
   every completion, 1,675 rejected candidates (1,552 generator filters, 123 negative
   controls), no shortfall or draw failure, at most 619 s and 898 MiB per partition (plus
   800 MiB for the C compiler), about $0.38 billed. Two partitions reused 23 batches that an
-  earlier execution of the same partition had published.
-- **Validation depends on the CPU.** That run's final report failed: `validate_corpus`
-  requires the stored `identifiability.signal_metrics` to equal a recomputation exactly,
-  and `contrib_r2_explained_by_rest` comes from `np.linalg.lstsq`, whose last bits depend
-  on the host's OpenBLAS kernel (SkylakeX on AVX-512 hosts, Haswell otherwise). In 0.1–0.4 %
-  of the payloads one of their 9,000 values differs, by at most 3e-14 (1–1,024 float32
-  ULPs of R² values near 0); each passes on hosts with its writer's kernel and fails on
-  the others (re-validated on 36 fresh containers). A payload that passes one host can fail
-  another, so `validated_outputs` and the dashboard reject a few tasks depending on where
-  they run (the dashboard: 7 tasks).
+  earlier execution of the same partition had published. Its world-level distributions
+  match the 1,000-world half-baseline run (channel, control and baseline shares, active
+  and effect counts, series with weeks at zero: 9 KS tests, all p ≥ 0.35); 777 worlds
+  (0.39 %) have a baseline share above 80 % (1,000-world run: 5).
+- **Validation used to depend on the CPU.** That run's first final report failed:
+  `validate_corpus` required the stored `identifiability.signal_metrics` to equal a
+  recomputation exactly, but `contrib_r2_explained_by_rest` comes from `np.linalg.lstsq`,
+  whose last bits depend on the host's OpenBLAS kernel (SkylakeX on AVX-512 hosts, Haswell
+  otherwise). In 0.1–0.4 % of the payloads one of their 9,000 values differed, by at most
+  3e-14 (1–1,024 float32 steps of R² values near 0); each passed on hosts with its
+  writer's kernel and failed on the others (re-validated on 36 fresh containers). The
+  check now allows that rounding (`SIGNAL_METRIC_RTOL`, `SIGNAL_METRIC_ATOL`); the rerun
+  report validated all 2,000 payloads and finished the attempt.
 
 ## Execution, memory and storage
 
@@ -217,8 +220,9 @@ Bounded raw-data memory and compilation reuse are tested. A 200,000-world struct
 run with 100-world batches (2,000 publications) has been measured once (see
 [the design section](#the-structural-split-design---design-structural-splits)): 75 minutes
 on 5 workers, and the dashboard kept up with a 30 s read budget. Its final validation
-depends on the CPU (same section). 10-world batches would create 20,000 publications:
-more than a worker can publish before its timeout and far slower dashboard cold starts.
+needed `validate_corpus` to allow CPU-dependent rounding (same section). 10-world batches
+would create 20,000 publications: more than a worker can publish before its timeout and
+far slower dashboard cold starts.
 
 ## What to verify
 
