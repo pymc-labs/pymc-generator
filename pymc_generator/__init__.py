@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     )
     from .descriptors import ObservedWorlds, WorldDescriptors, world_descriptors
     from .diagnostics import DataDiagnostics, data_diagnostics
+    from .oracle_family import FamilyOracle, OracleInputs
+    from .oracle_inferred import sample_inferred_walk_predictions
     from .oracle_sampling import (
         ORACLE_CONFIG_SCHEMA,
         ORACLE_DATA_NAMES,
@@ -124,6 +126,9 @@ _LAZY_IMPORTS = {
     "build_oracle_template": (".oracle_sampling", "build_oracle_template"),
     "compile_oracle": (".oracle_sampling", "compile_oracle"),
     "sample_oracle": (".oracle_sampling", "sample_oracle"),
+    "sample_inferred_walk_predictions": (".oracle_inferred", "sample_inferred_walk_predictions"),
+    "FamilyOracle": (".oracle_family", "FamilyOracle"),
+    "OracleInputs": (".oracle_family", "OracleInputs"),
     "SCENARIOS": (".scenarios", "SCENARIOS"),
     "SIGNAL_METRIC_VERSION": (".signal_diagnostics", "SIGNAL_METRIC_VERSION"),
     "SIGNAL_METRIC_LAYOUT": (".signal_diagnostics", "SIGNAL_METRIC_LAYOUT"),
@@ -180,6 +185,9 @@ __all__ = [
     "outcome_distributions",
     "nearest_worlds",
     "sample_oracle",
+    "sample_inferred_walk_predictions",
+    "FamilyOracle",
+    "OracleInputs",
     "sample_prior_predictive",
     "load_corpus",
     "make_scm_prior",

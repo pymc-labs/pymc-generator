@@ -153,6 +153,7 @@ class OracleSamplingConfig:
     nuts_sampler: Literal["nutpie", "pymc"] = _DEFAULT_NUTS_SAMPLER
     adaptation: Literal["diag", "draw_diag", "low_rank", "flow"] = _DEFAULT_NUTPIE_ADAPTATION
     sampler_kwargs: Mapping[str, object] = field(default_factory=dict)
+    walk_smoothness: Literal["known", "inferred"] = "known"
 
     def __post_init__(self) -> None:
         self.validate()
@@ -174,6 +175,10 @@ class OracleSamplingConfig:
                 raise ValueError("random_seed must be nonnegative")
         if self.latent not in ("marginal", "sampled"):
             raise ValueError("latent must be 'marginal' or 'sampled'")
+        if self.walk_smoothness not in ("known", "inferred"):
+            raise ValueError("walk_smoothness must be 'known' or 'inferred'")
+        if self.walk_smoothness == "inferred" and self.latent != "sampled":
+            raise ValueError("inferred walk smoothness requires latent='sampled'")
         for name in ("discard_tuned_samples", "progressbar", "compute_convergence_checks"):
             _validate_bool(getattr(self, name), name)
         if not isinstance(self.nuts_sampler, str):
@@ -212,6 +217,7 @@ class OracleSamplingConfig:
             "nuts_sampler": self.nuts_sampler,
             "adaptation": self.adaptation,
             "sampler_kwargs": _plain(self.sampler_kwargs),
+            **({"walk_smoothness": "inferred"} if self.walk_smoothness == "inferred" else {}),
         }
 
 
@@ -688,10 +694,12 @@ def sample_oracle(
         identities[name] = _immutable({} if identity is None else identity, path=f"{name}_identity")
 
     started = time.monotonic()
-    if observed_indices is None:
-        model = world.oracle_model(latent=config.latent)
-    else:
-        model = world.oracle_model(latent=config.latent, observed_indices=observed_indices)
+    model_kwargs: dict[str, Any] = {"latent": config.latent}
+    if observed_indices is not None:
+        model_kwargs["observed_indices"] = observed_indices
+    if config.walk_smoothness == "inferred":
+        model_kwargs["walk_smoothness"] = "inferred"
+    model = world.oracle_model(**model_kwargs)
     idata = pm.sample(
         model=model,
         draws=config.draws,
@@ -742,7 +750,13 @@ def sample_oracle(
         package_version=package_version,
         environment=_immutable(_versions()),
         identities=_immutable(identities),
-        oracle=_immutable({"builder": "SCM.oracle_model", "latent": config.latent}),
+        oracle=_immutable(
+            {
+                "builder": "SCM.oracle_model",
+                "latent": config.latent,
+                **({"walk_smoothness": "inferred"} if config.walk_smoothness == "inferred" else {}),
+            }
+        ),
         sampling=_immutable(sampling),
         timing=_immutable({"elapsed_seconds": float(time.monotonic() - started)}),
         posterior=_immutable({"present": posterior is not None, "included_in_receipt": False}),
@@ -1490,6 +1504,10 @@ class CompiledOracle:
             raise TypeError("config and criteria must use the Oracle sampling types")
         config.validate()
         criteria.validate()
+        if config.walk_smoothness != "known":
+            raise ValueError(
+                "reusable Oracle templates currently require known walk smoothness; use sample_oracle or build_oracle_model for inferred widths"
+            )
         if config.latent != self.template.latent:
             raise ValueError("config.latent must match the compiled Oracle template latent mode")
         if config.nuts_sampler != "nutpie":

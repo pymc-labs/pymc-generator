@@ -8,6 +8,13 @@ read the migration notes before upgrading.
 
 ### Added
 
+- Opt-in inferred-smoothness oracle models for persisted worlds, without realized
+  baseline/latent walk truth. Exactly marginalize Beta-induced walk widths and
+  reconstruct paired full-window trajectories. `FamilyOracle` reuses one numerical
+  compilation across active input counts, contexts and regime-specific walk priors;
+  the legacy supplied-width API remains the default. Dataset selection, evaluation
+  scheduling and scoring remain outside this library API. See the inferred-oracle guide.
+
 - Opt-in reusable-family streaming generation for the live dashboard: bounded
   per-worker save queues, backpressure, single-writer Volume ownership, deterministic
   ten-world publications and validated resume. The self-contained compositional

@@ -1484,6 +1484,7 @@ def build_oracle_model(
     *,
     latent: Literal["marginal", "sampled"] = "marginal",
     observed_indices: np.ndarray | list[int] | list[bool] | None = None,
+    walk_smoothness: Literal["known", "inferred"] = "known",
 ) -> pm.Model:
     """The observed-data variant of :func:`build_world_model` — the posterior oracle.
 
@@ -1528,6 +1529,19 @@ def build_oracle_model(
         ``"sampled"`` preserves the previous latent-innovation representation
         and exposes posterior ``latent_unobserved`` and ``baseline`` series.
 
+    walk_smoothness : {"known", "inferred"}, default "known"
+        Opt into inference of baseline and latent walk widths under the
+        generating Beta prior with ``"inferred"`` (requires ``latent="sampled"``).
+        This mode never reads realized smoothness or walk paths, accepts
+        persisted observations directly, and exactly sums over width combinations.
+        All selected context rows are retained with a recorded zero-initialized
+        adstock approximation; indices refer to the full reported window.
+        ``baseline`` / ``outcome_mu`` are conditional width-averaged means in
+        this mode, not paired trajectory draws. Use
+        :func:`pymc_generator.oracle_inferred.sample_inferred_walk_predictions`
+        for joint trajectories and width/smoothness draws. The supplied-width
+        default and its warmup convention remain unchanged.
+
     Returns
     -------
     pm.Model
@@ -1545,6 +1559,11 @@ def build_oracle_model(
 
     Notes
     -----
+    The qualifications below describe the compatibility default
+    ``walk_smoothness="known"``. For inferred widths, see the parameter above
+    and the inferred-oracle guide: smoothness is unknown, series deterministics
+    are width-averaged means, and all selected context rows are retained.
+
     **Reference model, not exact joint conditioning.** Outcome-side priors
     and response functions are shared with generation, subject to these
     mode-dependent qualifications:
@@ -1620,6 +1639,10 @@ def build_oracle_model(
     for very long ``n_time_steps``; use ``latent="sampled"`` when posterior
     ``latent_unobserved`` or ``baseline`` paths are needed.
     """
+    if walk_smoothness not in ("known", "inferred"):
+        raise ValueError("walk_smoothness must be 'known' or 'inferred'")
+    if walk_smoothness == "inferred" and latent != "sampled":
+        raise ValueError("inferred walk smoothness requires latent='sampled'")
     if latent not in ("marginal", "sampled"):
         raise ValueError(f"latent must be 'marginal' or 'sampled', got {latent!r}")
 
@@ -1645,7 +1668,12 @@ def build_oracle_model(
             f"outcome (n_time_steps,)={(n_time_steps,)}; "
             f"got treatments {treatments.shape}, covariates {covariates.shape}"
         )
-    if not all(np.isfinite(value).all() for value in (treatments, covariates, outcome)):
+    checked_data = (
+        (treatments, covariates, outcome)
+        if walk_smoothness == "known"
+        else (treatments, covariates)
+    )
+    if not all(np.isfinite(value).all() for value in checked_data):
         raise ValueError("data treatments, covariates, and outcome must contain only finite values")
     if "saturation_scale" not in data:
         raise ValueError("data requires a saturation_scale")
@@ -1682,7 +1710,7 @@ def build_oracle_model(
             cfg.l_max,
             carryover_alpha_range=(carryover_alpha_lo, carryover_alpha_hi),
         )
-        if burn_in > 0
+        if burn_in > 0 and walk_smoothness == "known"
         else 0
     )
     # K2 makes this unreachable after SCMPrior.validate(); retain it for callers
@@ -1723,6 +1751,17 @@ def build_oracle_model(
             )
         if np.unique(selected_indices).size != selected_indices.size:
             raise ValueError("observed_indices must not contain duplicates")
+    if walk_smoothness == "inferred":
+        # Do not retain query outcomes in the inference graph, even as unused data.
+        selected_outcome = outcome[selected_indices]
+        if not np.isfinite(selected_outcome).all():
+            raise ValueError("selected context outcomes must be finite")
+        outcome = np.zeros_like(outcome)
+        outcome[selected_indices] = selected_outcome
+        # The prior builder must not consult realized walk truth in this mode.
+        structural = {
+            key: value for key, value in structural.items() if not key.startswith("smoothness_")
+        }
     rows = np.arange(burn_in + warmup, n_time_steps_full)
     _validate_oracle_treatment_shocks(cfg, g_cy, data, n_time_steps)
     mech_names = _live_mechanism_param_names(structural)
@@ -1814,22 +1853,28 @@ def build_oracle_model(
         # Width indices are runtime data: one compiled graph supports every
         # compatible smoothness value while preserving the selected operator's
         # shape.  The stack dimensions remain structural (horizon/max width).
-        width_d = pm.Data(
-            "walk_width_d_data",
-            walk_width_index(
-                np.asarray(structural.get("smoothness_d", ()), dtype="float64"),
-                n_time_steps_full,
-                rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
-            ),
-        )
-        width_b = pm.Data(
-            "walk_width_b_data",
-            walk_width_index(
-                np.asarray(structural.get("smoothness_b", ()), dtype="float64"),
-                n_time_steps_full,
-                rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
-            ),
-        )
+        if walk_smoothness == "known":
+            width_d = pm.Data(
+                "walk_width_d_data",
+                walk_width_index(
+                    np.asarray(structural.get("smoothness_d", ()), dtype="float64"),
+                    n_time_steps_full,
+                    rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
+                ),
+            )
+            width_b = pm.Data(
+                "walk_width_b_data",
+                walk_width_index(
+                    np.asarray(structural.get("smoothness_b", ()), dtype="float64"),
+                    n_time_steps_full,
+                    rw_smoothness_max_weeks=cfg.rw_smoothness_max_weeks,
+                ),
+            )
+        else:
+            # Placeholders only for the shared prior factory; the inferred
+            # likelihood below enumerates every width instead of using these.
+            width_d = pt.zeros((n_latent,), dtype="int64")
+            width_b = pt.zeros((1,), dtype="int64")
         rw = _walk_priors(
             cfg,
             structural,
@@ -1928,7 +1973,24 @@ def build_oracle_model(
         contributions = pm.Deterministic("contributions", pt.stack(contrib_cols, axis=1))
         term_zy = pt.dot(controls_t, g_zb_t * rho_zy)  # (n_time_steps,)
 
-        if latent == "marginal":
+        if walk_smoothness == "inferred":
+            from .oracle_inferred import add_inferred_walk_likelihood
+
+            add_inferred_walk_likelihood(
+                model=model,
+                cfg=cfg,
+                rw=rw,
+                n_time_steps=n_time_steps,
+                n_latent=n_latent,
+                n_covariates=n_covariates,
+                contributions=contributions,
+                controls=controls_t,
+                control_loadings=g_zb_t * rho_zy,
+                latent_loadings=g_db_t * delta_dy,
+                outcome=sales_t,
+                observed_indices=observed_indices_t,
+            )
+        elif latent == "marginal":
             if cfg.baseline_floor is not None:
                 raise ValueError(
                     "latent='marginal' cannot represent a floored intercept: "

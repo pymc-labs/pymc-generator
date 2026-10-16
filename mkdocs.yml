@@ -165,6 +165,7 @@ nav:
       - Input trajectories: guide/trajectories.md
       - Corpus quality: guide/corpus-quality.md
       - The posterior oracle: guide/oracle.md
+      - Oracle with inferred smoothness: guide/oracle-inferred.md
       - Interrogating the data: guide/data-diagnostics.md
       - Comparing worlds: guide/world-descriptors.md
   - Examples:

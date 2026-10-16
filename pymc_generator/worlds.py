@@ -286,6 +286,7 @@ class SCM:
         *,
         latent: Literal["marginal", "sampled"] = "marginal",
         observed_indices: np.ndarray | list[int] | list[bool] | None = None,
+        walk_smoothness: Literal["known", "inferred"] = "known",
     ) -> pm.Model:
         """The observed-data posterior ``pm.Model`` for THIS world.
 
@@ -297,8 +298,10 @@ class SCM:
         Gaussian walks and is the recommended reference posterior.
         ``latent="sampled"`` reproduces the previous representation and is
         required for posterior ``latent_unobserved`` / ``baseline`` series. Requires an
-        SCM produced by ``sample_scm`` (which records the structural draw in
-        ``extras``). The locked released stack supports NUTS for identity,
+        SCM carrying mechanism metadata in ``extras['structural']``.
+        ``walk_smoothness='inferred'`` with ``latent='sampled'`` infers baseline
+        and latent widths without reading realized smoothness. For persisted
+        data without an SCM wrapper, call ``build_oracle_model`` directly. The locked released stack supports NUTS for identity,
         geometric, and Weibull carryover. Gradient availability does not
         establish convergence: inspect divergences, R-hat, and effective
         sample sizes. See the oracle guide for the conditioning caveats.
@@ -307,8 +310,8 @@ class SCM:
 
         if "structural" not in self.extras:
             raise ValueError(
-                "this SCM does not carry its structural draw (extras['structural']); "
-                "oracle_model() needs a world produced by sample_scm"
+                "this SCM does not carry mechanism metadata (extras['structural']); "
+                "supply it or call build_oracle_model directly with persisted observations"
             )
         data = {
             "treatments": self.data["treatments"],
@@ -337,6 +340,7 @@ class SCM:
             prior_cond=self.extras.get("prior_cond"),
             latent=latent,
             observed_indices=observed_indices,
+            walk_smoothness=walk_smoothness,
         )
 
     def signal(self) -> dict[str, Any]:

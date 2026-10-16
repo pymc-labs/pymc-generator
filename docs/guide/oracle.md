@@ -13,6 +13,14 @@ diagnostics. With the locked released stack, identity, geometric, and Weibull
 carryover parameters are NUTS-eligible; Weibull no longer requires Metropolis
 because of missing upstream gradients.
 
+## Inferred smoothness and persisted data
+
+For an oracle that **infers baseline and latent walk smoothness**, accepts
+persisted worlds without regeneration, and reuses one active-dimension compilation
+per family worker, see [Oracle with inferred walk smoothness](oracle-inferred.md).
+That opt-in API retains all context rows with recorded zero-initialized adstock.
+The supplied-width compatibility default and its warmup convention are described below.
+
 ## Public sampling API
 
 The maintained public objects include the sampling types below and the explicit
