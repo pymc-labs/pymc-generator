@@ -10,7 +10,7 @@ import pytest
 import pymc_generator as pg
 import pymc_generator.world_model as world_model
 from pymc_generator import DataGenerator
-from pymc_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION
+from pymc_generator.sampler import OUTCOME_NOISE_SEMANTICS, OUTCOME_NOISE_VERSION, _signal_block
 from pymc_generator.signal_diagnostics import (
     SIGNAL_METRIC_LAYOUT,
     SIGNAL_METRIC_VERSION,
@@ -591,6 +591,54 @@ def test_validate_corpus_recomputes_labels_and_signal_summary(corpus):
     assert DataGenerator.validate_corpus(bad_summary) == [
         "diagnostics signal summary does not match recomputation"
     ]
+
+
+@pytest.mark.parametrize(("steps", "accepted"), [(1, True), (2, True), (64, False)])
+def test_signal_labels_written_on_another_cpu_validate_within_its_rounding(corpus, steps, accepted):
+    """Least squares rounds differently with another CPU's BLAS kernels, so the writer's
+    labels can differ from this host's recomputation by a float32 step or two (measured
+    across Modal hosts); that validates, a larger difference does not."""
+    cfg = pg.make_scm_prior(  # the fixture's configuration
+        n_treatments=4,
+        n_covariates=2,
+        n_latent=1,
+        n_time_steps=40,
+        n_cells=2,
+        draws_per_cell=3,
+        seed=7,
+    )
+    labels = corpus["identifiability"]
+    index = SIGNAL_METRIC_LAYOUT.index("contrib_r2_explained_by_rest")
+    values = labels["signal_metrics"][..., index]
+    n, k = np.argwhere((labels["signal_metric_valid"][..., index] == 1) & (values > 0.01))[0]
+    metrics = labels["signal_metrics"].copy()
+    for _ in range(steps):
+        metrics[n, k, index] = np.nextafter(metrics[n, k, index], np.float32(0.0))
+    # Stored as that writer would: its labels, and the summary of those labels.
+    written = dict(corpus)
+    written["identifiability"] = {**labels, "signal_metrics": metrics}
+    written["diagnostics"] = {
+        **corpus["diagnostics"],
+        "signal": _signal_block(
+            cfg,
+            cfg.layout,
+            corpus["outcome_raw"],
+            corpus["g"],
+            corpus["treatment_active_mask"],
+            corpus["outcome_scale"],
+            corpus["carryover_family"],
+            corpus["carryover_alpha"],
+            corpus["weibull_lam"],
+            corpus["weibull_k"],
+            metrics,
+            labels["signal_metric_valid"],
+        ),
+    }
+    errors = DataGenerator.validate_corpus(written)
+    if accepted:
+        assert errors == []
+    else:
+        assert "identifiability signal_metrics do not match recomputation" in errors
 
 
 @pytest.mark.parametrize("diagnostics", ([], {"signal": []}))

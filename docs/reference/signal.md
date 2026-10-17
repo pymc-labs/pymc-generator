@@ -103,8 +103,14 @@ from a fabricated zero baseline. Persisted corpus generation always supplies
 the true baseline.
 
 Metrics are calculated from the final stored float32 arrays, after any task
-truncation, so they are exactly recomputable after save/load. The signal summary
-is likewise derived from those retained arrays and carries the layout/version.
+truncation, so they are recomputable after save/load. On the same host the
+recomputation is exact; on another CPU, least squares and BLAS dot products can
+round differently (OpenBLAS picks its kernels per host), so `validate_corpus`
+accepts metrics within `SIGNAL_METRIC_RTOL` (2.5e-7, about two float32 steps)
+plus `SIGNAL_METRIC_ATOL` (1e-9) of their recomputation. Validity flags must
+match exactly, and the signal summary is checked against the stored metrics it
+was derived from. The signal summary is likewise derived from those retained
+arrays and carries the layout/version.
 It also records `l_max`, `carryover_burn_in`, `response_warmup_weeks`,
 `frac_zero_contemporaneous_weight`, `carryover_kernel_semantics`, and
 `carryover_kernel_version`, so nondefault shards can be recomputed or assessed

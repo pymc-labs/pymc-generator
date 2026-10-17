@@ -7,6 +7,7 @@ recursive-include conda *.yaml *.yml
 recursive-include tests *.py
 recursive-include benchmarks *.py
 recursive-include docs_gen *.py
+recursive-include live_dashboard *.py *.html *.js *.css *.md
 recursive-include docs *.md *.css *.js *.svg
 include docs/examples/*.ipynb
 include docs/examples/data/linear-recovery-prevalence-config.json

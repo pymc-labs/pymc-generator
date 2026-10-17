@@ -42,7 +42,9 @@ from .sampler import (
     sample_prior_predictive,
 )
 from .signal_diagnostics import (
+    SIGNAL_METRIC_ATOL,
     SIGNAL_METRIC_LAYOUT,
+    SIGNAL_METRIC_RTOL,
     SIGNAL_METRIC_VERSION,
     dense_signal_metrics,
     summarize_signal_metrics,
@@ -1838,12 +1840,27 @@ class DataGenerator:
                 carryover_burn_in=int(signal_diagnostics["carryover_burn_in"]),
             )
             if has_signal_labels:
-                if not np.array_equal(signal_metrics, expected_metrics):
+                # Labels written on another CPU match their recomputation only up to
+                # BLAS rounding (see SIGNAL_METRIC_RTOL); validity must match exactly.
+                labels_match = bool(
+                    np.allclose(
+                        np.asarray(signal_metrics, dtype=np.float64),
+                        np.asarray(expected_metrics, dtype=np.float64),
+                        rtol=SIGNAL_METRIC_RTOL,
+                        atol=SIGNAL_METRIC_ATOL,
+                    )
+                )
+                if not labels_match:
                     errors.append("identifiability signal_metrics do not match recomputation")
-                if not np.array_equal(signal_metric_valid, expected_valid):
+                validity_match = np.array_equal(signal_metric_valid, expected_valid)
+                if not validity_match:
                     errors.append(
                         "identifiability signal_metric_valid does not match recomputation"
                     )
+                if labels_match and validity_match:
+                    # The writer summarized the metrics it stored: summarize those too, so
+                    # rounding within the tolerance cannot move a thresholded fraction.
+                    expected_metrics, expected_valid = signal_metrics, signal_metric_valid
             expected_signal = summarize_signal_metrics(
                 expected_metrics,
                 expected_valid,

@@ -8,6 +8,90 @@ read the migration notes before upgrading.
 
 ### Added
 
+- The wheel now includes the experimental `live_dashboard` package (with its static
+  assets), so a pinned install can import the compile-once streaming generator
+  (`live_dashboard.streaming`) without a source checkout on `PYTHONPATH`. Its web stack
+  stays in the `dashboard` extra; the generation path needs only the core dependencies.
+
+- Opt-in inferred-smoothness oracle models for persisted worlds, without realized
+  baseline/latent walk truth. Exactly marginalize Beta-induced walk widths and
+  reconstruct paired full-window trajectories. `FamilyOracle` reuses one numerical
+  compilation across active input counts, contexts and regime-specific walk priors;
+  the legacy supplied-width API remains the default. Dataset selection, evaluation
+  scheduling and scoring remain outside this library API. See the inferred-oracle guide.
+
+- Opt-in reusable-family streaming generation for the live dashboard: bounded
+  per-worker save queues, backpressure, single-writer Volume ownership, deterministic
+  ten-world publications and validated resume. The self-contained compositional
+  backend compiles once per family worker; existing generation defaults are unchanged.
+  See `live_dashboard/STREAMING.md` for launch instructions and scientific/scale limits.
+  `--design structural-splits` streams the 1,000-world structural-split design: one
+  compiled model per split × regime (the legacy member configurations, mechanism priors
+  included; no walk truth), the legacy task-to-member mapping and split seeds, and
+  worlds with a negative control rejected. `--compile-mode python` runs the compiled
+  model with Python thunks: much faster to compile, slower to draw, for few worlds per
+  model. Measured on Modal with 5 workers: 1,000 worlds in 8.3 minutes ($0.04), against
+  25 worlds/min for the legacy run, with matching distributions. `--baseline-scale k`
+  multiplies a design's baseline level range and spread by `k` (recorded in the manifest,
+  not in the run ID): at 0.5 the baseline share fell from 10–85 % to 5–73 % for 99 % of
+  worlds. The backend now
+  supports mechanism priors and inclusion probabilities of exactly 0 or 1, reports the
+  indirect effect through an absent edge family as an exact zero (as the ordinary model
+  does), skips a candidate on a retryable numeric draw failure (stopping the worker when
+  no candidate of a task draws), validates only a worker's own tasks before it starts,
+  and records a stopped attempt as `finished` (the dashboard could not read `stopped`).
+  For runs of 200,000 worlds the dashboard draws at most 2,000 points per violin (evenly
+  spaced ranks, with the outline's bandwidth from every value) and 4,000 worlds in the
+  composition triangle (evenly spaced in run order over all worlds, so × and dots keep
+  their proportions), spends at most 30 s per refresh reading and extracting unread
+  payloads, newest run first (the rest show as `loading`; the cards, run list and drawn
+  panels then say the data are partial, and the speed card counts them from their task
+  records), starts serving after at most 60 s however long its first read of the store
+  takes, reuses the worlds of unchanged tasks and the bodies of unchanged runs between
+  refreshes, and runs with 4 GiB (`DASHBOARD_KEEP_WARM=1` at deploy keeps it running). The
+  streaming coordinator may run an hour, to re-validate every payload of a large run in its
+  final report.
+
+- **Experimental, internal live generation dashboard with a Modal CPU worker and an
+  authenticated web app (#52).** `live_dashboard/` (a repository tool, not part of the
+  installed package) is the generation engine and UI on top of the publication of #67:
+  its Modal worker generates each task with deferred train/validation membership and
+  publishes it through `pymc_generator.publication` (a corpus payload plus a version-1
+  completion record), and a separate FastAPI + Plotly page behind HTTP Basic
+  authentication discovers and follows the publications: worlds-generated,
+  generation-speed and generation-cost cards (the worker's attempt time at the list
+  price it records, updated at every task), speed and cumulative worlds over time,
+  channel impact, control impact and baseline share distributions on one 0-100 % axis
+  (impact counted for the inputs with an effect), the channel/control/baseline
+  composition triangle, worlds per saturation and adstock family (every library family
+  on the x axis, read from each payload), a heatmap of worlds per saturation x adstock
+  split, a heatmap of worlds per channel-column x control-column combination, worlds
+  per number of columns and of inputs with an effect, the channels and controls per share
+  of their weeks at exactly zero, and how those weeks fall over the first, middle and last
+  third of the series, redrawn as tasks publish without
+  rerunning generation. Presets `geometric-mm` and `geometric-logistic` (10 channels and
+  10 controls acting only on the target, geometric adstock with Michaelis-Menten or
+  logistic saturation, wide trajectory and share variety, channel and control effects up
+  to 39x apart within a world with an even channel/control/baseline split) and preset
+  mixes, which alternate presets by task in one run (`geometric-mm-logistic`), so one run
+  is the concatenated dataset. The structural-split design `structural-splits` spreads
+  one run evenly over every saturation family but root x adstock none or geometric (10
+  splits, 100 worlds each at 1,000 worlds) and five texture regimes (everything smooth,
+  everything hectic, each input on its own, spiky inputs over a smooth baseline, a
+  jagged baseline under smooth inputs), on 208 weeks, with 1-10 channel and control
+  columns of which 1 to all have an effect, symmetric trends, and controls whose values
+  and contributions are never negative (a draw with a negative control is drawn again);
+  every split has its own seed derived from the launch time and its families, recorded
+  in the manifest and in every completion. On Modal (environment `pfn`) generation and
+  the dashboard run on separate CPU containers, the dashboard at a stable URL. Workers
+  use no GPU by decision: PyTensor 3.2 has no native CUDA backend, and CPU-only workers
+  measured as fast as A100 workers for about 1/20 of the cost. The interim single-writer
+  driver records (`pymc-generator-live-publication` 1.2: run manifest and attempt
+  progress around the #67 completions) show zero-world tasks, conflicting records and
+  unavailable payloads separately and never substitute data; the multi-writer mechanism
+  remains open in #54. New optional extra `dashboard`; the `dev` extra gains the web
+  stack for the tests.
+
 - **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not
   rendered on the documentation site) generates N worlds (10 by default) from
@@ -313,6 +397,16 @@ read the migration notes before upgrading.
   explicitly configured width ranges are checked.
 
 ### Fixed
+
+- **`validate_corpus` no longer rejects signal labels written on another CPU.** It
+  required `identifiability.signal_metrics` to equal their recomputation exactly, but
+  `contrib_r2_explained_by_rest` comes from `np.linalg.lstsq`, whose last bits depend
+  on the host's OpenBLAS kernel (SkylakeX on AVX-512 hosts, Haswell otherwise). On a
+  200,000-world run 0.1–0.4 % of payloads failed on hosts other than their writer's (1
+  to 1,024 float32 steps, at most 3e-14 apart), so `FilePublicationStore.validated_outputs`
+  failed closed. Labels now match within `SIGNAL_METRIC_RTOL` (2.5e-7) plus
+  `SIGNAL_METRIC_ATOL` (1e-9); validity flags still match exactly, and the signal summary
+  is checked against the stored labels it was derived from. Generated corpora are unchanged.
 
 - **`sample_scm` with a texture term off keeps main's leftover streams (#28).**
   #27 appended every primitive random variable to the world's draw request.
