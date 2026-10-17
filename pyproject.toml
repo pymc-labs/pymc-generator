@@ -98,10 +98,13 @@ cache-keys = [{file = "pyproject.toml"}, {file = "pymc_generator/_version.py"}]
 pymc-generator = "pymc_generator.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["pymc_generator*"]
+# live_dashboard ships with the wheel so consumers pinned to this branch (MarketingFoundationalModels
+# mfm_ops) can import its compile-once streaming generator; its web stack stays an optional extra.
+include = ["pymc_generator*", "live_dashboard*"]
 
 [tool.setuptools.package-data]
 pymc_generator = ["py.typed"]
+live_dashboard = ["static/*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "pymc_generator._version.__version__"}

@@ -8,6 +8,11 @@ read the migration notes before upgrading.
 
 ### Added
 
+- The wheel now includes the experimental `live_dashboard` package (with its static
+  assets), so a pinned install can import the compile-once streaming generator
+  (`live_dashboard.streaming`) without a source checkout on `PYTHONPATH`. Its web stack
+  stays in the `dashboard` extra; the generation path needs only the core dependencies.
+
 - Opt-in inferred-smoothness oracle models for persisted worlds, without realized
   baseline/latent walk truth. Exactly marginalize Beta-induced walk widths and
   reconstruct paired full-window trajectories. `FamilyOracle` reuses one numerical
