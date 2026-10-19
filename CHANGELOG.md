@@ -8,6 +8,12 @@ read the migration notes before upgrading.
 
 ### Added
 
+- `CompiledOracle.for_family` uses native nutpie sampling with inferred walk
+  smoothness. Fixed input capacities and shared-data masks allow counts, direct
+  graph gates, contexts, and compatible walk priors to change without sampler
+  recompilation. Inactive input parameters retain proper priors but are excluded
+  from the public posterior. Joint predictions use a separate lazy kernel.
+
 - The wheel now includes the experimental `live_dashboard` package (with its static
   assets), so a pinned install can import the compile-once streaming generator
   (`live_dashboard.streaming`) without a source checkout on `PYTHONPATH`. Its web stack
