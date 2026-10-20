@@ -128,7 +128,9 @@ reference range, and a descriptive Kolmogorov–Smirnov distance.
   different realizations; a small distance is descriptor similarity, not
   repeated data.
 * **Not inference.** No p-values or significance: worlds within a cell are
-  dependent and descriptors are noisy functions of finite series.
+  dependent and descriptors are noisy functions of finite series. For a
+  calibrated answer to "could this dataset come from this corpus or
+  generator?", see [dataset typicality](typicality.md).
 * **Not a support guarantee.** A target can be ordinary on every marginal and
   still sit far from every reference world jointly; check both.
 

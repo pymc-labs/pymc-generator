@@ -6,9 +6,13 @@ definition), never the production helper under test.
 
 from __future__ import annotations
 
+import codecs
+import io
+import re
 from copy import deepcopy
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import pymc_generator as pg
@@ -581,3 +585,460 @@ def test_corpus_padding_errors_name_the_source_world():
     # chunk_size=2 puts world 5 second in its chunk: the error must still say 5.
     with pytest.raises(ValueError, match="padding at world 5,"):
         _describe(corpus, chunk_size=2)
+
+
+# ---------------------------------------------------------------------------
+# Dataset format: from_frame, from_csv, to_frame
+# ---------------------------------------------------------------------------
+
+EPS16, EPS32, EPS64 = (float(np.finfo(t).eps) for t in (np.float16, np.float32, np.float64))
+_ROLES = {
+    "treatments": ["treatment_C1", "treatment_C2"],
+    "covariates": ["covariate_Z1"],
+    "outcome": "outcome_Y",
+}
+
+
+def _dataset(t: int = 24, **columns) -> pd.DataFrame:
+    """A bundle-layout dataset table: two treatments, one covariate and the outcome."""
+    rng = np.random.default_rng(t)
+    frame = pd.DataFrame(
+        {
+            "week": np.arange(t),
+            "treatment_C1": rng.gamma(2.0, 1.0, t),
+            "treatment_C2": rng.gamma(2.0, 1.0, t),
+            "covariate_Z1": rng.normal(10.0, 1.0, t),
+            "outcome_Y": rng.normal(100.0, 5.0, t),
+        }
+    )
+    for label, values in columns.items():
+        frame[label] = values
+    return frame
+
+
+def _assert_same_series(a: ObservedWorlds, b: ObservedWorlds) -> None:
+    for name in ("treatment_raw", "covariates", "outcome_raw"):
+        np.testing.assert_array_equal(getattr(a, name), getattr(b, name))
+
+
+def test_a_bundle_dataset_reads_back_exactly_and_describes_like_its_world(scm_worlds, tmp_path):
+    world = scm_worlds[0]
+    path = pg.write_scm_bundle(world, tmp_path / "bundle", plots=False) / "dataset.csv"
+    observed = ObservedWorlds.from_csv(path)
+    np.testing.assert_array_equal(observed.treatment_raw[0], world.data["treatments"])
+    np.testing.assert_array_equal(observed.covariates[0], world.data["covariates"])
+    np.testing.assert_array_equal(observed.outcome_raw[0], world.data["outcome"])
+    read = _describe(observed, lags=(1, 2))
+    direct = _describe([world], lags=(1, 2))
+    np.testing.assert_array_equal(read.status, direct.status)
+    np.testing.assert_array_equal(read.values, direct.values)
+    # The same series under other names and in another column order: roles set the order.
+    x, z, y = (world.data[key] for key in ("treatments", "covariates", "outcome"))
+    renamed = pd.DataFrame(
+        {
+            "sales": y,
+            "search": x[:, 2],
+            "temperature": z[:, 1],
+            "tv": x[:, 0],
+            "price": z[:, 0],
+            "radio": x[:, 1],
+        }
+    )
+    explicit = ObservedWorlds.from_frame(
+        renamed,
+        treatments=["tv", "radio", "search"],
+        covariates=["price", "temperature"],
+        outcome="sales",
+    )
+    _assert_same_series(explicit, observed)
+
+
+def test_to_frame_round_trips_the_active_columns_of_a_padded_float32_world(generated):
+    corpus = ObservedWorlds(
+        treatment_raw=generated["treatment_raw"],
+        covariates=generated["covariates"],
+        outcome_raw=generated["outcome_raw"],
+        treatment_active_mask=generated["treatment_active_mask"],
+        covariate_active_mask=generated["covariate_active_mask"],
+    )
+    tmask = generated["treatment_active_mask"].astype(bool)
+    cmask = generated["covariate_active_mask"].astype(bool)
+    world = int(np.flatnonzero(~tmask.all(axis=1) & ~cmask.all(axis=1))[0])
+    frame = corpus.to_frame(world)
+    n_treat, n_cov = int(tmask[world].sum()), int(cmask[world].sum())
+    assert list(frame.columns) == [
+        "week",
+        *(f"treatment_C{k}" for k in range(1, n_treat + 1)),
+        *(f"covariate_Z{m}" for m in range(1, n_cov + 1)),
+        "outcome_Y",
+    ]
+    assert frame["week"].dtype == np.int64
+    assert frame["week"].tolist() == list(range(corpus.n_time_steps))
+    assert set(frame.dtypes.iloc[1:]) == {np.dtype(np.float32)}
+    back = ObservedWorlds.from_frame(frame)
+    np.testing.assert_array_equal(
+        back.treatment_raw[0], generated["treatment_raw"][world][:, tmask[world]]
+    )
+    np.testing.assert_array_equal(
+        back.covariates[0], generated["covariates"][world][:, cmask[world]]
+    )
+    np.testing.assert_array_equal(back.outcome_raw[0], generated["outcome_raw"][world])
+    assert back.resolution == corpus.resolution == (EPS32, EPS32, EPS32)
+
+
+def test_a_float32_column_flat_within_an_ulp_keeps_an_infinite_level_to_variation():
+    flat = (0.7 * (1.0 + EPS32 * (np.arange(40) % 2))).astype(np.float32)
+    assert np.unique(flat).size == 2  # a one-ULP wiggle, not a literal constant
+    frame = _dataset(40).astype({"treatment_C2": np.float32})
+    frame["treatment_C1"] = flat
+    desc = _describe(ObservedWorlds.from_frame(frame), reducers=("max",))
+    assert desc.column("treatment_level_to_variation_max")[0] == np.inf
+
+
+def test_each_role_keeps_its_columns_resolution_through_to_frame():
+    frame = _dataset(40).astype(
+        {"treatment_C1": np.float16, "treatment_C2": np.float16, "covariate_Z1": np.float32}
+    )
+    observed = ObservedWorlds.from_frame(frame)
+    assert observed.resolution == (EPS16, EPS32, EPS64)
+    written = observed.to_frame()
+    assert written.dtypes.tolist() == [np.int64, np.float16, np.float16, np.float32, np.float64]
+    back = ObservedWorlds.from_frame(written)
+    assert back.resolution == observed.resolution
+    _assert_same_series(back, observed)
+    alone = ObservedWorlds.from_frame(
+        frame.astype({"treatment_C1": np.float32, "treatment_C2": np.float32})
+    )
+    mixed = ObservedWorlds.from_frame(
+        frame.astype({"treatment_C1": np.float32, "treatment_C2": np.float64})
+    )
+    assert (alone.resolution[0], mixed.resolution[0]) == (EPS32, EPS64)
+
+
+def test_nullable_columns_are_read_at_the_resolution_of_their_values():
+    frame = _dataset(30)
+    frame["treatment_C2"] = np.round(100.0 * frame["treatment_C2"])
+    nullable = frame.astype(
+        {"treatment_C1": "Float64", "treatment_C2": "Int64", "covariate_Z1": "Float32"}
+    )
+    observed = ObservedWorlds.from_frame(nullable)
+    _assert_same_series(
+        observed, ObservedWorlds.from_frame(frame.astype({"covariate_Z1": np.float32}))
+    )
+    assert observed.resolution == (EPS64, EPS32, EPS64)
+
+
+def test_arrow_columns_read_like_numpy_ones_and_arrow_nulls_and_flags_are_refused(tmp_path):
+    path = tmp_path / "dataset.csv"
+    _dataset(30).to_csv(path, index=False)
+    arrow = ObservedWorlds.from_csv(path, dtype_backend="pyarrow")
+    _assert_same_series(arrow, ObservedWorlds.from_csv(path))
+    assert arrow.resolution == (EPS64, EPS64, EPS64)
+    gap = _dataset(30)
+    gap.loc[4, "covariate_Z1"] = np.nan
+    gap.to_csv(path, index=False)
+    with pytest.raises(
+        ValueError,
+        match=r"'covariate_Z1' \(covariates\) has 1 missing value; the first is at row 4",
+    ):
+        ObservedWorlds.from_csv(path, dtype_backend="pyarrow")
+    _dataset(30, covariate_Z1=np.arange(30) % 3 == 0).to_csv(path, index=False)
+    assert str(pd.read_csv(path, dtype_backend="pyarrow")["covariate_Z1"].dtype) == "bool[pyarrow]"
+    with pytest.raises(TypeError, match=r"'covariate_Z1' \(covariates\) is boolean"):
+        ObservedWorlds.from_csv(path, dtype_backend="pyarrow")
+
+
+def test_missing_and_non_finite_values_are_refused_naming_column_count_and_row():
+    frame = _dataset(12).set_axis(range(100, 112)).astype({"treatment_C2": "Float64"})
+    frame.loc[[102, 107], "treatment_C2"] = pd.NA
+    with pytest.raises(
+        ValueError,
+        match=r"'treatment_C2' \(treatments\) has 2 missing values; the first is at row 102",
+    ):
+        ObservedWorlds.from_frame(frame)
+    frame = _dataset(12).set_axis(range(100, 112))
+    frame.loc[105, "outcome_Y"] = np.inf
+    with pytest.raises(
+        ValueError, match=r"'outcome_Y' \(outcome\) has 1 non-finite value; the first is at row 105"
+    ):
+        ObservedWorlds.from_frame(frame)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pd.Series([str(v) for v in range(1, 13)]),
+        pd.Series([float(v) for v in range(1, 13)], dtype=object),
+        pd.Series(np.arange(12) % 2 == 0),
+        pd.Series(np.arange(12) % 2 == 0, dtype="boolean"),
+    ],
+    ids=["str", "object", "bool", "boolean"],
+)
+def test_text_object_and_flag_columns_are_refused_naming_the_column(values):
+    with pytest.raises(TypeError, match=r"column 'covariate_Z1' \(covariates\)"):
+        ObservedWorlds.from_frame(_dataset(12, covariate_Z1=values))
+
+
+def test_text_time_is_parsed_as_iso_8601_with_offsets_converted():
+    frame = _dataset(4)
+    plain = ObservedWorlds.from_frame(frame)
+    for stamps in (
+        ["2024-01-01", "2024-01-08", "2024-01-15", "2024-01-22"],
+        # Increasing in time although the second stamp sorts first as text.
+        [
+            "2024-03-31T00:15:00+01:00",
+            "2024-03-30T23:30:00+00:00",
+            "2024-03-31T01:00:00+01:00",
+            "2024-03-31T03:00:00+02:00",
+        ],
+    ):
+        _assert_same_series(
+            ObservedWorlds.from_frame(frame.assign(date=stamps), time="date"), plain
+        )
+    # Increasing as text, but 00:15+01:00 is 15 minutes before 23:30+00:00.
+    backwards = [
+        "2024-03-30T23:30:00+00:00",
+        "2024-03-31T00:15:00+01:00",
+        "2024-03-31T01:00:00+01:00",
+        "2024-03-31T03:00:00+02:00",
+    ]
+    with pytest.raises(ValueError, match="time column 'date' does not strictly increase: row 1 "):
+        ObservedWorlds.from_frame(frame.assign(date=backwards), time="date")
+    # Text that is not ISO 8601 names the first value that does not parse.
+    mixed = ["2024-01-01", "2024-01-08", "15/01/2024", "2024-01-22"]
+    with pytest.raises(
+        ValueError,
+        match=r"not ISO 8601 date text: row 102 holds '15/01/2024'; read it with parse_dates=",
+    ) as raised:
+        ObservedWorlds.from_frame(frame.set_axis(range(100, 104)).assign(date=mixed), time="date")
+    assert "You might want" not in str(raised.value)
+    # A missing stamp before it is not the value that failed to parse.
+    gap = ["2024-01-01", None, "15/01/2024", "2024-01-22"]
+    with pytest.raises(ValueError, match=r"not ISO 8601 date text: row 2 holds '15/01/2024'"):
+        ObservedWorlds.from_frame(frame.assign(date=gap), time="date")
+
+
+@pytest.mark.parametrize(
+    "stamps",
+    [
+        pd.period_range("2024-01-01", periods=5, freq="W"),
+        pd.to_timedelta(np.arange(5), unit="W"),
+    ],
+    ids=["period", "timedelta"],
+)
+def test_period_and_timedelta_time_count_in_order_and_must_increase(stamps):
+    frame = _dataset(5)
+    observed = ObservedWorlds.from_frame(frame.assign(t=stamps), time="t")
+    _assert_same_series(observed, ObservedWorlds.from_frame(frame))
+    with pytest.raises(ValueError, match="row 3 is not later than the row before it"):
+        ObservedWorlds.from_frame(frame.assign(t=stamps[[0, 1, 2, 1, 4]]), time="t")
+
+
+def test_out_of_order_missing_or_infinite_time_names_the_first_offending_row():
+    frame = _dataset(6).set_axis(range(100, 106))
+    with pytest.raises(ValueError, match=r"row 103 is not later than the row before it.*sort"):
+        ObservedWorlds.from_frame(frame.assign(t=[0, 1, 2, 2, 4, 5]), time="t")
+    for stamps, row in (
+        ([0.0, 1.0, 2.0, 3.0, np.nan, 5.0], 104),
+        ([0.0, 1.0, 2.0, 3.0, 4.0, np.inf], 105),
+    ):
+        with pytest.raises(
+            ValueError, match=f"time column 't' is missing or non-finite at row {row}"
+        ):
+            ObservedWorlds.from_frame(frame.assign(t=stamps), time="t")
+
+
+def test_week_is_never_read_as_time_unless_named():
+    frame = _dataset(10)
+    frame["week"] = np.random.default_rng(1).permutation(10)
+    frame[0] = np.arange(10.0)  # other columns, non-str labels included, are ignored
+    frame["notes"] = "promo"
+    expected = frame[["treatment_C1", "treatment_C2"]].to_numpy()
+    for observed in (ObservedWorlds.from_frame(frame), ObservedWorlds.from_frame(frame, **_ROLES)):
+        np.testing.assert_array_equal(observed.treatment_raw[0], expected)
+    with pytest.raises(ValueError, match="time column 'week' does not strictly increase"):
+        ObservedWorlds.from_frame(frame, time="week")
+
+
+def test_default_labels_keep_table_order_and_multi_digit_numbers():
+    rng = np.random.default_rng(5)
+    names = ("treatment_C2", "treatment_C10", "treatment_C1", "covariate_Z1", "outcome_Y")
+    frame = pd.DataFrame({name: rng.gamma(2.0, 1.0, 10) for name in names})
+    observed = ObservedWorlds.from_frame(frame)
+    np.testing.assert_array_equal(observed.treatment_raw[0], frame[list(names[:3])].to_numpy())
+
+
+@pytest.mark.parametrize(
+    ("column", "near_miss"),
+    [
+        ("treatment_C1", "treatment_C1 "),
+        ("treatment_C2", "Treatment_C2"),
+        ("treatment_C1", "treatment_\u200bC1"),
+        ("covariate_Z1", "\ufeffcovariate_Z1"),
+        ("outcome_Y", "OUTCOME_Y"),
+    ],
+    ids=["space", "case", "zero-width", "byte-order-mark", "outcome-case"],
+)
+def test_labels_matching_the_bundle_only_after_normalization_are_refused(column, near_miss):
+    with pytest.raises(ValueError, match=re.escape(repr(near_miss))):
+        ObservedWorlds.from_frame(_dataset(8).rename(columns={column: near_miss}))
+
+
+def test_a_label_must_name_one_column_and_play_one_role():
+    frame = _dataset(8)
+    with pytest.raises(ValueError, match="'treatment_C2' appears 2 times"):
+        ObservedWorlds.from_frame(pd.concat([frame, frame[["treatment_C2"]]], axis=1))
+    repeated = {**_ROLES, "treatments": ["treatment_C1", "treatment_C1"]}
+    with pytest.raises(ValueError, match="'treatment_C1' is used twice in treatments"):
+        ObservedWorlds.from_frame(frame, **repeated)
+    with pytest.raises(ValueError, match="'covariate_Z1' is used as covariates and time"):
+        ObservedWorlds.from_frame(frame, **_ROLES, time="covariate_Z1")
+    with pytest.raises(KeyError, match="treatment column 'tv' not found"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "treatments": ["tv"]})
+
+
+def test_role_labels_may_be_any_ordered_collection_but_never_a_set():
+    frame = _dataset(8)
+    reordered = frame[["treatment_C2", "treatment_C1"]].to_numpy()
+    for treatments in (frame.columns[[2, 1]], np.array(["treatment_C2", "treatment_C1"])):
+        observed = ObservedWorlds.from_frame(
+            frame, treatments=treatments, covariates=frame.columns[3:4], outcome="outcome_Y"
+        )
+        np.testing.assert_array_equal(observed.treatment_raw[0], reordered)
+    with pytest.raises(KeyError, match="treatment column 'tv' not found"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "treatments": np.array(["tv"])})
+    unordered = {"treatment_C1", "treatment_C2"}
+    with pytest.raises(TypeError, match="ordered collection of column labels .* got set"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "treatments": unordered})
+
+
+def test_multiindex_columns_are_named_by_their_full_tuples():
+    frame = _dataset(8)
+    wide = pd.concat(
+        {
+            "media": frame[["treatment_C1", "treatment_C2"]],
+            "context": frame[["covariate_Z1"]],
+            "result": frame[["outcome_Y"]],
+            "calendar": frame[["week"]],
+        },
+        axis=1,
+    )
+    roles = {
+        "treatments": [("media", "treatment_C1"), ("media", "treatment_C2")],
+        "covariates": [("context", "covariate_Z1")],
+        "outcome": ("result", "outcome_Y"),
+    }
+    observed = ObservedWorlds.from_frame(wide, **roles, time=("calendar", "week"))
+    _assert_same_series(observed, ObservedWorlds.from_frame(frame))
+    # A partial key names a block of columns, never one column.
+    with pytest.raises(KeyError, match="outcome column 'result' not found"):
+        ObservedWorlds.from_frame(wide, **{**roles, "outcome": "result"})
+    with pytest.raises(TypeError, match="a dataset has one outcome column; .*flatten"):
+        ObservedWorlds.from_frame(wide, **{**roles, "outcome": ("result",)})
+    wide[("calendar", "week")] = frame["week"].to_numpy()[::-1]
+    with pytest.raises(ValueError, match=r"time column \('calendar', 'week'\) does not strictly"):
+        ObservedWorlds.from_frame(wide, **roles, time=("calendar", "week"))
+
+
+def test_roles_are_label_sequences_and_one_outcome_given_together():
+    frame = _dataset(8)
+    with pytest.raises(TypeError, match="treatments must be a sequence .* not a bare string"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "treatments": "treatment_C1"})
+    with pytest.raises(TypeError, match="covariates must be a sequence .* not a bare string"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "covariates": "covariate_Z1"})
+    with pytest.raises(TypeError, match="outcome must be one column label, got list"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "outcome": ["outcome_Y"]})
+    two = ("outcome_Y", "covariate_Z1")
+    with pytest.raises(TypeError, match="got tuple .*; a dataset has one outcome column"):
+        ObservedWorlds.from_frame(frame, **{**_ROLES, "outcome": two})
+    with pytest.raises(ValueError, match="covariates and outcome are missing"):
+        ObservedWorlds.from_frame(frame, treatments=["treatment_C1"])
+
+
+def test_an_all_zero_column_is_refused_as_an_inactive_series():
+    with pytest.raises(
+        ValueError,
+        match=r"'treatment_C2' \(treatments\) is zero at every time step; drop the inactive",
+    ):
+        ObservedWorlds.from_frame(_dataset(8, treatment_C2=np.zeros(8)))
+
+
+def test_a_mapping_is_read_by_position_from_aligned_one_dimensional_values():
+    index = pd.Index([7, 3, 9, 1])
+    columns = {
+        "treatment_C1": pd.Series([1.0, 2.0, 3.0, 4.0], index=index),
+        "covariate_Z1": pd.Series([5.0, 6.0, 7.0, 8.0], index=index),
+        "outcome_Y": [9.0, 10.0, 11.0, 12.0],
+    }
+    observed = ObservedWorlds.from_frame(columns)
+    np.testing.assert_array_equal(observed.treatment_raw[0, :, 0], [1.0, 2.0, 3.0, 4.0])
+    np.testing.assert_array_equal(observed.outcome_raw[0], [9.0, 10.0, 11.0, 12.0])
+    gap = {**columns, "covariate_Z1": pd.Series([5.0, 6.0, np.nan, 8.0], index=index)}
+    with pytest.raises(ValueError, match="the first is at row 2"):
+        ObservedWorlds.from_frame(gap)
+    with pytest.raises(ValueError, match="'treatment_C1' must be one-dimensional.*a scalar"):
+        ObservedWorlds.from_frame({**columns, "treatment_C1": 1.0})
+    with pytest.raises(ValueError, match="differ in length"):
+        ObservedWorlds.from_frame({**columns, "outcome_Y": [9.0, 10.0, 11.0]})
+    shuffled = pd.Series([5.0, 6.0, 7.0, 8.0], index=[1, 3, 7, 9])
+    with pytest.raises(ValueError, match="different indexes.*align them first"):
+        ObservedWorlds.from_frame({**columns, "covariate_Z1": shuffled})
+
+
+def test_to_frame_refuses_worlds_that_from_frame_could_not_read():
+    rng = np.random.default_rng(31)
+    x = rng.gamma(2.0, 1.0, size=(2, 10, 2))
+    z = rng.normal(10.0, 1.0, size=(2, 10, 1))
+    y = rng.normal(100.0, 5.0, size=(2, 10))
+    with pytest.raises(ValueError, match=r"world must be an integer in \[0, 2\), got 2"):
+        ObservedWorlds(treatment_raw=x, covariates=z, outcome_raw=y).to_frame(2)
+    with pytest.raises(ValueError, match="no outcome"):
+        ObservedWorlds(treatment_raw=x, covariates=z).to_frame(0)
+    with pytest.raises(ValueError, match="world 0 has no active covariate"):
+        ObservedWorlds(treatment_raw=x, outcome_raw=y).to_frame(0)
+    silent = x.copy()
+    silent[1, :, 1] = 0.0
+    with pytest.raises(ValueError, match="world 1: active treatment column 1 is zero"):
+        ObservedWorlds(treatment_raw=silent, covariates=z, outcome_raw=y).to_frame(1)
+    with pytest.raises(ValueError, match="world 1: the outcome is zero at every time step"):
+        ObservedWorlds(treatment_raw=x, covariates=z, outcome_raw=y * [[1.0], [0.0]]).to_frame(1)
+
+
+def test_from_csv_reads_full_precision_float64_exactly_from_a_decimal_comma_file(tmp_path):
+    frame = _dataset(200)
+    path = tmp_path / "dataset.csv"
+    frame.to_csv(path, index=False, sep=";", decimal=",")
+    observed = ObservedWorlds.from_csv(path, sep=";", decimal=",")
+    _assert_same_series(observed, ObservedWorlds.from_frame(frame))
+    with pytest.raises(TypeError, match="check sep=, decimal= and thousands="):
+        ObservedWorlds.from_csv(path, sep=";")
+
+
+@pytest.mark.parametrize("source", ["path", "text buffer", "text handle"])
+def test_from_csv_reads_with_the_python_engine_and_a_sniffed_separator(tmp_path, source):
+    frame = _dataset(12).round(2)  # short decimals: every parser engine reads them exactly
+    path = tmp_path / "dataset.csv"
+    frame.to_csv(path, index=False, sep=";")
+    expected = ObservedWorlds.from_frame(frame)
+    for options in ({"engine": "python", "sep": ";"}, {"sep": None}):
+        if source == "text handle":  # already decoded: from_csv must not impose an encoding
+            with path.open(encoding="utf-8") as handle:
+                observed = ObservedWorlds.from_csv(handle, **options)
+        else:
+            target = path if source == "path" else io.StringIO(path.read_text())
+            observed = ObservedWorlds.from_csv(target, **options)
+        _assert_same_series(observed, expected)
+
+
+@pytest.mark.parametrize("source", ["path", "bytes"])
+def test_from_csv_drops_a_byte_order_mark_when_sniffing_the_separator(tmp_path, source):
+    rng = np.random.default_rng(9)
+    names = ("tv", "radio", "price", "sales")
+    frame = pd.DataFrame({name: rng.gamma(2.0, 10.0, 12).round(2) for name in names})
+    path = tmp_path / "dataset.csv"
+    frame.to_csv(path, index=False, sep=";", decimal=",", encoding="utf-8-sig")
+    assert path.read_bytes().startswith(codecs.BOM_UTF8)
+    roles = {"treatments": ["tv", "radio"], "covariates": ["price"], "outcome": "sales"}
+    target = path if source == "path" else io.BytesIO(path.read_bytes())
+    observed = ObservedWorlds.from_csv(target, sep=None, decimal=",", **roles)
+    _assert_same_series(observed, ObservedWorlds.from_frame(frame, **roles))

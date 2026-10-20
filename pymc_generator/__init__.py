@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .active_counts import active_count_coverage
     from .bundles import write_scenario_bundles, write_scm_bundle
     from .data_generator import DataGenerator, load_corpus, save_corpus
+    from .dataset_typicality import Typicality, matched_prior, typicality
     from .describe import describe_scm
     from .descriptor_analysis import (
         DescriptorScale,
@@ -106,6 +107,10 @@ _LAZY_IMPORTS = {
     "nearest_worlds": (".descriptor_analysis", "nearest_worlds"),
     "compare_descriptors": (".descriptor_analysis", "compare_descriptors"),
     "DescriptorScale": (".descriptor_analysis", "DescriptorScale"),
+    # how typical one observed dataset is of a reference corpus or generator
+    "typicality": (".dataset_typicality", "typicality"),
+    "Typicality": (".dataset_typicality", "Typicality"),
+    "matched_prior": (".dataset_typicality", "matched_prior"),
     "describe_scm": (".describe", "describe_scm"),
     "write_scm_bundle": (".bundles", "write_scm_bundle"),
     "write_scenario_bundles": (".bundles", "write_scenario_bundles"),
@@ -167,6 +172,7 @@ __all__ = [
     "QuantityDistribution",
     "SIGNAL_METRIC_LAYOUT",
     "SIGNAL_METRIC_VERSION",
+    "Typicality",
     "WorldDescriptors",
     "__version__",
     "active_count_coverage",
@@ -183,12 +189,14 @@ __all__ = [
     "sample_prior_predictive",
     "load_corpus",
     "make_scm_prior",
+    "matched_prior",
     "sample_prior_cond",
     "sample_scm",
     "sample_structure",
     "save_corpus",
     "write_scenario_bundles",
     "summarize_descriptors",
+    "typicality",
     "world_descriptors",
     "write_scm_bundle",
 ]

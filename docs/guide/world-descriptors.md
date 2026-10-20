@@ -122,7 +122,10 @@ pg.compare_descriptors(a, target, features=features).query_frame()
 
 Observed data yield the same observable features as a corpus with the same
 series; generating-process features (`include_truth=True`) are refused rather
-than invented.
+than invented. A dataset stored as a CSV file or a DataFrame loads with
+`ObservedWorlds.from_csv` / `from_frame`; to ask how typical it is of a corpus
+or a generator, with a calibrated p-value, see
+[how typical is a dataset?](dataset-typicality.md).
 
 ## Joining your own measurements
 

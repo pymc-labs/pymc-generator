@@ -8,6 +8,26 @@ read the migration notes before upgrading.
 
 ### Added
 
+- **Dataset typicality against a corpus or a generator.** `pg.typicality(reference, query)`
+  asks of one observed dataset (treatments, covariates and outcome over time)
+  whether it could be a world of a generated corpus: a split-conformal p-value
+  (the share of calibration worlds of the dataset's shape, one per generation
+  cell, at least as unusual; `P(p ≤ α) ≤ α` on average over references when the
+  dataset is an independent draw from the reference's generator and the
+  settings are fixed in advance) and a per-descriptor profile (percentile,
+  reference interval, inside, support violation). Reference worlds are compared
+  only within the dataset's shape (active treatment and covariate counts,
+  horizon); calibration uses one world per generation cell, split from the
+  ruler by a seeded hash of the cell's identity.
+  `pg.matched_prior(prior, dataset, n_cells=, seed=)` conditions a
+  configuration on a dataset's shape so a reference can be generated from a
+  generator rather than a stored corpus. Datasets load from CSV files,
+  DataFrames or mappings with `ObservedWorlds.from_csv` / `from_frame` (roles
+  named explicitly, or the audit-bundle `dataset.csv` layout by default; missing
+  values, text columns, all-zero series and unordered time columns are
+  refused), and `ObservedWorlds.to_frame` exports a world in that layout. New
+  guide page "How typical is a dataset?", API page and example notebook
+  comparing datasets from the same generator with datasets from three others.
 - **Trajectory showcase development notebook with a plot-first corpus report (#29, #31).**
   The development notebook `docs/examples/dev/trajectory-showcase.ipynb` (not
   rendered on the documentation site) generates N worlds (10 by default) from

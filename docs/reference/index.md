@@ -23,6 +23,7 @@ it.
 | [`data_diagnostics`](diagnostics.md#pymc_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
 | [`world_descriptors`](descriptors.md#pymc_generator.descriptors.world_descriptors) / [`ObservedWorlds`](descriptors.md#pymc_generator.descriptors.ObservedWorlds) | [World descriptors](descriptors.md) | One row of named statistics per world, for generated or observed data. |
 | [`summarize_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.summarize_descriptors) / [`bin_counts`](descriptors.md#pymc_generator.descriptor_analysis.bin_counts) / [`nearest_worlds`](descriptors.md#pymc_generator.descriptor_analysis.nearest_worlds) / [`compare_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.compare_descriptors) | [World descriptors](descriptors.md) | Independent between-world analyses: distributions, region counts, similarity, reference comparison. |
+| [`typicality`](typicality.md#pymc_generator.dataset_typicality.typicality) / [`matched_prior`](typicality.md#pymc_generator.dataset_typicality.matched_prior) | [Dataset typicality](typicality.md) | How typical one observed dataset is of a corpus or a generator: a calibrated p-value and a descriptor profile. |
 
 ## Import surface
 
@@ -53,6 +54,8 @@ pg.summarize_descriptors     # descriptor distributions, optionally by stratum
 pg.bin_counts                # worlds per explicit descriptor region
 pg.nearest_worlds            # most similar worlds in a chosen feature space
 pg.compare_descriptors       # where one collection sits relative to another
+pg.typicality                # how typical a dataset is of a reference corpus
+pg.matched_prior             # a prior conditioned on a dataset's shape
 ```
 
 Public symbols are lazy-loaded, so `import pymc_generator` stays light — the

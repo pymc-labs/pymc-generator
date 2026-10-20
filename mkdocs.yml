@@ -167,9 +167,11 @@ nav:
       - The posterior oracle: guide/oracle.md
       - Interrogating the data: guide/data-diagnostics.md
       - Comparing worlds: guide/world-descriptors.md
+      - How typical is a dataset?: guide/dataset-typicality.md
   - Examples:
       - End-to-end tour: examples/index.ipynb
       - MMM recovery case study: examples/simple-model.ipynb
+      - Dataset typicality: examples/dataset-typicality.ipynb
   - API reference:
       - Overview: reference/index.md
       - Configuration: reference/config.md
@@ -184,3 +186,4 @@ nav:
       - Outcome distributions: reference/outcomes.md
       - Data diagnostics: reference/diagnostics.md
       - World descriptors: reference/descriptors.md
+      - Dataset typicality: reference/typicality.md
