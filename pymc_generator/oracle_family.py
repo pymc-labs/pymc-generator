@@ -214,7 +214,14 @@ class FamilyOracle:
     lives here. Inactive columns must be removed by the caller, preserving IDs.
     """
 
-    def __init__(self, cfg: SCMPrior, *, saturation: str, carryover: str) -> None:
+    def __init__(
+        self,
+        cfg: SCMPrior,
+        *,
+        saturation: str,
+        carryover: str,
+        _capacity: tuple[int, int] | None = None,
+    ) -> None:
         import copy
 
         if saturation not in SATURATION_FAMILY_KEYS or carryover not in CARRYOVER_FAMILY_KEYS:
@@ -229,6 +236,9 @@ class FamilyOracle:
         self.compile_instance_id = uuid4().hex
         self.axes: dict[str, tuple[str, ...]] = {}
         t = cfg.n_time_steps
+        self._capacity = _capacity
+        p, c = (2, 2) if _capacity is None else _capacity
+        context_size = max(1, t // 2) if _capacity is None else t
         self.width_prior = walk_width_prior(
             t + cfg.carryover_burn_in,
             cfg.rw_smoothness_max_weeks,
@@ -236,15 +246,16 @@ class FamilyOracle:
             cfg.rw_smoothness_beta,
         )
         with pm.Model() as model:
-            x = pm.Data("channels", np.ones((t, 2)))
-            z = pm.Data("controls", np.ones((t, 2)))
-            scale = pm.Data("anchor", np.ones(2))
-            cy = pm.Data("channel_gates", np.ones(2))
-            zy = pm.Data("control_gates", np.ones(2))
+            x = pm.Data("channels", np.ones((t, p)))
+            z = pm.Data("controls", np.ones((t, c)))
+            scale = pm.Data("anchor", np.ones(p))
+            cy = pm.Data("channel_gates", np.ones(p))
+            zy = pm.Data("control_gates", np.ones(c))
             dy = pm.Data("latent_gates", np.ones(cfg.n_latent))
-            indices = pm.Data("context_indices", np.arange(max(1, t // 2), dtype="int64"))
+            indices = pm.Data("context_indices", np.arange(context_size, dtype="int64"))
+            context_mask = None if _capacity is None else pm.Data("context_mask", np.ones(t))
             # Context values only; scatter into zeros solely for the shared builder.
-            y = pm.Data("context_outcome", np.zeros(max(1, t // 2)))
+            y = pm.Data("context_outcome", np.zeros(context_size))
             outcome = pt.set_subtensor(pt.zeros((t,))[indices], y)
             priors = pm.Data("walk_priors", _runtime_priors(cfg))
             width_probs = pm.Data("width_probs", self.width_prior.probabilities.copy())
@@ -380,6 +391,7 @@ class FamilyOracle:
                 outcome=outcome,
                 observed_indices=indices,
                 width_probabilities=width_probs,
+                observed_mask=context_mask,
             )
             self.axes.update(
                 eps_b=("innovation",),
@@ -402,16 +414,37 @@ class FamilyOracle:
             )
             for name, expr in zip(internal_names, components["outputs"], strict=True):
                 pm.Deterministic(name, expr)
-            pm.Deterministic("_state", pt.concatenate([v.reshape((-1,)) for v in model.value_vars]))
+            if _capacity is None:
+                state_values = model.value_vars
+            else:
+                state_values = [
+                    rv
+                    if model.rvs_to_transforms[rv] is None
+                    else model.rvs_to_transforms[rv].forward(rv, *rv.owner.inputs)
+                    for rv in model.free_RVs
+                ]
+            pm.Deterministic("_state", pt.concatenate([v.reshape((-1,)) for v in state_values]))
         self.model = model
         self.parameter_names = tuple(
             dict.fromkeys([rv.name for rv in model.free_RVs] + list(self.axes))
         )
-        self.kernel = DynamicOracleKernel(
-            model, output_names=[*self.parameter_names, *internal_names, "_state"]
-        )
+        self._output_names = [*self.parameter_names, *internal_names, "_state"]
+        self._kernel: DynamicOracleKernel | None = None
 
-    def bind(self, inputs: OracleInputs, *, cfg: SCMPrior | None = None) -> BoundOracleKernel:
+    @property
+    def kernel(self) -> DynamicOracleKernel:
+        """Compile lazily. Native sampling does not require this prediction kernel."""
+        if self._kernel is None:
+            self._kernel = DynamicOracleKernel(self.model, output_names=self._output_names)
+        return self._kernel
+
+    def bind(
+        self,
+        inputs: OracleInputs,
+        *,
+        cfg: SCMPrior | None = None,
+        _context_mask: NDArray[np.float64] | None = None,
+    ) -> BoundOracleKernel:
         """Bind one world's observations/priors without model construction or compilation."""
         inputs.validate()
         cfg = self.cfg if cfg is None else cfg
@@ -467,6 +500,10 @@ class FamilyOracle:
             "walk_priors": _runtime_priors(cfg),
             "width_probs": prior.probabilities,
         }
+        if self._capacity is not None:
+            if (p, inputs.controls.shape[1]) != self._capacity or _context_mask is None:
+                raise ValueError("native prediction requires padded inputs and a context mask")
+            data["context_mask"] = _context_mask
         data = {
             name: np.asarray(value, dtype=self.model[name].dtype) for name, value in data.items()
         }

@@ -30,6 +30,9 @@ from pytensor.tensor.random.variable import RandomGeneratorSharedVariable
 from pytensor.tensor.sharedvar import SharedVariable
 from xarray import DataTree
 
+from .oracle_family import OracleInputs
+from .oracle_native import NativeFamilyTemplate
+from .sampler import SCMPrior
 from .worlds import SCM
 
 _DEFAULT_NUTS_SAMPLER: Literal["nutpie", "pymc"] = "nutpie"
@@ -1430,7 +1433,7 @@ class OracleTemplate:
 class CompiledOracle:
     """One process-local Nutpie compilation, safely reused for sequential fits."""
 
-    template: OracleTemplate
+    template: OracleTemplate | NativeFamilyTemplate
     compiled: Any
     sampler: Any | None = None
     backend: str = "numba"
@@ -1485,9 +1488,54 @@ class CompiledOracle:
                     f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
                 )
 
+    @classmethod
+    def for_family(
+        cls,
+        cfg: SCMPrior,
+        *,
+        saturation: str,
+        carryover: str,
+        max_channels: int,
+        max_controls: int,
+    ) -> CompiledOracle:
+        """Compile a fixed-capacity family with inferred smoothness and data masks.
+
+        Counts may decrease within the declared capacity. Inactive parameters
+        retain proper priors but are removed from the public posterior.
+        """
+        import nutpie  # type: ignore[import-untyped]
+
+        template = NativeFamilyTemplate.build(
+            cfg,
+            saturation=saturation,
+            carryover=carryover,
+            max_channels=max_channels,
+            max_controls=max_controls,
+        )
+        compiled = nutpie.compile_pymc_model(
+            template.model,
+            backend="numba",
+            var_names=[*template.family.parameter_names, "_state"],
+            freeze_model=False,
+        )
+        return cls(template=template, compiled=compiled, sampler=nutpie.sample)
+
+    def predict_posterior(
+        self,
+        inputs: OracleInputs,
+        trace: DataTree,
+        *,
+        random_seed: int,
+        cfg: SCMPrior | None = None,
+    ) -> Any:
+        """Return paired joint predictions for a native family fit."""
+        if not isinstance(self.template, NativeFamilyTemplate):
+            raise ValueError("predict_posterior requires a native family template")
+        return self.template.predict(self, inputs, trace, random_seed=random_seed, cfg=cfg)
+
     def fit(
         self,
-        world: SCM,
+        world: SCM | OracleInputs,
         config: OracleSamplingConfig | None = None,
         *,
         criteria: OracleHealthCriteria | None = None,
@@ -1495,7 +1543,25 @@ class CompiledOracle:
         world_identity: Mapping[str, object] | None = None,
         source_identity: Mapping[str, object] | None = None,
         configuration_identity: Mapping[str, object] | None = None,
+        cfg: SCMPrior | None = None,
     ) -> OracleSamplingResult:
+        if isinstance(self.template, NativeFamilyTemplate):
+            if not isinstance(world, OracleInputs):
+                raise TypeError("native family fits require OracleInputs")
+            if observed_indices is not None:
+                raise ValueError("supply context indices through OracleInputs")
+            return self.template.fit(
+                self,
+                world,
+                config,
+                cfg=cfg,
+                criteria=criteria,
+                world_identity=world_identity,
+                source_identity=source_identity,
+                configuration_identity=configuration_identity,
+            )
+        if cfg is not None or isinstance(world, OracleInputs):
+            raise TypeError("known-width fits require SCM and do not accept cfg overrides")
         config = OracleSamplingConfig() if config is None else config
         criteria = OracleHealthCriteria() if criteria is None else criteria
         if not isinstance(config, OracleSamplingConfig) or not isinstance(
@@ -1679,7 +1745,7 @@ def compile_oracle(template: OracleTemplate | SCM, **kwargs: Any) -> CompiledOra
     if not isinstance(template, OracleTemplate):
         raise TypeError("template must be an OracleTemplate or SCM")
     try:
-        import nutpie  # type: ignore[import-untyped]
+        import nutpie
     except ImportError as error:
         raise ImportError(
             "compile_oracle requires nutpie, a runtime dependency of pymc-generator; "

@@ -20,6 +20,11 @@ from .oracle_smoothness import reported_walk_bases, walk_width_prior
 from .sampler import SCMPrior
 
 
+def _joint_width_logp(value, means, noise, log_prior, mask):
+    pointwise = -0.5 * ((value - means) / noise) ** 2 - pt.log(noise) - 0.5 * np.log(2 * np.pi)
+    return pt.logsumexp(log_prior + (pointwise * mask).sum(axis=-1))
+
+
 def add_inferred_walk_likelihood(
     *,
     model: pm.Model,
@@ -35,6 +40,7 @@ def add_inferred_walk_likelihood(
     outcome: Any,
     observed_indices: Any,
     width_probabilities: Any = None,
+    observed_mask: Any = None,
 ) -> None:
     """Attach a world-level finite mixture, preserving generator floor order.
 
@@ -99,11 +105,28 @@ def add_inferred_walk_likelihood(
     means = baseline + contributions.sum(axis=1)
     noise = rw["rw_y"]["std"][0]
     residual = (outcome[observed_indices] - means[:, observed_indices]) / noise
-    log_likelihood = (-0.5 * residual**2 - pt.log(noise) - 0.5 * np.log(2 * np.pi)).sum(axis=1)
+    pointwise = -0.5 * residual**2 - pt.log(noise) - 0.5 * np.log(2 * np.pi)
+    if observed_mask is not None:
+        pointwise = pointwise * observed_mask
+    log_likelihood = pointwise.sum(axis=1)
     probabilities_data = prior.probabilities if width_probabilities is None else width_probabilities
     log_prior = pt.log(pt.as_tensor_variable(probabilities_data)[combinations]).sum(axis=1)
     log_weights = log_prior + log_likelihood
-    pm.Potential("outcome_width_likelihood", pt.logsumexp(log_weights))
+    if observed_mask is None:
+        pm.Potential("outcome_width_likelihood", pt.logsumexp(log_weights))
+    else:
+        # One joint observation: the width is shared across the context.
+        # This symbolic logp is compiled by nutpie, not called from Python while sampling.
+        pm.CustomDist(
+            "outcome",
+            means[:, observed_indices],
+            noise,
+            log_prior,
+            observed_mask,
+            logp=_joint_width_logp,
+            signature="(k,t),(),(k),(t)->(t)",
+            observed=outcome[observed_indices],
+        )
     model.add_coord(
         "walk_combination",
         tuple(",".join(str(int(width)) for width in prior.widths[row]) for row in combinations),

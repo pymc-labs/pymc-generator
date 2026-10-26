@@ -56,10 +56,70 @@ An SCM wrapper carrying the same metadata can use
 `sample_oracle`; its receipt records the mode.
 
 The legacy default remains `walk_smoothness="known"`, preserving its model,
-receipt serialization and discarded response-history prefix. The older
-`OracleTemplate`/`CompiledOracle` lifecycle remains a supplied-width interface;
-it explicitly rejects inferred-width requests. Use the family worker below for
-reusable inferred-width compilation.
+receipt serialization and discarded response-history prefix. The existing `compile_oracle(SCM)` lifecycle remains a supplied-width interface.
+It rejects inferred-width requests. Use `CompiledOracle.for_family` below for
+native inferred-width sampling, or the active-only family worker for its dynamic
+callback backend.
+
+## Native compilation with fixed capacities
+
+`CompiledOracle.for_family` compiles one native nutpie sampler. Its parameter
+count stays fixed. Shared data masks remove absent inputs and unobserved weeks
+from the likelihood. Inactive input parameters retain their proper priors.
+They are not flat directions in the target density.
+
+```python
+from pymc_generator import CompiledOracle, OracleSamplingConfig
+
+compiled = CompiledOracle.for_family(
+    cfg, saturation="hill", carryover="geometric",
+    max_channels=10, max_controls=10,
+)
+config = OracleSamplingConfig(
+    latent="sampled", walk_smoothness="inferred",
+    adaptation="draw_diag", tune=1000, draws=500, chains=8, cores=8,
+    target_accept=0.9, random_seed=42,
+)
+result = compiled.fit(inputs, config, cfg=world_cfg)
+paired = compiled.predict_posterior(
+    inputs, result.idata, cfg=world_cfg, random_seed=43,
+)
+```
+
+`inputs` is an `OracleInputs` instance, as shown below. It contains only context
+outcomes. The library fills unobserved rows with finite placeholders and applies
+a context mask. Counts come from the supplied input columns. IDs label the
+returned active slots. Graph changes are changes to the supported direct outcome
+gates, not arbitrary additions of input-generating edges.
+
+The same compiled sampler accepts different counts within capacity, direct gates,
+context selections, observations, and compatible walk priors. Horizon, latent
+count, response family, and the family configuration contract remain fixed.
+Exceeding capacity fails rather than silently recompiling. An observed
+`CustomDist` represents the joint width likelihood; this native model has no
+`Potential`. Its symbolic log density is compiled into native code. It does not
+use the Python `from_pyfunc` sampling interface.
+
+The returned `posterior` and retained warmup posterior omit inactive input slots.
+A separate `oracle_state` group retains the full unconstrained state for paired
+prediction. It includes the unused slots and is not part of posterior diagnostics.
+Keep it until prediction is complete. It can then be removed if no more predictions
+are needed. Masked input parameters still consume sampler work, so select a useful
+capacity rather than an unnecessarily large one.
+
+Prediction compiles a separate kernel lazily on first use. Later predictions reuse
+it. This kernel is not a sampling callback. Predictions check the immutable data
+binding and retain chain/draw coordinates. Use this helper rather than ordinary
+`pm.sample_posterior_predictive`: the width choice must be drawn from its joint
+conditional posterior. The model does not provide independent pointwise likelihoods
+for automatic LOO.
+
+Fits on one `CompiledOracle` object run sequentially. Nutpie runs the requested
+chains using `cores` within each fit. The compiled object is process-local and
+cannot be passed across a fork. Receipts identify the sampler compilation and
+capacity. This opt-in interface does not change the default supplied-width API.
+Small integration tests establish execution, not convergence or performance on
+the full benchmark.
 
 ## Compile once per family worker
 
@@ -140,7 +200,8 @@ binding as the fit, including that world's smoothness prior. All supplied draws
 are used; no thinning, scoring or fit filtering occurs. Consumers can compute
 full-draw summaries before choosing a storage retention policy.
 
-A Potential represents the joint context likelihood. Ordinary
+In the active-only callback backend, a Potential represents the joint context
+likelihood. The native fixed-capacity backend uses an observed joint CustomDist. Ordinary
 `pm.sample_posterior_predictive` does not reconstruct the marginalized widths:
 use these helpers. The mixture does not supply independent pointwise likelihoods
 for automatic LOO, because its width choice is shared across observations.
