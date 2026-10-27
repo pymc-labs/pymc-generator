@@ -22,6 +22,12 @@ The four analyses are independent: call any of them, in any order, on any
 descriptor table. None generates data or changes a prior; improving a prior
 stays an explicit loop you run — change a setting, generate, describe, compare.
 
+To compare a dataset with an **already-existing corpus**, including explicit
+window selection, caller-defined groups, additional temporal/activity/lag
+statistics, and standalone comparison plots, see
+[existing-corpus comparisons](corpus-comparison.md). Those extensions do not
+generate or tune a reference and leave the original descriptor defaults intact.
+
 ## Describe two collections
 
 Collection names are arbitrary labels. Here two priors differ only in the range

@@ -111,7 +111,12 @@ def test_import_is_light():
 
 
 @pytest.mark.parametrize(
-    "module", ("pymc_generator.diagnostics", "pymc_generator.dataset_typicality")
+    "module",
+    (
+        "pymc_generator.diagnostics",
+        "pymc_generator.dataset_typicality",
+        "pymc_generator.series_comparison",
+    ),
 )
 def test_importing_a_numpy_only_module_stays_light(module):
     # diagnostics and dataset typicality are pure numpy over retained arrays:

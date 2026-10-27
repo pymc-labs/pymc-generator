@@ -40,6 +40,7 @@ import numpy as np
 from .diagnostics import (
     _MIN_PAIRS,
     _WORLD_COUNTERFACTUAL,
+    ACTIVITY_STATISTICS,
     _acf_world,
     _cell,
     _check_zero_padding,
@@ -49,9 +50,13 @@ from .diagnostics import (
     _numeric_float64,
     _render_table,
     _require_finite,
+    _series_lags,
     _validate_lags,
     _validate_world_selector,
     _worlds_source,
+    activity_runs,
+    lagged_dependence,
+    temporal_statistics,
 )
 from .outcomes import DEFAULT_QUANTILES
 
@@ -63,6 +68,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .worlds import SCM
 
 __all__ = [
+    "DEFAULT_STATISTICS",
     "DESCRIPTOR_STATUSES",
     "DESCRIPTOR_VERSION",
     "METADATA_COLUMNS",
@@ -87,8 +93,8 @@ VALID, INELIGIBLE, UNDEFINED = 0, 1, 2
 #: Integer per-world metadata usable as strata; never a distance feature.
 METADATA_COLUMNS: tuple[str, ...] = ("n_treatments_active", "n_covariates_active", "n_time_steps")
 
-#: Per-series statistics, reduced over the active nodes of a role.
-NODE_STATISTICS: tuple[str, ...] = (
+#: Legacy per-series statistics, unchanged by opt-in diagnostic additions.
+_LEGACY_NODE_STATISTICS: tuple[str, ...] = (
     "level_to_variation",
     "cv",
     "zero_fraction",
@@ -97,10 +103,30 @@ NODE_STATISTICS: tuple[str, ...] = (
     "acf",
     "diff_acf",
 )
+#: Opt-in temporal statistics on original-unit levels and first differences.
+_TEMPORAL_STATISTICS: tuple[str, ...] = (
+    "level_std",
+    "difference_std",
+    "time_correlation",
+    "overlap_pearson",
+    "diff_overlap_pearson",
+)
+#: Per-series statistics, reduced over the active nodes of a role.
+NODE_STATISTICS: tuple[str, ...] = (
+    _LEGACY_NODE_STATISTICS + _TEMPORAL_STATISTICS + ACTIVITY_STATISTICS
+)
 #: Per-role statistics (one value per role, no reducer).
 ROLE_STATISTICS: tuple[str, ...] = ("constant_fraction",)
+#: Legacy pair statistics retain their unordered within-role pair universe.
+_LEGACY_PAIR_STATISTICS: tuple[str, ...] = ("abs_pearson", "diff_abs_pearson")
+#: Signed lagged pair statistics, selected with explicit ``dependence_lags``.
+_LAGGED_PAIR_STATISTICS: tuple[str, ...] = ("lagged_pearson", "diff_lagged_pearson")
 #: Pairwise statistics, reduced over the eligible pairs of a pair role.
-PAIR_STATISTICS: tuple[str, ...] = ("abs_pearson", "diff_abs_pearson")
+PAIR_STATISTICS: tuple[str, ...] = _LEGACY_PAIR_STATISTICS + _LAGGED_PAIR_STATISTICS
+#: Original default feature selection; new diagnostics are strictly opt-in.
+DEFAULT_STATISTICS: tuple[str, ...] = (
+    _LEGACY_NODE_STATISTICS + ROLE_STATISTICS + _LEGACY_PAIR_STATISTICS
+)
 #: Every selectable statistic family, in feature order.
 STATISTICS: tuple[str, ...] = NODE_STATISTICS + ROLE_STATISTICS + PAIR_STATISTICS
 
@@ -141,6 +167,31 @@ _STAT_TEXT: dict[str, str] = {
     "constant_fraction": "fraction of active series that are constant (exact range floor)",
     "abs_pearson": "|Pearson correlation| of the level series",
     "diff_abs_pearson": "|Pearson correlation| of the first-differenced series",
+    "level_std": "population standard deviation of levels in original units",
+    "difference_std": "population standard deviation of first differences in original units",
+    "time_correlation": "signed Pearson correlation of levels with the time index",
+    "overlap_pearson": "signed Pearson correlation of separately centered overlapping levels",
+    "diff_overlap_pearson": (
+        "signed Pearson correlation of separately centered overlapping first differences"
+    ),
+    "leading_inactive_length": "length of the leading exactly-zero spell, or zero",
+    "trailing_inactive_length": "length of the trailing exactly-zero spell, or zero",
+    "longest_active_length": "length of the longest exactly-nonzero spell, or zero",
+    "longest_inactive_length": "length of the longest exactly-zero spell, or zero",
+    "active_spell_count": "number of exactly-nonzero spells, including censored spells",
+    "inactive_spell_count": "number of exactly-zero spells, including censored spells",
+    "complete_active_spell_count": "number of complete interior exactly-nonzero spells",
+    "complete_inactive_spell_count": "number of complete interior exactly-zero spells",
+    "censored_active_spell_count": "number of boundary-censored exactly-nonzero spells",
+    "censored_inactive_spell_count": "number of boundary-censored exactly-zero spells",
+    "complete_active_length_median": "median length of complete interior exactly-nonzero spells",
+    "complete_inactive_length_median": "median length of complete interior exactly-zero spells",
+    "switching_rate": "fraction of adjacent time steps switching exact-zero activity state",
+    "interior_inactive_fraction": (
+        "total length of complete interior exactly-zero spells divided by the full window length"
+    ),
+    "lagged_pearson": "signed lagged Pearson correlation of levels",
+    "diff_lagged_pearson": "signed lagged Pearson correlation of first differences",
 }
 
 _PAIR_TEXT: dict[str, str] = {
@@ -176,7 +227,8 @@ class FeatureDefinition:
     view
         ``levels`` or ``differences``.
     lag
-        Lag for autocorrelation statistics, otherwise ``None``.
+        Lag for autocorrelation, overlap correlation or lagged pair statistics,
+        otherwise ``None``. Signed pair lags use left[t] versus right[t + lag].
     reducer
         Reducer across nodes/pairs from :data:`REDUCERS`; ``None`` for a
         single-series or per-role statistic.
@@ -206,6 +258,7 @@ def _node_token(statistic: str, lag: int | None) -> str:
 def _definitions(
     statistics: tuple[str, ...],
     lags: tuple[int, ...],
+    dependence_lags: tuple[int, ...],
     reducers: tuple[str, ...],
     include_truth: bool,
 ) -> tuple[FeatureDefinition, ...]:
@@ -216,7 +269,7 @@ def _definitions(
         for stat in NODE_STATISTICS:
             if stat not in statistics:
                 continue
-            if stat in ("acf", "diff_acf"):
+            if stat in ("acf", "diff_acf", "overlap_pearson", "diff_overlap_pearson"):
                 items.extend((stat, lag) for lag in lags)
             else:
                 items.append((stat, None))
@@ -233,7 +286,11 @@ def _definitions(
                         name=f"{role}_{token}_{reducer}",
                         role=role,
                         statistic=stat,
-                        view="differences" if stat == "diff_acf" else "levels",
+                        view=(
+                            "differences"
+                            if stat in ("diff_acf", "difference_std", "diff_overlap_pearson")
+                            else "levels"
+                        ),
                         lag=lag,
                         reducer=reducer,
                         observable=True,
@@ -248,7 +305,11 @@ def _definitions(
                 name=f"outcome_{token}",
                 role="outcome",
                 statistic=stat,
-                view="differences" if stat == "diff_acf" else "levels",
+                view=(
+                    "differences"
+                    if stat in ("diff_acf", "difference_std", "diff_overlap_pearson")
+                    else "levels"
+                ),
                 lag=lag,
                 reducer=None,
                 observable=True,
@@ -272,20 +333,36 @@ def _definitions(
     for stat in PAIR_STATISTICS:
         if stat not in statistics:
             continue
+        pair_lags: tuple[int | None, ...] = (
+            dependence_lags if stat in _LAGGED_PAIR_STATISTICS else (None,)
+        )
         for pair_role in PAIR_ROLES:
-            for reducer in reducers:
-                out.append(
-                    FeatureDefinition(
-                        name=f"{pair_role}_{stat}_{reducer}",
-                        role=pair_role,
-                        statistic=stat,
-                        view="differences" if stat == "diff_abs_pearson" else "levels",
-                        lag=None,
-                        reducer=reducer,
-                        observable=True,
-                        description=f"{reducer} {_PAIR_TEXT[pair_role]} of {_STAT_TEXT[stat]}",
+            for lag in pair_lags:
+                token = _node_token(stat, lag)
+                pair_text = _PAIR_TEXT[pair_role]
+                lag_text = ""
+                if lag is not None:
+                    if pair_role in ("treatment_pair", "covariate_pair") and lag != 0:
+                        role = "treatments" if pair_role == "treatment_pair" else "covariates"
+                        pair_text = f"over both ordered distinct directions of active {role}"
+                    lag_text = f" at lag {lag} (left[t] versus right[t + lag])"
+                for reducer in reducers:
+                    out.append(
+                        FeatureDefinition(
+                            name=f"{pair_role}_{token}_{reducer}",
+                            role=pair_role,
+                            statistic=stat,
+                            view=(
+                                "differences"
+                                if stat in ("diff_abs_pearson", "diff_lagged_pearson")
+                                else "levels"
+                            ),
+                            lag=lag,
+                            reducer=reducer,
+                            observable=True,
+                            description=f"{reducer} {pair_text} of {_STAT_TEXT[stat]}{lag_text}",
+                        )
                     )
-                )
     if include_truth:
         for name, key in TRUTH_FEATURES.items():
             out.append(
@@ -1544,9 +1621,17 @@ def _reduce(
     rows = valid.any(axis=1)
     if rows.any():
         masked = np.where(valid[rows], values[rows], np.nan)
-        with np.errstate(invalid="ignore"):
+        with np.errstate(invalid="ignore", over="ignore"):
             if reducer == "median":
                 reduced = np.nanmedian(masked, axis=1)
+                # NumPy averages the two middle values by summing first.
+                # Repair only overflowed finite midpoints; real infinities
+                # and all ordinary legacy reductions keep their semantics.
+                for row in np.flatnonzero(np.isinf(reduced)):
+                    ordered = np.sort(masked[row, ~np.isnan(masked[row])])
+                    low, high = ordered[(ordered.size - 1) // 2], ordered[ordered.size // 2]
+                    if np.isfinite(low) and np.isfinite(high):
+                        reduced[row] = low / 2.0 + high / 2.0
             elif reducer == "min":
                 reduced = np.nanmin(masked, axis=1)
             else:
@@ -1691,6 +1776,7 @@ def _chunk_features(
     definitions: tuple[FeatureDefinition, ...],
     statistics: tuple[str, ...],
     lags: tuple[int, ...],
+    dependence_lags: tuple[int, ...],
 ) -> tuple[np.ndarray, np.ndarray]:
     n_worlds, n_time, n_treat = chunk.treatment.shape
     n_cov = chunk.covariates.shape[2]
@@ -1703,12 +1789,6 @@ def _chunk_features(
         ],
         axis=1,
     )
-    # Exact power-of-two rescaling of every series to max|x| in [0.5, 1): each
-    # statistic here is invariant to positive rescaling, and squared sums then
-    # neither overflow nor underflow for magnitudes from 1e-300 to 1e300. A
-    # contiguous block also makes results independent of chunk_size.
-    _, exponent = np.frexp(np.abs(raw).max(axis=2))
-    block = np.ascontiguousarray(np.ldexp(raw, -exponent[..., None]))
     eligible = np.concatenate(
         [
             chunk.treatment_mask,
@@ -1725,25 +1805,88 @@ def _chunk_features(
 
     values = np.full((n_worlds, len(definitions)), np.nan)
     status = np.full((n_worlds, len(definitions)), UNDEFINED, dtype=np.uint8)
-    slots, slot_valid = _compute_slots(block, eligible)
     # Each series is judged at its own source resolution: a float32 covariate
     # never loosens the floor for a float64 treatment in the same world.
     resolution = np.empty(eligible.shape, dtype=np.float64)
     for role, eps in zip(("treatment", "covariate", "outcome"), chunk.resolution):
         resolution[:, columns[role]] = np.reshape(np.asarray(eps, dtype=np.float64), (-1, 1))
-    flat = _flatness(block, slots, resolution)
-    needs_nodes = any(s in statistics for s in NODE_STATISTICS)
-    nodes = _node_statistics(block, eligible, lags, slots, slot_valid, flat) if needs_nodes else {}
-    constant = flat.level & slot_valid[..., 1]
+    nodes: dict[tuple[str, int | None], tuple[np.ndarray, np.ndarray]] = {}
     pearson: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    for stat, offset, degenerate in (
-        ("abs_pearson", 0, flat.level),
-        ("diff_abs_pearson", 1, flat.steps),
-    ):
-        # Too-short views are undefined below; skip the empty-slice arithmetic.
-        if stat in statistics and n_time - offset >= _MIN_PAIRS:
-            view = np.diff(block, axis=2) if offset else block
-            pearson[stat] = (_abs_pearson(view, ~degenerate), ~degenerate)
+    if any(s in statistics for s in DEFAULT_STATISTICS):
+        # Preserve legacy scale-invariant calculations exactly. New amplitude
+        # and activity diagnostics below must instead receive original levels.
+        _, exponent = np.frexp(np.abs(raw).max(axis=2))
+        block = np.ascontiguousarray(np.ldexp(raw, -exponent[..., None]))
+        slots, slot_valid = _compute_slots(block, eligible)
+        flat = _flatness(block, slots, resolution)
+        if any(s in statistics for s in _LEGACY_NODE_STATISTICS):
+            nodes = _node_statistics(block, eligible, lags, slots, slot_valid, flat)
+        constant = flat.level & slot_valid[..., 1]
+        for stat, offset, degenerate in (
+            ("abs_pearson", 0, flat.level),
+            ("diff_abs_pearson", 1, flat.steps),
+        ):
+            # Too-short views are undefined below; skip the empty-slice arithmetic.
+            if stat in statistics and n_time - offset >= _MIN_PAIRS:
+                view = np.diff(block, axis=2) if offset else block
+                pearson[stat] = (_abs_pearson(view, ~degenerate), ~degenerate)
+
+    source_values = raw.transpose(0, 2, 1)
+    if any(s in statistics for s in _TEMPORAL_STATISTICS):
+        temporal = temporal_statistics(
+            source_values, lags=lags, eligible=eligible, resolution=resolution
+        )
+        for stat in _TEMPORAL_STATISTICS:
+            if stat not in statistics:
+                continue
+            if stat in ("overlap_pearson", "diff_overlap_pearson"):
+                for position, lag in enumerate(temporal.lags):
+                    nodes[(stat, lag)] = (
+                        temporal.values[stat][..., position],
+                        temporal.valid[stat][..., position],
+                    )
+            else:
+                nodes[(stat, None)] = (temporal.values[stat], temporal.valid[stat])
+    if any(s in statistics for s in ACTIVITY_STATISTICS):
+        # Exact nonzero activity is a property of raw data. Rescaling can
+        # underflow tiny nonzero values within a wide-range series into zero.
+        activity = activity_runs(source_values, eligible=eligible)
+        for stat in ACTIVITY_STATISTICS:
+            if stat in statistics:
+                nodes[(stat, None)] = (activity.values[stat], activity.valid[stat])
+
+    lagged: dict[tuple[str, str, int | None], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    lagged_statistics = tuple(s for s in _LAGGED_PAIR_STATISTICS if s in statistics)
+    if lagged_statistics:
+        views = tuple(
+            "differences" if s == "diff_lagged_pearson" else "levels" for s in lagged_statistics
+        )
+        lag_groups = (
+            tuple(lag for lag in dependence_lags if lag == 0),
+            tuple(lag for lag in dependence_lags if lag != 0),
+        )
+        for pair_role in PAIR_ROLES:
+            for pair_lags in lag_groups:
+                if not pair_lags:
+                    continue
+                i, j = _pair_index(pair_role, n_treat, n_cov)
+                if pair_lags[0] != 0 and pair_role in ("treatment_pair", "covariate_pair"):
+                    i, j = np.concatenate((i, j)), np.concatenate((j, i))
+                dependence = lagged_dependence(
+                    source_values,
+                    pairs=np.column_stack((i, j)),
+                    lags=pair_lags,
+                    views=views,
+                    eligible=eligible,
+                    resolution=resolution,
+                )
+                for view_position, stat in enumerate(lagged_statistics):
+                    for lag_position, lag in enumerate(dependence.lags):
+                        lagged[(stat, pair_role, lag)] = (
+                            dependence.correlation[:, view_position, :, lag_position],
+                            dependence.valid[:, view_position, :, lag_position],
+                            dependence.eligible,
+                        )
 
     for f, d in enumerate(definitions):
         if d.role == "truth":
@@ -1778,6 +1921,12 @@ def _chunk_features(
             values[has, f] = (constant[:, cols] & active)[has].sum(axis=1) / n_active[has]
             status[has, f] = VALID
             status[~has, f] = INELIGIBLE
+            continue
+        if d.statistic in _LAGGED_PAIR_STATISTICS:
+            pair_values, pair_valid, pair_eligible = lagged[(d.statistic, d.role, d.lag)]
+            values[:, f], status[:, f] = _reduce(
+                pair_values, pair_valid, pair_eligible, str(d.reducer)
+            )
             continue
         # pair statistics
         n_view = n_time - (1 if d.statistic == "diff_abs_pearson" else 0)
@@ -1832,8 +1981,9 @@ def _id_override(values: Any, n: int, what: str, *, minimum: int) -> np.ndarray:
 def world_descriptors(
     source: Mapping[str, Any] | Sequence[SCM] | ObservedWorlds,
     *,
-    statistics: Sequence[str] = STATISTICS,
+    statistics: Sequence[str] = DEFAULT_STATISTICS,
     lags: Sequence[int] = (1,),
+    dependence_lags: Sequence[int] | None = None,
     reducers: Sequence[str] = REDUCERS,
     include_truth: bool = False,
     worlds: Any = None,
@@ -1852,11 +2002,23 @@ def world_descriptors(
         :class:`~pymc_generator.worlds.SCM` worlds sharing one horizon, or
         :class:`ObservedWorlds`.
     statistics
-        Statistic families from :data:`STATISTICS`. Per-series statistics are
+        Statistic families from :data:`STATISTICS`. Defaults to the unchanged
+        legacy families in :data:`DEFAULT_STATISTICS`; temporal, activity and
+        signed lagged pair features are opt-in. Per-series statistics are
         computed for every active treatment, covariate and the outcome;
         treatment/covariate values are then reduced with every reducer.
     lags
-        Lags for ``acf`` (levels) and ``diff_acf`` (first differences).
+        Positive lags for legacy ``acf`` / ``diff_acf`` and opt-in
+        ``overlap_pearson`` / ``diff_overlap_pearson``. Legacy ACF keeps its
+        global-mean, full-denominator definition; overlap correlations center
+        each overlapping segment separately.
+    dependence_lags
+        Explicit signed integer lags for ``lagged_pearson`` and
+        ``diff_lagged_pearson``; required and nonempty when either is selected.
+        At lag h, correlate left[t] with right[t + h]. Treatment-covariate and
+        treatment-outcome pairs always put treatment on the left. Within-role
+        nonzero lags reduce both ordered distinct directions; lag zero uses
+        unordered pairs. No causal or carryover interpretation is implied.
     reducers
         Reducers across active nodes and pairs, from :data:`REDUCERS`.
     include_truth
@@ -1890,6 +2052,13 @@ def world_descriptors(
     roughness, spike and ACF reuse its definitions. Level-to-variation and CV are
     invariant to multiplying a series by a positive constant but not to
     shifting it.
+    Opt-in ``level_std`` and ``difference_std`` retain original units and scale
+    with the absolute input multiplier. ``time_correlation`` is signed Pearson
+    correlation with ``0, ..., T-1``. Activity summaries use exact raw nonzero
+    values, include boundary-censored spells in total counts and longest
+    lengths, and exclude them from complete-spell medians. No complete spell
+    makes its median undefined, not zero. ``interior_inactive_fraction`` divides
+    complete interior inactive length by the full window length.
 
     Degenerate series are detected from exact ranges, never from a computed
     ``std``, whose rounding residue misses true constants. With ``eps`` the
@@ -1900,11 +2069,12 @@ def world_descriptors(
     float64 summation error) and it takes both signs. Nonzero constants give
     ``level_to_variation = inf`` (an all-zero series has none: it is undefined),
     ``cv = 0``, roughness and spike 0, and undefined ACF and correlations; ramps
-    give roughness and spike 0 and undefined differenced statistics. No absolute
-    epsilon is applied, and each series is rescaled exactly by a power of two
-    first, so magnitudes from ``1e-300`` to ``1e300`` describe identically.
-    Statuses are exactly independent of ``chunk_size``; values agree to
-    floating-point rounding.
+    give roughness and spike 0 and undefined differenced correlations. No absolute
+    epsilon is applied. Legacy scale-invariant statistics first rescale each
+    series exactly by a power of two, so magnitudes from ``1e-300`` to ``1e300``
+    describe identically. New diagnostics handle their own safe scaling without
+    changing amplitude units or exact activity states. Statuses are exactly
+    independent of ``chunk_size``; values agree to floating-point rounding.
     """
     stats = _validate_choice(statistics, STATISTICS, "statistics")
     reds = _validate_choice(reducers, REDUCERS, "reducers")
@@ -1986,6 +2156,13 @@ def world_descriptors(
         raise ValueError("source has no time steps to describe")
     # Canonical lag order, so equal requests produce equal definitions.
     lag_axis = tuple(sorted(_validate_lags(lags, n_time_steps)))
+    dependence_axis = (
+        () if dependence_lags is None else tuple(sorted(_series_lags(dependence_lags, signed=True)))
+    )
+    if any(s in stats for s in _LAGGED_PAIR_STATISTICS) and not dependence_axis:
+        raise ValueError(
+            "dependence_lags must explicitly select signed integer lags for lagged pair statistics"
+        )
     idx = _validate_world_selector(worlds, n_total)
     n = int(idx.size)
 
@@ -2000,7 +2177,7 @@ def world_descriptors(
     else:
         groups = np.full(n, -1, dtype=np.int64)
 
-    definitions = _definitions(stats, lag_axis, reds, include_truth)
+    definitions = _definitions(stats, lag_axis, dependence_axis, reds, include_truth)
     if not definitions:
         raise ValueError(
             f"no features to compute: statistics {list(stats)} with lags {list(lag_axis)} "
@@ -2014,7 +2191,9 @@ def world_descriptors(
         rows = slice(start, min(start + int(chunk_size), n))
         chunk_idx = idx[rows]
         chunk = extract(chunk_idx)
-        values[rows], status[rows] = _chunk_features(chunk, definitions, stats, lag_axis)
+        values[rows], status[rows] = _chunk_features(
+            chunk, definitions, stats, lag_axis, dependence_axis
+        )
         n_treat_active[rows] = chunk.treatment_mask.sum(axis=1)
         n_cov_active[rows] = chunk.covariate_mask.sum(axis=1)
 

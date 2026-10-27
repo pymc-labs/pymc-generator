@@ -20,7 +20,13 @@ if TYPE_CHECKING:
     from .active_counts import active_count_coverage
     from .bundles import write_scenario_bundles, write_scm_bundle
     from .data_generator import DataGenerator, load_corpus, save_corpus
-    from .dataset_typicality import Typicality, matched_prior, typicality
+    from .dataset_typicality import (
+        ReferenceWindows,
+        Typicality,
+        matched_prior,
+        sample_reference_windows,
+        typicality,
+    )
     from .describe import describe_scm
     from .descriptor_analysis import (
         DescriptorScale,
@@ -30,7 +36,16 @@ if TYPE_CHECKING:
         summarize_descriptors,
     )
     from .descriptors import ObservedWorlds, WorldDescriptors, world_descriptors
-    from .diagnostics import DataDiagnostics, data_diagnostics
+    from .diagnostics import (
+        ActivityRuns,
+        DataDiagnostics,
+        LaggedDependence,
+        TemporalStatistics,
+        activity_runs,
+        data_diagnostics,
+        lagged_dependence,
+        temporal_statistics,
+    )
     from .oracle_sampling import (
         ORACLE_CONFIG_SCHEMA,
         ORACLE_DATA_NAMES,
@@ -57,6 +72,16 @@ if TYPE_CHECKING:
     from .presets import make_scm_prior
     from .sampler import SCMPrior, sample_prior_predictive
     from .scenarios import SCENARIOS
+    from .series_comparison import (
+        NearestSeries,
+        QuantileNormalization,
+        SeriesComparison,
+        SimilarityAssessment,
+        assess_series_similarity,
+        compare_series,
+        nearest_series,
+        normalize_series_quantile,
+    )
     from .signal_diagnostics import SIGNAL_METRIC_LAYOUT, SIGNAL_METRIC_VERSION
     from .world_model import (
         build_oracle_model,
@@ -107,6 +132,23 @@ _LAZY_IMPORTS = {
     "nearest_worlds": (".descriptor_analysis", "nearest_worlds"),
     "compare_descriptors": (".descriptor_analysis", "compare_descriptors"),
     "DescriptorScale": (".descriptor_analysis", "DescriptorScale"),
+    # statistical profiles and alignment-sensitive matching of existing data
+    "temporal_statistics": (".diagnostics", "temporal_statistics"),
+    "TemporalStatistics": (".diagnostics", "TemporalStatistics"),
+    "activity_runs": (".diagnostics", "activity_runs"),
+    "ActivityRuns": (".diagnostics", "ActivityRuns"),
+    "lagged_dependence": (".diagnostics", "lagged_dependence"),
+    "LaggedDependence": (".diagnostics", "LaggedDependence"),
+    "sample_reference_windows": (".dataset_typicality", "sample_reference_windows"),
+    "ReferenceWindows": (".dataset_typicality", "ReferenceWindows"),
+    "normalize_series_quantile": (".series_comparison", "normalize_series_quantile"),
+    "QuantileNormalization": (".series_comparison", "QuantileNormalization"),
+    "compare_series": (".series_comparison", "compare_series"),
+    "SeriesComparison": (".series_comparison", "SeriesComparison"),
+    "nearest_series": (".series_comparison", "nearest_series"),
+    "NearestSeries": (".series_comparison", "NearestSeries"),
+    "assess_series_similarity": (".series_comparison", "assess_series_similarity"),
+    "SimilarityAssessment": (".series_comparison", "SimilarityAssessment"),
     # how typical one observed dataset is of a reference corpus or generator
     "typicality": (".dataset_typicality", "typicality"),
     "Typicality": (".dataset_typicality", "Typicality"),
@@ -163,6 +205,14 @@ __all__ = [
     "OUTCOME_QUANTITIES",
     "SCENARIOS",
     "SCMPrior",
+    "ActivityRuns",
+    "LaggedDependence",
+    "NearestSeries",
+    "QuantileNormalization",
+    "ReferenceWindows",
+    "SeriesComparison",
+    "SimilarityAssessment",
+    "TemporalStatistics",
     "DataDiagnostics",
     "DescriptorScale",
     "DataGenerator",
@@ -176,27 +226,35 @@ __all__ = [
     "WorldDescriptors",
     "__version__",
     "active_count_coverage",
+    "activity_runs",
+    "assess_series_similarity",
     "bin_counts",
     "build_oracle_model",
     "build_world_model",
     "compare_descriptors",
+    "compare_series",
     "data_diagnostics",
     "describe_scm",
     "draw_worlds",
     "outcome_distributions",
     "nearest_worlds",
+    "nearest_series",
+    "normalize_series_quantile",
     "sample_oracle",
     "sample_prior_predictive",
     "load_corpus",
+    "lagged_dependence",
     "make_scm_prior",
     "matched_prior",
     "sample_prior_cond",
+    "sample_reference_windows",
     "sample_scm",
     "sample_structure",
     "save_corpus",
     "write_scenario_bundles",
     "summarize_descriptors",
     "typicality",
+    "temporal_statistics",
     "world_descriptors",
     "write_scm_bundle",
 ]

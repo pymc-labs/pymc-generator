@@ -7,6 +7,10 @@ covariates and outcome over time:
 > Could this dataset be a world of this corpus, or of this generator, and if it
 > stands out, in what way?
 
+For descriptive statistical comparisons rather than a calibrated inference
+question, see [existing-corpus comparisons](corpus-comparison.md). Cropping or
+projecting a corpus does not automatically preserve this page's guarantee.
+
 ```text
 dataset    CSV | DataFrame
   └ ObservedWorlds.from_csv / from_frame

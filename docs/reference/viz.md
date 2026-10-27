@@ -1,14 +1,15 @@
 # Visualization
 
-Matplotlib renders in two families. The bundle figures take an
-[`SCM`](sampling.md#pymc_generator.worlds.SCM) and a save path — the four
-figures every bundle contains. The diagnostics figures take a
-[`DataDiagnostics`](diagnostics.md) report and a save path. matplotlib is
-imported lazily, and headless callers should select the `Agg` backend first
-(`matplotlib.use("Agg")`).
+Matplotlib renders bundle figures from an
+[`SCM`](sampling.md#pymc_generator.worlds.SCM), diagnostic figures from a
+[`DataDiagnostics`](diagnostics.md) report, and standalone existing-corpus
+comparisons from focused statistical results. Matplotlib is imported lazily;
+headless callers should select `Agg` first (`matplotlib.use("Agg")`).
 
-Every function has the same shape — `plot_*(result, path, *, ...) -> None`: it
-saves one figure to `path`, closes it, and returns nothing.
+Each function saves one figure to `path`, closes it, and returns nothing.
+Existing-corpus plots take reference and query results before `path`, except
+`plot_series_matches(comparison, matches, path, ...)` and
+`plot_similarity_scores(assessment, path, ...)`.
 
 ## Diagnostics figures
 
@@ -100,6 +101,29 @@ bands, no causal or forecast claims. The retained latent series (D, B) are
 labelled *retained latent truth* — ground truth kept for auditing, never model
 inputs.
 
+## Existing-corpus comparison figures
+
+The [executable comparison guide](../guide/corpus-comparison.md) renders every
+function using independent synthetic data. Reference bands are descriptive
+quantiles, not uncertainty or confidence bands. Unavailable statistics are
+annotated; no missing value becomes a zero or an unavailable `-1` match becomes
+the last candidate.
+
+| Function | What it draws |
+| --- | --- |
+| `plot_temporal_comparison` | Query overlap-Pearson profiles against reference quantiles, plus original-unit level/change variability and trend distributions. |
+| `plot_activity_runs` | Activity-summary distributions and selected query timelines with boundary-censored spells. |
+| `plot_dependence_comparison` | Signed level/difference lag profiles, reducing pairs within each world before reference quantiles. |
+| `plot_series_matches` | Aligned waveforms from the exact comparison that produced the matches, with metric scores and candidate counts. |
+| `plot_similarity_scores` | Held-out raw-score ECDFs, query empirical ranks, and tie bounds for an identical shared bank. |
+
+Selectors bound panel counts using the existing renderer limits. Temporal and
+activity plots require equal horizons. Dependence plots match pairs, lag axes and
+selected views; unequal horizons can have different valid observation counts.
+Callers select series, pairs and query rows explicitly when narrowing a figure.
+Scalar distributions with one contributing world remain visible as a point.
+Plotting a nearest result with a different producing comparison raises an error.
+
 ::: pymc_generator.viz
     options:
       show_root_heading: true
@@ -115,3 +139,8 @@ inputs.
         - plot_temporal_diagnostics
         - plot_vif_diagnostics
         - plot_contribution_diagnostics
+        - plot_temporal_comparison
+        - plot_activity_runs
+        - plot_dependence_comparison
+        - plot_series_matches
+        - plot_similarity_scores

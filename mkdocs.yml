@@ -167,6 +167,7 @@ nav:
       - The posterior oracle: guide/oracle.md
       - Interrogating the data: guide/data-diagnostics.md
       - Comparing worlds: guide/world-descriptors.md
+      - Existing-corpus comparisons: guide/corpus-comparison.md
       - How typical is a dataset?: guide/dataset-typicality.md
   - Examples:
       - End-to-end tour: examples/index.ipynb
@@ -187,3 +188,4 @@ nav:
       - Data diagnostics: reference/diagnostics.md
       - World descriptors: reference/descriptors.md
       - Dataset typicality: reference/typicality.md
+      - Existing-corpus comparisons: reference/corpus-comparison.md

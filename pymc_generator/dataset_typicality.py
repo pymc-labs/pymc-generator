@@ -33,15 +33,16 @@ as the generator produces levels. The reference and the dataset must not share
 generation seeds. Self-queries (``typicality(reference, reference)``) cost up
 to one scoring of the calibration worlds per excluded group.
 
-This module is numpy-only at import. It draws no random numbers — the split is
-a hash of ``seed`` and each group's identity — and writes nothing.
+This module is numpy-only at import and writes nothing. The typicality split is
+a hash of ``seed`` and each group's identity; :func:`sample_reference_windows`
+uses a local seeded random generator to extract windows from existing data.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any
@@ -61,6 +62,7 @@ from .descriptor_analysis import (
     nearest_worlds,
 )
 from .descriptors import (
+    _CORPUS_OBSERVABLE_KEYS,
     DESCRIPTOR_STATUSES,
     INELIGIBLE,
     METADATA_COLUMNS,
@@ -69,8 +71,20 @@ from .descriptors import (
     FeatureDefinition,
     ObservedWorlds,
     WorldDescriptors,
+    _corpus_chunk,
+    _corpus_layout,
+    _mask_chunk,
+    _observed_chunk,
+    _resolution,
+    _resolution_dtype,
 )
-from .diagnostics import _cell, _render_table, _strict_json_value
+from .diagnostics import (
+    ACTIVITY_STATISTICS,
+    _cell,
+    _render_table,
+    _strict_json_value,
+    _validate_world_selector,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -80,8 +94,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "FEATURE_ROLES",
     "TYPICALITY_STATUSES",
+    "ReferenceWindows",
     "Typicality",
     "matched_prior",
+    "sample_reference_windows",
     "typicality",
 ]
 
@@ -106,10 +122,276 @@ _DUPLICATE_TOLERANCE = 1e-4
 #: Statistics that take a handful of levels (a count over the time steps or over
 #: the active series): distinct worlds often share them, so equal values are no
 #: evidence of one world and the copy and duplicate checks leave them out.
-_COUNT_STATISTICS: tuple[str, ...] = ("zero_fraction", "constant_fraction")
+_COUNT_STATISTICS: tuple[str, ...] = (
+    "zero_fraction",
+    "constant_fraction",
+    *ACTIVITY_STATISTICS,
+)
 
 _NO_ROWS = np.zeros(0, dtype=np.int64)
 _NO_VALUES = np.zeros(0)
+
+
+# ---------------------------------------------------------------------------
+# Reference windows
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReferenceWindows:
+    """A fixed-shape projection of an existing source, with exact lineage.
+
+    ``observed`` contains one contiguous window per sampled source world.
+    ``world_positions``, ``world_ids``, ``group_ids`` and ``starts`` have shape
+    ``(n_windows,)``; starts index the original source time axis.
+    ``treatment_indices`` and ``covariate_indices`` have shape
+    ``(n_windows, n_treatments)`` and ``(n_windows, n_covariates)`` and index
+    the original source columns in their returned order. Every returned
+    column is active, even when its cropped values are all zero.
+
+    ``n_eligible_worlds`` counts source worlds in the caller-selected pool
+    with enough eligible columns of both roles, before sampling. Repeated
+    group IDs remain repeated, and ``-1`` denotes unknown independence.
+    Extraction and role projection change the reference population; they do
+    not automatically preserve a conformal calibration guarantee.
+    """
+
+    observed: ObservedWorlds
+    world_positions: np.ndarray
+    world_ids: np.ndarray
+    group_ids: np.ndarray
+    starts: np.ndarray
+    treatment_indices: np.ndarray
+    covariate_indices: np.ndarray
+    n_eligible_worlds: int
+
+    def to_frame(self) -> pd.DataFrame:
+        """One row per window, with original positions, IDs and column lineage.
+
+        ``stop`` is exclusive. Column-index tuples follow the order of the
+        corresponding columns in ``observed``, including empty tuples for
+        zero-width roles.
+        """
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "world_position": self.world_positions,
+                "world_id": self.world_ids,
+                "group_id": self.group_ids,
+                "start": self.starts,
+                "stop": self.starts + self.observed.n_time_steps,
+                "treatment_indices": [tuple(map(int, row)) for row in self.treatment_indices],
+                "covariate_indices": [tuple(map(int, row)) for row in self.covariate_indices],
+            }
+        )
+
+
+def _reference_array(value: Any, what: str) -> np.ndarray:
+    if np.ma.isMaskedArray(value):
+        raise TypeError(
+            f"{what} must not be a masked array; pass plain values and explicit eligibility"
+        )
+    return np.asarray(value)
+
+
+def _reference_ids(value: Any, n: int, what: str, *, minimum: int) -> np.ndarray:
+    arr = _reference_array(value, what)
+    if arr.shape != (n,) or arr.dtype.kind not in "iu":
+        raise ValueError(
+            f"{what} must be an int64 integer array with one entry per pool world ({n})"
+        )
+    if arr.dtype.kind == "u" and arr.size and int(arr.max()) > np.iinfo(np.int64).max:
+        raise ValueError(f"{what} must fit in int64")
+    if arr.dtype.kind == "i" and (arr < minimum).any():
+        raise ValueError(f"{what} must be >= {minimum}")
+    return arr.astype(np.int64)
+
+
+def _reference_mask(value: Any, n: int, width: int, what: str) -> np.ndarray:
+    arr = _reference_array(value, what)
+    if arr.shape != (n, width):
+        raise ValueError(f"{what} must have shape ({n}, {width}), got {arr.shape}")
+    return _mask_chunk(arr, what)
+
+
+def _nonnegative_int(value: Any, what: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise TypeError(f"{what} must be a non-negative integer, got {type(value).__name__}")
+    if value < 0:
+        raise ValueError(f"{what} must be a non-negative integer, got {value}")
+    return int(value)
+
+
+def sample_reference_windows(
+    source: Mapping[str, Any] | ObservedWorlds,
+    *,
+    length: int,
+    n_windows: int,
+    n_treatments: int,
+    n_covariates: int,
+    seed: int,
+    treatment_eligible: Any = None,
+    covariate_eligible: Any = None,
+    worlds: Any = None,
+    world_ids: Any = None,
+    group_ids: Any = None,
+) -> ReferenceWindows:
+    """Extract aligned windows and explicit role subsets from existing data.
+
+    ``source`` is a corpus mapping with observable arrays and active masks,
+    or :class:`~pymc_generator.descriptors.ObservedWorlds`. No generation or
+    model evaluation is performed. ``length`` and ``n_windows`` are positive
+    integers; the two explicit role counts are non-negative integers.
+
+    ``worlds`` accepts the existing world-selector forms (positions, a slice
+    or a boolean mask) and defines an ordered source-world pool. Caller
+    ``treatment_eligible`` and ``covariate_eligible`` are binary masks of
+    shape ``(pool_size, original_role_width)`` in that pool's order. They
+    intersect, never override, the source active masks. Omitted masks allow
+    every source-active column. Neither eligibility nor sampling depends on
+    series values, so a cropped all-zero active series stays eligible.
+
+    Eligible pool worlds are sampled uniformly without replacement using a
+    local generator initialized by ``seed``. Each sampled world contributes
+    one uniformly sampled contiguous window and uniformly sampled columns
+    without replacement for each role. All roles and the outcome use that
+    same original world and time window; a missing ObservedWorlds outcome
+    remains absent. Source float16/32/64 resolution is retained per role.
+
+    Optional integer ``world_ids`` and ``group_ids`` have shape
+    ``(pool_size,)`` and align to ``worlds`` BEFORE eligibility filtering or
+    sampling, not to the returned windows. World IDs default to original
+    source positions and must be non-negative. Group IDs default to corpus
+    ``cell_id`` or unknown ``-1`` and must be at least ``-1``; repeated
+    groups are not converted to independent singleton groups. All IDs must
+    fit in int64. A corpus ``cell_id`` has one entry per original source
+    world and is validated by the same rules, even when IDs are overridden.
+
+    Run this helper separately with caller-defined masks and counts for
+    different series groups. Extraction and projection change the reference
+    population and do not automatically preserve conformal guarantees.
+    Masked arrays are rejected rather than silently discarding their masks.
+    """
+    length = _positive_int(length, "length")
+    n_windows = _positive_int(n_windows, "n_windows")
+    n_treatments = _nonnegative_int(n_treatments, "n_treatments")
+    n_covariates = _nonnegative_int(n_covariates, "n_covariates")
+    seed = _seed(seed)
+
+    if isinstance(source, ObservedWorlds):
+        arrays = {
+            key: _reference_array(getattr(source, key), key)
+            for key in _CORPUS_OBSERVABLE_KEYS
+            if getattr(source, key) is not None
+        }
+        n_total, horizon = source.n_worlds, source.n_time_steps
+        resolution = source.resolution
+    elif isinstance(source, Mapping):
+        arrays = {
+            key: _reference_array(source[key], key)
+            for key in _CORPUS_OBSERVABLE_KEYS
+            if key in source
+        }
+        n_total, horizon = _corpus_layout(arrays)
+        resolution = (
+            _resolution(arrays["treatment_raw"].dtype),
+            _resolution(arrays["covariates"].dtype),
+            _resolution(arrays["outcome_raw"].dtype),
+        )
+    else:
+        raise TypeError(
+            f"source must be a corpus mapping or ObservedWorlds, got {type(source).__name__}"
+        )
+    if horizon == 0:
+        raise ValueError("source has no time steps")
+    if length > horizon:
+        raise ValueError(f"length {length} exceeds source horizon {horizon}")
+    pool = _validate_world_selector(worlds, n_total)
+    n_pool = int(pool.size)
+    treatment_mask = _reference_mask(
+        arrays["treatment_active_mask"][pool],
+        n_pool,
+        arrays["treatment_raw"].shape[2],
+        "treatment_active_mask",
+    )
+    covariate_mask = _reference_mask(
+        arrays["covariate_active_mask"][pool],
+        n_pool,
+        arrays["covariates"].shape[2],
+        "covariate_active_mask",
+    )
+    for value, active, what in (
+        (treatment_eligible, treatment_mask, "treatment_eligible"),
+        (covariate_eligible, covariate_mask, "covariate_eligible"),
+    ):
+        if value is not None:
+            active &= _reference_mask(value, n_pool, active.shape[1], what)
+
+    ids = pool if world_ids is None else _reference_ids(world_ids, n_pool, "world_ids", minimum=0)
+    default_groups = np.full(n_pool, -1, dtype=np.int64)
+    if isinstance(source, Mapping) and "cell_id" in source:
+        default_groups = _reference_ids(source["cell_id"], n_total, "corpus cell_id", minimum=-1)[
+            pool
+        ]
+    groups = (
+        default_groups
+        if group_ids is None
+        else _reference_ids(group_ids, n_pool, "group_ids", minimum=-1)
+    )
+    eligible = np.flatnonzero(
+        (treatment_mask.sum(axis=1) >= n_treatments) & (covariate_mask.sum(axis=1) >= n_covariates)
+    )
+    n_eligible = int(eligible.size)
+    if n_windows > n_eligible:
+        raise ValueError(
+            f"n_windows={n_windows} exceeds {n_eligible} eligible source worlds; each needs "
+            f"at least {n_treatments} eligible treatments and {n_covariates} eligible covariates"
+        )
+
+    rng = np.random.default_rng(seed)
+    chosen = rng.choice(eligible, size=n_windows, replace=False)
+    positions = pool[chosen]
+    starts = rng.integers(0, horizon - length + 1, size=n_windows, dtype=np.int64)
+    treatment_indices = np.empty((n_windows, n_treatments), dtype=np.int64)
+    covariate_indices = np.empty((n_windows, n_covariates), dtype=np.int64)
+    for row, position in enumerate(chosen):
+        treatment_indices[row] = rng.choice(
+            np.flatnonzero(treatment_mask[position]), size=n_treatments, replace=False
+        )
+        covariate_indices[row] = rng.choice(
+            np.flatnonzero(covariate_mask[position]), size=n_covariates, replace=False
+        )
+
+    chunk = (
+        _observed_chunk(source, positions)
+        if isinstance(source, ObservedWorlds)
+        else _corpus_chunk(arrays, positions, False, resolution)
+    )
+    world_rows = np.arange(n_windows, dtype=np.int64)[:, None]
+    time = starts[:, None] + np.arange(length, dtype=np.int64)[None, :]
+    treatment = chunk.treatment[
+        world_rows[:, :, None], time[:, :, None], treatment_indices[:, None, :]
+    ].astype(_resolution_dtype(resolution[0]), copy=False)
+    covariates = chunk.covariates[
+        world_rows[:, :, None], time[:, :, None], covariate_indices[:, None, :]
+    ].astype(_resolution_dtype(resolution[1]), copy=False)
+    outcome = (
+        None
+        if chunk.outcome is None
+        else chunk.outcome[world_rows, time].astype(_resolution_dtype(resolution[2]), copy=False)
+    )
+    observed = ObservedWorlds(treatment_raw=treatment, covariates=covariates, outcome_raw=outcome)
+    return ReferenceWindows(
+        observed=observed,
+        world_positions=positions,
+        world_ids=ids[chosen],
+        group_ids=groups[chosen],
+        starts=starts,
+        treatment_indices=treatment_indices,
+        covariate_indices=covariate_indices,
+        n_eligible_worlds=n_eligible,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +924,15 @@ def _structural_duplicates(
     redundant = np.zeros(len(definitions), dtype=bool)
     first_seen: set[tuple[str, str, str, int | None]] = set()
     for j, d in enumerate(definitions):
-        if d.reducer is None or _reduced_set_size(d.role, n_treatments, n_covariates) != 1:
+        size = _reduced_set_size(d.role, n_treatments, n_covariates)
+        if (
+            size is not None
+            and d.role in ("treatment_pair", "covariate_pair")
+            and d.statistic in ("lagged_pearson", "diff_lagged_pearson")
+            and d.lag != 0
+        ):
+            size *= 2
+        if d.reducer is None or size != 1:
             continue
         key = (d.role, d.statistic, d.view, d.lag)
         if key in first_seen:
