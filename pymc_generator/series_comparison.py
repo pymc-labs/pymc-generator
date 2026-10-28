@@ -184,9 +184,11 @@ class _SeriesInput:
     resolution: np.ndarray
     scale_available: np.ndarray
     normalization: tuple[str, float] | None
+    constant: np.ndarray | None
 
 
 def _series_input(value: Any, resolution: Any, name: str) -> _SeriesInput:
+    constant: np.ndarray | None = None
     if isinstance(value, QuantileNormalization):
         if resolution is not None:
             raise ValueError(f"{name} already carries source resolution")
@@ -195,6 +197,8 @@ def _series_input(value: Any, resolution: Any, name: str) -> _SeriesInput:
         raw = value.values
         eps = value.resolution
         available = value.scale_available
+        _unmasked(value.constant, f"{name} source-constant mask")
+        constant = np.array(value.constant, dtype=bool, copy=True)
         normalization = (value.mode, value.quantile)
     else:
         _unmasked(value, name)
@@ -211,7 +215,9 @@ def _series_input(value: Any, resolution: Any, name: str) -> _SeriesInput:
     scale_available = np.array(available, dtype=bool, copy=True)
     for array in (snapshot, precision, scale_available):
         array.setflags(write=False)
-    return _SeriesInput(snapshot, precision, scale_available, normalization)
+    if constant is not None:
+        constant.setflags(write=False)
+    return _SeriesInput(snapshot, precision, scale_available, normalization, constant)
 
 
 def _names(metrics: Sequence[str], lags: Sequence[int]) -> tuple[tuple[str, ...], tuple[int, ...]]:
@@ -282,9 +288,22 @@ def _correlations(left: _SeriesInput, right: _SeriesInput, *, differences: bool)
             floor = 8 * source.resolution * np.max(np.abs(scaled), axis=1)
             data = np.diff(scaled, axis=1)
         centered, available = _centered_rows(data, source.resolution, constant_floor=floor)
+        if source.constant is not None:
+            available &= ~source.constant
         units.append(centered)
         valid.append(available)
-    out = np.asarray(units[0] @ units[1].T)
+    # Every pair uses the same contiguous time-axis reduction, including 1x1.
+    # Reuse a bounded workspace rather than a query x reference x time tensor.
+    n_time = units[0].shape[1]
+    block_size = max(1, (1 << 18) // max(1, n_time))
+    out = np.empty((units[0].shape[0], units[1].shape[0]))
+    workspace = np.empty((min(block_size, units[1].shape[0]), n_time))
+    for row, left_row in enumerate(units[0]):
+        for start in range(0, units[1].shape[0], block_size):
+            stop = min(start + block_size, units[1].shape[0])
+            block = workspace[: stop - start]
+            np.multiply(left_row, units[1][start:stop], out=block)
+            np.sum(block, axis=1, out=out[row, start:stop])
     np.clip(out, -1, 1, out=out)
     out[~valid[0], :] = np.nan
     out[:, ~valid[1]] = np.nan
@@ -297,7 +316,10 @@ def _profile(source: _SeriesInput, lags: tuple[int, ...]) -> np.ndarray:
     result = temporal_statistics(
         source.values[:, :, None], lags=lags, resolution=source.resolution[:, None]
     )
-    return result.values["overlap_pearson"][:, 0, :]
+    values = result.values["overlap_pearson"][:, 0, :]
+    if source.constant is not None:
+        values[source.constant] = np.nan
+    return values
 
 
 @dataclass(frozen=True)

@@ -216,6 +216,19 @@ def test_unknown_groups_require_explicit_opt_out_and_empty_calibration_has_no_ra
             calibration_groups=[1],
             bank_groups=[2],
         )
+    opted_out = assess_series_similarity(
+        np.ones((1, 3)),
+        [[0.0, 0, 0], [2.0, 2, 2]],
+        np.zeros((1, 3)),
+        lags=(),
+        metrics=("mse",),
+        require_disjoint_groups=False,
+    )
+    np.testing.assert_array_equal(opted_out.query_matches.scores["mse"], [1.0])
+    np.testing.assert_array_equal(opted_out.calibration_matches.scores["mse"], [0.0, 4.0])
+    assert opted_out.percentiles["mse"][0] == 0.5
+    assert opted_out.finite_reference_counts["mse"] == 2
+    assert opted_out.group_disjoint is False
     result = assess_series_similarity(
         values,
         np.empty((0, 5)),
@@ -325,6 +338,114 @@ def test_finite_signed_correlation_ranks_use_only_eligible_reference_scores():
     assert result.finite_reference_counts["level_r"] == 2
     assert result.query_matches.candidate_counts["level_r"][0] == 2
     assert result.query_matches.indices["level_r"][0] == 0
+
+
+@pytest.mark.parametrize(
+    ("metric", "n_time"),
+    [
+        ("level_r", 3),
+        ("diff_r", 4),
+        ("level_r", 10007),
+        ("diff_r", 10007),
+        ("level_r", 10008),
+        ("diff_r", 10008),
+    ],
+)
+def test_correlations_are_invariant_to_query_and_reference_batching(metric, n_time):
+    rng = np.random.default_rng(2026)
+    query = rng.normal(size=(9, n_time))
+    reference = rng.normal(size=(31, n_time))
+    full = compare_series(query, reference, lags=(), metrics=(metric,)).values[metric]
+    query_rows = np.concatenate(
+        [
+            compare_series(row[None], reference, lags=(), metrics=(metric,)).values[metric]
+            for row in query
+        ],
+        axis=0,
+    )
+    reference_columns = np.concatenate(
+        [
+            compare_series(query, row[None], lags=(), metrics=(metric,)).values[metric]
+            for row in reference
+        ],
+        axis=1,
+    )
+    np.testing.assert_array_equal(full, query_rows)
+    np.testing.assert_array_equal(full, reference_columns)
+    single_pairs = np.array(
+        [
+            [
+                compare_series(left[None], right[None], lags=(), metrics=(metric,)).values[metric][
+                    0, 0
+                ]
+                for right in reference
+            ]
+            for left in query
+        ]
+    )
+    np.testing.assert_array_equal(full, single_pairs)
+
+
+@pytest.mark.parametrize(
+    ("n_time", "metric", "expected"),
+    [
+        (10007, "level_r", 0.25),
+        (10007, "diff_r", 0.75),
+        (10008, "level_r", 0.25),
+        (10008, "diff_r", 0.25),
+    ],
+)
+def test_long_singleton_assessment_retains_identical_calibration_score_ties(
+    n_time, metric, expected
+):
+    base, bank = np.random.default_rng(744).normal(size=(2, n_time))
+    result = assess_series_similarity(
+        base[None],
+        np.vstack((base, -base, np.ones(n_time))),
+        bank[None],
+        lags=(),
+        metrics=(metric,),
+        query_groups=["q"],
+        calibration_groups=["c0", "c1", "c2"],
+        bank_groups=["b"],
+    )
+    assert result.query_matches.scores[metric][0] == result.calibration_matches.scores[metric][0]
+    assert result.percentiles[metric][0] == expected
+    assert result.lower[metric][0] == expected - 0.25
+    assert result.upper[metric][0] == expected + 0.25
+    assert result.tie_counts[metric][0] == 1
+    assert result.finite_reference_counts[metric] == 2
+
+
+def test_quantile_scaling_cannot_promote_source_constants_into_shape_matches():
+    unresolved = 0.75 + np.spacing(0.75) * np.array([0, 6, 1, 2, 0])
+    values = np.stack((unresolved, [0.5, 1, 0, 2, 1]))
+    normalized = normalize_series_quantile(values, quantile=0.75, mode="absolute")
+    np.testing.assert_array_equal(normalized.constant, [True, False])
+    shape_metrics = ("level_r", "diff_r", "overlap_pearson_rmse")
+    comparison = compare_series(normalized, normalized, lags=(1,), metrics=("mse", *shape_metrics))
+    assert comparison.values["mse"][0, 0] == 0
+    for metric in shape_metrics:
+        np.testing.assert_array_equal(
+            np.isfinite(comparison.values[metric]), [[False, False], [False, True]]
+        )
+    assessment = assess_series_similarity(
+        normalized,
+        normalized,
+        normalized,
+        lags=(1,),
+        metrics=("mse", *shape_metrics),
+        query_groups=["q0", "q1"],
+        calibration_groups=["c0", "c1"],
+        bank_groups=["b0", "b1"],
+    )
+    assert assessment.finite_reference_counts["mse"] == 2
+    np.testing.assert_array_equal(assessment.percentiles["mse"], [0.5, 0.5])
+    for metric in shape_metrics:
+        assert assessment.finite_reference_counts[metric] == 1
+        assert assessment.query_matches.candidate_counts[metric][0] == 0
+        assert np.isnan(assessment.percentiles[metric][0])
+        assert assessment.percentiles[metric][1] == 0.5
 
 
 @pytest.mark.parametrize("normalized", [False, True])

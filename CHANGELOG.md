@@ -16,11 +16,14 @@ read the migration notes before upgrading.
   differences. New descriptor families are opt-in; existing raw-input defaults
   and sample ACF definitions remain unchanged. Waveform comparisons report
   direct MSE, signed level/difference correlation, and overlap-profile RMSE;
-  held-out series searching the same bank provide descriptive empirical ranks
-  with tie bounds and finite counts, not origin probabilities or new calibrated
-  tests. Five standalone renderers and an assertion-bearing synthetic guide
-  demonstrate query-versus-reference comparisons without model evaluation,
-  reference generation/tuning, or interactive report assembly.
+  correlations use fixed per-pair reductions so query/calibration batching does
+  not perturb exact score ties. Source-constant rows remain shape-ineligible
+  after quantile scaling. Held-out series searching the same bank provide
+  descriptive empirical ranks with tie bounds and finite counts, not origin
+  probabilities or new calibrated tests. Five standalone renderers and an
+  assertion-bearing synthetic guide demonstrate query-versus-reference
+  comparisons without model evaluation, reference generation/tuning, or
+  interactive report assembly.
 - **Dataset typicality against a corpus or a generator.** `pg.typicality(reference, query)`
   asks of one observed dataset (treatments, covariates and outcome over time)
   whether it could be a world of a generated corpus: a split-conformal p-value

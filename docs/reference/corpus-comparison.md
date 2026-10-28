@@ -29,6 +29,11 @@ candidate is represented by `NaN`, index `-1`, and count `0`. Empirical ranks an
 reference quantile bands are descriptive, not origin probabilities, confidence
 intervals, causal evidence, or new calibrated tests.
 
+Correlations use the same contiguous per-pair time-axis reduction for singleton
+and bulk searches, preserving exact score ties between query and calibration
+pools. Quantile-normalized source-constant rows remain ineligible for shape
+matching; this does not exclude their otherwise-available MSE comparisons.
+
 ## Reference selection
 
 ::: pymc_generator.dataset_typicality
