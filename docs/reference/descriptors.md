@@ -68,6 +68,14 @@ Feature names spell this out: `covariate_level_to_variation_median`,
 | `abs_pearson`, `diff_abs_pearson` | `abs(Pearson)` in levels / differences | Over treatment pairs, covariate pairs, treatment-covariate and treatment-outcome pairs. |
 | `truth_*_share` | net top-cut contribution shares | Only with `include_truth=True`, generated sources only, `observable=False`. |
 
+The original families remain the default (`DEFAULT_STATISTICS`); `STATISTICS`
+also includes explicitly selectable `level_std`, `difference_std`,
+`time_correlation`, `overlap_pearson`, `diff_overlap_pearson`, all
+`ACTIVITY_STATISTICS`, and signed `lagged_pearson`/`diff_lagged_pearson`. The signed
+pair families require explicit `dependence_lags`; within-role nonzero lags reduce
+both ordered directions. See [existing-corpus comparisons](corpus-comparison.md)
+for exact definitions, censoring, source precision, and reference-selection rules.
+
 Moments use population `std`, as in `data_diagnostics`. Degenerate series are
 detected from exact ranges rather than a computed `std`, whose rounding residue
 misses true constants. With `eps` the machine epsilon of the input dtype
@@ -78,11 +86,13 @@ their range is at most `8 * eps * max|x|`, and its **mean is zero** when
 float64 summation error — and it takes both signs. A nonzero constant has infinite
 level-to-variation (an all-zero series has none: it is undefined), CV 0,
 roughness and spike 0, and no autocorrelation or correlation; a ramp has
-roughness and spike 0 and no differenced statistics. There is no absolute
-epsilon, and every series is first rescaled exactly by a power of two, so values
-from `1e-300` to `1e300` describe identically. Roughness and spike need at least
-three steps (`T >= 4`), like every lag-based statistic. Levels are
-random-walk-like, so level-view correlations are large even between independent
+roughness and spike 0 and no differenced correlations. There is no absolute
+epsilon. The scale-invariant default families are first rescaled exactly by a
+power of two, so magnitudes from `1e-300` to `1e300` describe identically. New
+standard deviations intentionally retain original units; activity statistics use
+original exact zeros. Roughness and spike need at least three steps (`T >= 4`).
+Overlap and lagged correlations require at least three observations.
+Levels are random-walk-like, so level-view correlations are large even between independent
 series; read the `diff_` companions alongside them.
 
 ## Valid, ineligible, undefined
@@ -128,7 +138,9 @@ reference range, and a descriptive Kolmogorov–Smirnov distance.
   different realizations; a small distance is descriptor similarity, not
   repeated data.
 * **Not inference.** No p-values or significance: worlds within a cell are
-  dependent and descriptors are noisy functions of finite series.
+  dependent and descriptors are noisy functions of finite series. For a
+  calibrated answer to "could this dataset come from this corpus or
+  generator?", see [dataset typicality](typicality.md).
 * **Not a support guarantee.** A target can be ordinary on every marginal and
   still sit far from every reference world jointly; check both.
 
@@ -142,6 +154,7 @@ reference range, and a descriptive Kolmogorov–Smirnov distance.
         - ObservedWorlds
         - FeatureDefinition
         - STATISTICS
+        - DEFAULT_STATISTICS
         - REDUCERS
         - PAIR_ROLES
         - METADATA_COLUMNS

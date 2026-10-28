@@ -24,6 +24,17 @@ _DIAGNOSTICS_EXPORTS_HOLD = (
     "assert inspect.isclass(pg.DataDiagnostics), f'DataDiagnostics is {pg.DataDiagnostics!r}'"
 )
 
+# `typicality` is a lazy public callable whose module must not share its name:
+# importing a submodule binds it as a package attribute, which would replace the
+# function from the second access on.
+_TYPICALITY_EXPORTS_HOLD = (
+    "import inspect; "
+    "f = pg.typicality; "
+    "assert inspect.isfunction(f), f'typicality resolved to {f!r}'; "
+    "assert pg.typicality is f, 'a second access changed typicality'; "
+    "assert f is pg.dataset_typicality.typicality, 'export is not the module function'"
+)
+
 
 def test_all_public_symbols_resolve():
     # guards the lazy __getattr__ map — a stale entry would only fail on access.
@@ -48,6 +59,23 @@ def test_diagnostics_exports_hold_under_both_import_orders(prologue):
     # attribute is a one-shot import-time effect an imported package would hide.
     r = subprocess.run(
         [sys.executable, "-c", f"{prologue}; {_DIAGNOSTICS_EXPORTS_HOLD}"],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize(
+    "prologue",
+    (
+        "import pymc_generator as pg",
+        "import pymc_generator.dataset_typicality; import pymc_generator as pg",
+    ),
+    ids=("package-first", "submodule-first"),
+)
+def test_typicality_export_stays_the_function_under_both_import_orders(prologue):
+    r = subprocess.run(
+        [sys.executable, "-c", f"{prologue}; {_TYPICALITY_EXPORTS_HOLD}"],
         capture_output=True,
         text=True,
     )
@@ -82,14 +110,22 @@ def test_import_is_light():
     assert r.returncode == 0, "import pymc_generator pulled a heavy dependency at import time"
 
 
-def test_importing_the_diagnostics_module_stays_light():
-    # diagnostics is pure numpy over retained arrays: pandas is TYPE_CHECKING-only
-    # there and the frame helpers import it on latent_unobserved.
+@pytest.mark.parametrize(
+    "module",
+    (
+        "pymc_generator.diagnostics",
+        "pymc_generator.dataset_typicality",
+        "pymc_generator.series_comparison",
+    ),
+)
+def test_importing_a_numpy_only_module_stays_light(module):
+    # diagnostics and dataset typicality are pure numpy over retained arrays:
+    # pandas is TYPE_CHECKING-only there and the frame helpers import it lazily.
     code = (
-        "import sys, pymc_generator.diagnostics; "
+        f"import sys, {module}; "
         "heavy = [m for m in ('pytensor', 'pymc', 'pymc_marketing', 'scipy', 'pandas', 'matplotlib') "
         "if m in sys.modules]; "
         "sys.exit(1 if heavy else 0)"
     )
     r = subprocess.run([sys.executable, "-c", code])
-    assert r.returncode == 0, "pymc_generator.diagnostics pulled a heavy dependency at import time"
+    assert r.returncode == 0, f"{module} pulled a heavy dependency at import time"

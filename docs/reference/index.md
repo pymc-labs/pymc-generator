@@ -23,6 +23,9 @@ it.
 | [`data_diagnostics`](diagnostics.md#pymc_generator.diagnostics.data_diagnostics) | [Data diagnostics](diagnostics.md) | Dependence, collinearity, dynamics and the contribution hierarchy of the generated series. |
 | [`world_descriptors`](descriptors.md#pymc_generator.descriptors.world_descriptors) / [`ObservedWorlds`](descriptors.md#pymc_generator.descriptors.ObservedWorlds) | [World descriptors](descriptors.md) | One row of named statistics per world, for generated or observed data. |
 | [`summarize_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.summarize_descriptors) / [`bin_counts`](descriptors.md#pymc_generator.descriptor_analysis.bin_counts) / [`nearest_worlds`](descriptors.md#pymc_generator.descriptor_analysis.nearest_worlds) / [`compare_descriptors`](descriptors.md#pymc_generator.descriptor_analysis.compare_descriptors) | [World descriptors](descriptors.md) | Independent between-world analyses: distributions, region counts, similarity, reference comparison. |
+| [`typicality`](typicality.md#pymc_generator.dataset_typicality.typicality) / [`matched_prior`](typicality.md#pymc_generator.dataset_typicality.matched_prior) | [Dataset typicality](typicality.md) | How typical one observed dataset is of a corpus or a generator: a calibrated p-value and a descriptor profile. |
+| `sample_reference_windows`, `temporal_statistics`, `activity_runs`, `lagged_dependence` | [Existing-corpus comparisons](corpus-comparison.md) | Select aligned reference views and describe temporal, activity, and signed lag properties. |
+| `normalize_series_quantile`, `compare_series`, `nearest_series`, `assess_series_similarity` | [Existing-corpus comparisons](corpus-comparison.md) | Explicit scaling, alignment-sensitive waveform matching, and descriptive held-out score percentiles. |
 
 ## Import surface
 
@@ -53,6 +56,16 @@ pg.summarize_descriptors     # descriptor distributions, optionally by stratum
 pg.bin_counts                # worlds per explicit descriptor region
 pg.nearest_worlds            # most similar worlds in a chosen feature space
 pg.compare_descriptors       # where one collection sits relative to another
+pg.typicality                # how typical a dataset is of a reference corpus
+pg.matched_prior             # a prior conditioned on a dataset's shape
+pg.sample_reference_windows  # explicit windows/projection from existing data
+pg.temporal_statistics       # variability, time correlation, overlap profiles
+pg.activity_runs             # exact-zero spells, lengths and boundary censoring
+pg.lagged_dependence         # signed lag association within original worlds
+pg.normalize_series_quantile # opt-in scaling with source precision/eligibility
+pg.compare_series            # direct waveform pair matrices
+pg.nearest_series            # best signed/lowest-distance finite candidates
+pg.assess_series_similarity  # query scores versus held-out shared-bank scores
 ```
 
 Public symbols are lazy-loaded, so `import pymc_generator` stays light — the

@@ -61,6 +61,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .worlds import SCM
 
 __all__ = [
+    "ACTIVITY_STATISTICS",
     "CONTRIBUTION_BASES",
     "CONTRIBUTION_FIELDS",
     "DEFAULT_MAX_LAG",
@@ -69,6 +70,7 @@ __all__ = [
     "SERIES_SLOTS",
     "VIEWS",
     "VIF_SCOPES",
+    "ActivityRuns",
     "ContributionBudget",
     "ContributionClosure",
     "ContributionDescriptor",
@@ -76,11 +78,16 @@ __all__ = [
     "DataDiagnostics",
     "DependenceDiagnostics",
     "DiagnosticView",
+    "LaggedDependence",
     "SeriesDescriptor",
     "SeriesDiagnostics",
     "TemporalDiagnostics",
+    "TemporalStatistics",
     "VIFDiagnostics",
+    "activity_runs",
     "data_diagnostics",
+    "lagged_dependence",
+    "temporal_statistics",
 ]
 
 Scope = Literal["nodes", "decomposition", "counterfactual"]
@@ -94,6 +101,24 @@ SCOPES: tuple[str, ...] = ("nodes", "decomposition", "counterfactual")
 
 #: The two views every series is reported in.
 VIEWS: tuple[str, ...] = ("levels", "differences")
+
+#: Exact-zero activity summaries, in report order.
+ACTIVITY_STATISTICS: tuple[str, ...] = (
+    "leading_inactive_length",
+    "trailing_inactive_length",
+    "longest_active_length",
+    "longest_inactive_length",
+    "active_spell_count",
+    "inactive_spell_count",
+    "complete_active_spell_count",
+    "complete_inactive_spell_count",
+    "censored_active_spell_count",
+    "censored_inactive_spell_count",
+    "complete_active_length_median",
+    "complete_inactive_length_median",
+    "switching_rate",
+    "interior_inactive_fraction",
+)
 
 #: The eight per-world descriptive slots, in stored order.
 SERIES_SLOTS: tuple[str, ...] = (
@@ -2960,4 +2985,663 @@ def data_diagnostics(
         contributions=bases["base_direct_plus_indirect"],
         contribution_bases=bases,
         views=view_results,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Focused diagnostics over caller-supplied series
+# ---------------------------------------------------------------------------
+
+
+def _series_numeric(values: Any, name: str) -> tuple[np.ndarray, float]:
+    """Reject masks before conversion and retain the source precision."""
+    if np.ma.isMaskedArray(values):
+        raise TypeError(f"{name} must not be a masked array")
+    raw = np.asarray(values)
+    if raw.dtype.kind not in "fiu":
+        raise TypeError(f"{name} must be a real numeric array")
+    eps = float(np.finfo(np.float64).eps)
+    if raw.dtype.kind == "f":
+        eps = max(eps, float(np.finfo(raw.dtype).eps))
+    with np.errstate(over="ignore", invalid="ignore"):
+        return np.asarray(raw, dtype=np.float64), eps
+
+
+def _series_input(values: Any, *, finite: bool = True) -> tuple[np.ndarray, float]:
+    block, eps = _series_numeric(values, "values")
+    if block.ndim != 3:
+        raise ValueError("values must have shape (world, time, series)")
+    if block.shape[1] == 0:
+        raise ValueError("values must have a nonempty time axis")
+    if finite and not np.isfinite(block).all():
+        raise ValueError("values must contain only finite observations")
+    return block, eps
+
+
+def _series_broadcast(
+    values: Any, shape: tuple[int, ...], name: str, *, boolean: bool = False
+) -> np.ndarray:
+    if np.ma.isMaskedArray(values):
+        raise TypeError(f"{name} must not be a masked array")
+    raw = np.asarray(values)
+    if boolean:
+        if raw.dtype.kind not in "buif" or not np.all((raw == 0) | (raw == 1)):
+            raise ValueError(f"{name} must be a binary 0/1 mask")
+    elif raw.dtype.kind not in "fiu":
+        raise TypeError(f"{name} must be real numeric")
+    try:
+        out = np.broadcast_to(raw, shape)
+    except ValueError as exc:
+        raise ValueError(f"{name} must broadcast to {shape}") from exc
+    return np.array(out, dtype=bool if boolean else np.float64)
+
+
+def _series_resolution(resolution: Any, shape: tuple[int, ...], default: float) -> np.ndarray:
+    eps = _series_broadcast(default if resolution is None else resolution, shape, "resolution")
+    if not np.isfinite(eps).all() or np.any(eps <= 0.0):
+        raise ValueError("resolution must contain positive finite machine epsilons")
+    return np.asarray(np.maximum(eps, float(np.finfo(np.float64).eps)))
+
+
+def _series_lags(lags: Any, *, signed: bool = False) -> tuple[int, ...]:
+    """Validate an explicit axis, retaining its order and allowing an empty axis."""
+    if np.ma.isMaskedArray(lags):
+        raise TypeError("lags must not be a masked array")
+    if isinstance(lags, np.ndarray):
+        if lags.ndim != 1:
+            raise ValueError("lags must be one-dimensional")
+    elif isinstance(lags, str) or not isinstance(lags, Sequence):
+        raise TypeError("lags must be an explicit sequence of integers")
+    out: list[int] = []
+    for lag in lags:
+        if isinstance(lag, (bool, np.bool_)) or not isinstance(lag, (int, np.integer)):
+            raise TypeError("lags must contain integers, not booleans or floats")
+        if not signed and int(lag) <= 0:
+            raise ValueError("lags must contain positive integers")
+        out.append(int(lag))
+    if len(set(out)) != len(out):
+        raise ValueError("lags must not repeat an entry")
+    return tuple(out)
+
+
+def _series_row_moments(
+    values: np.ndarray,
+    resolution: np.ndarray,
+    constant_floor: np.ndarray | None = None,
+    finite: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Centered rows in a power-of-two scale, without large squared moments.
+
+    Translate first whenever subtraction is safe, so variation on a large
+    baseline is not rounded away by rescaling the levels. Opposite-signed
+    extreme values are scaled before subtraction instead. The returned
+    exponent restores the original units of each centered row.
+    """
+    usable = np.isfinite(values)
+    if finite is not None:
+        usable &= finite
+    counts = np.count_nonzero(usable, axis=1)
+    centered = np.zeros_like(values)
+    exponents = np.zeros(values.shape[0], dtype=np.int64)
+    varies = np.zeros(values.shape[0], dtype=bool)
+    half_max = float(np.finfo(np.float64).max) / 2.0
+    for row in range(values.shape[0]):
+        if counts[row] == 0:
+            continue
+        x = values[row, usable[row]]
+        maximum = float(np.max(np.abs(x)))
+        wide = maximum > half_max and np.min(x) < 0.0 < np.max(x)
+        if wide:
+            exponent = int(np.frexp(maximum)[1])
+            with np.errstate(under="ignore"):
+                shifted = np.ldexp(x, -exponent)
+            shifted -= shifted[0]
+        else:
+            shifted = x - x[0]
+            extent = float(np.max(np.abs(shifted)))
+            exponent = int(np.frexp(extent)[1])
+            shifted = np.ldexp(shifted, -exponent)
+        exponents[row] = exponent
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            if constant_floor is None:
+                scaled_floor = np.ldexp(maximum, -exponent) * (4.0 * resolution[row])
+            else:
+                scaled_floor = np.ldexp(constant_floor[row], -exponent)
+        spread = float(np.max(shifted) - np.min(shifted))
+        if spread > scaled_floor:
+            varies[row] = True
+            centered[row, usable[row]] = shifted - shifted.mean()
+    return centered, exponents, varies, counts
+
+
+def _centered_rows(
+    values: Any,
+    resolution: Any,
+    constant_floor: Any = None,
+    finite: Any = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return centered unit rows and their precision-aware validity mask.
+
+    ``values`` is ``(N, T)``; resolution and an optional absolute range floor
+    broadcast to ``(N,)``. Nonfinite entries and entries excluded by ``finite``
+    are zero in the returned rows and do not enter centering. At least three
+    jointly retained observations and a range above ``4 * eps * maxabs`` are
+    required. Difference callers supply ``8 * eps * original_level_maxabs``
+    in the same safe scale as their differences.
+
+    Translation precedes normalization except for overflow-prone wide ranges.
+    Invalid rows are all zero, never arbitrary unit vectors of rounding noise.
+    """
+    rows, default = _series_numeric(values, "values")
+    if rows.ndim != 2:
+        raise ValueError("values must have shape (row, time)")
+    eps = _series_resolution(resolution, (rows.shape[0],), default)
+    floor = None
+    if constant_floor is not None:
+        floor = _series_broadcast(constant_floor, (rows.shape[0],), "constant_floor")
+        if np.any(np.isnan(floor)) or np.any(floor < 0.0):
+            raise ValueError("constant_floor must contain nonnegative range floors")
+    keep = None if finite is None else _series_broadcast(finite, rows.shape, "finite", boolean=True)
+    centered, _, varies, counts = _series_row_moments(rows, eps, floor, keep)
+    valid = varies & (counts >= _MIN_PAIRS)
+    norms = np.sqrt(np.sum(centered * centered, axis=1))
+    unit = np.divide(
+        centered,
+        norms[:, None],
+        out=np.zeros_like(centered),
+        where=valid[:, None],
+    )
+    return unit, valid
+
+
+def _series_std(
+    rows: np.ndarray,
+    resolution: np.ndarray,
+    *,
+    constant_floor: np.ndarray | None = None,
+    finite: np.ndarray | None = None,
+    exponent_shift: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    centered, exponents, varies, counts = _series_row_moments(
+        rows, resolution, constant_floor, finite
+    )
+    variance = np.divide(
+        np.sum(centered * centered, axis=1),
+        counts,
+        out=np.zeros(rows.shape[0]),
+        where=counts > 0,
+    )
+    if exponent_shift is not None:
+        exponents += exponent_shift
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        std = np.ldexp(np.sqrt(variance), exponents)
+    valid = (counts > 0) & np.isfinite(std) & ((std > 0.0) | ~varies)
+    return np.where(valid, std, np.nan), valid, counts
+
+
+def _series_differences(
+    rows: np.ndarray, resolution: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Difference only after scaling; return restoration exponents and floors."""
+    finite = np.isfinite(rows)
+    maximum = np.max(np.where(finite, np.abs(rows), 0.0), axis=1, initial=0.0)
+    exponents = np.asarray(np.frexp(maximum)[1], dtype=np.int64)
+    with np.errstate(under="ignore"):
+        scaled = np.ldexp(np.where(finite, rows, np.nan), -exponents[:, None])
+    with np.errstate(over="ignore", under="ignore"):
+        floor = (resolution * np.ldexp(maximum, -exponents)) * 8.0
+    return np.diff(scaled, axis=1), exponents, floor
+
+
+def _series_pearson(
+    left: np.ndarray,
+    right: np.ndarray,
+    left_resolution: np.ndarray,
+    right_resolution: np.ndarray,
+    *,
+    left_floor: np.ndarray | None = None,
+    right_floor: np.ndarray | None = None,
+    eligible: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    finite = np.isfinite(left) & np.isfinite(right)
+    if eligible is not None:
+        finite &= eligible[:, None]
+    left_unit, left_valid = _centered_rows(left, left_resolution, left_floor, finite)
+    right_unit, right_valid = _centered_rows(right, right_resolution, right_floor, finite)
+    valid = left_valid & right_valid
+    correlation = np.clip(np.sum(left_unit * right_unit, axis=1), -1.0, 1.0)
+    return np.where(valid, correlation, np.nan), valid, np.count_nonzero(finite, axis=1)
+
+
+@dataclass(frozen=True)
+class TemporalStatistics:
+    """Within-world scalar moments and overlap-centered lag correlations.
+
+    Scalar dictionaries have shape ``(W, P)`` and lag dictionaries have shape
+    ``(W, P, L)``. Counts retain eligible observations even when a coefficient
+    is unavailable because it is constant or has fewer than three points.
+    ``scale_available`` gates standard deviations, not shape correlations.
+    """
+
+    lags: tuple[int, ...]
+    values: dict[str, np.ndarray]
+    valid: dict[str, np.ndarray]
+    counts: dict[str, np.ndarray]
+    eligible: np.ndarray
+    scale_available: np.ndarray
+    n_time_steps: int
+
+    def to_frame(self) -> pd.DataFrame:
+        """One row per world, series, statistic and optional lag."""
+        import pandas as pd
+
+        columns = [
+            "world",
+            "series",
+            "statistic",
+            "view",
+            "lag",
+            "value",
+            "valid",
+            "n_observations",
+            "eligible",
+            "scale_available",
+        ]
+        rows = []
+        for world, series in np.ndindex(self.eligible.shape):
+            for statistic, values in self.values.items():
+                for position in range(len(self.lags)) if values.ndim == 3 else (None,):
+                    index = (world, series) if position is None else (world, series, position)
+                    rows.append(
+                        {
+                            "world": world,
+                            "series": series,
+                            "statistic": statistic,
+                            "view": "differences"
+                            if statistic in ("difference_std", "diff_overlap_pearson")
+                            else "levels",
+                            "lag": None if position is None else self.lags[position],
+                            "value": values[index],
+                            "valid": self.valid[statistic][index],
+                            "n_observations": self.counts[statistic][index],
+                            "eligible": self.eligible[world, series],
+                            "scale_available": self.scale_available[world, series],
+                        }
+                    )
+        return pd.DataFrame(rows, columns=columns)
+
+
+def temporal_statistics(
+    values: Any,
+    *,
+    lags: Any,
+    eligible: Any = None,
+    resolution: Any = None,
+    scale_available: Any = None,
+) -> TemporalStatistics:
+    """Describe finite ``(world, time, series)`` arrays without pooling worlds.
+
+    Lags are explicit positive integers; an empty axis requests only scalar
+    statistics. Each lag Pearson centers its two overlaps separately, unlike
+    the legacy global-mean, full-denominator sample ACF. All correlations need
+    at least three observations. Standard deviations are population moments
+    in original units, with source-precision constants reported as zero.
+    Nonrepresentable nonzero moments are unavailable, never false zeros.
+    Empty world and series axes are supported; empty time axes are rejected.
+    """
+    block, default = _series_input(values)
+    n_worlds, n_time, n_series = block.shape
+    shape = (n_worlds, n_series)
+    lag_axis = _series_lags(lags)
+    selected = _series_broadcast(
+        True if eligible is None else eligible, shape, "eligible", boolean=True
+    )
+    available = _series_broadcast(
+        True if scale_available is None else scale_available,
+        shape,
+        "scale_available",
+        boolean=True,
+    )
+    eps = _series_resolution(resolution, shape, default).reshape(-1)
+    rows = np.transpose(block, (0, 2, 1)).reshape(n_worlds * n_series, n_time)
+    keep = selected.reshape(-1)
+    output: dict[str, np.ndarray] = {}
+    valid: dict[str, np.ndarray] = {}
+    counts: dict[str, np.ndarray] = {}
+    differences, exponents, difference_floor = _series_differences(rows, eps)
+    for name, view, floor, shift in (
+        ("level_std", rows, None, None),
+        ("difference_std", differences, difference_floor, exponents),
+    ):
+        std, std_valid, observations = _series_std(
+            view, eps, constant_floor=floor, finite=keep[:, None], exponent_shift=shift
+        )
+        std_valid = std_valid.reshape(shape) & available
+        output[name] = np.where(std_valid, std.reshape(shape), np.nan)
+        valid[name] = std_valid
+        counts[name] = observations.reshape(shape)
+    time = np.broadcast_to(np.arange(n_time, dtype=np.float64), rows.shape)
+    correlation, correlation_valid, observations = _series_pearson(
+        rows,
+        time,
+        eps,
+        np.full(eps.shape, float(np.finfo(np.float64).eps)),
+        eligible=keep,
+    )
+    output["time_correlation"] = correlation.reshape(shape)
+    valid["time_correlation"] = correlation_valid.reshape(shape)
+    counts["time_correlation"] = observations.reshape(shape)
+    for name, view, floor in (
+        ("overlap_pearson", rows, None),
+        ("diff_overlap_pearson", differences, difference_floor),
+    ):
+        lag_shape = (*shape, len(lag_axis))
+        output[name] = np.full(lag_shape, np.nan)
+        valid[name] = np.zeros(lag_shape, dtype=bool)
+        counts[name] = np.zeros(lag_shape, dtype=np.int64)
+        for position, lag in enumerate(lag_axis):
+            if lag >= view.shape[1]:
+                continue
+            correlation, correlation_valid, observations = _series_pearson(
+                view[:, :-lag],
+                view[:, lag:],
+                eps,
+                eps,
+                left_floor=floor,
+                right_floor=floor,
+                eligible=keep,
+            )
+            output[name][..., position] = correlation.reshape(shape)
+            valid[name][..., position] = correlation_valid.reshape(shape)
+            counts[name][..., position] = observations.reshape(shape)
+    return TemporalStatistics(
+        lags=lag_axis,
+        values=output,
+        valid=valid,
+        counts=counts,
+        eligible=selected,
+        scale_available=available,
+        n_time_steps=n_time,
+    )
+
+
+@dataclass(frozen=True)
+class ActivityRuns:
+    """Exact-nonzero spell summaries and boundary-censored run records.
+
+    Summary dictionaries and eligibility have shape ``(W, P)``. Records use
+    zero-based, half-open ``[start, stop)`` intervals, and are retained only
+    for eligible series. A spell touching either boundary is censored; one
+    touching both boundaries is still just one censored spell.
+    """
+
+    values: dict[str, np.ndarray]
+    valid: dict[str, np.ndarray]
+    counts: dict[str, np.ndarray]
+    eligible: np.ndarray
+    records: tuple[dict[str, int | bool], ...]
+    n_time_steps: int
+
+    def to_frame(self) -> pd.DataFrame:
+        """One summary row per world and series, including validity and counts."""
+        import pandas as pd
+
+        n_worlds, n_series = self.eligible.shape
+        data: dict[str, Any] = {
+            "world": np.repeat(np.arange(n_worlds), n_series),
+            "series": np.tile(np.arange(n_series), n_worlds),
+            "eligible": self.eligible.reshape(-1),
+        }
+        for name in ACTIVITY_STATISTICS:
+            data[name] = self.values[name].reshape(-1)
+            data[f"{name}_valid"] = self.valid[name].reshape(-1)
+            data[f"{name}_count"] = self.counts[name].reshape(-1)
+        return pd.DataFrame(data)
+
+    def runs_frame(self) -> pd.DataFrame:
+        """One row per observed spell, with both censoring boundaries explicit."""
+        import pandas as pd
+
+        return pd.DataFrame(
+            self.records,
+            columns=[
+                "world",
+                "series",
+                "start",
+                "stop",
+                "active",
+                "left_censored",
+                "right_censored",
+            ],
+        )
+
+
+def activity_runs(values: Any, *, eligible: Any = None) -> ActivityRuns:
+    """Summarize exact nonzero activity in finite ``(W, T, P)`` arrays.
+
+    No magnitude threshold or data-derived column eligibility is inferred.
+    Interior inactivity is COMPLETE inactive spell length divided by the FULL
+    window length. Thus an all-zero window has interior fraction zero, one
+    doubly censored inactive spell, and no defined complete-length medians.
+
+    Counts are source time steps for ordinary summaries, adjacent pairs for
+    switching rate, and complete spells for the complete-length medians.
+    A one-step window has no defined switching rate. Empty world/series axes
+    retain the corresponding result shapes and an empty run table.
+    """
+    block, _ = _series_input(values)
+    n_worlds, n_time, n_series = block.shape
+    shape = (n_worlds, n_series)
+    selected = _series_broadcast(
+        True if eligible is None else eligible, shape, "eligible", boolean=True
+    )
+    output = {name: np.full(shape, np.nan) for name in ACTIVITY_STATISTICS}
+    valid = {name: np.zeros(shape, dtype=bool) for name in ACTIVITY_STATISTICS}
+    counts = {name: np.zeros(shape, dtype=np.int64) for name in ACTIVITY_STATISTICS}
+    records: list[dict[str, int | bool]] = []
+    for world, series in np.ndindex(shape):
+        if not selected[world, series]:
+            continue
+        active = block[world, :, series] != 0.0
+        switches = np.flatnonzero(active[1:] != active[:-1]) + 1
+        starts = np.concatenate(([0], switches))
+        stops = np.concatenate((switches, [n_time]))
+        lengths = stops - starts
+        states = active[starts]
+        complete = (starts > 0) & (stops < n_time)
+        for start, stop, state in zip(starts, stops, states, strict=True):
+            records.append(
+                {
+                    "world": world,
+                    "series": series,
+                    "start": int(start),
+                    "stop": int(stop),
+                    "active": bool(state),
+                    "left_censored": bool(start == 0),
+                    "right_censored": bool(stop == n_time),
+                }
+            )
+        complete_active = lengths[states & complete]
+        complete_inactive = lengths[~states & complete]
+        summary = {
+            "leading_inactive_length": int(lengths[0]) if not states[0] else 0,
+            "trailing_inactive_length": int(lengths[-1]) if not states[-1] else 0,
+            "longest_active_length": int(np.max(lengths[states], initial=0)),
+            "longest_inactive_length": int(np.max(lengths[~states], initial=0)),
+            "active_spell_count": int(np.count_nonzero(states)),
+            "inactive_spell_count": int(np.count_nonzero(~states)),
+            "complete_active_spell_count": int(complete_active.size),
+            "complete_inactive_spell_count": int(complete_inactive.size),
+            "censored_active_spell_count": int(np.count_nonzero(states & ~complete)),
+            "censored_inactive_spell_count": int(np.count_nonzero(~states & ~complete)),
+            "complete_active_length_median": float(np.median(complete_active))
+            if complete_active.size
+            else np.nan,
+            "complete_inactive_length_median": float(np.median(complete_inactive))
+            if complete_inactive.size
+            else np.nan,
+            "switching_rate": float(switches.size / (n_time - 1)) if n_time > 1 else np.nan,
+            "interior_inactive_fraction": float(complete_inactive.sum() / n_time),
+        }
+        for name, value in summary.items():
+            output[name][world, series] = value
+            valid[name][world, series] = np.isfinite(value)
+            counts[name][world, series] = n_time
+        counts["complete_active_length_median"][world, series] = complete_active.size
+        counts["complete_inactive_length_median"][world, series] = complete_inactive.size
+        counts["switching_rate"][world, series] = n_time - 1
+    return ActivityRuns(
+        values=output,
+        valid=valid,
+        counts=counts,
+        eligible=selected,
+        records=tuple(records),
+        n_time_steps=n_time,
+    )
+
+
+@dataclass(frozen=True)
+class LaggedDependence:
+    """Signed, within-world overlap correlations for explicit ordered pairs.
+
+    Correlation, validity and finite observation counts have shape
+    ``(W, V, Q, L)``; pair eligibility is ``(W, Q)``. Positive ``h`` compares
+    ``left[t]`` with ``right[t+h]``; negative ``h`` reverses the alignment.
+    No causal interpretation or cross-world pooling is implied.
+    """
+
+    pairs: np.ndarray
+    lags: tuple[int, ...]
+    views: tuple[str, ...]
+    correlation: np.ndarray
+    valid: np.ndarray
+    n_observations: np.ndarray
+    eligible: np.ndarray
+
+    def to_frame(self) -> pd.DataFrame:
+        """One row per world, view, ordered pair and lag."""
+        import pandas as pd
+
+        columns = [
+            "world",
+            "view",
+            "pair",
+            "left",
+            "right",
+            "lag",
+            "correlation",
+            "valid",
+            "n_observations",
+            "eligible",
+        ]
+        rows = []
+        for world, view, pair, position in np.ndindex(self.correlation.shape):
+            index = (world, view, pair, position)
+            rows.append(
+                {
+                    "world": world,
+                    "view": self.views[view],
+                    "pair": pair,
+                    "left": self.pairs[pair, 0],
+                    "right": self.pairs[pair, 1],
+                    "lag": self.lags[position],
+                    "correlation": self.correlation[index],
+                    "valid": self.valid[index],
+                    "n_observations": self.n_observations[index],
+                    "eligible": self.eligible[world, pair],
+                }
+            )
+        return pd.DataFrame(rows, columns=columns)
+
+
+def lagged_dependence(
+    values: Any,
+    *,
+    pairs: Any,
+    lags: Any,
+    views: Sequence[str] = ("levels", "differences"),
+    eligible: Any = None,
+    resolution: Any = None,
+) -> LaggedDependence:
+    """Compute overlap Pearson correlations for explicit signed alignments.
+
+    Values are ``(W, T, P)``; eligibility and source resolution broadcast to
+    ``(W, P)``. Each result pair is eligible only if both source series are.
+    Unlike the finite-only temporal/activity entrypoints, this helper permits
+    nonfinite observations and counts only JOINTLY finite aligned values.
+    Difference observations require both adjacent source levels to be finite.
+    At least three paired observations and source-resolved spread on both
+    sides are required. Too-long lags yield NaN/false/zero, not array errors.
+    Empty world, series and pair axes are supported; time must be nonempty.
+    """
+    block, default = _series_input(values, finite=False)
+    n_worlds, n_time, n_series = block.shape
+    shape = (n_worlds, n_series)
+    lag_axis = _series_lags(lags, signed=True)
+    if np.ma.isMaskedArray(views):
+        raise TypeError("views must not be a masked array")
+    view_axis = _validate_names(views, VIEWS, "views")
+    selected = _series_broadcast(
+        True if eligible is None else eligible, shape, "eligible", boolean=True
+    )
+    eps = _series_resolution(resolution, shape, default)
+    if np.ma.isMaskedArray(pairs):
+        raise TypeError("pairs must not be a masked array")
+    pair_array = np.asarray(pairs)
+    if pair_array.shape == (0,):
+        pair_array = np.empty((0, 2), dtype=np.int64)
+    if pair_array.ndim != 2 or pair_array.shape[1] != 2:
+        raise ValueError("pairs must have shape (pair, 2)")
+    if pair_array.dtype.kind not in "iu":
+        raise TypeError("pairs must contain integer series positions")
+    if np.any(pair_array < 0) or np.any(pair_array >= n_series):
+        raise ValueError("pairs contain an out-of-range series position")
+    pair_array = np.array(pair_array, dtype=np.int64)
+    pair_eligible = selected[:, pair_array[:, 0]] & selected[:, pair_array[:, 1]]
+    output_shape = (n_worlds, len(view_axis), len(pair_array), len(lag_axis))
+    correlation = np.full(output_shape, np.nan)
+    valid = np.zeros(output_shape, dtype=bool)
+    counts = np.zeros(output_shape, dtype=np.int64)
+    levels = np.transpose(block, (0, 2, 1))
+    differences = None
+    difference_floor = None
+    if "differences" in view_axis:
+        difference_rows, _, raw_floor = _series_differences(
+            levels.reshape(n_worlds * n_series, n_time), eps.reshape(-1)
+        )
+        differences = difference_rows.reshape(n_worlds, n_series, n_time - 1)
+        difference_floor = raw_floor.reshape(shape)
+    for view_position, view in enumerate(view_axis):
+        view_values = levels if view == "levels" else differences
+        floor = None if view == "levels" else difference_floor
+        assert view_values is not None
+        for pair, (left, right) in enumerate(pair_array):
+            for position, lag in enumerate(lag_axis):
+                n = view_values.shape[2]
+                if abs(lag) >= n:
+                    continue
+                if lag >= 0:
+                    left_values = view_values[:, left, : n - lag]
+                    right_values = view_values[:, right, lag:]
+                else:
+                    left_values = view_values[:, left, -lag:]
+                    right_values = view_values[:, right, : n + lag]
+                index = (slice(None), view_position, pair, position)
+                correlation[index], valid[index], counts[index] = _series_pearson(
+                    left_values,
+                    right_values,
+                    eps[:, left],
+                    eps[:, right],
+                    left_floor=None if floor is None else floor[:, left],
+                    right_floor=None if floor is None else floor[:, right],
+                    eligible=pair_eligible[:, pair],
+                )
+    return LaggedDependence(
+        pairs=pair_array,
+        lags=lag_axis,
+        views=view_axis,
+        correlation=correlation,
+        valid=valid,
+        n_observations=counts,
+        eligible=pair_eligible,
     )
