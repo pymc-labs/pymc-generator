@@ -15,8 +15,9 @@ read the migration notes before upgrading.
   virtualenv to 21.15.6, retaining the locked numerical stack. Recovery smoke
   and report requirements use the same updated Pillow, filelock, and Tornado.
 - Updated CodeQL initialization and analysis together to 4.39.3 and grouped
-  future Dependabot updates so incompatible action versions are not proposed
-  separately. Artifact upload/download actions include their latest retry fixes.
+  future CodeQL Dependabot version updates so incompatible action versions
+  are not proposed separately. Artifact upload/download actions include
+  their latest retry fixes.
 
 ### Added
 
