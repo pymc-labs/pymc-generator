@@ -28,6 +28,6 @@ pyzmq==27.2.0
 referencing==0.37.0
 rpds-py==2026.9.1
 stack-data==0.6.3
-tornado==6.5.10
+tornado==6.6.1
 traitlets==5.16.1
 wcwidth==0.9.2

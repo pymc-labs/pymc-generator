@@ -13,7 +13,7 @@ cloudpickle==3.1.2
 contourpy==1.4.0
 cycler==0.12.1
 donfig==0.8.1.post1
-filelock==4.1.1
+filelock==4.2.10
 fonttools==4.66.1
 google-crc32c==1.9.0
 h5netcdf==1.8.1
