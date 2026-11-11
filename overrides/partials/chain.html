@@ -1,0 +1,21 @@
+{#- The section as a chain of nodes: every page of this section in reading order,
+    the current one marked, the ones before it drawn as already traversed. -#}
+{% if page.parent and page.parent.children | length > 1 %}
+  {% set pages = page.parent.children | selectattr("is_page") | list %}
+  {% set ns = namespace(current=0) %}
+  {% for p in pages %}{% if p.active %}{% set ns.current = loop.index %}{% endif %}{% endfor %}
+  <nav class="pg-chain" aria-label="{{ page.parent.title }}: {{ ns.current }} of {{ pages | length }}">
+    <span class="pg-chain__count">{{ ns.current }}<span>/{{ pages | length }}</span></span>
+    <ol class="pg-chain__list" style="--pg-chain-count: {{ pages | length }}">
+      {% for p in pages %}
+        {% set state = "is-current" if p.active else ("is-before" if loop.index < ns.current else "") %}
+        <li class="pg-chain__node {{ state }}" style="--i: {{ loop.index0 }}">
+          <a href="{{ p.url | url }}" {% if p.active %}aria-current="page"{% endif %}>
+            <span class="pg-chain__dot" aria-hidden="true"></span>
+            <span class="pg-chain__label">{{ p.title }}</span>
+          </a>
+        </li>
+      {% endfor %}
+    </ol>
+  </nav>
+{% endif %}

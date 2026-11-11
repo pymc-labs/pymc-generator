@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+from typing import NamedTuple
 
 import numpy as np
 
@@ -32,6 +33,56 @@ _SATURATION_SHAPES: dict[str, tuple[tuple[str, str], ...]] = {
     "tanh": (("c", "tanh_c"),),
     "root": (("alpha", "root_alpha"),),
 }
+
+#: How each node family reads in a graph label, ``name ~ type``, after the
+#: ``name ~ Distribution`` labels of PyMC's ``model_to_graphviz``.
+NODE_TYPES = {"D": "Latent", "Z": "Control", "C": "Channel", "B": "Baseline", "Y": "Outcome"}
+#: Graph fills, as Graphviz X11 greys: what a modeller never observes (latent
+#: factors, the baseline) stays white; observed nodes darken from controls to
+#: channels to the outcome.
+NODE_FILLS = {"D": "white", "B": "white", "Z": "gray90", "C": "gray80", "Y": "gray70"}
+
+
+class DagNode(NamedTuple):
+    """One node as the DAG figure and the DOT export draw it."""
+
+    name: str
+    kind: str
+    """The family type shown after ``~`` (see :data:`NODE_TYPES`)."""
+    notes: tuple[str, ...]
+    """Small print under the type, one entry per line: a channel's mechanism,
+    its role when that is not a direct effect, and ``isolated null`` for nodes
+    without a path to the outcome."""
+    fill: str
+    """Graphviz X11 grey (see :data:`NODE_FILLS`)."""
+    isolated: bool
+
+
+def dag_nodes(world: SCM) -> list[DagNode]:
+    """Every node of the world's DAG in family order: D, Z, C, then B and Y."""
+    g, params = world.g, world.params
+    status = node_status(g)
+    names = (
+        [f"D{j + 1}" for j in range(len(g["g_dy"]))]
+        + [f"Z{m + 1}" for m in range(len(g["g_zy"]))]
+        + [f"C{k + 1}" for k in range(len(g["g_cy"]))]
+        + ["B", "Y"]
+    )
+    nodes = []
+    for name in names:
+        family = name[0]
+        isolated = status.get(name, "connected") != "connected"  # B and Y always reach
+        notes: list[str] = []
+        if family == "C":
+            k = int(name[1:]) - 1
+            notes.append(mechanism_label(params, k))
+            role = treatment_role(g, k)
+            if role not in ("direct", "null"):
+                notes.append(role)
+        if isolated:
+            notes.append("isolated null")
+        nodes.append(DagNode(name, NODE_TYPES[family], tuple(notes), NODE_FILLS[family], isolated))
+    return nodes
 
 
 def _saturation_description(params: dict, k: int, family: str) -> str:
@@ -257,23 +308,24 @@ def describe_scm(world: SCM) -> str:
 
 
 def world_to_dot(world: SCM) -> str:
-    """Graphviz DOT source for the world's DAG (text only — the ``graphviz``
-    library/binary is never invoked; renderable with any external tool)."""
+    """Graphviz DOT source for the world's DAG, styled as ``viz.plot_dag`` draws it.
+
+    Text only: the ``graphviz`` library/binary is never invoked; render it with
+    any external tool. Nodes read ``name ~ type`` on grey fills (see
+    :func:`dag_nodes`); edge labels carry the drawn coefficients, and the
+    baseline's edge to the outcome is dashed.
+    """
     g, params = world.g, world.params
-    n_treatments = len(g["g_cy"])
-    n_covariates = len(g["g_zy"])
-    n_latent = len(g["g_dy"])
     f = io.StringIO()
-    f.write("digraph CDAG {\n  rankdir=LR;\n  node [shape=ellipse];\n")
-    for k in range(n_treatments):
-        f.write(f'  C{k + 1} [label="C{k + 1}\\n({mechanism_label(params, k)})"];\n')
-    for m in range(n_covariates):
-        f.write(f'  Z{m + 1} [label="Z{m + 1}\\n(covariate)"];\n')
-    for j in range(n_latent):
-        f.write(f'  D{j + 1} [label="D{j + 1}\\n(latent_unobserved)"];\n')
-    f.write('  B [label="B\\n(baseline)"];\n  Y [label="Y\\n(outcome)"];\n')
+    f.write('digraph CDAG {\n  node [shape=ellipse, fontname="Times-Roman"];\n')
+    for node in dag_nodes(world):
+        label = f"{node.name}<BR/>~<BR/>{node.kind}"
+        for note in node.notes:
+            label += f'<BR/><FONT POINT-SIZE="10" COLOR="gray35">{note}</FONT>'
+        style = "filled,dashed" if node.isolated else "filled"
+        f.write(f'  {node.name} [label=<{label}>, style="{style}", fillcolor={node.fill}];\n')
     for et, src, dst, coef in edges_with_coeffs(g, params):
         label = parameter_text(params, coef, "+.2f")
         f.write(f'  {src} -> {dst} [label="{label}", comment="{et}"];\n')
-    f.write("  B -> Y;\n}\n")
+    f.write("  B -> Y [style=dashed];\n}\n")
     return f.getvalue()

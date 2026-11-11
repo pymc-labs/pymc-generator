@@ -1,0 +1,439 @@
+/* ==========================================================================
+   Home: the drawn world as a full-bleed field, the code-to-proof story, and
+   a short index. Shares every token with site.css.
+   ========================================================================== */
+
+/* --- Hero field -------------------------------------------------------- */
+.pg-hero {
+  position: relative;
+  height: calc(100svh - 3.2rem);
+  min-height: 34rem;
+  max-height: 56rem;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--pg-ground);
+}
+.pg-field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Film grain: a fixed noise layer so the white field reads as photographed
+   rather than flat. */
+.pg-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.07;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.05 0 0 0 0 0.12 0 0 0 0 0.25 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+[data-md-color-scheme="slate"] .pg-hero::after {
+  mix-blend-mode: screen;
+  opacity: 0.05;
+}
+.pg-hero__inner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 1.4rem 6rem;
+  pointer-events: none;
+}
+.pg-hero__copy {
+  max-width: 34rem;
+  pointer-events: auto;
+}
+.pg-hero h1 {
+  max-width: 10.5ch;
+  margin: 0 0 1.3rem;
+  color: var(--pg-ink);
+  font: 600 clamp(2.7rem, 5.4vw, 4.6rem) / 0.97 var(--pg-display);
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+.pg-hero__lead {
+  max-width: 29rem;
+  margin: 0 0 1.9rem;
+  color: var(--pg-ink-2);
+  font: 400 1rem/1.55 var(--pg-text);
+}
+.pg-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.pg-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.7rem 1.25rem;
+  border-radius: 999px;
+  background: var(--pg-ground);
+  box-shadow: inset 0 0 0 1px var(--pg-rule);
+  color: var(--pg-ink);
+  font: 500 0.75rem/1 var(--pg-display);
+  text-decoration: none;
+  transition: background-color 0.2s var(--pg-ease), box-shadow 0.2s var(--pg-ease), color 0.2s;
+}
+.pg-button:hover {
+  box-shadow: inset 0 0 0 1px var(--pg-ink);
+  color: var(--pg-ink);
+}
+.pg-button--primary {
+  background: var(--pg-ink);
+  box-shadow: none;
+  color: var(--pg-ground);
+}
+.pg-button--primary:hover {
+  background: var(--pg-link);
+  box-shadow: none;
+  color: var(--pg-ground);
+}
+.pg-hero__specimen {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(min(140px, 16%) + 1.9rem);
+  z-index: 2;
+  margin: 0 auto;
+  padding: 0 1.4rem;
+  color: var(--pg-ink-3);
+  font: 400 0.6rem/1.4 var(--pg-mono);
+  text-align: right;
+  pointer-events: none;
+}
+@media screen and (max-width: 59.984375em) {
+  .pg-hero {
+    height: 50rem;
+    min-height: 0;
+    max-height: none;
+  }
+  .pg-hero__inner {
+    align-items: flex-start;
+    height: auto;
+    padding-top: 2rem;
+    padding-bottom: 0;
+  }
+  .pg-hero__specimen {
+    text-align: left;
+  }
+}
+
+/* --- Home content column ----------------------------------------------- */
+.md-main:has(.pg-story) .md-content__inner {
+  margin-left: 1rem;
+  margin-right: 1rem;
+  padding-top: 0;
+}
+.md-main:has(.pg-story) .md-content__inner > :first-child {
+  margin-top: 0;
+}
+
+/* --- The story: code → data → graph → causes → proof -------------------- */
+.pg-story {
+  display: grid;
+  grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  gap: 3.2rem;
+  margin: 2rem 0 0;
+}
+.pg-story__steps {
+  padding: 8vh 0 8vh;
+}
+.pg-story__step {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 74vh;
+  opacity: 0.28;
+  transition: opacity 0.5s var(--pg-ease);
+}
+.pg-story[data-state="code"] [data-step="code"],
+.pg-story[data-state="series"] [data-step="series"],
+.pg-story[data-state="graph"] [data-step="graph"],
+.pg-story[data-state="decomposition"] [data-step="decomposition"],
+.pg-story[data-state="identity"] [data-step="identity"],
+.pg-story:not([data-state]) .pg-story__step {
+  opacity: 1;
+}
+.md-typeset .pg-story__step h2 {
+  margin: 0 0 0.7rem;
+  padding: 0;
+  border: 0;
+  font-size: clamp(1.6rem, 2.7vw, 2.4rem);
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+}
+.md-typeset .pg-story__step p {
+  margin: 0;
+  color: var(--pg-ink-2);
+  font-size: 1rem;
+}
+.pg-story__stage {
+  position: sticky;
+  top: calc(3.2rem + 5vh);
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: calc(90vh - 3.2rem);
+  justify-content: center;
+}
+.pg-stage {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(100% - 2.5rem);
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.5rem;
+  background: var(--pg-ground);
+}
+.md-typeset ol.pg-story__progress {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0.4rem;
+  padding: 0;
+  list-style: none;
+  font: 400 0.6rem/1 var(--pg-mono);
+  color: var(--pg-ink-3);
+}
+.md-typeset .pg-story__progress::before {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  right: 0.3rem;
+  top: 0.3rem;
+  height: 1px;
+  background: var(--pg-rule);
+}
+.md-typeset .pg-story__progress li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  transition: color 0.3s;
+}
+.md-typeset .pg-story__progress li:first-child {
+  align-items: flex-start;
+}
+.md-typeset .pg-story__progress li:last-child {
+  align-items: flex-end;
+}
+.md-typeset .pg-story__progress li::before {
+  content: "";
+  position: static;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  border: 1.3px solid var(--pg-ink-3);
+  background: var(--pg-ground);
+  transition: background-color 0.3s, border-color 0.3s;
+}
+.md-typeset .pg-story__progress li.is-before::before {
+  background: var(--pg-ink);
+  border-color: var(--pg-ink);
+}
+.md-typeset .pg-story__progress li.is-current {
+  color: var(--pg-ink);
+}
+.md-typeset .pg-story__progress li.is-current::before {
+  background: var(--pg-peach);
+  border-color: var(--pg-ink);
+}
+
+/* Stage drawing. */
+.pg-stage {
+  --stage-ink: var(--pg-ink);
+  --stage-ink-2: var(--pg-ink-2);
+}
+.pg-stage__plate {
+  fill: var(--pg-plate);
+  stroke: var(--pg-rule);
+}
+.pg-stage__code {
+  fill: var(--stage-ink);
+  font: 14px var(--pg-mono);
+  white-space: pre;
+}
+.pg-stage__series,
+.pg-stage__lane,
+.pg-stage__edge,
+.pg-stage__residual {
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.pg-stage__series {
+  stroke-width: 1.5;
+}
+.pg-stage__series--C {
+  stroke: #3d57b0;
+}
+.pg-stage__series--Z {
+  stroke: #1e8c7a;
+}
+.pg-stage__series--Y {
+  stroke: var(--stage-ink);
+  stroke-width: 1.8;
+}
+[data-md-color-scheme="slate"] .pg-stage__series--C,
+[data-md-color-scheme="slate"] .pg-stage__lane {
+  stroke: #aeb8ec;
+}
+[data-md-color-scheme="slate"] .pg-stage__series--Z {
+  stroke: var(--pg-aqua);
+}
+.pg-stage__rowlabel,
+.pg-stage__lanelabel {
+  fill: var(--stage-ink-2);
+  font: 12px var(--pg-mono);
+  text-anchor: end;
+}
+.pg-stage__edge {
+  stroke-width: 1.7;
+}
+.pg-stage__node circle {
+  fill: var(--pg-ground);
+  stroke: var(--stage-ink);
+  stroke-width: 1.4;
+}
+.pg-stage__node--D circle {
+  stroke-dasharray: 3 2.4;
+}
+.pg-stage__node--Y circle {
+  fill: var(--pg-peach);
+}
+.pg-stage__node text {
+  fill: var(--stage-ink);
+  font: 12px var(--pg-mono);
+}
+.pg-stage__node--Y text {
+  fill: var(--pg-navy);
+}
+.pg-stage__axis {
+  stroke: var(--stage-ink);
+  stroke-width: 1;
+  stroke-dasharray: 8 4 2 4;
+  opacity: 0;
+}
+.pg-stage__lane {
+  stroke: #3d57b0;
+  stroke-width: 1.4;
+}
+.pg-stage__lane--sales {
+  stroke: var(--stage-ink);
+  stroke-width: 1.9;
+}
+.pg-stage__residual {
+  stroke: #d9783a;
+  stroke-width: 2.2;
+}
+.pg-stage__lane--baseline {
+  stroke: #1e8c7a;
+}
+.pg-stage__lane--indirect {
+  stroke: #d9783a;
+}
+[data-md-color-scheme="slate"] .pg-stage__lane--baseline {
+  stroke: var(--pg-aqua);
+}
+[data-md-color-scheme="slate"] .pg-stage__lane--indirect {
+  stroke: var(--pg-peach);
+}
+.pg-stage__number {
+  fill: var(--stage-ink);
+  font: 600 64px var(--pg-display);
+  letter-spacing: -0.03em;
+}
+.pg-stage__exp {
+  font-size: 34px;
+}
+.pg-stage__caption {
+  fill: var(--stage-ink-2);
+  font: 13px var(--pg-mono);
+}
+
+@media screen and (max-width: 59.984375em) {
+  .pg-story {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .pg-story__stage {
+    order: -1;
+    top: 3.2rem;
+    z-index: 1;
+    height: auto;
+    padding: 0.8rem 0;
+    background: var(--pg-ground);
+  }
+  .pg-story__steps {
+    padding: 18vh 0 46vh;
+  }
+  .pg-story__step {
+    justify-content: flex-start;
+    min-height: 34vh;
+  }
+}
+
+/* --- Proof plate and the index ------------------------------------------ */
+.md-typeset .pg-proof h2,
+.md-typeset .pg-index h2 {
+  margin-top: 5rem;
+  padding-top: 0;
+  border-top: 0;
+  font-size: clamp(1.6rem, 2.7vw, 2.4rem);
+  letter-spacing: -0.035em;
+}
+.md-typeset .pg-proof figure.scm-plot {
+  max-width: 52rem;
+  margin-top: 1.4rem;
+}
+.md-typeset .pg-index ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0 2.4rem;
+  max-width: none;
+  margin: 1.2rem 0 2rem;
+  padding: 0;
+  list-style: none;
+}
+.md-typeset .pg-index li {
+  margin: 0;
+  border-top: 1px solid var(--pg-rule);
+}
+.md-typeset .pg-index li::before {
+  display: none;
+}
+.md-typeset .pg-index li a {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.9rem 0;
+  color: var(--pg-ink);
+  font: 500 0.9rem/1.2 var(--pg-display);
+  text-decoration: none;
+}
+.md-typeset .pg-index li a::before {
+  content: "";
+  flex: none;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  border: 1.3px solid var(--pg-ink);
+  background: var(--pg-ground);
+  transition: background-color 0.2s, transform 0.25s var(--pg-ease);
+}
+.md-typeset .pg-index li a:hover::before,
+.md-typeset .pg-index li a:focus-visible::before {
+  background: var(--pg-peach);
+  transform: scale(1.3);
+}

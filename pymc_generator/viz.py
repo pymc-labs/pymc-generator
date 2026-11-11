@@ -17,11 +17,16 @@ ground truth kept for auditing and are labelled as such, never model inputs.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import functools
+import itertools
+import math
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .describe import dag_nodes
 from .diagnostics import (
     DEPENDENCE_METRICS,
     SERIES_SLOTS,
@@ -34,7 +39,6 @@ from .worlds import (
     SCM,
     edges_with_coeffs,
     mechanism_label,
-    node_status,
     parameter_text,
     treatment_role,
 )
@@ -43,129 +47,582 @@ if TYPE_CHECKING:
     from .diagnostics import ActivityRuns, LaggedDependence, TemporalStatistics
     from .series_comparison import NearestSeries, SeriesComparison, SimilarityAssessment
 
-# Validated categorical palette — slots are assigned in FIXED order per entity
-# and reused consistently across every figure of a bundle.
-PALETTE = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"]
-INK, MUTED, GRID = "#1f1f1f", "#666666", "#d9d9d9"
+# House style, shared by bundle figures, the documentation site, and the
+# executed example notebooks. Colours stay inside the PyMC Labs brand palette:
+# deep navy ink on white plates, with aqua, periwinkle, and peach families.
+NAVY, AQUA, PERIWINKLE, SOFT_WHITE, PEACH = "#0C1F40", "#B4E7DD", "#9FAAE2", "#F7F7F7", "#F6AE72"
+PAPER = "#FFFFFF"
+INK, MUTED, GRID = NAVY, "#55627D", "#D9DEE8"
+#: Neutral reference strokes (Σ-of-components overlays).
+GUIDE = "#9AA3B5"
 
-#: Edge-type colors, shared between the DAG figure and the decomposition
-#: figure (an indirect-effect source IS its edge type).
-EDGE_STYLE: dict[str, tuple[str, str]] = {
-    "cy": ("#2a78d6", "C→Y direct"),
-    "dc": ("#e34948", "D→C (confounding)"),
-    "zc": ("#eda100", "Z→C"),
-    "cc": ("#4a3aa7", "C→C (halo)"),
-    "dy": ("#eb6834", "D→Y"),
-    "zy": ("#1baf7a", "Z→Y"),
-    "dz": ("#e87ba4", "D→Z"),
-    "zz": ("#008300", "Z→Z"),
+# Categorical palette — slots are assigned in FIXED order per entity and reused
+# consistently across every figure of a bundle. Deepened brand hues keep each
+# line legible on a white plate.
+PALETTE = ["#3D57B0", "#1E8C7A", "#D9783A", "#5A6B8F", "#8792D6", "#B5532A", "#4FB3A0", "#2B3F6B"]
+
+#: Colours of the decomposition figure's edge-type lines (an indirect-effect
+#: source IS its edge type). The hue family names the SOURCE node family:
+#: periwinkle for treatments, aqua for covariates, peach for the latent
+#: confounders. The DAG figure itself is drawn in greys; see ``plot_dag``.
+EDGE_COLORS: dict[str, str] = {
+    "cy": "#3D57B0",
+    "dc": "#B5532A",
+    "zc": "#1E8C7A",
+    "cc": "#8792D6",
+    "dy": "#D9783A",
+    "zy": "#4FB3A0",
+    "dz": "#E39A63",
+    "zz": "#2E6F66",
 }
+
+# Graph figures follow Graphviz's look, as PyMC's ``model_to_graphviz`` does:
+# black ovals and arrows, a Times-like serif, "name ~ type" labels, and grey
+# fills that separate what a modeller observes from what stays latent. The
+# labels and fills are shared with the DOT export (``describe.world_to_dot``).
+#: Matplotlib bundles STIX, a Times-compatible face, so no system font is needed.
+_DAG_FONT = ["STIXGeneral", "DejaVu Serif"]
+_DAG_INK = "#000000"
+_DAG_NOTE = "#595959"
+#: The X11 greys Graphviz names, as Matplotlib colours.
+_X11_GREYS = {"white": "#FFFFFF", "gray90": "#E5E5E5", "gray80": "#CCCCCC", "gray70": "#B3B3B3"}
+
+_FONT_FILE = Path(__file__).with_name("fonts") / "FragmentMono-Regular.ttf"
+
+#: Matplotlib rcParams of the house style. Glyphs the bundled face lacks (Greek
+#: capitals, for instance) fall back to DejaVu Sans Mono glyph by glyph, which
+#: needs explicit family names rather than the generic ``monospace`` alias.
+STYLE: dict[str, object] = {
+    "font.family": ["Fragment Mono", "DejaVu Sans Mono"],
+    "font.size": 8.5,
+    "figure.facecolor": PAPER,
+    "figure.dpi": 150,
+    "savefig.facecolor": PAPER,
+    "axes.facecolor": PAPER,
+    "axes.edgecolor": INK,
+    "axes.linewidth": 0.8,
+    "axes.labelcolor": MUTED,
+    "axes.titlecolor": INK,
+    "axes.titleweight": "normal",
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": False,
+    "axes.prop_cycle": f"cycler('color', {PALETTE!r})",
+    "grid.color": GRID,
+    "grid.linewidth": 0.6,
+    "text.color": INK,
+    "xtick.color": MUTED,
+    "ytick.color": MUTED,
+    "xtick.direction": "out",
+    "ytick.direction": "out",
+    "xtick.major.size": 3.0,
+    "ytick.major.size": 3.0,
+    "xtick.major.width": 0.8,
+    "ytick.major.width": 0.8,
+    "legend.frameon": False,
+    "lines.linewidth": 1.3,
+    "lines.solid_capstyle": "round",
+    "image.cmap": "pymc_generator.sequential",
+}
+
+
+def _register_style_assets() -> None:
+    """Register the bundled face and the brand colormaps with Matplotlib once."""
+    import matplotlib as mpl
+    from matplotlib import font_manager
+    from matplotlib.colors import LinearSegmentedColormap
+
+    if not any(entry.fname == str(_FONT_FILE) for entry in font_manager.fontManager.ttflist):
+        font_manager.fontManager.addfont(str(_FONT_FILE))
+    maps = {
+        # Lightness rises monotonically from navy to white: readable in greyscale.
+        "pymc_generator.sequential": [NAVY, "#2E6F66", "#4FB3A0", AQUA, PAPER][::-1],
+        # Periwinkle below zero, white at zero, peach above.
+        "pymc_generator.diverging": [
+            "#2B3F6B",
+            "#3D57B0",
+            PERIWINKLE,
+            PAPER,
+            PEACH,
+            "#D9783A",
+            "#8A3A12",
+        ],
+    }
+    for name, colors in maps.items():
+        if name not in mpl.colormaps:
+            mpl.colormaps.register(LinearSegmentedColormap.from_list(name, colors))
+
+
+def use_style() -> None:
+    """Apply the house figure style to Matplotlib globally.
+
+    The package's ``plot_*`` functions already render in this style without
+    touching global state. Call this in a notebook or script so your own
+    Matplotlib figures match them and the documentation site.
+    """
+    import matplotlib as mpl
+
+    _register_style_assets()
+    mpl.rcParams.update(STYLE)
+
+
+def _styled[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+    """Render ``fn``'s figure in the house style, restoring rcParams afterwards."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        import matplotlib as mpl
+
+        _register_style_assets()
+        with mpl.rc_context(STYLE):
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _style_ax(ax) -> None:
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
-        ax.spines[side].set_color(GRID)
-    ax.grid(axis="y", color=GRID, linewidth=0.6, alpha=0.6)
-    ax.tick_params(colors=MUTED, labelsize=8)
+        ax.spines[side].set_color(INK)
+        ax.spines[side].set_linewidth(0.8)
+    ax.tick_params(colors=MUTED, labelsize=7.5)
 
 
+#: Graphviz ``dot`` defaults, in inches: space between ovals in a rank, space
+#: between ranks, and the label margin inside an oval.
+_DAG_NODESEP = 0.3
+_DAG_RANKSEP = 0.5
+_DAG_MARGIN = (0.11, 0.055)
+_DAG_FONT_PT = 14.0
+_DAG_NOTE_PT = 10.0
+#: Width reserved for an edge passing through a rank it does not stop in.
+_DAG_PASS_WIDTH = 0.15
+
+
+def _dag_text_width(text: str, size: float) -> float:
+    """Width of ``text`` set in the graph face at ``size`` points, in inches."""
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.textpath import TextPath
+
+    path = TextPath((0.0, 0.0), text, size=size, prop=FontProperties(family=_DAG_FONT))
+    return float(path.get_extents().width) / 72.0
+
+
+def _dag_layout(
+    nodes: Sequence[str],
+    edges: Sequence[tuple[str, str]],
+    size: Mapping[str, tuple[float, float]],
+) -> tuple[dict[str, tuple[float, float]], dict[tuple[str, str], list[str]], dict[str, float]]:
+    """Top-to-bottom layered layout in the manner of Graphviz ``dot``.
+
+    Ranks come from the longest path, then each node moves down beside its
+    nearest child, which keeps edges short; edgeless nodes get a row of their
+    own on top. An edge that still spans several ranks passes through one
+    waypoint per rank, so it bends around ovals rather than through them.
+    Sweeps order each rank by the positions of its neighbours (a waypoint by
+    its edge's two ends), keeping the order with the fewest crossings and the
+    least sideways lean, and averaging passes centre nodes over neighbours.
+
+    ``size`` maps each node to its oval's (width, height) in inches. Returns
+    the centre of every node and waypoint, each edge's chain of points from
+    source to target, and half the height of every node's rank band. Nodes
+    are named ``<family letter><index>``.
+    """
+    parents: dict[str, list[str]] = {n: [] for n in nodes}
+    children: dict[str, list[str]] = {n: [] for n in nodes}
+    for src, dst in edges:
+        children[src].append(dst)
+        parents[dst].append(src)
+
+    order: list[str] = []
+    indegree = {n: len(parents[n]) for n in nodes}
+    ready = [n for n in nodes if not indegree[n]]
+    while ready:
+        node = ready.pop(0)
+        order.append(node)
+        for child in children[node]:
+            indegree[child] -= 1
+            if not indegree[child]:
+                ready.append(child)
+    if len(order) != len(nodes):
+        raise ValueError("plot_dag needs an acyclic graph")
+    rank: dict[str, int] = {}
+    for node in order:
+        rank[node] = max((rank[p] + 1 for p in parents[node]), default=0)
+    # Children are final before their parents in reverse topological order.
+    for node in reversed(order):
+        if children[node]:
+            rank[node] = min(rank[c] for c in children[node]) - 1
+    connected = [n for n in nodes if parents[n] or children[n]]
+    for node in nodes:
+        if not (parents[node] or children[node]):
+            # Edgeless nodes (isolated nulls) share a row above the graph, where
+            # no edge can pass through them.
+            rank[node] = min((rank[m] for m in connected), default=1) - 1
+    lowest = min(rank.values())
+    layer_of = {n: r - lowest for n, r in rank.items()}
+
+    chains: dict[tuple[str, str], list[str]] = {}
+    for src, dst in edges:
+        chain = [src]
+        for step in range(layer_of[src] + 1, layer_of[dst]):
+            waypoint = f"{src}>{dst}@{step}"
+            layer_of[waypoint] = step
+            chain.append(waypoint)
+        chains[(src, dst)] = [*chain, dst]
+    above: dict[str, list[str]] = {n: [] for n in layer_of}
+    below: dict[str, list[str]] = {n: [] for n in layer_of}
+    for chain in chains.values():
+        for a, b in zip(chain[:-1], chain[1:], strict=True):
+            below[a].append(b)
+            above[b].append(a)
+
+    families = "DZCBY"
+
+    def initial(node: str) -> tuple[int, int, int]:
+        owner = node.split(">")[0]
+        index = int(owner[1:]) if owner[1:] else 0
+        return families.index(owner[0]), index, int(">" in node)
+
+    depth = max(layer_of.values()) + 1
+    layers = [sorted((n for n in layer_of if layer_of[n] == r), key=initial) for r in range(depth)]
+
+    def place(current: list[list[str]]) -> dict[str, float]:
+        """Each node's relative position in its rank, in (0, 1)."""
+        return {n: (i + 0.5) / len(layer) for layer in current for i, n in enumerate(layer)}
+
+    def cost(current: list[list[str]]) -> float:
+        """Edge crossings plus how far edges lean sideways (in rank widths),
+        so a long edge runs between its ends rather than around the figure."""
+        where = place(current)
+        total = 0.0
+        for upper, lower in zip(current[:-1], current[1:], strict=True):
+            slot = {n: i for i, n in enumerate(lower)}
+            links = [(i, slot[b]) for i, a in enumerate(upper) for b in below[a]]
+            total += sum(
+                1
+                for (a1, b1), (a2, b2) in itertools.combinations(links, 2)
+                if (a1 - a2) * (b1 - b2) < 0
+            )
+            total += 3.0 * sum(abs(where[a] - where[b]) for a in upper for b in below[a])
+        return total
+
+    def ends(node: str) -> list[str]:
+        """The neighbours whose positions pull ``node``: a waypoint answers to
+        its edge's two real ends, a node to its neighbouring ranks."""
+        if ">" in node:
+            src, rest = node.split(">")
+            return [src, rest.split("@")[0]]
+        return above[node] + below[node]
+
+    best, lowest_cost = [list(layer) for layer in layers], cost(layers)
+    for sweep in range(8):
+        rows = range(1, depth) if sweep % 2 == 0 else range(depth - 2, -1, -1)
+        for r in rows:
+            where = place(layers)
+            here = {n: i for i, n in enumerate(layers[r])}
+
+            def barycentre(node: str, where=where, here=here) -> tuple[float, bool, int]:
+                linked = ends(node)
+                centre = sum(where[m] for m in linked) / len(linked) if linked else where[node]
+                return centre, ">" in node, here[node]
+
+            layers[r] = sorted(layers[r], key=barycentre)
+        current_cost = cost(layers)
+        if current_cost < lowest_cost:
+            best, lowest_cost = [list(layer) for layer in layers], current_cost
+    layers = best
+
+    width = {n: size[n][0] if n in size else _DAG_PASS_WIDTH for n in layer_of}
+    x: dict[str, float] = {}
+    for layer in layers:
+        cursor = 0.0
+        for node in layer:
+            x[node] = cursor + width[node] / 2
+            cursor += width[node] + _DAG_NODESEP
+        for node in layer:
+            x[node] -= (cursor - _DAG_NODESEP) / 2
+    for sweep in range(8):
+        downward = sweep % 2 == 0
+        neighbours = above if downward else below
+        rows = range(1, depth) if downward else range(depth - 2, -1, -1)
+        for r in rows:
+            layer = layers[r]
+            wanted = [
+                sum(x[m] for m in neighbours[n]) / len(neighbours[n]) if neighbours[n] else x[n]
+                for n in layer
+            ]
+            gaps = [(width[a] + width[b]) / 2 + _DAG_NODESEP for a, b in zip(layer, layer[1:])]
+            # Pushing right-to-left and left-to-right each keep the spacing;
+            # so does their average, which stays closest to what was wanted.
+            forward, backward = list(wanted), list(wanted)
+            for i in range(1, len(layer)):
+                forward[i] = max(forward[i], forward[i - 1] + gaps[i - 1])
+            for i in range(len(layer) - 2, -1, -1):
+                backward[i] = min(backward[i], backward[i + 1] - gaps[i])
+            for node, pushed_right, pushed_left in zip(layer, forward, backward, strict=True):
+                x[node] = (pushed_right + pushed_left) / 2
+
+    y: dict[str, float] = {}
+    band: dict[str, float] = {}
+    top = 0.0
+    for layer in layers:
+        tallest = max((size[n][1] for n in layer if n in size), default=0.0)
+        for node in layer:
+            y[node] = top - tallest / 2
+            band[node] = tallest / 2
+        top -= tallest + _DAG_RANKSEP
+    return {n: (x[n], y[n]) for n in layer_of}, chains, band
+
+
+#: Minimum angle between two edges meeting the same oval.
+_DAG_PORT_GAP = math.radians(14.0)
+
+
+def _dag_spread(angles: Sequence[float], limit: float) -> list[float]:
+    """Space port ``angles`` at least ``_DAG_PORT_GAP`` apart within
+    ``±limit``, keeping their order and staying as close as possible to them."""
+    n = len(angles)
+    if n < 2:
+        return [float(a) for a in angles]
+    gap = min(_DAG_PORT_GAP, 2 * limit / (n - 1))
+    order = sorted(range(n), key=lambda i: angles[i])
+    wanted = [float(angles[i]) for i in order]
+    forward, backward = list(wanted), list(wanted)
+    for i in range(1, n):
+        forward[i] = max(forward[i], forward[i - 1] + gap)
+    for i in range(n - 2, -1, -1):
+        backward[i] = min(backward[i], backward[i + 1] - gap)
+    placed = [(a + b) / 2 for a, b in zip(forward, backward, strict=True)]
+    shift = 0.0
+    if placed[0] < -limit:
+        shift = -limit - placed[0]
+    elif placed[-1] > limit:
+        shift = limit - placed[-1]
+    spread = [0.0] * n
+    for slot, i in enumerate(order):
+        spread[i] = float(np.clip(placed[slot] + shift, -limit, limit))
+    return spread
+
+
+def _dag_edge_path(knots: Sequence[tuple[np.ndarray, np.ndarray, bool]]):
+    """Join ``(point, direction of travel, straight-to-next)`` knots into one
+    path: cubic Béziers that leave and arrive along each knot's direction, or
+    a straight run where a knot asks for one (an edge crossing a rank)."""
+    from matplotlib.path import Path as MplPath
+
+    verts = [knots[0][0]]
+    codes = [MplPath.MOVETO]
+    for (a, heading_a, straight), (b, heading_b, _) in zip(knots[:-1], knots[1:], strict=True):
+        if straight:
+            verts.append(b)
+            codes.append(MplPath.LINETO)
+            continue
+        # Bends scale with the vertical gap only, so every edge between the same
+        # two ranks bends alike and neighbouring edges do not cross mid-run.
+        reach = max(0.15, 0.45 * abs(float(a[1] - b[1])))
+        verts += [a + heading_a * reach, b - heading_b * reach, b]
+        codes += [MplPath.CURVE4] * 3
+    return MplPath(np.asarray(verts), codes)
+
+
+@_styled
 def plot_dag(world: SCM, path: str, title: str | None = None) -> None:
-    """Column-layout DAG render (pure matplotlib — no graphviz required)."""
+    """Draw the world's DAG the way Graphviz draws a PyMC model.
+
+    Ranks run top to bottom. Each node is a black oval labelled ``name ~ type``
+    (as ``pm.model_to_graphviz`` labels ``name ~ Distribution``); arrows are
+    plain and black and curve between ranks as ``dot`` routes them. Greys mark
+    what a modeller observes: latent factors and the baseline stay white,
+    while controls, channels, and the outcome darken in that order. A
+    channel's mechanism, and any role other than a direct effect, sit in small
+    grey print inside its oval. Isolated null nodes and the baseline's edge to
+    the outcome are dashed. Pure Matplotlib: no Graphviz installation is
+    needed, and ``describe.world_to_dot`` writes the same figure as DOT source.
+    """
     import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Circle, FancyArrowPatch
+    from matplotlib.patches import Ellipse, FancyArrowPatch
+    from matplotlib.transforms import Bbox
 
-    g, params = world.g, world.params
     title = world.name if title is None else title
-    n_treatments, n_covariates, n_latent = len(g["g_cy"]), len(g["g_zy"]), len(g["g_dy"])
-
-    def _col(n: int, x: float) -> dict[int, tuple[float, float]]:
-        ys = np.linspace(0.9, 0.1, n) if n > 1 else [0.5]
-        return {i: (x, float(y)) for i, y in enumerate(ys)}
-
-    pos: dict[str, tuple[float, float]] = {}
-    pos.update({f"D{j + 1}": p for j, p in _col(n_latent, 0.05).items()})
-    pos.update({f"Z{m + 1}": p for m, p in _col(n_covariates, 0.30).items()})
-    pos.update({f"C{k + 1}": p for k, p in _col(n_treatments, 0.58).items()})
-    pos["B"] = (0.93, 0.80)
-    pos["Y"] = (0.93, 0.28)
-
-    fig, ax = plt.subplots(figsize=(9, 5.2))
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-    ax.set_title(title, fontsize=11, color=INK, loc="left")
-
-    edges = edges_with_coeffs(g, params) + [("_by", "B", "Y", 0.0)]
-    present: dict[str, str] = {}
-    for et, src, dst, _ in edges:
-        if et == "_by":
-            color, ls, rad = "#999999", "--", 0.0
-        else:
-            color, ls = EDGE_STYLE[et][0], "-"
-            rad = 0.35 if src[0] == dst[0] else 0.12  # within-column arcs curve more
-            present[et] = EDGE_STYLE[et][1]
-        arrow = FancyArrowPatch(
-            pos[src],
-            pos[dst],
-            connectionstyle=f"arc3,rad={rad}",
-            arrowstyle="-|>",
-            mutation_scale=11,
-            linewidth=1.5,
-            linestyle=ls,
-            color=color,
-            shrinkA=31,
-            shrinkB=31,
-            alpha=0.9,
-            zorder=2,
+    nodes = dag_nodes(world)
+    line = _DAG_FONT_PT * 1.2 / 72.0
+    note_line = _DAG_NOTE_PT * 1.3 / 72.0
+    size: dict[str, tuple[float, float]] = {}
+    for node in nodes:
+        text_w = max(_dag_text_width(t, _DAG_FONT_PT) for t in (node.name, "~", node.kind))
+        text_w = max([text_w, *(_dag_text_width(t, _DAG_NOTE_PT) for t in node.notes)])
+        text_h = 3 * line + len(node.notes) * note_line
+        # Graphviz pads the label by its margin, then circumscribes the box.
+        size[node.name] = (
+            max(0.75, (text_w + 2 * _DAG_MARGIN[0]) * math.sqrt(2)),
+            max(0.5, (text_h + 2 * _DAG_MARGIN[1]) * math.sqrt(2)),
         )
-        ax.add_patch(arrow)
+    edges = [(src, dst) for _, src, dst, _ in edges_with_coeffs(world.g, world.params)]
+    edges.append(("B", "Y"))
+    pos, chains, band = _dag_layout([n.name for n in nodes], edges, size)
 
-    status = node_status(g)
-    for name, (x, y) in pos.items():
-        reaches = status.get(name, "connected") == "connected"  # B / Y always reach
-        ax.add_patch(Circle((x, y), 0.055, facecolor="white", edgecolor="none", zorder=2.5))
+    def rim(name: str, toward: tuple[float, float]) -> np.ndarray:
+        """Where the line from ``name``'s centre toward a point leaves its oval."""
+        (cx, cy), (w, h) = pos[name], size[name]
+        dx, dy = toward[0] - cx, toward[1] - cy
+        reach = 1.0 / math.hypot(dx / (w / 2), dy / (h / 2))
+        return np.array([cx + dx * reach, cy + dy * reach])
+
+    def unit(v: np.ndarray) -> np.ndarray:
+        return v / float(np.linalg.norm(v))
+
+    down = np.array([0.0, -1.0])
+    # Edges leave through the bottom of an oval (within 35 degrees of straight
+    # down) and arrive through its top (within 45 degrees of straight up),
+    # angled toward the other end. The sideways run then happens in the gap
+    # between ranks, clear of neighbouring ovals. Edges sharing an oval keep
+    # their left-to-right order around it, spaced apart, so they neither cross
+    # there nor stack their arrowheads.
+    exit_limit, entry_limit = math.radians(35.0), math.radians(45.0)
+    routes = []
+    for (src, dst), chain in chains.items():
+        middle = []
+        for waypoint in chain[1:-1]:
+            wx, wy = pos[waypoint]
+            middle.append((np.array([wx, wy + band[waypoint]]), down, True))
+            middle.append((np.array([wx, wy - band[waypoint]]), down, False))
+        routes.append((src, dst, middle))
+
+    def ports(ends: list[tuple[str, float]], limit: float) -> list[float]:
+        """Each end's port angle from vertical toward a point ``dx`` inches
+        across, spread around its oval in order. An oval with many edges
+        widens its arc beyond ``limit`` (up to 70 degrees) to keep them apart."""
+        spread = [0.0] * len(ends)
+        for name in {n for n, _ in ends}:
+            mine = [i for i, (n, _) in enumerate(ends) if n == name]
+            arc = min(math.radians(70.0), max(limit, (len(mine) - 1) * _DAG_PORT_GAP / 2))
+            wanted = [float(np.clip(math.atan2(ends[i][1], 2.0), -arc, arc)) for i in mine]
+            for i, angle in zip(mine, _dag_spread(wanted, arc), strict=True):
+                spread[i] = angle
+        return spread
+
+    exits = ports(
+        [
+            (src, (middle[0][0][0] if middle else pos[dst][0]) - pos[src][0])
+            for src, dst, middle in routes
+        ],
+        exit_limit,
+    )
+    leaves = [
+        rim(src, (pos[src][0] + math.sin(a), pos[src][1] - math.cos(a)))
+        for (src, _, _), a in zip(routes, exits, strict=True)
+    ]
+    entries = ports(
+        [
+            (dst, (middle[-1][0][0] if middle else leave[0]) - pos[dst][0])
+            for (_, dst, middle), leave in zip(routes, leaves, strict=True)
+        ],
+        entry_limit,
+    )
+    paths = []
+    for (src, dst, middle), leave, a in zip(routes, leaves, entries, strict=True):
+        centre = np.array(pos[dst])
+        arrive = rim(dst, (centre[0] + math.sin(a), centre[1] + math.cos(a)))
+        heading_out = unit(leave - np.array(pos[src]))
+        heading_in = unit(centre - arrive)
+        knots = [(leave, heading_out, False), *middle, (arrive, heading_in, False)]
+        paths.append((src, _dag_edge_path(knots), arrive, heading_in))
+
+    boxes = [
+        Bbox.from_bounds(pos[n][0] - size[n][0] / 2, pos[n][1] - size[n][1] / 2, *size[n])
+        for n in size
+    ]
+    extent = Bbox.union(boxes + [p.get_extents() for _, p, _, _ in paths])
+    pad = 0.2
+    heading = 0.45 if title else 0.0
+    fig = plt.figure(figsize=(extent.width + 2 * pad, extent.height + 2 * pad + heading))
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+    ax.set_xlim(extent.x0 - pad, extent.x1 + pad)
+    ax.set_ylim(extent.y0 - pad, extent.y1 + pad + heading)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    if title:
+        ax.text(
+            (extent.x0 + extent.x1) / 2,
+            extent.y1 + pad + heading / 2,
+            title,
+            ha="center",
+            va="center",
+            fontsize=_DAG_FONT_PT,
+            fontfamily=_DAG_FONT,
+            color=_DAG_INK,
+        )
+
+    head = "-|>,head_length=1.0,head_width=0.36"
+    for src, edge, arrive, heading_in in paths:
+        dashed = src == "B"
         ax.add_patch(
-            Circle(
-                (x, y),
-                0.036,
-                facecolor="#f2f2f0" if reaches else "#ffffff",
-                edgecolor=MUTED,
-                linestyle="-" if reaches else (0, (3, 2)),
-                zorder=3,
+            FancyArrowPatch(
+                path=edge,
+                arrowstyle="-" if dashed else head,
+                mutation_scale=10,
+                color=_DAG_INK,
+                linewidth=1.0,
+                linestyle=(0, (4.0, 3.0)) if dashed else "-",
+                shrinkA=0,
+                shrinkB=0,
+                zorder=1,
             )
         )
-        ax.text(x, y, name, ha="center", va="center", fontsize=9, color=INK, zorder=4)
-        sub = ""
-        if name.startswith("C"):
-            k = int(name[1:]) - 1
-            role = treatment_role(g, k)
-            sub = mechanism_label(params, k) + ("" if role in ("direct", "null") else f" · {role}")
-        if not reaches:
-            sub = (sub + " · " if sub else "") + "isolated null"
-        if sub:
-            ax.text(x, y - 0.055, sub, ha="center", va="top", fontsize=6.5, color=MUTED, zorder=4)
+        if dashed:
+            # A solid head on the dashed line, as Graphviz draws one.
+            tail = arrive - heading_in * 0.15
+            ax.add_patch(
+                FancyArrowPatch(
+                    (float(tail[0]), float(tail[1])),
+                    (float(arrive[0]), float(arrive[1])),
+                    arrowstyle=head,
+                    mutation_scale=10,
+                    color=_DAG_INK,
+                    linewidth=1.0,
+                    shrinkA=0,
+                    shrinkB=0,
+                    zorder=1,
+                )
+            )
 
-    handles = [
-        Line2D([0], [0], color=EDGE_STYLE[et][0], lw=1.8, label=lab) for et, lab in present.items()
-    ]
-    handles.append(Line2D([0], [0], color="#999999", lw=1.5, ls="--", label="B→Y (baseline)"))
-    # legend BELOW the axes so it can never collide with lower-column nodes
-    ax.legend(
-        handles=handles,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.01),
-        fontsize=7.5,
-        frameon=False,
-        ncol=min(len(handles), 5),
-    )
-    fig.tight_layout()
-    fig.savefig(path, dpi=130, bbox_inches="tight")
+    for node in nodes:
+        (x, y), (w, h) = pos[node.name], size[node.name]
+        ax.add_patch(
+            Ellipse(
+                (x, y),
+                w,
+                h,
+                facecolor=_X11_GREYS[node.fill],
+                edgecolor=_DAG_INK,
+                linewidth=1.0,
+                linestyle=(0, (4.0, 3.0)) if node.isolated else "-",
+                zorder=2,
+            )
+        )
+        rows = [(text, _DAG_FONT_PT, _DAG_INK, line) for text in (node.name, "~", node.kind)]
+        rows += [(note, _DAG_NOTE_PT, _DAG_NOTE, note_line) for note in node.notes]
+        cursor = y + sum(r[3] for r in rows) / 2
+        for text, font_pt, color, height in rows:
+            ax.text(
+                x,
+                cursor - height / 2,
+                text,
+                ha="center",
+                va="center",
+                fontsize=font_pt,
+                fontfamily=_DAG_FONT,
+                color=color,
+                zorder=3,
+            )
+            cursor -= height
+    fig.savefig(path, dpi=130)
     plt.close(fig)
 
 
+@_styled
 def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
     """Model-input series: per-treatment treatment, covariates + latent latent_unobserved, outcome."""
     import matplotlib.pyplot as plt
@@ -216,6 +673,7 @@ def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
     plt.close(fig)
 
 
+@_styled
 def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
     """Every true effect on Y + the reconstruction identity check."""
     import matplotlib.pyplot as plt
@@ -233,7 +691,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
 
     ax = axes[0]
     ax.plot(weeks, d["outcome"], color=INK, lw=1.6, label="outcome Y")
-    ax.plot(weeks, recon, color="#999999", lw=1.2, ls="--", label="Σ true components")
+    ax.plot(weeks, recon, color=GUIDE, lw=1.2, ls="--", label="Σ true components")
     ax.set_title(
         f"{title} — true decomposition (identity max err {ident_err:.1e})",
         fontsize=11,
@@ -262,7 +720,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
             ax.plot(
                 weeks,
                 d["latent_unobserved_contribution"][:, j],
-                color=EDGE_STYLE["dy"][0],
+                color=EDGE_COLORS["dy"],
                 lw=1.2,
                 ls=["-", "--"][j % 2],
                 label=f"D{j + 1}→Y",
@@ -272,7 +730,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
             ax.plot(
                 weeks,
                 d["covariate_contribution"][:, m],
-                color=EDGE_STYLE["zy"][0],
+                color=EDGE_COLORS["zy"],
                 lw=1.2,
                 ls=["-", "--", ":", "-."][m % 4],
                 label=f"Z{m + 1}→Y",
@@ -285,7 +743,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
         ax.plot(
             weeks,
             d["indirect_effects_by_source"][:, i],
-            color=EDGE_STYLE[src][0],
+            color=EDGE_COLORS[src],
             lw=1.3,
             label=f"indirect via {src}",
         )
@@ -307,6 +765,7 @@ def _mean_index(values: np.ndarray) -> tuple[np.ndarray, str]:
     return (values / mean, "/ |mean|") if mean else (values, "raw; zero mean")
 
 
+@_styled
 def plot_treatments(world: SCM, path: str, title: str | None = None) -> None:
     """Per-treatment treatment and contribution relative to their absolute mean.
 
@@ -349,6 +808,7 @@ def plot_treatments(world: SCM, path: str, title: str | None = None) -> None:
     plt.close(fig)
 
 
+@_styled
 def plot_outcome_distributions(
     dist: OutcomeDistributions,
     path: str,
@@ -565,9 +1025,9 @@ def _view_banner(fig, views: tuple[str, ...]) -> bool:
             ha="center",
             va="top",
             fontsize=9,
-            color="#7a1616",
+            color="#8A3A12",
             wrap=True,
-            bbox={"facecolor": "#fdf0ef", "edgecolor": "#e34948", "boxstyle": "round,pad=0.4"},
+            bbox={"facecolor": "#FDEFE3", "edgecolor": "#D9783A", "boxstyle": "round,pad=0.4"},
         )
         return True
     if views == ("differences",):
@@ -579,7 +1039,7 @@ def _view_banner(fig, views: tuple[str, ...]) -> bool:
             va="top",
             fontsize=9,
             color=INK,
-            bbox={"facecolor": "#f2f2f0", "edgecolor": GRID, "boxstyle": "round,pad=0.4"},
+            bbox={"facecolor": "#EEF1F9", "edgecolor": GRID, "boxstyle": "round,pad=0.4"},
         )
         return True
     return False
@@ -615,13 +1075,13 @@ def _heatmap(
     finite = np.asarray(data.compressed(), dtype=np.float64)
     if diverging:
         limit = max(float(np.abs(finite).max()) if finite.size else 1.0, 1e-9)
-        vmin, vmax, name = -limit, limit, "RdBu_r"
+        vmin, vmax, name = -limit, limit, "pymc_generator.diverging"
     else:
         vmin = min(float(finite.min()), 0.0) if finite.size else 0.0
         vmax = max(float(finite.max()), 0.0) if finite.size else 1.0
         if vmax - vmin < 1e-12:
             vmin, vmax = vmin - 0.5, vmax + 0.5
-        name = "viridis"
+        name = "pymc_generator.sequential"
     im = ax.imshow(
         data,
         cmap=mpl.colormaps[name].with_extremes(bad=GRID),
@@ -665,6 +1125,7 @@ def _finish(fig, path: str, *, banner: bool, footnote: str | None) -> None:
     plt.close(fig)
 
 
+@_styled
 def plot_dependence_matrices(
     report: DataDiagnostics,
     path: str,
@@ -749,6 +1210,7 @@ def plot_dependence_matrices(
     _finish(fig, path, banner=banner, footnote=_DEPENDENCE_MASK_NOTE)
 
 
+@_styled
 def plot_series_distributions(
     report: DataDiagnostics,
     path: str,
@@ -869,6 +1331,7 @@ def plot_series_distributions(
     _finish(fig, path, banner=banner, footnote=None)
 
 
+@_styled
 def plot_temporal_diagnostics(
     report: DataDiagnostics,
     path: str,
@@ -1002,6 +1465,7 @@ def plot_temporal_diagnostics(
     _finish(fig, path, banner=banner, footnote=_MASK_NOTE)
 
 
+@_styled
 def plot_vif_diagnostics(
     report: DataDiagnostics,
     path: str,
@@ -1144,6 +1608,7 @@ def plot_vif_diagnostics(
     )
 
 
+@_styled
 def plot_contribution_diagnostics(
     report: DataDiagnostics,
     path: str,
@@ -1448,6 +1913,7 @@ def _comparison_profile(
     _style_ax(ax)
 
 
+@_styled
 def plot_temporal_comparison(
     reference: TemporalStatistics,
     query: TemporalStatistics,
@@ -1521,6 +1987,7 @@ def plot_temporal_comparison(
     )
 
 
+@_styled
 def plot_activity_runs(
     reference: ActivityRuns,
     query: ActivityRuns,
@@ -1635,6 +2102,7 @@ def _world_pair_profiles(report: LaggedDependence, view: str, pairs: tuple[int, 
     return result
 
 
+@_styled
 def plot_dependence_comparison(
     reference: LaggedDependence,
     query: LaggedDependence,
@@ -1691,6 +2159,7 @@ def plot_dependence_comparison(
     )
 
 
+@_styled
 def plot_series_matches(
     comparison: SeriesComparison,
     matches: NearestSeries,
@@ -1753,6 +2222,7 @@ def plot_series_matches(
     _finish(fig, path, banner=False, footnote="Matching does not establish a shared data origin.")
 
 
+@_styled
 def plot_similarity_scores(
     assessment: SimilarityAssessment,
     path: str,

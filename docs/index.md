@@ -1,119 +1,77 @@
 ---
+template: home.html
+title: Simulate causal worlds
 hide:
   - navigation
   - toc
+  - footer
 ---
 
-<div class="pg-hero" markdown>
-<span class="pg-hero__eyebrow">structural causal models · exact ground truth</span>
+```python exec="1" html="1"
+from scm_docs import world, world_json
 
-# Simulate causal worlds. <span class="pg-gradient-text">Know the answer.</span>
-
-Thousands of **worlds**, each a random Pearlian DAG compiled into one
-PyTensor / PyMC graph — so a single draw gives you the observable data *and*
-the exact causal decomposition of the outcome, reproducibly from a seed.
-
-<div class="pg-hero__cta" markdown>
-[Get started :material-arrow-right:](getting-started.md){ .pg-btn .pg-btn--primary }
-[Read the model](guide/foundation.md){ .pg-btn .pg-btn--ghost }
-[View on GitHub](https://github.com/pymc-labs/pymc-generator){ .pg-btn .pg-btn--ghost }
-</div>
-</div>
-
-## From one seed, everything
-
-<div class="pg-grid" markdown>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">🎲</div>
-### Draw a world
-Every prior is a PyMC distribution; the treatment response mechanisms
-(carryover, saturation) are pymc-marketing's own. One `pm.draw` yields the
-series and the truth together.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">🧮</div>
-### Exact decomposition
-The outcome splits into per-treatment direct contributions, baseline drivers,
-and a telescoping indirect split — holding to **float precision (~1e-15)**,
-not a Taylor approximation.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">📂</div>
-### Auditable bundles
-Write a folder a human can read end-to-end: CSVs, a plain-text world
-description, the DAG, and diagnostic figures.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">🧱</div>
-### Stacked corpora
-Stack thousands of worlds into one padded tensor `.npz` with explicit active
-counts and masks — decomposition targets included.
-</div>
-
-</div>
-
-## A world, drawn and audited
-
-Here is one world sampled live during this docs build — its causal graph, its
-observable series, and a machine-checked proof that the decomposition adds up.
-
-```python exec="1" source="block" html="1"
-from scm_docs import world, viz_html
-import pymc_generator as pg
-
-w = world(scenario=1, seed=0)          # "confounded_treatment"
-print(viz_html(pg.viz.plot_dag, w, caption="The drawn causal graph (D confounds spend)."))
+print(world_json(world(scenario=1, seed=0), seed=0))
 ```
 
-```python exec="1" source="block" html="1"
+<section class="pg-story" data-pg-story aria-label="One draw, from code to proof">
+<div class="pg-story__steps">
+<div class="pg-story__step" data-step="code">
+<h2>One call draws a world.</h2>
+<p>A named scenario's prior and a seed.</p>
+</div>
+<div class="pg-story__step" data-step="series">
+<h2>It returns the data a modeller sees.</h2>
+<p>Spend, controls, and sales, week by week.</p>
+</div>
+<div class="pg-story__step" data-step="graph">
+<h2>And the graph that caused it.</h2>
+<p>Hidden demand drives both spend and sales.</p>
+</div>
+<div class="pg-story__step" data-step="decomposition">
+<h2>Every week splits into its causes.</h2>
+<p>Baseline, each channel, and indirect effects add back to sales.</p>
+</div>
+<div class="pg-story__step" data-step="identity">
+<h2>Exactly.</h2>
+<p>The largest gap between sales and the sum of its parts.</p>
+</div>
+</div>
+<div class="pg-story__stage">
+<svg class="pg-stage" data-pg-stage viewBox="0 0 800 560" role="img" aria-label="The drawn world: its code, series, graph, and decomposition"></svg>
+<ol class="pg-story__progress" aria-hidden="true">
+<li data-step="code">Code</li>
+<li data-step="series">Data</li>
+<li data-step="graph">Graph</li>
+<li data-step="decomposition">Causes</li>
+<li data-step="identity">Proof</li>
+</ol>
+</div>
+</section>
+
+<section class="pg-proof" markdown>
+
+## Every figure here is executed.
+
+```python exec="1" html="1"
 from scm_docs import world, viz_html
 import pymc_generator as pg
 
 w = world(scenario=1, seed=0)
-print(viz_html(pg.viz.plot_timeseries, w, caption="What a modeller observes: spend, controls & demand, sales."))
+print(viz_html(pg.viz.plot_decomposition, w, caption="The same world, rendered by <code>pg.viz.plot_decomposition</code> while this page was built. Hover to read it under the loupe."))
 ```
 
-```python exec="1" source="block" result="text"
-from scm_docs import world
-w = world(scenario=1, seed=0)
-print("decomposition identity error:", f"{w.identity_error():.2e}")
-print("reconstruction == sales:", bool((abs(w.reconstruction() - w.data['outcome']) < 1e-9).all()))
-```
+</section>
 
-!!! tip "Everything on this site is live"
-    Each figure and number above was produced by executing the code block right
-    above it while the site was built. Nothing is pasted in.
+<section class="pg-index" markdown>
 
-## Where to go next
+## Read on
 
-<div class="pg-grid" markdown>
+- [Getting started](getting-started.md)
+- [The causal model](guide/foundation.md)
+- [Sampling a world](guide/worlds.md)
+- [The exact decomposition](guide/decomposition.md)
+- [Generating a corpus](guide/corpus.md)
+- [End-to-end tour](examples/index.ipynb)
+- [API reference](reference/index.md)
 
-<div class="pg-card" markdown>
-<div class="pg-card__icon">⚡</div>
-### [Getting started](getting-started.md)
-Install, sample your first world, and write a bundle.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">🧠</div>
-### [The causal model](guide/foundation.md)
-The five node families, eight edge types, and structural equations.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">📓</div>
-### [Examples notebook](examples/index.ipynb)
-An end-to-end tour: sample, inspect, plot, validate.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">📖</div>
-### [API reference](reference/index.md)
-Every public symbol, generated from the source.
-</div>
-
-</div>
+</section>

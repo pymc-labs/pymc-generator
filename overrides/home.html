@@ -1,0 +1,25 @@
+{% extends "main.html" %}
+
+{#- The home page opens on the world drawn during this build: a full-bleed field
+    the reader focuses with the cursor. Its data is the page's #pg-world
+    payload; without scripts the field stays an empty ground behind the text. -#}
+{% block hero %}
+  <section class="pg-hero" aria-labelledby="pg-hero-title">
+    <canvas class="pg-field" data-pg-field aria-hidden="true"></canvas>
+    <div class="pg-hero__inner md-grid">
+      <div class="pg-hero__copy">
+        <h1 id="pg-hero-title">Simulate causal worlds. Know the answer.</h1>
+        <p class="pg-hero__lead">Random Pearlian DAGs, each compiled into one PyMC graph. One draw returns the data and its exact causal decomposition, reproducibly from a seed.</p>
+        <div class="pg-hero__actions">
+          <a class="pg-button pg-button--primary" href="{{ 'getting-started/' | url }}">Get started</a>
+          <a class="pg-button" href="{{ 'guide/foundation/' | url }}">Read the model</a>
+        </div>
+      </div>
+    </div>
+    <p class="pg-hero__specimen md-grid" data-pg-specimen></p>
+  </section>
+{% endblock %}
+
+{% block content %}
+  {{ page.content }}
+{% endblock %}

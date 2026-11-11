@@ -2,7 +2,8 @@
 
 Adds the repo-root ``docs_gen`` directory to ``sys.path`` so executable Markdown
 blocks can share its cached world sampler. Selects the headless Matplotlib
-backend before any figure is drawn.
+backend before any figure is drawn, and exposes the package version to the
+theme templates.
 
 The path is (re)asserted in ``on_page_markdown`` — right before each page's
 markdown is converted (which is when markdown-exec runs the code blocks) —
@@ -38,6 +39,14 @@ def _ensure_path() -> None:
 
 
 _ensure_path()
+
+
+def on_config(config, **kwargs: object):
+    """Expose the package version to the theme (header and home page)."""
+    from pymc_generator import __version__
+
+    config.extra["package_version"] = __version__
+    return config
 
 
 def on_page_markdown(markdown: str, **kwargs: object) -> str:
