@@ -59,7 +59,7 @@ ruff==0.15.18
 scikit-learn==1.9.1
 scipy==1.18.1
 seaborn==0.13.2
-setuptools==84.0.0
+setuptools==84.1.0
 six==1.17.0
 threadpoolctl==3.7.0
 tqdm==4.70.1
