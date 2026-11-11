@@ -334,13 +334,23 @@ read the migration notes before upgrading.
   allows a 1e-10 relative tolerance for them only).
 
 - **Documentation site redesign.** The site now reads as a research publication
-  in the PyMC Labs palette. The home page opens on the world drawn during the
-  docs build: a full-bleed field you can focus with a magnifying loupe, and a
-  scrolling sequence from the sampling call to its data, its graph, its exact
-  decomposition, and the identity check. Every page carries a reading rail that
-  fills as you scroll and remembers where you stopped, a chain of the section's
-  pages under the title, and a loupe on every executed figure. Executed figures
-  are inline SVG in the house style.
+  in the PyMC Labs palette and type: Archivo Expanded for headings, Inter for
+  text and interface, and a monospace for code only. The home page opens on a
+  single-ink network world, dithered to a few pixel tones, that a magnifying
+  lens resolves at full resolution; clicking it breaks the world into a flowing
+  ribbon that slowly gathers back. Below it, one screen plays a short editor
+  demo once, with chapters you can jump between: a notebook samples a world,
+  writes its bundle, and opens `dataset.csv` as a sheet, then draws a
+  twelve-world corpus, saves it as one compressed `.npz`, loads it back, lists
+  the arrays inside, and opens every world as a sheet. The code, files, and data
+  come from running those cells during the docs build. A short index of the
+  guides closes the page. Every page carries a reading rail that fills as you
+  scroll and remembers where you stopped, a chain of the section's pages under
+  the title, and a loupe on every executed figure. Reading text is justified
+  across the full column, so its edges line up with code, equations, and
+  figures. On API pages, "Source code in …" opens the code in a viewer over the
+  blurred page, where it scrolls on its own. Executed figures are inline SVG in
+  the house style.
 - **`pymc_generator.viz.use_style()`.** Applies the package's figure style to
   Matplotlib globally so your own figures match the bundle figures; the example
   notebooks call it.
@@ -348,12 +358,13 @@ read the migration notes before upgrading.
 ### Changed — migration notes
 
 - **Bundle and diagnostic figures use the house style.** Every `viz.plot_*`
-  figure renders in the PyMC Labs palette with a bundled monospace face
-  (Fragment Mono, SIL Open Font License) and plain axes, inside a temporary
-  style context that leaves global Matplotlib settings untouched. Heatmaps use
-  brand sequential and diverging colormaps instead of `viridis` / `RdBu_r`.
-  Figure content and file names are unchanged. `viz.EDGE_STYLE` is replaced by
-  `viz.EDGE_COLORS` (colours only; the legend labels it carried are gone).
+  figure renders in the PyMC Labs palette and type, with bundled brand faces
+  (Inter for labels, ticks, and legends; Archivo Expanded for titles; both SIL
+  Open Font License) and plain axes, inside a temporary style context that
+  leaves global Matplotlib settings untouched. Heatmaps use brand sequential
+  and diverging colormaps instead of `viridis` / `RdBu_r`. Figure content and
+  file names are unchanged. `viz.EDGE_STYLE` is replaced by `viz.EDGE_COLORS`
+  (colours only; the legend labels it carried are gone).
 - **The DAG figure and `dag.dot` follow Graphviz's look.** `viz.plot_dag` now
   draws, as PyMC's `model_to_graphviz` does, top-to-bottom ranks of black ovals
   labelled `name ~ type` (Latent, Control, Channel, Baseline, Outcome) with plain

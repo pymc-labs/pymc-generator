@@ -1,5 +1,6 @@
-/* Reading instruments shared by every page: the plate loupe, the reading
-   rail (contents progress plus a resume mark), and the header read line.
+/* Reading instruments shared by every page: the plate loupe, the source viewer,
+   the reading rail (contents progress plus a resume mark), and the header read
+   line.
    Material's instant navigation swaps the page body without reloading, so every
    instrument is mounted per page through `document$` and torn down before the
    next one. Nothing here is required to read the page. */
@@ -97,6 +98,120 @@
     root
       .querySelectorAll("figure.scm-plot, figure.pg-figure, .jp-RenderedImage, [data-pg-loupe]")
       .forEach(mountLoupe);
+  }
+
+  /* ---------------------------------------------------------------------------
+     Source viewer: an API page's "Source code in …" rows open their code in a
+     modal dialog over the blurred page instead of expanding in place. The code
+     block itself moves into the dialog and back on close, so its line anchors
+     and copy button keep working; the page behind stays put while the code
+     scrolls. Without the script the rows expand as plain details elements. */
+  const CLOSE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+
+  function mountSources(root) {
+    const rows = [...root.querySelectorAll("details.mkdocstrings-source")];
+    const article = root.querySelector(".md-content__inner");
+    if (!rows.length || !article || typeof HTMLDialogElement !== "function") return;
+
+    const dialog = document.createElement("dialog");
+    dialog.className = "pg-source";
+    dialog.setAttribute("aria-labelledby", "pg-source-title");
+    dialog.innerHTML =
+      '<div class="pg-source__frame">' +
+      '<div class="pg-source__bar">' +
+      '<p class="pg-source__title" id="pg-source-title"></p>' +
+      `<button type="button" class="pg-source__close" aria-label="Close source code">${CLOSE_ICON}</button>` +
+      "</div>" +
+      '<div class="pg-source__body" tabindex="0" aria-label="Source code"></div>' +
+      "</div>";
+    article.append(dialog);
+    const title = dialog.querySelector(".pg-source__title");
+    const body = dialog.querySelector(".pg-source__body");
+    let shown = null;
+
+    /* The object the code belongs to, from its anchor id with the module path
+       of the source file stripped: `sample_scm`, `SCM.equations`. */
+    function objectName(row, file) {
+      const object = row.closest(".doc-object");
+      const anchor = object?.querySelector(":scope > a[id], :scope > :is(h2, h3, h4, h5, h6)[id]");
+      if (!anchor) return "";
+      const module = file
+        ? file.textContent.trim().replace(/(\/__init__)?\.py$/, "").replaceAll("/", ".")
+        : "";
+      return module && anchor.id.startsWith(`${module}.`)
+        ? anchor.id.slice(module.length + 1)
+        : anchor.id.split(".").pop();
+    }
+
+    function open(row) {
+      const code = row.querySelector(":scope > .highlight");
+      if (!code || shown) return;
+      row.open = false;
+      const file = row.querySelector(":scope > summary code");
+      const name = objectName(row, file);
+      title.replaceChildren();
+      if (name) {
+        const span = document.createElement("span");
+        span.className = "pg-source__name";
+        span.textContent = name;
+        title.append(span);
+      }
+      if (file) title.append(file.cloneNode(true));
+      body.append(code);
+      shown = { row, code };
+      dialog.showModal();
+      body.scrollTop = 0;
+      body.focus({ preventScroll: true });
+    }
+
+    on(dialog, "close", () => {
+      if (!shown) return;
+      const { row, code } = shown;
+      shown = null;
+      row.append(code);
+      row.querySelector(":scope > summary").focus({ preventScroll: true });
+    });
+    on(dialog.querySelector(".pg-source__close"), "click", () => dialog.close());
+    // The frame fills the dialog, so a click landing on the dialog itself is
+    // a click on the blurred page around it.
+    on(dialog, "click", (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    // Line-number links scroll the code, not the locked page behind it. The
+    // listener runs at the window, in capture, ahead of the site's instant
+    // navigation, which would otherwise scroll the page to the line.
+    on(
+      window,
+      "click",
+      (event) => {
+        // Material rewrites in-page links to absolute URLs, so match on the hash.
+        const link = event.target instanceof Element && event.target.closest("a[href]");
+        if (!link || !link.hash || !body.contains(link)) return;
+        const target = body.querySelector(`[id="${CSS.escape(decodeURIComponent(link.hash.slice(1)))}"]`);
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const offset = target.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        body.scrollTo({ top: body.scrollTop + offset - body.clientHeight / 3, behavior: "auto" });
+      },
+      true,
+    );
+
+    rows.forEach((row) => {
+      const summary = row.querySelector(":scope > summary");
+      if (!summary || !row.querySelector(":scope > .highlight")) return;
+      row.classList.add("pg-source-row");
+      summary.setAttribute("aria-haspopup", "dialog");
+      on(summary, "click", (event) => {
+        event.preventDefault();
+        open(row);
+      });
+    });
+
+    teardown.push(() => {
+      if (dialog.open) dialog.close();
+      dialog.remove();
+    });
   }
 
   /* ---------------------------------------------------------------------------
@@ -214,6 +329,7 @@
     teardown.forEach((undo) => undo());
     teardown = [];
     mountLoupes(document);
+    mountSources(document);
     mountReading();
     context = { on, cleanup: (undo) => teardown.push(undo), reduceMotion };
     modules.forEach((fn) => fn(context));

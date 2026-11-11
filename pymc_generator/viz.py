@@ -22,7 +22,7 @@ import itertools
 import math
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -87,13 +87,23 @@ _DAG_NOTE = "#595959"
 #: The X11 greys Graphviz names, as Matplotlib colours.
 _X11_GREYS = {"white": "#FFFFFF", "gray90": "#E5E5E5", "gray80": "#CCCCCC", "gray70": "#B3B3B3"}
 
-_FONT_FILE = Path(__file__).with_name("fonts") / "FragmentMono-Regular.ttf"
+_FONT_FILES = (
+    Path(__file__).with_name("fonts") / "Inter-Regular.ttf",
+    Path(__file__).with_name("fonts") / "ArchivoExpanded-SemiBold.ttf",
+)
 
-#: Matplotlib rcParams of the house style. Glyphs the bundled face lacks (Greek
-#: capitals, for instance) fall back to DejaVu Sans Mono glyph by glyph, which
-#: needs explicit family names rather than the generic ``monospace`` alias.
+#: Matplotlib uses Inter for all ordinary figure text. Explicit fallback names
+#: cover glyphs beyond the bundled files; titles receive Archivo below.
+TITLE_FONT: dict[str, Any] = {
+    "fontfamily": ["Archivo", "Inter", "DejaVu Sans"],
+    "fontstretch": "expanded",
+    "fontweight": "semibold",
+}
+
+#: Matplotlib rcParams of the house style. Inter is registered from the package;
+#: DejaVu Sans supplies any glyph Inter lacks.
 STYLE: dict[str, object] = {
-    "font.family": ["Fragment Mono", "DejaVu Sans Mono"],
+    "font.family": ["Inter", "DejaVu Sans"],
     "font.size": 8.5,
     "figure.facecolor": PAPER,
     "figure.dpi": 150,
@@ -103,7 +113,8 @@ STYLE: dict[str, object] = {
     "axes.linewidth": 0.8,
     "axes.labelcolor": MUTED,
     "axes.titlecolor": INK,
-    "axes.titleweight": "normal",
+    "axes.titleweight": "semibold",
+    "figure.titleweight": "semibold",
     "axes.spines.top": False,
     "axes.spines.right": False,
     "axes.grid": False,
@@ -113,7 +124,6 @@ STYLE: dict[str, object] = {
     "text.color": INK,
     "xtick.color": MUTED,
     "ytick.color": MUTED,
-    "xtick.direction": "out",
     "ytick.direction": "out",
     "xtick.major.size": 3.0,
     "ytick.major.size": 3.0,
@@ -127,13 +137,30 @@ STYLE: dict[str, object] = {
 
 
 def _register_style_assets() -> None:
-    """Register the bundled face and the brand colormaps with Matplotlib once."""
+    """Register the bundled typefaces and brand colormaps with Matplotlib once."""
     import matplotlib as mpl
     from matplotlib import font_manager
     from matplotlib.colors import LinearSegmentedColormap
 
-    if not any(entry.fname == str(_FONT_FILE) for entry in font_manager.fontManager.ttflist):
-        font_manager.fontManager.addfont(str(_FONT_FILE))
+    font_paths = tuple(str(font_file) for font_file in _FONT_FILES)
+    faces = font_manager.fontManager.ttflist
+    for font_path in font_paths:
+        if not any(entry.fname == font_path for entry in faces):
+            font_manager.fontManager.addfont(font_path)
+
+    # Matplotlib resolves equally scoring family names in list order. Keep the
+    # bundled faces ahead of similarly named system fonts, then drop cached
+    # lookups that may have selected a system face before registration.
+    bundled_faces = {entry.fname: entry for entry in faces if entry.fname in font_paths}
+    if [entry.fname for entry in faces[: len(font_paths)]] != list(font_paths):
+        faces[:] = [bundled_faces[font_path] for font_path in font_paths] + [
+            entry for entry in faces if entry.fname not in font_paths
+        ]
+        # `_findfont_cached` is Matplotlib's private lookup cache; a version
+        # without it has no stale lookups to drop.
+        cached = getattr(font_manager.fontManager, "_findfont_cached", None)
+        if cached is not None:
+            cached.cache_clear()
     maps = {
         # Lightness rises monotonically from navy to white: readable in greyscale.
         "pymc_generator.sequential": [NAVY, "#2E6F66", "#4FB3A0", AQUA, PAPER][::-1],
@@ -640,7 +667,7 @@ def plot_timeseries(world: SCM, path: str, title: str | None = None) -> None:
         ax.plot(
             weeks, d["treatments"][:, k], color=PALETTE[k % len(PALETTE)], lw=1.3, label=f"C{k + 1}"
         )
-    ax.set_title(f"{title} — model inputs", fontsize=11, color=INK, loc="left")
+    ax.set_title(f"{title} — model inputs", fontsize=11, color=INK, loc="left", **TITLE_FONT)
     ax.set_ylabel("treatment", fontsize=9, color=MUTED)
     ax.legend(fontsize=7.5, frameon=False, ncol=min(n_treatments, 8), loc="upper left")
 
@@ -697,6 +724,7 @@ def plot_decomposition(world: SCM, path: str, title: str | None = None) -> None:
         fontsize=11,
         color=INK,
         loc="left",
+        **TITLE_FONT,
     )
     ax.legend(fontsize=8, frameon=False, loc="upper left")
 
@@ -797,12 +825,19 @@ def plot_treatments(world: SCM, path: str, title: str | None = None) -> None:
             tag = f"β={parameter_text(params, params['beta'][k])}"
         else:
             tag = f"no direct edge ({treatment_role(g, k)})"
-        ax.set_title(f"C{k + 1} — {mechanism_label(params, k)} — {tag}", fontsize=9, color=INK)
+        ax.set_title(
+            f"C{k + 1} — {mechanism_label(params, k)} — {tag}", fontsize=9, color=INK, **TITLE_FONT
+        )
         ax.legend(fontsize=7, frameon=False, loc="upper left")
         _style_ax(ax)
     for ax in axes[n_treatments:]:
         ax.axis("off")
-    fig.suptitle(f"{title} — per-treatment treatment vs true contribution", fontsize=11, color=INK)
+    fig.suptitle(
+        f"{title} — per-treatment treatment vs true contribution",
+        fontsize=11,
+        color=INK,
+        **TITLE_FONT,
+    )
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)
@@ -853,6 +888,7 @@ def plot_outcome_distributions(
             fontsize=9,
             color=INK,
             loc="left",
+            **TITLE_FONT,
         )
         ax.set_ylabel("count", fontsize=8, color=MUTED)
         _style_ax(ax)
@@ -862,7 +898,7 @@ def plot_outcome_distributions(
     head = title or (
         f"outcome distributions — {of} — {dist.n_worlds} worlds × {dist.n_time_steps} steps{scale}"
     )
-    fig.suptitle(head, fontsize=11, color=INK)
+    fig.suptitle(head, fontsize=11, color=INK, **TITLE_FONT)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)
@@ -1020,25 +1056,27 @@ def _view_banner(fig, views: tuple[str, ...]) -> bool:
     if views == ("levels",):
         fig.text(
             0.5,
-            0.94,
+            0.93,
             LEVELS_ONLY_NOTE,
             ha="center",
             va="top",
             fontsize=9,
             color="#8A3A12",
             wrap=True,
+            **TITLE_FONT,
             bbox={"facecolor": "#FDEFE3", "edgecolor": "#D9783A", "boxstyle": "round,pad=0.4"},
         )
         return True
     if views == ("differences",):
         fig.text(
             0.5,
-            0.94,
+            0.93,
             DIFFERENCES_ONLY_NOTE,
             ha="center",
             va="top",
             fontsize=9,
             color=INK,
+            **TITLE_FONT,
             bbox={"facecolor": "#EEF1F9", "edgecolor": GRID, "boxstyle": "round,pad=0.4"},
         )
         return True
@@ -1116,6 +1154,8 @@ def _finish(fig, path: str, *, banner: bool, footnote: str | None) -> None:
     """Reserve room for the figure-level texts, save, and close."""
     import matplotlib.pyplot as plt
 
+    if banner and fig._suptitle is not None:
+        fig._suptitle.set_y(0.99)
     if footnote is not None:
         fig.text(0.5, 0.012, footnote, ha="center", va="bottom", fontsize=8, color=MUTED)
     fig.tight_layout(
@@ -1194,6 +1234,7 @@ def plot_dependence_matrices(
                 fontsize=9,
                 color=INK,
                 loc="left",
+                **TITLE_FONT,
             )
             if metric == "xi":
                 ax.set_ylabel("predictor X (row)", fontsize=8, color=MUTED)
@@ -1206,6 +1247,7 @@ def plot_dependence_matrices(
         f"{report.n_time_steps} steps — {n_keys} of {len(report.keys)} keys",
         fontsize=11,
         color=INK,
+        **TITLE_FONT,
     )
     _finish(fig, path, banner=banner, footnote=_DEPENDENCE_MASK_NOTE)
 
@@ -1287,7 +1329,9 @@ def plot_series_distributions(
             else:
                 note = "No valid observations"
             _empty_panel(ax, note)
-            ax.set_title(f"{head} — {view} — {statistic}", fontsize=9, color=INK, loc="left")
+            ax.set_title(
+                f"{head} — {view} — {statistic}", fontsize=9, color=INK, loc="left", **TITLE_FONT
+            )
             continue
         color = PALETTE[position % len(PALETTE)]
         median = float(np.median(values))
@@ -1316,6 +1360,7 @@ def plot_series_distributions(
             fontsize=8,
             color=INK,
             loc="left",
+            **TITLE_FONT,
         )
         _style_ax(ax)
     for ax in flat[len(panels) :]:
@@ -1327,6 +1372,7 @@ def plot_series_distributions(
         f"{report.n_time_steps} steps",
         fontsize=11,
         color=INK,
+        **TITLE_FONT,
     )
     _finish(fig, path, banner=banner, footnote=None)
 
@@ -1380,6 +1426,7 @@ def plot_temporal_diagnostics(
                 fontsize=9,
                 color=INK,
                 loc="left",
+                **TITLE_FONT,
             )
             if not np.isfinite(matrix).any():
                 _empty_panel(ax, "No valid lags")
@@ -1432,7 +1479,7 @@ def plot_temporal_diagnostics(
                     fontsize=6.5,
                     color=MUTED,
                 )
-        ax.set_title(f"roughness / spike — {view}", fontsize=9, color=INK, loc="left")
+        ax.set_title(f"roughness / spike — {view}", fontsize=9, color=INK, loc="left", **TITLE_FONT)
         if not drawn_any:
             ax.text(
                 0.5,
@@ -1461,6 +1508,7 @@ def plot_temporal_diagnostics(
         f"{n_lags} lags",
         fontsize=11,
         color=INK,
+        **TITLE_FONT,
     )
     _finish(fig, path, banner=banner, footnote=_MASK_NOTE)
 
@@ -1513,6 +1561,7 @@ def plot_vif_diagnostics(
                 fontsize=9,
                 color=INK,
                 loc="left",
+                **TITLE_FONT,
             )
             if not in_scope:
                 _empty_panel(ax, "No predictors in scope")
@@ -1599,6 +1648,7 @@ def plot_vif_diagnostics(
         f"{report.n_time_steps} steps",
         fontsize=11,
         color=INK,
+        **TITLE_FONT,
     )
     _finish(
         fig,
@@ -1704,6 +1754,7 @@ def plot_contribution_diagnostics(
         fontsize=10,
         color=INK,
         loc="left",
+        **TITLE_FONT,
     )
     ax.grid(axis="x", color=GRID, linewidth=0.6, alpha=0.6)
     for side in ("top", "right"):
@@ -1973,12 +2024,12 @@ def plot_temporal_comparison(
             )
         else:
             _comparison_ecdf(ax, reference_values, query_values[world_indices])
-        ax.set_title(f"series {column} — {name}", fontsize=9, color=INK, loc="left")
+        ax.set_title(f"series {column} — {name}", fontsize=9, color=INK, loc="left", **TITLE_FONT)
     if not panels:
         _empty_panel(flat[0], "N/A — no series columns")
     for ax in flat[max(1, len(panels)) :]:
         ax.axis("off")
-    fig.suptitle("query temporal statistics versus reference", fontsize=11, color=INK)
+    fig.suptitle("query temporal statistics versus reference", fontsize=11, color=INK, **TITLE_FONT)
     _finish(
         fig,
         path,
@@ -2072,12 +2123,12 @@ def plot_activity_runs(
                 ax.set_yticks([0, 1], ["inactive", "active"])
                 ax.set_xlabel("time position; stop exclusive", fontsize=8, color=MUTED)
                 _style_ax(ax)
-        ax.set_title(heading, fontsize=9, color=INK, loc="left")
+        ax.set_title(heading, fontsize=9, color=INK, loc="left", **TITLE_FONT)
     if not panels:
         _empty_panel(flat[0], "N/A — no series columns")
     for ax in flat[max(1, len(panels)) :]:
         ax.axis("off")
-    fig.suptitle("query activity runs versus reference", fontsize=11, color=INK)
+    fig.suptitle("query activity runs versus reference", fontsize=11, color=INK, **TITLE_FONT)
     _finish(
         fig,
         path,
@@ -2147,10 +2198,16 @@ def plot_dependence_comparison(
             worlds,
             interval,
         )
-        ax.set_title(f"{view} — within-world median over pairs", fontsize=9, color=INK, loc="left")
+        ax.set_title(
+            f"{view} — within-world median over pairs",
+            fontsize=9,
+            color=INK,
+            loc="left",
+            **TITLE_FONT,
+        )
     for ax in flat[len(names) :]:
         ax.axis("off")
-    fig.suptitle("query lagged dependence versus reference", fontsize=11, color=INK)
+    fig.suptitle("query lagged dependence versus reference", fontsize=11, color=INK, **TITLE_FONT)
     _finish(
         fig,
         path,
@@ -2209,7 +2266,7 @@ def plot_series_matches(
         else:
             detail = f"{metric}: N/A; no available reference match"
             ax.text(0.02, 0.04, "reference: N/A", transform=ax.transAxes, fontsize=8, color=MUTED)
-        ax.set_title(f"query {index}\n{detail}", fontsize=9, color=INK, loc="left")
+        ax.set_title(f"query {index}\n{detail}", fontsize=9, color=INK, loc="left", **TITLE_FONT)
         ax.set_xlabel("aligned time position", fontsize=8, color=MUTED)
         ax.set_ylabel("values used for matching", fontsize=8, color=MUTED)
         ax.legend(fontsize=7, loc="best")
@@ -2218,7 +2275,9 @@ def plot_series_matches(
         _empty_panel(flat[0], "N/A — no query series")
     for ax in flat[max(1, len(chosen)) :]:
         ax.axis("off")
-    fig.suptitle("query waveforms and their reference matches", fontsize=11, color=INK)
+    fig.suptitle(
+        "query waveforms and their reference matches", fontsize=11, color=INK, **TITLE_FONT
+    )
     _finish(fig, path, banner=False, footnote="Matching does not establish a shared data origin.")
 
 
@@ -2319,10 +2378,15 @@ def plot_similarity_scores(
             ax.set_ylabel("empirical fraction ≤ score", fontsize=8, color=MUTED)
             ax.legend(fontsize=7, loc="best")
             _style_ax(ax)
-        ax.set_title(metric, fontsize=9, color=INK, loc="left")
+        ax.set_title(metric, fontsize=9, color=INK, loc="left", **TITLE_FONT)
     for ax in flat[len(names) :]:
         ax.axis("off")
-    fig.suptitle("query matching scores versus held-out reference scores", fontsize=11, color=INK)
+    fig.suptitle(
+        "query matching scores versus held-out reference scores",
+        fontsize=11,
+        color=INK,
+        **TITLE_FONT,
+    )
     _finish(
         fig,
         path,

@@ -1,8 +1,10 @@
 {% extends "main.html" %}
 
-{#- The home page opens on the world drawn during this build: a full-bleed field
-    the reader focuses with the cursor. Its data is the page's #pg-world
-    payload; without scripts the field stays an empty ground behind the text. -#}
+{#- The home page opens on a single figure: a world of nodes drawn in one ink
+    and dithered to a few pixel tones, which a lens under the cursor resolves
+    at full resolution. Clicking the world, or its hint button, breaks it into
+    a flowing ribbon that gathers back on its own. Without scripts the field
+    stays an empty ground and the hint stays hidden. -#}
 {% block hero %}
   <section class="pg-hero" aria-labelledby="pg-hero-title">
     <canvas class="pg-field" data-pg-field aria-hidden="true"></canvas>
@@ -16,7 +18,7 @@
         </div>
       </div>
     </div>
-    <p class="pg-hero__specimen md-grid" data-pg-specimen></p>
+    <button class="pg-hero__hint" type="button" data-pg-hint hidden>Break the world apart</button>
   </section>
 {% endblock %}
 

@@ -1,43 +1,13 @@
-/* Home page: the cinematic field (the world drawn during this build, focused
-   with a loupe that follows the cursor) and the story that turns one call into
-   data, a graph, a decomposition, and its proof. Both read the page's
-   #pg-world payload; neither invents data. */
+/* Home page: the hero field (one network in one ink, dithered to a few
+   pixel tones, resolved by a lens that follows the cursor) and the demo
+   window that plays once, the first time it is seen, from an empty notebook
+   to a written bundle's data open as a sheet. The window's contents come from
+   a real run during the build; the script only reveals them. */
 
 (() => {
   const NAVY = "#0C1F40";
   const AQUA = "#B4E7DD";
-  const PERIWINKLE = "#9FAAE2";
-  const PEACH = "#F6AE72";
-  const MONO = '"Fragment Mono", Menlo, monospace';
-  /* Edge colours follow the package figures: the hue names the source family. */
-  const EDGE = {
-    cy: "#3D57B0", cc: "#8792D6",
-    zc: "#1E8C7A", zy: "#4FB3A0", zz: "#2E6F66",
-    dc: "#B5532A", dy: "#D9783A", dz: "#E39A63",
-    by: "#9AA3B5",
-  };
-  const ROLE = { D: "latent demand", Z: "control", C: "channel", B: "baseline", Y: "sales" };
-
-  function readWorld() {
-    const el = document.getElementById("pg-world");
-    if (!el || !el.dataset.world) return null;
-    try {
-      return JSON.parse(el.dataset.world);
-    } catch {
-      return null;
-    }
-  }
-
-  function unit(values) {
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const v of values) {
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-    const span = hi - lo;
-    return values.map((v) => (span > 0 ? (v - lo) / span : 0.5));
-  }
+  const UI_FONT = '"Inter", system-ui, sans-serif';
 
   function prng(seed) {
     let a = seed >>> 0;
@@ -49,350 +19,452 @@
     };
   }
 
-  const family = (name) => name[0];
-  const easeOut = (t) => 1 - Math.pow(1 - t, 4);
-
-  /* Series per node: what the field pulses with at the current week. */
-  function nodeSeries(world) {
-    const out = {};
-    for (const name of world.nodes) {
-      const raw = name === "B" ? world.decomposition.baseline : world.series[name];
-      out[name] = raw ? unit(raw) : null;
-    }
-    return out;
-  }
-
-  /* The field's own palette for the light and dark schemes. */
-  function theme() {
-    const dark = document.body.getAttribute("data-md-color-scheme") === "slate";
-    return dark
-      ? {
-          dark,
-          ground: NAVY,
-          node: "#11284d",
-          ink: "#F2F4F8",
-          ink2: "#C5CCDA",
-          ghost: (a) => `rgba(242, 244, 248, ${a})`,
-        }
-      : {
-          dark,
-          ground: "#ffffff",
-          node: "#ffffff",
-          ink: NAVY,
-          ink2: "#3b4a66",
-          ghost: (a) => `rgba(12, 31, 64, ${a})`,
-        };
-  }
+  const smooth = (a, b, x) => {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
 
   /* =========================================================================
-     The field. */
-  function mountField(canvas, world, { on, cleanup, reduceMotion }) {
+     The field. One network drawn in a single ink at a third of the screen's
+     resolution, ordered-dithered to four tones, and scaled up without
+     smoothing. The lens draws the same network at full resolution, magnified,
+     with the direction of every edge. */
+  const CELL = 3;
+  const TONES = 4;
+  const LEVELS = 12;
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
+  const DISTANCE = 3.2;
+  const LENS_R = 96;
+  const ZOOM = 2.2;
+
+  /* One ink on the scheme's ground: navy on white, or aqua on navy. */
+  function palette() {
+    const dark = document.body.getAttribute("data-md-color-scheme") === "slate";
+    return dark ? { ground: NAVY, ink: AQUA } : { ground: "#FFFFFF", ink: NAVY };
+  }
+
+  function rgb(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+  /* One network with two bodies. As a world, its nodes cover a globe evenly
+     and join their nearest neighbours; broken apart, the same nodes sit on a
+     jittered lattice that flows like cloth, its near end turned toward the
+     viewer and its far end tapering into a thread toward the text. Each node
+     takes the globe point nearest its lattice position, so the world unwraps
+     rather than scatters. Every edge runs from a lower to a higher index, so
+     both bodies are acyclic. */
+  function network(random) {
+    const NU = 64;
+    const NV = 14;
+    const N = NU * NV;
+    const uv = new Float32Array(2 * N);
+    for (let i = 0; i < NU; i++) {
+      for (let j = 0; j < NV; j++) {
+        uv[2 * (i * NV + j)] = (i + (random() - 0.5) * 0.7) / (NU - 1);
+        uv[2 * (i * NV + j) + 1] = (j + (random() - 0.5) * 0.8) / (NV - 1);
+      }
+    }
+
+    const edges = [];
+    const kinds = [];
+    const id = (i, j) => i * NV + j;
+    const link = (a, b, p) => {
+      if (random() >= p) return;
+      edges.push(a, b);
+      kinds.push(0);
+    };
+    for (let i = 0; i < NU; i++) {
+      for (let j = 0; j < NV; j++) {
+        if (i + 1 < NU) link(id(i, j), id(i + 1, j), 0.75);
+        if (j + 1 < NV) link(id(i, j), id(i, j + 1), 0.6);
+        if (i + 1 < NU && j + 1 < NV) link(id(i, j), id(i + 1, j + 1), 0.4);
+        if (i + 1 < NU && j > 0) link(id(i, j), id(i + 1, j - 1), 0.4);
+        if (i + 3 < NU) link(id(i, j), id(i + 2 + Math.floor(random() * 2), Math.floor(random() * NV)), 0.05);
+      }
+    }
+
+    /* Globe points on a Fibonacci spiral, handed out in random node order. */
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const spiral = new Float32Array(3 * N);
+    for (let p = 0; p < N; p++) {
+      const y = 1 - (2 * (p + 0.5)) / N;
+      const r = Math.sqrt(1 - y * y);
+      const a = p * golden + (random() - 0.5) * 0.3;
+      spiral[3 * p] = Math.cos(a) * r;
+      spiral[3 * p + 1] = y;
+      spiral[3 * p + 2] = Math.sin(a) * r;
+    }
+    const globe = new Float32Array(3 * N);
+    const taken = new Uint8Array(N);
+    const order = Array.from({ length: N }, (_, k) => k);
+    for (let k = N - 1; k > 0; k--) {
+      const j = Math.floor(random() * (k + 1));
+      [order[k], order[j]] = [order[j], order[k]];
+    }
+    for (const k of order) {
+      const lon = uv[2 * k] * Math.PI * 2;
+      const lat = (uv[2 * k + 1] - 0.5) * Math.PI * 0.9;
+      const tx = Math.cos(lat) * Math.cos(lon);
+      const ty = Math.sin(lat);
+      const tz = Math.cos(lat) * Math.sin(lon);
+      let best = -1;
+      let bestDot = -2;
+      for (let p = 0; p < N; p++) {
+        if (taken[p]) continue;
+        const d = tx * spiral[3 * p] + ty * spiral[3 * p + 1] + tz * spiral[3 * p + 2];
+        if (d > bestDot) {
+          bestDot = d;
+          best = p;
+        }
+      }
+      taken[best] = 1;
+      globe[3 * k] = spiral[3 * best];
+      globe[3 * k + 1] = spiral[3 * best + 1];
+      globe[3 * k + 2] = spiral[3 * best + 2];
+    }
+
+    /* The world's own edges: each node to its three nearest on the globe. */
+    const seen = new Set();
+    for (let k = 0; k < N; k++) {
+      const best = [-1, -1, -1];
+      const dots = [-2, -2, -2];
+      for (let j = 0; j < N; j++) {
+        if (j === k) continue;
+        const d = globe[3 * k] * globe[3 * j] + globe[3 * k + 1] * globe[3 * j + 1] + globe[3 * k + 2] * globe[3 * j + 2];
+        for (let s = 0; s < 3; s++) {
+          if (d > dots[s]) {
+            dots.splice(s, 0, d);
+            best.splice(s, 0, j);
+            dots.pop();
+            best.pop();
+            break;
+          }
+        }
+      }
+      for (const j of best) {
+        const a = Math.min(j, k);
+        const b = Math.max(j, k);
+        if (seen.has(a * N + b) || random() > 0.75) continue;
+        seen.add(a * N + b);
+        edges.push(a, b);
+        kinds.push(1);
+      }
+    }
+
+    const yaw = 0.7;
+    const roll = -0.45;
+    const tilt = 0.38;
+    const RADIUS = 0.9;
+    return {
+      count: N,
+      edges: Uint16Array.from(edges),
+      kinds: Uint8Array.from(kinds),
+      /* How far along the ribbon each node sits; the world gathers near end first. */
+      along: (k) => uv[2 * k],
+      /* `mix` is each node's progress from ribbon (0) to world (1). */
+      place(out, t, mix) {
+        const c = Math.cos(t * 0.11);
+        const s = Math.sin(t * 0.11);
+        for (let k = 0; k < N; k++) {
+          const u = uv[2 * k];
+          const v = uv[2 * k + 1];
+          const fold = 0.9 * Math.sin(u * 2.6 - t * 0.1) + 0.3;
+          const half = (0.42 + 0.14 * Math.sin(u * 3.1 + 0.8)) * (0.08 + 0.92 * smooth(0, 0.5, u));
+          const across = (v - 0.5) * 2 * half;
+          const x = (u * 2 - 1) * 2.3;
+          const y = 0.34 * Math.sin(u * 2.8 + t * 0.12) + across * Math.cos(fold);
+          const z =
+            0.35 * Math.sin(u * 2.2 - t * 0.09 + v * 1.4) +
+            across * Math.sin(fold) +
+            0.6 * across * across +
+            0.03 * Math.sin(v * 9 + u * 11 + t * 0.5);
+          const x1 = x * Math.cos(yaw) - z * Math.sin(yaw);
+          const rx = x1 * Math.cos(roll) - y * Math.sin(roll);
+          const ry = x1 * Math.sin(roll) + y * Math.cos(roll);
+          const rz = z * Math.cos(yaw) + x * Math.sin(yaw);
+
+          const gx = globe[3 * k] * c + globe[3 * k + 2] * s;
+          const gz0 = globe[3 * k + 2] * c - globe[3 * k] * s;
+          const gy = globe[3 * k + 1] * Math.cos(tilt) - gz0 * Math.sin(tilt);
+          const gz = gz0 * Math.cos(tilt) + globe[3 * k + 1] * Math.sin(tilt);
+
+          /* In flight, a node swings out from the globe before it lands. */
+          const w = mix[k];
+          const burst = 0.45 * Math.sin(Math.PI * w);
+          out[3 * k] = rx + (gx * RADIUS - rx) * w + gx * burst;
+          out[3 * k + 1] = ry + (gy * RADIUS - ry) * w + gy * burst;
+          out[3 * k + 2] = rz + (gz * RADIUS - rz) * w + gz * burst;
+        }
+      },
+      /* The globe's silhouette radius, for the shaded body and the click target. */
+      radius: RADIUS,
+    };
+  }
+
+  function mountField(canvas, { on, cleanup, reduceMotion }) {
     const hero = canvas.closest(".pg-hero");
     const copy = hero.querySelector(".pg-hero__copy");
     const g = canvas.getContext("2d");
-    const pulses = nodeSeries(world);
-    const sales = unit(world.series.Y);
-    const weeks = world.weeks;
-    const maxCoef = Math.max(...world.edges.map((e) => Math.abs(e.coef || 0)), 1e-9);
-    const random = prng(20260712);
-    const particles = world.edges.map(() =>
-      Array.from({ length: 3 }, () => random()),
-    );
+    const hint = hero.querySelector("[data-pg-hint]");
+    const model = network(prng(20260712));
+    const n = model.count;
+    const edges = model.edges;
+    const kinds = model.kinds;
+    const m = edges.length / 2;
+    const mix = new Float32Array(n).fill(1);
+    const stagger = prng(11);
+    const delay = Float32Array.from({ length: n }, () => stagger());
+    /* A click breaks the world into the ribbon; it flows, then slowly gathers
+       back into the world, near end first. */
+    const BREAK = 2.8;
+    const HOLD = 9;
+    const GATHER = 7;
+    let phase = "world";
+    let phaseAt = 0;
+    let whole = mix[0];
+    const pos = new Float32Array(n * 3);
+    const sx = new Float32Array(n);
+    const sy = new Float32Array(n);
+    const near = new Float32Array(n);
+    const lit = new Float32Array(n);
+    const edgeLevel = new Uint8Array(m);
+    const nodeLevel = new Uint8Array(n);
+    const white = Array.from({ length: LEVELS }, (_, b) => `rgba(255, 255, 255, ${(b + 1) / LEVELS})`);
+
+    const lo = document.createElement("canvas");
+    const lg = lo.getContext("2d", { willReadFrequently: true });
+    const px = document.createElement("canvas");
+    const pg = px.getContext("2d");
+    let image = null;
+    let tones = new Uint32Array(TONES + 1);
+    let P = palette();
     let W = 0;
     let H = 0;
+    let GW = 0;
+    let GH = 0;
     let dpr = 1;
-    let anchors = {};
-    let ghosts = [];
-    let bloom = null;
+    let view = null;
     let pointer = null;
     let lastPointer = 0;
-    let week = 0;
+    let lens = null;
+    let focus = -1;
+    let focusSince = 0;
+    const pick = prng(7);
+    let clock = 0;
     let frame = 0;
     let visible = true;
     let lastTime = performance.now();
-    let clock = 0;
-    let lens = { x: 0, y: 0 };
-    const LENS_R = 96;
-    const ZOOM = 2.2;
-    let T = theme();
 
-    const specimen = hero.querySelector("[data-pg-specimen]");
-    if (specimen) {
-      specimen.textContent =
-        `Drawn while this page was built: ${world.name} · seed ${world.seed} · ` +
-        `${weeks} weeks · identity error ${world.identity_error.toExponential(2)}`;
-    }
-
-    function region() {
-      const narrow = W < 960;
-      if (narrow) {
-        const copyBottom = copy ? copy.getBoundingClientRect().bottom - hero.getBoundingClientRect().top : H * 0.5;
-        const band = Math.min(140, H * 0.16);
-        return { x0: W * 0.1, x1: W * 0.9, y0: copyBottom + 40, y1: H - band - 90 };
-      }
-      const textRight = copy ? copy.getBoundingClientRect().right - hero.getBoundingClientRect().left : W * 0.45;
-      return { x0: Math.max(W * 0.5, textRight + 70), x1: W * 0.94, y0: H * 0.13, y1: H * 0.72 };
-    }
-
-    function layout() {
-      const r = region();
-      const columns = { D: 0, Z: 0.32, C: 0.64, B: 1, Y: 1 };
-      const byFamily = {};
-      for (const name of world.nodes) (byFamily[family(name)] ||= []).push(name);
-      anchors = {};
-      for (const [fam, names] of Object.entries(byFamily)) {
-        names.forEach((name, i) => {
-          let fy = (i + 1) / (names.length + 1);
-          if (fam === "B") fy = 0.18;
-          if (fam === "Y") fy = 0.62;
-          anchors[name] = {
-            x: r.x0 + columns[fam] * (r.x1 - r.x0),
-            y: r.y0 + fy * (r.y1 - r.y0),
-            phase: random() * Math.PI * 2,
-          };
-        });
-      }
-      lens = { x: anchors.Y.x - 80, y: anchors.Y.y - 40 };
-    }
-
-    /* Depth: three layers of other worlds, out of focus, drawn once per size. */
-    function paintGhosts() {
-      const rand = prng(42);
-      ghosts = [0.22, 0.5, 0.82].map((depth, layerIndex) => {
-        const layer = document.createElement("canvas");
-        layer.width = Math.ceil(W * dpr * 1.2);
-        layer.height = Math.ceil(H * dpr * 1.2);
-        const c = layer.getContext("2d");
-        c.scale(dpr, dpr);
-        c.filter = `blur(${[9, 5, 2.4][layerIndex]}px)`;
-        const count = Math.round((W / 1440) * [26, 18, 12][layerIndex]) + 6;
-        const pts = Array.from({ length: count }, () => ({
-          x: rand() * W * 1.2,
-          y: rand() * H * 1.2,
-          r: (4 + rand() * 7) * (0.6 + depth),
-          fill: [null, AQUA, PERIWINKLE, null, PEACH][Math.floor(rand() * 5)],
-        }));
-        c.lineWidth = 1;
-        c.strokeStyle = T.ghost(0.08 + depth * 0.1);
-        for (const p of pts) {
-          const targets = pts
-            .filter((q) => q.x > p.x && q.x - p.x < W * 0.22 && Math.abs(q.y - p.y) < H * 0.3)
-            .slice(0, 2);
-          for (const q of targets) {
-            c.beginPath();
-            c.moveTo(p.x, p.y);
-            c.quadraticCurveTo((p.x + q.x) / 2, (p.y + q.y) / 2 - 18, q.x, q.y);
-            c.stroke();
-          }
-        }
-        for (const p of pts) {
-          c.beginPath();
-          c.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-          c.fillStyle = p.fill ? p.fill : T.node;
-          c.globalAlpha = p.fill ? 0.55 : 0.9;
-          c.fill();
-          c.globalAlpha = 1;
-          c.stroke();
-        }
-        return { layer, depth };
-      });
-
-      bloom = document.createElement("canvas");
-      bloom.width = Math.ceil(W * dpr);
-      bloom.height = Math.ceil(H * dpr);
-      const b = bloom.getContext("2d");
-      b.scale(dpr, dpr);
-      const glow = (x, y, radius, color, alpha) => {
-        const grad = b.createRadialGradient(x, y, 0, x, y, radius);
-        grad.addColorStop(0, color);
-        grad.addColorStop(1, "rgba(255,255,255,0)");
-        b.globalAlpha = alpha;
-        b.fillStyle = grad;
-        b.fillRect(0, 0, W, H);
-      };
-      const dim = T.dark ? 0.35 : 1;
-      glow(W * 0.8, H * 0.28, W * 0.5, AQUA, 0.75 * dim);
-      glow(W * 0.12, H * 0.92, W * 0.42, PERIWINKLE, 0.42 * dim);
-      glow(W * 0.55, H * 0.02, W * 0.3, AQUA, 0.35 * dim);
-      b.globalAlpha = 1;
-    }
-
-    function resize() {
-      T = theme();
+    /* Where the figure sits: right of the copy on wide screens, below it on
+       narrow ones. It fades out toward the text and toward the hero's top and
+       bottom, so it never meets a hard edge. `ink` thins strokes on a small
+       figure so it stays a network rather than a blot. */
+    function frameView() {
       const box = hero.getBoundingClientRect();
-      W = box.width;
-      H = box.height;
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(W * dpr);
-      canvas.height = Math.round(H * dpr);
-      canvas.style.width = `${W}px`;
-      canvas.style.height = `${H}px`;
-      layout();
-      paintGhosts();
-      draw(0);
-    }
-
-    function position(name) {
-      const a = anchors[name];
-      if (reduceMotion.matches) return a;
-      const drift = 5;
-      const px = pointer ? (pointer.x / W - 0.5) * 10 : 0;
-      const py = pointer ? (pointer.y / H - 0.5) * 6 : 0;
+      const rim = H * 0.1;
+      const ends = (y) => smooth(0, rim, y) * smooth(H, H - rim, y);
+      const ink = (scale) => Math.min(1, Math.max(0.55, scale / 360));
+      if (W < 960) {
+        const top = copy ? copy.getBoundingClientRect().bottom - box.top + 24 : H * 0.5;
+        const room = H - top;
+        const scale = Math.min(W * 0.4, room * 0.38);
+        return {
+          left: 0,
+          cx: W / 2,
+          cy: top + room * 0.43,
+          scale,
+          ink: ink(scale),
+          fade: (x, y) => smooth(top - 20, top + 80, y) * smooth(H, H - rim, y),
+        };
+      }
+      const right = copy ? copy.getBoundingClientRect().right - box.left : W * 0.42;
+      const x0 = Math.max(W * 0.44, right + 40);
+      const scale = Math.min(H * 0.42, (W - x0) * 0.46);
       return {
-        x: a.x + Math.sin(clock * 0.45 + a.phase) * drift + px,
-        y: a.y + Math.cos(clock * 0.37 + a.phase * 1.3) * drift + py,
+        left: x0,
+        cx: x0 + (W - x0) * 0.56,
+        cy: H * 0.47,
+        scale,
+        ink: ink(scale),
+        fade: (x, y) => smooth(x0 - W * 0.16, x0 + W * 0.06, x) * ends(y),
       };
     }
 
-    function curve(src, dst, index) {
-      const mx = (src.x + dst.x) / 2;
-      const my = (src.y + dst.y) / 2;
-      const dx = dst.x - src.x;
-      const dy = dst.y - src.y;
-      const bend = (index % 2 ? 1 : -1) * 0.12;
-      return { x0: src.x, y0: src.y, cx: mx - dy * bend, cy: my + dx * bend, x1: dst.x, y1: dst.y };
+    function enter(next) {
+      phase = next;
+      phaseAt = clock;
+      if (next === "world") mix.fill(1);
+      if (next === "ribbon") mix.fill(0);
+      syncHint();
     }
 
-    function at(c, u) {
-      const v = 1 - u;
-      return {
-        x: v * v * c.x0 + 2 * v * u * c.cx + u * u * c.x1,
-        y: v * v * c.y0 + 2 * v * u * c.cy + u * u * c.y1,
-      };
+    /* Break the world apart, or gather the ribbon back; ignored in flight. */
+    function toggle() {
+      if (reduceMotion.matches) return;
+      if (phase === "world") enter("breaking");
+      else if (phase === "ribbon") enter("gathering");
+      start();
     }
 
-    function radius() {
-      return Math.max(14, Math.min(22, W / 66));
+    /* The globe's outline on screen: perspective makes it a little larger
+       than its nominal radius. */
+    function silhouette() {
+      const r = model.radius;
+      return (view.scale * r * DISTANCE) / Math.sqrt(DISTANCE * DISTANCE - r * r);
     }
 
-    /* The sharp world. `detail` adds the labels only the loupe can read. */
-    function drawWorld(detail) {
-      const t = Math.min(weeks - 1, Math.max(0, Math.round(week)));
-      const pos = {};
-      for (const name of world.nodes) pos[name] = position(name);
-      const r = radius();
-
-      world.edges.forEach((edge, i) => {
-        const c = curve(pos[edge.src], pos[edge.dst], i);
-        const weight = edge.coef == null ? 0.4 : Math.abs(edge.coef) / maxCoef;
-        g.beginPath();
-        g.moveTo(c.x0, c.y0);
-        g.quadraticCurveTo(c.cx, c.cy, c.x1, c.y1);
-        g.strokeStyle = EDGE[edge.type] || T.ink;
-        g.globalAlpha = 0.62;
-        g.lineWidth = 0.9 + weight * 1.6;
-        g.setLineDash(edge.type === "by" ? [4, 4] : []);
-        g.stroke();
-        g.setLineDash([]);
-        g.globalAlpha = 1;
-        if (!reduceMotion.matches && edge.type !== "by") {
-          for (const phase of particles[i]) {
-            const u = (phase + clock * (0.06 + 0.12 * weight)) % 1;
-            if (u < 0.12 || u > 0.88) continue;
-            const p = at(c, u);
-            g.beginPath();
-            g.arc(p.x, p.y, 1.9, 0, Math.PI * 2);
-            g.fillStyle = EDGE[edge.type];
-            g.fill();
-          }
-        }
-        if (detail && edge.coef != null) {
-          const m = at(c, 0.5);
-          g.font = `4.6px ${MONO}`;
-          g.textAlign = "center";
-          g.textBaseline = "middle";
-          const label = `β ${edge.coef.toFixed(2)}`;
-          const w = g.measureText(label).width + 3;
-          g.fillStyle = T.node;
-          g.fillRect(m.x - w / 2, m.y - 3.2, w, 6.4);
-          g.fillStyle = T.ink;
-          g.fillText(label, m.x, m.y + 0.2);
-        }
-      });
-
-      for (const name of world.nodes) {
-        const p = pos[name];
-        const series = pulses[name];
-        const swell = series ? 0.86 + 0.32 * series[t] : 1;
-        const rr = r * swell;
-        g.beginPath();
-        g.arc(p.x, p.y, rr, 0, Math.PI * 2);
-        g.fillStyle = name === "Y" ? PEACH : T.node;
-        g.fill();
-        g.lineWidth = 1.4;
-        g.strokeStyle = T.ink;
-        g.setLineDash(family(name) === "D" ? [3, 2.4] : []);
-        g.stroke();
-        g.setLineDash([]);
-        g.fillStyle = name === "Y" ? NAVY : T.ink;
-        g.font = `${Math.round(r * 0.62)}px ${MONO}`;
-        g.textAlign = "center";
-        g.textBaseline = "middle";
-        g.fillText(name, p.x, p.y + 0.5);
-        if (detail) {
-          const fam = family(name);
-          const role = fam === "C" && world.mechanisms[name] ? world.mechanisms[name] : ROLE[fam];
-          g.font = `4.8px ${MONO}`;
-          g.fillStyle = T.ink2;
-          g.fillText(role, p.x, p.y + rr + 5.5);
-        }
+    /* The hint is the same action as a button: in a clear band under the
+       world, named for what the next click does, and quiet while the nodes
+       travel. It stays focusable in flight so a keyboard press never drops
+       focus. */
+    function syncHint() {
+      if (!hint) return;
+      hint.hidden = reduceMotion.matches;
+      hint.setAttribute("aria-disabled", String(phase !== "world" && phase !== "ribbon"));
+      hint.textContent = phase === "world" || phase === "gathering" ? "Break the world apart" : "Gather it back";
+      if (view) {
+        hint.style.left = `${view.cx}px`;
+        hint.style.top = `${view.cy + silhouette() + 30}px`;
       }
     }
 
-    function drawRidge() {
-      const band = Math.min(140, H * 0.16);
-      const base = H - 10;
-      const x = (i) => (i / (weeks - 1)) * W;
-      const y = (i) => base - 12 - sales[i] * (band - 18);
-      g.beginPath();
-      g.moveTo(0, base);
-      for (let i = 0; i < weeks; i++) g.lineTo(x(i), y(i));
-      g.lineTo(W, base);
-      g.closePath();
-      const fill = g.createLinearGradient(0, base - band, 0, base);
-      fill.addColorStop(0, "rgba(180,231,221,0.55)");
-      fill.addColorStop(1, "rgba(180,231,221,0)");
-      g.fillStyle = fill;
-      g.fill();
-      g.beginPath();
-      for (let i = 0; i < weeks; i++) (i ? g.lineTo : g.moveTo).call(g, x(i), y(i));
-      g.strokeStyle = T.ink;
-      g.globalAlpha = 0.7;
-      g.lineWidth = 1.2;
-      g.stroke();
-      g.globalAlpha = 1;
-
-      const t = Math.min(weeks - 1, Math.max(0, Math.round(week)));
-      const cx = x(t);
-      g.beginPath();
-      g.moveTo(cx, base - band - 6);
-      g.lineTo(cx, base);
-      g.strokeStyle = T.ghost(0.45);
-      g.lineWidth = 1;
-      g.stroke();
-      g.beginPath();
-      g.arc(cx, y(t), 3.6, 0, Math.PI * 2);
-      g.fillStyle = PEACH;
-      g.fill();
-      g.strokeStyle = T.ink;
-      g.stroke();
-      g.font = `11px ${MONO}`;
-      g.fillStyle = T.ink;
-      g.textBaseline = "alphabetic";
-      const label = `week ${t + 1} · sales ${world.series.Y[t].toFixed(2)}`;
-      const flip = cx > W - 190;
-      g.textAlign = flip ? "right" : "left";
-      g.fillText(label, cx + (flip ? -8 : 8), base - band - 2);
+    function settle() {
+      const T = clock - phaseAt;
+      if (phase === "breaking") {
+        for (let k = 0; k < n; k++) {
+          const local = Math.min(1, Math.max(0, (T - delay[k] * BREAK * 0.45) / (BREAK * 0.55)));
+          mix[k] = 1 - easeInOut(local);
+        }
+        if (T >= BREAK) enter("ribbon");
+      } else if (phase === "ribbon") {
+        if (T >= HOLD) enter("gathering");
+      } else if (phase === "gathering") {
+        for (let k = 0; k < n; k++) {
+          const lag = (1 - model.along(k)) * 0.45 + delay[k] * 0.15;
+          const local = Math.min(1, Math.max(0, (T - lag * GATHER) / (GATHER * 0.4)));
+          mix[k] = easeInOut(local);
+        }
+        if (T >= GATHER) enter("world");
+      }
     }
 
-    function drawLens() {
+    function overWorld(x, y) {
+      return Math.hypot(x - view.cx, y - view.cy) < silhouette() * 1.04;
+    }
+
+    function project() {
+      model.place(pos, clock, mix);
+      let sum = 0;
+      for (let k = 0; k < n; k++) sum += mix[k];
+      whole = sum / n;
+      const reach = 1.8 - 0.8 * whole;
+      for (let k = 0; k < n; k++) {
+        const z = pos[3 * k + 2];
+        const f = DISTANCE / (DISTANCE - z);
+        sx[k] = view.cx + pos[3 * k] * f * view.scale;
+        sy[k] = view.cy + pos[3 * k + 1] * f * view.scale;
+        near[k] = Math.min(1, Math.max(0, (z + reach) / (2 * reach)));
+        lit[k] = view.fade(sx[k], sy[k]);
+        const level = (0.35 + 0.65 * near[k]) * lit[k];
+        nodeLevel[k] = level < 0.04 ? 255 : Math.min(LEVELS - 1, Math.floor(level * LEVELS));
+      }
+      /* The ribbon's edges hold only between nodes on the ribbon, the world's
+         only between nodes on the globe; in flight, nodes travel loose. */
+      for (let e = 0; e < m; e++) {
+        const a = edges[2 * e];
+        const b = edges[2 * e + 1];
+        const hold = smooth(0.8, 1, kinds[e] ? mix[a] * mix[b] : (1 - mix[a]) * (1 - mix[b]));
+        const level =
+          (0.06 + 0.75 * Math.pow((near[a] + near[b]) * 0.5, 1.4)) * Math.min(lit[a], lit[b]) * hold;
+        edgeLevel[e] = level < 0.04 ? 255 : Math.min(LEVELS - 1, Math.floor(level * LEVELS));
+      }
+    }
+
+    function nodeRadius(k) {
+      return 0.5 + 2.2 * near[k] * near[k];
+    }
+
+    /* Edges and nodes, batched by brightness: one stroke and one fill per level. */
+    function trace(c, lineWidth, radius, style) {
+      c.lineWidth = lineWidth;
+      for (let b = 0; b < LEVELS; b++) {
+        style(c, b);
+        c.beginPath();
+        for (let e = 0; e < m; e++) {
+          if (edgeLevel[e] !== b) continue;
+          const a = edges[2 * e];
+          const d = edges[2 * e + 1];
+          c.moveTo(sx[a], sy[a]);
+          c.lineTo(sx[d], sy[d]);
+        }
+        c.stroke();
+        c.beginPath();
+        for (let k = 0; k < n; k++) {
+          if (nodeLevel[k] !== b) continue;
+          const r = radius(k);
+          c.moveTo(sx[k] + r, sy[k]);
+          c.arc(sx[k], sy[k], r, 0, Math.PI * 2);
+        }
+        c.fill();
+      }
+    }
+
+    /* The globe's body: a faint light falling from the upper left. */
+    function body(c, strength, colour) {
+      const r = silhouette();
+      const shade = c.createRadialGradient(
+        view.cx - r * 0.35, view.cy - r * 0.4, r * 0.1,
+        view.cx, view.cy, r,
+      );
+      shade.addColorStop(0, colour(strength * whole * whole));
+      shade.addColorStop(1, colour(0));
+      c.fillStyle = shade;
+      c.beginPath();
+      c.arc(view.cx, view.cy, r, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    /* Low-resolution pass: light on black, then ordered dither to the ink's tones. */
+    function paintField() {
+      lg.setTransform(1, 0, 0, 1, 0, 0);
+      lg.globalCompositeOperation = "source-over";
+      lg.fillStyle = "#000";
+      lg.fillRect(0, 0, GW, GH);
+      lg.setTransform(1 / CELL, 0, 0, 1 / CELL, 0, 0);
+      lg.globalCompositeOperation = "lighter";
+      if (whole > 0.01) body(lg, 0.3, (a) => `rgba(255, 255, 255, ${a})`);
+      trace(lg, CELL * 0.75 * view.ink, (k) => CELL * (0.3 + 0.45 * nodeRadius(k)) * view.ink, (c, b) => {
+        c.strokeStyle = white[b];
+        c.fillStyle = white[b];
+      });
+      const light = lg.getImageData(0, 0, GW, GH).data;
+      const out = new Uint32Array(image.data.buffer);
+      for (let y = 0; y < GH; y++) {
+        const row = (y & 3) * 4;
+        for (let x = 0; x < GW; x++) {
+          const i = y * GW + x;
+          const q = Math.floor((light[4 * i] / 255) * TONES + BAYER[row + (x & 3)]);
+          out[i] = tones[q > TONES ? TONES : q];
+        }
+      }
+      pg.putImageData(image, 0, 0);
+      g.imageSmoothingEnabled = false;
+      g.drawImage(px, 0, 0, GW * CELL, GH * CELL);
+    }
+
+    /* The lens: the same network at full resolution, magnified, with arrows. */
+    function paintLens() {
       g.save();
-      g.shadowColor = T.dark ? "rgba(0, 0, 0, 0.45)" : "rgba(12, 31, 64, 0.22)";
+      g.shadowColor = P.ink === NAVY ? "rgba(12, 31, 64, 0.22)" : "rgba(0, 0, 0, 0.45)";
       g.shadowBlur = 28;
       g.shadowOffsetY = 10;
       g.beginPath();
       g.arc(lens.x, lens.y, LENS_R, 0, Math.PI * 2);
-      g.fillStyle = T.ground;
+      g.fillStyle = P.ground;
       g.fill();
       g.restore();
 
@@ -403,75 +475,122 @@
       g.translate(lens.x, lens.y);
       g.scale(ZOOM, ZOOM);
       g.translate(-lens.x, -lens.y);
-      drawWorld(true);
+      if (whole > 0.01) {
+        const [r0, g0, b0] = rgb(P.ink);
+        body(g, 0.1, (a) => `rgba(${r0}, ${g0}, ${b0}, ${a})`);
+      }
+      g.strokeStyle = P.ink;
+      g.fillStyle = P.ink;
+      trace(g, 1.1 / ZOOM, nodeRadius, (c, b) => {
+        c.globalAlpha = (b + 1) / LEVELS;
+      });
+      const reach = LENS_R / ZOOM;
+      const head = 5 / ZOOM;
+      g.lineWidth = 1.1 / ZOOM;
+      for (let e = 0; e < m; e++) {
+        if (edgeLevel[e] === 255) continue;
+        const a = edges[2 * e];
+        const d = edges[2 * e + 1];
+        const tx = sx[a] + (sx[d] - sx[a]) * 0.6;
+        const ty = sy[a] + (sy[d] - sy[a]) * 0.6;
+        if (Math.abs(tx - lens.x) > reach || Math.abs(ty - lens.y) > reach) continue;
+        const len = Math.hypot(sx[d] - sx[a], sy[d] - sy[a]);
+        if (len < head * 3) continue;
+        const ux = (sx[d] - sx[a]) / len;
+        const uy = (sy[d] - sy[a]) / len;
+        g.globalAlpha = (edgeLevel[e] + 1) / LEVELS;
+        g.beginPath();
+        g.moveTo(tx - ux * head - uy * head * 0.6, ty - uy * head + ux * head * 0.6);
+        g.lineTo(tx, ty);
+        g.lineTo(tx - ux * head + uy * head * 0.6, ty - uy * head - ux * head * 0.6);
+        g.stroke();
+      }
       g.restore();
 
       g.beginPath();
       g.arc(lens.x, lens.y, LENS_R, 0, Math.PI * 2);
-      g.strokeStyle = T.ink;
+      g.strokeStyle = P.ink;
       g.lineWidth = 1;
       g.stroke();
       const tag = `×${ZOOM.toFixed(1)}`;
-      g.font = `10px ${MONO}`;
+      g.font = `500 10px ${UI_FONT}`;
       const w = g.measureText(tag).width + 12;
-      g.fillStyle = T.ink;
+      g.fillStyle = P.ink;
       g.beginPath();
       g.roundRect(lens.x - w / 2, lens.y + LENS_R - 22, w, 15, 7.5);
       g.fill();
-      g.fillStyle = T.ground;
+      g.fillStyle = P.ground;
       g.textAlign = "center";
       g.textBaseline = "middle";
       g.fillText(tag, lens.x, lens.y + LENS_R - 14.2);
     }
 
+    /* A node the lens can rest on: lit, mid-depth, and well inside the frame. */
+    function fits(k) {
+      const margin = LENS_R + 12;
+      return (
+        lit[k] > 0.95 && near[k] > 0.35 && near[k] < 0.85 &&
+        sx[k] > view.left + margin && sx[k] < W - margin && sy[k] > margin && sy[k] < H - margin
+      );
+    }
+
+    /* Idle, the lens travels from node to node; under the pointer it follows. */
+    function moveLens(dt) {
+      const idle = !pointer || performance.now() - lastPointer > 2600;
+      if (idle && (focus < 0 || clock - focusSince > 6 || !fits(focus))) {
+        focus = -1;
+        for (let tries = 0; tries < 200 && focus < 0; tries++) {
+          const k = Math.floor(pick() * n);
+          if (fits(k)) focus = k;
+        }
+        focusSince = clock;
+      }
+      const target = !idle ? pointer : focus >= 0 ? { x: sx[focus], y: sy[focus] } : { x: view.cx, y: view.cy };
+      if (!lens || reduceMotion.matches) {
+        lens = { x: target.x, y: target.y };
+        return;
+      }
+      const follow = Math.min(1, dt * (idle ? 1.2 : 18));
+      lens.x += (target.x - lens.x) * follow;
+      lens.y += (target.y - lens.y) * follow;
+    }
+
     function draw(dt) {
-      clock += dt;
+      if (!reduceMotion.matches) clock += dt;
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.clearRect(0, 0, W, H);
-      g.fillStyle = T.ground;
-      g.fillRect(0, 0, W, H);
-
-      const drift = reduceMotion.matches ? 0 : 1;
-      if (bloom) {
-        g.drawImage(
-          bloom,
-          Math.sin(clock * 0.05) * 30 * drift,
-          Math.cos(clock * 0.04) * 18 * drift,
-          W,
-          H,
-        );
+      settle();
+      project();
+      paintField();
+      if (W >= 600) {
+        moveLens(dt);
+        paintLens();
       }
-      const px = pointer ? pointer.x / W - 0.5 : 0;
-      const py = pointer ? pointer.y / H - 0.5 : 0;
-      for (const { layer, depth } of ghosts) {
-        const ox = -W * 0.1 + Math.sin(clock * 0.03 * (1 + depth)) * 24 * drift - px * 46 * depth;
-        const oy = -H * 0.1 + Math.cos(clock * 0.025 * (1 + depth)) * 14 * drift - py * 28 * depth;
-        g.drawImage(layer, ox, oy, W * 1.2, H * 1.2);
+    }
+
+    function resize() {
+      P = palette();
+      const box = hero.getBoundingClientRect();
+      W = box.width;
+      H = box.height;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      GW = Math.ceil(W / CELL);
+      GH = Math.ceil(H / CELL);
+      lo.width = px.width = GW;
+      lo.height = px.height = GH;
+      image = pg.createImageData(GW, GH);
+      const ground = rgb(P.ground);
+      const ink = rgb(P.ink);
+      tones = new Uint32Array(TONES + 1);
+      for (let q = 1; q <= TONES; q++) {
+        const [r, gr, b] = ground.map((c, i) => Math.round(c + (ink[i] - c) * (q / TONES)));
+        tones[q] = (255 << 24) | (b << 16) | (gr << 8) | r;
       }
-
-      const idle = !pointer || performance.now() - lastPointer > 2600;
-      if (idle) {
-        week = reduceMotion.matches ? weeks - 1 : (week + dt * 7) % weeks;
-      } else {
-        const target = (pointer.x / W) * (weeks - 1);
-        week += (target - week) * Math.min(1, dt * 10);
-      }
-
-      const r = region();
-      const lensTarget =
-        !idle && pointer.x > r.x0 - LENS_R && pointer.y < H * 0.82
-          ? { x: pointer.x, y: pointer.y }
-          : {
-              x: (r.x0 + r.x1) / 2 + Math.sin(clock * 0.21) * (r.x1 - r.x0) * 0.36 * drift,
-              y: (r.y0 + r.y1) / 2 + Math.sin(clock * 0.29 + 1.2) * (r.y1 - r.y0) * 0.32 * drift,
-            };
-      const follow = idle ? Math.min(1, dt * 2.5) : Math.min(1, dt * 18);
-      lens.x += (lensTarget.x - lens.x) * (reduceMotion.matches && idle ? 1 : follow);
-      lens.y += (lensTarget.y - lens.y) * (reduceMotion.matches && idle ? 1 : follow);
-
-      drawRidge();
-      drawWorld(false);
-      if (W >= 600) drawLens();
+      view = frameView();
+      syncHint();
+      draw(0);
     }
 
     function tick(now) {
@@ -479,7 +598,7 @@
       const dt = Math.min(0.05, (now - lastTime) / 1000);
       lastTime = now;
       draw(dt);
-      if (visible && !document.hidden) frame = requestAnimationFrame(tick);
+      if (visible && !document.hidden && !reduceMotion.matches) frame = requestAnimationFrame(tick);
     }
 
     function start() {
@@ -498,339 +617,324 @@
     /* The scheme toggle swaps the body attribute without a navigation. */
     const schemes = new MutationObserver(() => resize());
     schemes.observe(document.body, { attributes: true, attributeFilter: ["data-md-color-scheme"] });
-    cleanup(() => schemes.disconnect());
 
     on(hero, "pointermove", (event) => {
       const box = hero.getBoundingClientRect();
       pointer = { x: event.clientX - box.left, y: event.clientY - box.top };
       lastPointer = performance.now();
+      const clickable = (phase === "world" && overWorld(pointer.x, pointer.y)) || phase === "ribbon";
+      canvas.style.cursor = clickable && !reduceMotion.matches ? "pointer" : "";
+      start();
     });
     on(hero, "pointerleave", () => {
       pointer = null;
+      start();
     });
+    on(canvas, "click", (event) => {
+      const box = hero.getBoundingClientRect();
+      if (phase === "ribbon" || overWorld(event.clientX - box.left, event.clientY - box.top)) toggle();
+    });
+    if (hint) on(hint, "click", toggle);
     on(document, "visibilitychange", () => {
       if (!document.hidden && visible) start();
     });
 
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => draw(0));
     resize();
     start();
     cleanup(() => {
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
       sizer.disconnect();
+      schemes.disconnect();
     });
   }
 
   /* =========================================================================
-     The story: code → data → graph → causes → proof, one sticky stage. */
-  const SVG = "http://www.w3.org/2000/svg";
-  const CODE = [
-    "import pymc_generator as pg",
-    "scenario = pg.SCENARIOS[1]",
-    "prior = scenario.prior(n_time_steps=104, seed=0)",
-    "world = pg.sample_scm(prior, seed=0,",
-    "                      connect_all=scenario.connect_all)",
-    "world.data                # spend, controls, sales",
-    "world.identity_error()    # the decomposition check",
-  ];
+     The demo window. Every element is already in its final state in the page;
+     `render(time)` derives the whole window from one clock, so pausing,
+     resuming, replaying, and jumping to a chapter are the same operation.
+     Without the script the final state stays; with reduced motion nothing
+     plays, and the chapters step through still frames instead. */
+  const TYPE_MS = 16;
 
-  function el(name, attrs, parent) {
-    const node = document.createElementNS(SVG, name);
-    for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
-    if (parent) parent.append(node);
-    return node;
-  }
+  function mountDemo(section, { on, cleanup, reduceMotion }) {
+    const win = section.querySelector("[data-pg-window]");
+    const button = section.querySelector("[data-pg-play]");
+    const chapters = [...section.querySelectorAll("[data-pg-chapter]")];
+    if (!win || !button) return;
+    const one = (selector) => win.querySelector(selector);
+    const all = (selector) => [...win.querySelectorAll(selector)];
+    const body = one(".pg-demo__body");
+    const notebook = one('[data-view="notebook"]');
+    const views = all("[data-view]");
+    const tabs = all("[data-tab]");
+    const cells = all(".pg-demo__cell");
+    const lines = cells.map((c) => [...c.querySelectorAll(".pg-demo__line")]);
+    const widths = lines.map((ls) => ls.map((l) => Number(l.style.getPropertyValue("--chars"))));
+    const typed = widths.map((w) => w.reduce((a, b) => a + b, 0));
+    const counts = cells.map((c) => c.querySelector(".pg-demo__count"));
+    const outputs = cells.map((c) => c.querySelector(".pg-demo__output"));
+    const bundle = all('[data-made="bundle"]');
+    const corpus = all('[data-made="corpus"]');
+    const rowsOf = (view) => [...one(`[data-view="${view}"]`).querySelectorAll("tbody tr")];
+    const sheetRows = rowsOf("dataset");
+    const members = rowsOf("archive");
+    const worldRows = rowsOf("outcome");
+    const formula = one(".pg-demo__formula");
+    const kernel = one("[data-pg-kernel]");
+    const cursor = one(".pg-demo__cursor");
+    const progress = one(".pg-demo__progress");
+    const dataset = one('[data-file="dataset.csv"]');
+    const archive = one('[data-file="worlds.npz"]');
+    const member = one('[data-member="outcome_raw.npy"]');
+    const notebookTab = one('[data-tab="notebook"]');
+    if (cells.length !== 4 || !dataset || !archive || !member || !notebookTab) return;
 
-  function mountStory(section, world, { on, cleanup, reduceMotion }) {
-    const svg = section.querySelector("[data-pg-stage]");
-    const progress = section.querySelectorAll(".pg-story__progress li");
-    if (!svg) return;
-    svg.replaceChildren();
-    const N = world.weeks;
-    const X0 = 150;
-    const X1 = 770;
-    const xs = Array.from({ length: N }, (_, i) => X0 + (i / (N - 1)) * (X1 - X0));
+    /* The script: each beat starts where the last one ends. */
+    const beats = {};
+    let end = 300;
+    const beat = (name, ms) => {
+      beats[name] = [end, end + ms];
+      end += ms;
+    };
+    beat("type1", typed[0] * TYPE_MS);
+    beat("run1", 800);
+    beat("cell2", 450);
+    beat("type2", typed[1] * TYPE_MS);
+    beat("run2", 400 + bundle.length * 130 + 300);
+    beat("rest1", 300);
+    beat("move1", 900);
+    beat("click1", 300);
+    beat("open1", 300 + sheetRows.length * 30 + 1800);
+    beat("move2", 900);
+    beat("click2", 300);
+    beat("cell3", 450);
+    beat("type3", typed[2] * TYPE_MS);
+    beat("run3", 1600);
+    beat("cell4", 450);
+    beat("type4", typed[3] * TYPE_MS);
+    beat("run4", 700);
+    beat("rest2", 300);
+    beat("move3", 900);
+    beat("click3", 300);
+    beat("open3", 300 + members.length * 20 + 1400);
+    beat("move4", 900);
+    beat("click4", 300);
+    beat("open4", 300 + worldRows.length * 40 + 300);
+    const END = end + 200;
+    const phase = (name, time) => {
+      const [a, b] = beats[name];
+      return Math.min(1, Math.max(0, (time - a) / (b - a)));
+    };
 
-    const rows = ["C1", "C2", "C3", "C4", "Z1", "Z2", "Y"].filter((k) => world.series[k]);
-    const lanes = [
-      ["Y", "sales", world.series.Y],
-      ["baseline", "baseline", world.decomposition.baseline],
-      ...Object.keys(world.decomposition)
-        .filter((k) => /^C\d+$/.test(k))
-        .map((k) => [k, k, world.decomposition[k]]),
-      ["indirect", "indirect", world.decomposition.indirect],
+    /* What the pane shows, and when each tab first opens. */
+    const scenes = [
+      [0, "notebook"],
+      [beats.open1[0], "dataset"],
+      [beats.cell3[0], "notebook"],
+      [beats.open3[0], "archive"],
+      [beats.open4[0], "outcome"],
     ];
-    const laneTop = (i) => 34 + i * (470 / lanes.length);
-    const laneH = Math.min(48, 470 / lanes.length - 16);
-    const rowTop = (i) => 40 + i * (490 / rows.length);
-    const rowH = Math.min(48, 490 / rows.length - 14);
+    const opens = { notebook: 0, dataset: beats.open1[0], archive: beats.open3[0], outcome: beats.open4[0] };
+    const path = [
+      ["move1", "click1", dataset],
+      ["move2", "click2", notebookTab],
+      ["move3", "click3", archive],
+      ["move4", "click4", member],
+    ];
+    const starts = [0, beats.cell2[0], beats.move1[0], beats.move2[0], beats.cell4[0], beats.move3[0]];
 
-    const dag = {};
-    {
-      const byFamily = {};
-      for (const name of world.nodes) (byFamily[family(name)] ||= []).push(name);
-      const cols = { D: 130, Z: 310, C: 490, B: 680, Y: 680 };
-      for (const [fam, names] of Object.entries(byFamily)) {
-        names.forEach((name, i) => {
-          let fy = (i + 1) / (names.length + 1);
-          if (fam === "B") fy = 0.2;
-          if (fam === "Y") fy = 0.62;
-          dag[name] = { x: cols[fam], y: 50 + fy * 460 };
-        });
+    function type(i, p, active) {
+      let left = Math.round(p * typed[i]);
+      let caret = active;
+      lines[i].forEach((line, j) => {
+        const n = Math.max(0, Math.min(widths[i][j], left));
+        left -= widths[i][j];
+        line.style.setProperty("--typed", n);
+        const here = caret && (n < widths[i][j] || j === lines[i].length - 1);
+        line.classList.toggle("is-caret", here);
+        if (here) caret = false;
+      });
+    }
+
+    function run(i, time) {
+      const [a, b] = beats[`run${i + 1}`];
+      counts[i].textContent = time < a ? "[ ]" : time < b ? "[*]" : `[${i + 1}]`;
+      if (outputs[i]) outputs[i].classList.toggle("is-absent", time < b);
+      return time >= a && time < b;
+    }
+
+    /* Where a target sits in the window; remembered, because a target the
+       cursor left may be hidden by the time the next move starts from it. */
+    const spots = new Map();
+    function spot(el) {
+      const r = el.getBoundingClientRect();
+      if (r.width) {
+        const box = win.getBoundingClientRect();
+        spots.set(el, [r.left - box.left + Math.min(46, r.width * 0.4), r.top - box.top + r.height * 0.55]);
       }
+      return spots.get(el);
     }
 
-    const flat = (y, x0, x1) => xs.map((_, i) => [x0 + (i / (N - 1)) * (x1 - x0), y]);
-    const shaped = (values, top, h) => {
-      const u = unit(values);
-      return xs.map((x, i) => [x, top + (1 - u[i]) * h]);
-    };
-    const point = (p) => xs.map(() => [p.x, p.y]);
-
-    const layer = (name) => el("g", { class: `pg-stage__${name}` }, svg);
-    const codeLayer = layer("code");
-    const edgeLayer = layer("edges");
-    const laneLayer = layer("lanes");
-    const strokeLayer = layer("strokes");
-    const nodeLayer = layer("nodes");
-    const proofLayer = layer("proof");
-
-    /* Every animated thing is an item with per-state targets. */
-    const items = [];
-    const add = (item) => {
-      item.cur = { ...item.states.code };
-      if (item.states.code.pts) item.cur.pts = item.states.code.pts.map((p) => [...p]);
-      items.push(item);
-      return item;
-    };
-    const states = (fn) => Object.fromEntries(
-      ["code", "series", "graph", "decomposition", "identity"].map((s) => [s, fn(s)]),
-    );
-
-    el("rect", { x: 40, y: 92, width: 720, height: CODE.length * 34 + 36, rx: 6, class: "pg-stage__plate" }, codeLayer);
-    CODE.forEach((line, i) => {
-      const text = el("text", { x: 64, y: 130 + i * 34, class: "pg-stage__code" }, codeLayer);
-      text.textContent = line;
-    });
-    add({
-      kind: "group",
-      node: codeLayer,
-      states: states((s) => ({ op: s === "code" ? 1 : 0 })),
-    });
-
-    rows.forEach((name, i) => {
-      const length = CODE[i] ? CODE[i].replace(/^\s+/, "").length : 20;
-      const indent = CODE[i] ? CODE[i].length - CODE[i].replace(/^\s+/, "").length : 0;
-      const codePts = flat(136 + i * 34, 64 + indent * 8.4, 64 + (indent + length) * 8.4);
-      const seriesPts = shaped(world.series[name], rowTop(i), rowH);
-      const node = dag[name];
-      const path = el("path", { class: `pg-stage__series pg-stage__series--${family(name)}` }, strokeLayer);
-      add({
-        kind: "path",
-        node: path,
-        states: states((s) => {
-          if (s === "code") return { pts: codePts, op: 0 };
-          if (s === "series") return { pts: seriesPts, op: 1 };
-          return { pts: point(node), op: 0 };
-        }),
-      });
-      const label = el("text", { class: "pg-stage__rowlabel", x: 0, y: 0 }, strokeLayer);
-      label.textContent = { C: "spend", Z: "control", Y: "sales" }[family(name)] || "";
-      add({
-        kind: "text",
-        node: label,
-        states: states((s) => ({
-          x: 112,
-          y: rowTop(i) + rowH / 2 + 4,
-          op: s === "series" ? 1 : 0,
-        })),
-      });
-    });
-
-    world.edges.forEach((edge, i) => {
-      const a = dag[edge.src];
-      const b = dag[edge.dst];
-      const bend = (i % 2 ? 1 : -1) * 0.1;
-      const d = `M${a.x},${a.y} Q${(a.x + b.x) / 2 - (b.y - a.y) * bend},${(a.y + b.y) / 2 + (b.x - a.x) * bend} ${b.x},${b.y}`;
-      const path = el("path", { d, class: "pg-stage__edge", stroke: EDGE[edge.type] || NAVY }, edgeLayer);
-      if (edge.type === "by") path.setAttribute("stroke-dasharray", "4 4");
-      add({
-        kind: edge.type === "by" ? "group" : "edge",
-        node: path,
-        states: states((s) => ({ op: s === "graph" ? 1 : 0, draw: s === "graph" ? 1 : 0 })),
-      });
-    });
-
-    for (const name of world.nodes) {
-      const group = el("g", { class: `pg-stage__node pg-stage__node--${family(name)}` }, nodeLayer);
-      el("circle", { r: 17 }, group);
-      const text = el("text", { "text-anchor": "middle", dy: "0.35em" }, group);
-      text.textContent = name;
-      const rowIndex = rows.indexOf(name);
-      add({
-        kind: "node",
-        node: group,
-        states: states((s) => {
-          if (s === "series" && rowIndex >= 0) {
-            return { x: 44, y: rowTop(rowIndex) + rowH / 2, scale: 0.6, op: 1 };
-          }
-          if (s === "graph") return { x: dag[name].x, y: dag[name].y, scale: 1, op: 1 };
-          if (s === "code" && rowIndex >= 0) return { x: 40, y: 136 + rowIndex * 34, scale: 0.3, op: 0 };
-          return { x: dag[name].x, y: dag[name].y, scale: 0.6, op: 0 };
-        }),
-      });
-    }
-
-    const axis = el("line", { class: "pg-stage__axis", x1: 0, x2: 0, y1: 20, y2: 540 }, laneLayer);
-    const axisWeek = Math.round(N * 0.62);
-    add({
-      kind: "line",
-      node: axis,
-      states: states((s) => ({ x: xs[axisWeek], op: s === "decomposition" ? 1 : 0 })),
-    });
-    const salesPts = shaped(world.series.Y, laneTop(0), laneH);
-    lanes.forEach(([key, label, values], i) => {
-      const own = shaped(values, laneTop(i), laneH);
-      const kind = i === 0 ? "sales" : /^C\d+$/.test(key) ? "C" : key;
-      const path = el("path", { class: `pg-stage__lane pg-stage__lane--${kind}` }, laneLayer);
-      add({
-        kind: "path",
-        node: path,
-        states: states((s) => {
-          if (s === "decomposition") return { pts: own, op: 1 };
-          if (s === "identity") return { pts: salesPts, op: i === 0 ? 1 : 0.35 };
-          return { pts: salesPts, op: 0 };
-        }),
-      });
-      const text = el("text", { class: "pg-stage__lanelabel", x: 0, y: 0 }, laneLayer);
-      text.textContent = label;
-      add({
-        kind: "text",
-        node: text,
-        states: states((s) => ({
-          x: 132,
-          y: laneTop(i) + laneH / 2 + 4,
-          op: s === "decomposition" || (s === "identity" && i === 0) ? 1 : 0,
-        })),
-      });
-    });
-
-    const residual = el("path", { class: "pg-stage__residual" }, proofLayer);
-    add({
-      kind: "path",
-      node: residual,
-      states: states((s) => ({ pts: flat(s === "identity" ? 300 : laneTop(0) + laneH, X0, X1), op: s === "identity" ? 1 : 0 })),
-    });
-    const residualLabel = el("text", { class: "pg-stage__lanelabel", x: 132, y: 304 }, proofLayer);
-    residualLabel.textContent = "sales − Σ parts";
-    const number = el("text", { class: "pg-stage__number", x: X0, y: 420 }, proofLayer);
-    const [mantissa, exponent] = world.identity_error.toExponential(2).split("e");
-    number.textContent = `${mantissa} × 10`;
-    const sup = el("tspan", { "baseline-shift": "super", class: "pg-stage__exp" }, number);
-    sup.textContent = String(Number(exponent));
-    const caption = el("text", { class: "pg-stage__caption", x: X0, y: 456 }, proofLayer);
-    caption.textContent = `largest absolute error over all ${N} weeks, computed while this page was built`;
-    add({
-      kind: "group",
-      node: proofLayer,
-      states: states((s) => ({ op: s === "identity" ? 1 : 0 })),
-    });
-
-    /* Render the current values of every item. */
-    const pathD = (pts) => {
-      let d = "";
-      for (let i = 0; i < pts.length; i++) d += `${i ? "L" : "M"}${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)}`;
-      return d;
-    };
-    function render() {
-      for (const item of items) {
-        const c = item.cur;
-        item.node.style.opacity = c.op.toFixed(3);
-        item.node.style.visibility = c.op < 0.01 ? "hidden" : "visible";
-        if (item.kind === "path") item.node.setAttribute("d", pathD(c.pts));
-        if (item.kind === "text") {
-          item.node.setAttribute("x", c.x.toFixed(1));
-          item.node.setAttribute("y", c.y.toFixed(1));
+    function point(time) {
+      const box = win.getBoundingClientRect();
+      let from = [box.width * 0.82, box.height * 0.86];
+      let at = from;
+      let shown = false;
+      let press = 1;
+      for (const [move, click, el] of path) {
+        const to = spot(el) || from;
+        if (time >= beats[move][0]) {
+          const p = easeInOut(phase(move, time));
+          at = [from[0] + (to[0] - from[0]) * p, from[1] + (to[1] - from[1]) * p];
+          shown = time < beats[click][1] + 500;
+          press = time >= beats[click][0] && time < beats[click][0] + 140 ? 0.86 : 1;
         }
-        if (item.kind === "line") {
-          item.node.setAttribute("x1", c.x.toFixed(1));
-          item.node.setAttribute("x2", c.x.toFixed(1));
-        }
-        if (item.kind === "node") {
-          item.node.setAttribute("transform", `translate(${c.x.toFixed(1)} ${c.y.toFixed(1)}) scale(${c.scale.toFixed(3)})`);
-        }
-        if (item.kind === "edge") {
-          const length = item.length || (item.length = item.node.getTotalLength());
-          item.node.style.strokeDasharray = `${length}`;
-          item.node.style.strokeDashoffset = `${(1 - c.draw) * length}`;
-        }
+        from = to;
       }
+      cursor.style.transform = `translate(${at[0]}px, ${at[1]}px) scale(${press})`;
+      cursor.classList.toggle("is-on", shown);
     }
 
-    let current = "code";
+    function render(time) {
+      const busy = cells.map((c, i) => {
+        const ready = i ? beats[`cell${i + 1}`][1] : 0;
+        if (i) c.classList.toggle("is-absent", time < ready);
+        type(i, phase(`type${i + 1}`, time), time >= ready && time < beats[`run${i + 1}`][0]);
+        return run(i, time);
+      });
+      kernel.classList.toggle("is-busy", busy.some(Boolean));
+
+      const made = time - beats.run2[0];
+      bundle.forEach((f, i) => f.classList.toggle("is-absent", made < 300 + i * 130));
+      corpus.forEach((f) => f.classList.toggle("is-absent", time < beats.run3[1]));
+
+      let scene = "notebook";
+      for (const [at, name] of scenes) if (time >= at) scene = name;
+      views.forEach((v) => v.classList.toggle("is-open", v.dataset.view === scene));
+      tabs.forEach((t) => {
+        t.classList.toggle("is-absent", time < opens[t.dataset.tab]);
+        t.classList.toggle("is-active", t.dataset.tab === scene);
+      });
+      /* A sheet takes the whole window: the explorer folds away. */
+      body.classList.toggle("is-wide", scene !== "notebook");
+      /* Like a notebook, keep the latest cell in view when the pane is short. */
+      notebook.scrollTop = notebook.scrollHeight;
+
+      dataset.classList.toggle("is-selected", time >= beats.click1[0] && time < beats.click3[0]);
+      archive.classList.toggle("is-selected", time >= beats.click3[0]);
+      member.classList.toggle("is-selected", time >= beats.click4[0]);
+      const reveal = (rows, since, step) => rows.forEach((r, i) => r.classList.toggle("is-off", since < i * step));
+      reveal(sheetRows, time - beats.open1[0] - 300, 30);
+      reveal(members, time - beats.open3[0] - 300, 20);
+      reveal(worldRows, time - beats.open4[0] - 300, 40);
+      formula.classList.toggle("is-off", time < beats.open1[0] + 300 + sheetRows.length * 30);
+
+      point(time);
+      progress.style.setProperty("--progress", Math.min(1, time / END));
+      let current = -1;
+      starts.forEach((s, i) => {
+        if (time > 0 && time >= s) current = i;
+      });
+      chapters.forEach((c, i) => {
+        c.classList.toggle("is-current", i === current);
+        c.classList.toggle("is-before", i < current);
+        if (i === current) c.setAttribute("aria-current", "step");
+        else c.removeAttribute("aria-current");
+      });
+    }
+
+    /* Reduced motion: no playback. The page loads on the last frame, marked as
+       the last chapter; each chapter shows its own last frame. */
+    if (reduceMotion.matches) {
+      render(END);
+      chapters.forEach((c, i) => on(c, "click", () => render((starts[i + 1] ?? END) - 1)));
+      return;
+    }
+
+    let time = 0;
     let frame = 0;
-    function go(state) {
-      if (state === current) return;
-      current = state;
-      progress.forEach((li) => {
-        const order = [...progress].map((x) => x.dataset.step);
-        const here = order.indexOf(state);
-        const mine = order.indexOf(li.dataset.step);
-        li.classList.toggle("is-current", mine === here);
-        li.classList.toggle("is-before", mine < here);
-      });
-      section.dataset.state = state;
-      const from = items.map((item) => ({
-        ...item.cur,
-        pts: item.cur.pts ? item.cur.pts.map((p) => [...p]) : undefined,
-      }));
-      const to = items.map((item) => item.states[state]);
-      const duration = reduceMotion.matches ? 0 : 1100;
-      const begin = performance.now();
-      if (frame) cancelAnimationFrame(frame);
-      const step = (now) => {
-        const raw = duration ? Math.min(1, (now - begin) / duration) : 1;
-        items.forEach((item, k) => {
-          const a = from[k];
-          const b = to[k];
-          /* Stagger points left to right so lines appear to be drawn across. */
-          for (const key of ["op", "x", "y", "scale", "draw"]) {
-            if (b[key] !== undefined) item.cur[key] = a[key] + (b[key] - a[key]) * easeOut(raw);
-          }
-          if (b.pts) {
-            const n = b.pts.length;
-            for (let i = 0; i < n; i++) {
-              const lag = (i / n) * 0.35;
-              const local = Math.min(1, Math.max(0, (raw - lag) / 0.65));
-              const e = easeOut(local);
-              item.cur.pts[i][0] = a.pts[i][0] + (b.pts[i][0] - a.pts[i][0]) * e;
-              item.cur.pts[i][1] = a.pts[i][1] + (b.pts[i][1] - a.pts[i][1]) * e;
-            }
-          }
-        });
-        render();
-        frame = raw < 1 ? requestAnimationFrame(step) : 0;
-      };
-      frame = requestAnimationFrame(step);
+    let last = 0;
+    let playing = false;
+    let started = false;
+    let held = false;
+    let inView = false;
+    let away = false;
+
+    function sync() {
+      button.hidden = false;
+      button.textContent = time >= END ? "Replay" : playing ? "Pause" : "Play";
     }
 
-    render();
-    section.dataset.state = "code";
-    progress.forEach((li, i) => li.classList.toggle("is-current", i === 0));
-    const steps = section.querySelectorAll(".pg-story__step");
+    function tick(now) {
+      frame = 0;
+      time = Math.min(END, time + (now - last));
+      last = now;
+      render(time);
+      if (time >= END) playing = false;
+      if (playing) frame = requestAnimationFrame(tick);
+      sync();
+    }
+
+    function play() {
+      if (playing) return;
+      if (time >= END) time = 0;
+      playing = true;
+      last = performance.now();
+      frame = requestAnimationFrame(tick);
+      sync();
+    }
+
+    function pause() {
+      playing = false;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      sync();
+    }
+
+    win.classList.add("is-live");
+    render(0);
+    sync();
+
+    /* Plays the first time it is seen; leaving the view pauses it, and
+       coming back resumes it unless the reader paused it. */
     const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) if (entry.isIntersecting) go(entry.target.dataset.step);
+      ([entry]) => {
+        inView = entry.isIntersecting;
+        if (inView) {
+          if (!started || (!held && time < END)) play();
+          started = true;
+        } else if (playing) {
+          pause();
+        }
       },
-      /* On narrow screens the stage sits on top, so steps trigger lower down. */
-      {
-        rootMargin: window.matchMedia("(max-width: 59.984375em)").matches
-          ? "-68% 0px -31% 0px"
-          : "-45% 0px -45% 0px",
-      },
+      { threshold: 0.45 },
     );
-    steps.forEach((s) => observer.observe(s));
+    observer.observe(win);
+    /* A hidden tab stops the clock, so no part of the demo plays unseen. */
+    on(document, "visibilitychange", () => {
+      if (document.hidden) {
+        away = playing;
+        if (playing) pause();
+      } else if (away && inView && !held) {
+        away = false;
+        play();
+      }
+    });
+    on(button, "click", () => {
+      held = playing;
+      if (playing) pause();
+      else play();
+    });
+    chapters.forEach((c, i) =>
+      on(c, "click", () => {
+        held = false;
+        started = true;
+        time = starts[i];
+        render(time);
+        play();
+      }),
+    );
     cleanup(() => {
       observer.disconnect();
       if (frame) cancelAnimationFrame(frame);
@@ -838,12 +942,10 @@
   }
 
   function mount(context) {
-    const world = readWorld();
-    if (!world) return;
     const field = document.querySelector("[data-pg-field]");
-    if (field && field.getContext) mountField(field, world, context);
-    const story = document.querySelector("[data-pg-story]");
-    if (story) mountStory(story, world, context);
+    if (field && field.getContext) mountField(field, context);
+    const demo = document.querySelector("[data-pg-demo]");
+    if (demo) mountDemo(demo, context);
   }
 
   if (window.pymcGenerator) window.pymcGenerator.register(mount);

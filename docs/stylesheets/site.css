@@ -12,12 +12,13 @@
   --pg-soft-white: #f7f7f7;
   --pg-peach: #f6ae72;
 
-  --pg-display: "Host Grotesk", "Helvetica Neue", Arial, sans-serif;
-  --pg-text: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  /* Brand faces: Archivo (served at its expanded width only) for headings and
+     large text, Inter for body, captions, and interface. Mono is for code. */
+  --pg-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --pg-text: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --pg-mono: "Fragment Mono", "SFMono-Regular", Menlo, monospace;
 
   --pg-ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --pg-measure: 66ch;
   --pg-read: 0;
 }
 
@@ -208,7 +209,7 @@ html {
   margin: 0;
   opacity: 1;
   color: var(--pg-ink-2);
-  font: 500 0.72rem/1 var(--pg-display);
+  font: 500 0.72rem/1 var(--pg-text);
   transition: color 0.2s var(--pg-ease);
 }
 .pg-sections .md-tabs__link::before {
@@ -252,7 +253,7 @@ html {
   border-radius: 999px;
   background: var(--pg-ink);
   color: var(--pg-ground);
-  font: 500 0.68rem/1 var(--pg-display);
+  font: 500 0.68rem/1 var(--pg-text);
   white-space: nowrap;
   transition: background-color 0.2s var(--pg-ease);
 }
@@ -288,7 +289,7 @@ html {
   background: var(--pg-ground);
 }
 .md-search__input {
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
   font-size: 0.72rem;
   color: var(--pg-ink);
 }
@@ -314,12 +315,14 @@ html {
   }
   .pg-header .md-search__inner {
     width: 0;
+    overflow: hidden;
     visibility: hidden;
     opacity: 0;
     transition: width 0.3s var(--pg-ease), opacity 0.2s var(--pg-ease), visibility 0s 0.3s;
   }
   [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
     width: min(34.4rem, 70vw);
+    overflow: visible;
     visibility: visible;
     opacity: 1;
     transition: width 0.3s var(--pg-ease), opacity 0.2s var(--pg-ease);
@@ -328,18 +331,18 @@ html {
 .pg-version {
   margin-right: 0.5rem;
   color: var(--pg-ink-3);
-  font: 400 0.64rem/1 var(--pg-mono);
+  font: 400 0.64rem/1 var(--pg-text);
   white-space: nowrap;
 }
 .md-search__output {
   border-radius: 0 0 0.6rem 0.6rem;
 }
 .md-search__suggest {
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
   font-size: 0.72rem;
 }
 .md-search-result {
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
 }
 .md-search-result__article h1,
 .md-search-result__article h2 {
@@ -356,7 +359,7 @@ html {
 .md-search-result__meta {
   background: var(--pg-ground);
   color: var(--pg-ink-3);
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
 }
 .md-search-result mark {
   background: var(--pg-aqua);
@@ -387,6 +390,27 @@ html {
     padding: 0.42rem;
   }
 }
+/* Archivo Expanded runs wide: on a phone the wordmark scales with the screen
+   and the header tightens so the tools stay on it; below 340px the mark stands
+   alone (the link keeps its accessible name). */
+@media screen and (max-width: 29.984375em) {
+  .pg-header__inner {
+    padding: 0 0.6rem;
+    gap: 0.2rem;
+  }
+  .pg-wordmark {
+    gap: 0.35rem;
+    font-size: clamp(0.6rem, 3.5vw, 0.85rem);
+  }
+  .pg-repo {
+    margin-left: 0.2rem;
+  }
+}
+@media screen and (max-width: 21.24em) {
+  .pg-wordmark span {
+    display: none;
+  }
+}
 
 /* Instant-navigation loader: a series traced across the top of the page. */
 .md-progress {
@@ -402,7 +426,7 @@ html {
    Navigation rails.
    ========================================================================== */
 .md-nav {
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
   font-size: 0.68rem;
 }
 .md-nav__title {
@@ -431,12 +455,14 @@ html {
   .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list {
     position: relative;
     margin-left: 0.25rem;
-    padding-left: 0.9rem;
+    /* Room for the stations: Material clips this list (overflow hidden for its
+       expand animation), so a dot at its edge would lose its left side. */
+    padding-left: 1.05rem;
   }
   .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list::before {
     content: "";
     position: absolute;
-    left: 0.17rem;
+    left: 0.275rem;
     top: 0.75rem;
     bottom: 0.75rem;
     width: 1px;
@@ -462,10 +488,13 @@ html {
     border-color: var(--pg-ink);
   }
   .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav__link {
+    position: static;
+    margin-bottom: 0.5rem;
+    background: transparent;
+    box-shadow: none;
     color: var(--pg-ink);
-    font-weight: 600;
-    font-size: 0.72rem;
-    margin-bottom: 0.4rem;
+    font: 600 0.74rem/1.3 var(--pg-display);
+    letter-spacing: -0.01em;
   }
 }
 
@@ -477,12 +506,13 @@ html {
 @media screen and (min-width: 60em) {
   .md-sidebar--secondary .md-nav--secondary > .md-nav__list {
     position: relative;
-    padding-left: 0.9rem;
+    margin-left: 0.3rem;
+    padding-left: 1.05rem;
   }
   .md-sidebar--secondary .md-nav--secondary > .md-nav__list::before {
     content: "";
     position: absolute;
-    left: 0.17rem;
+    left: 0.275rem;
     top: 0.6rem;
     bottom: 0.6rem;
     width: 1px;
@@ -516,13 +546,20 @@ html {
     border-color: var(--pg-ink);
   }
 }
-.md-nav--secondary .md-nav__title {
-  color: var(--pg-ink-3);
-  font-size: 0.62rem;
-  font-family: var(--pg-mono);
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
+/* Rail titles head their rail as small Archivo Expanded headings, flush with
+   its stations, on the page's own ground: no sticky white band. */
+@media screen and (min-width: 60em) {
+  .md-sidebar--secondary .md-nav--secondary .md-nav__title {
+    position: static;
+    margin: 0 0 0.5rem 0.3rem;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--pg-ink);
+    font: 600 0.74rem/1.3 var(--pg-display);
+    letter-spacing: -0.01em;
+    text-transform: none;
+  }
 }
 
 /* Resume mark: where you stopped on this page last time. */
@@ -537,7 +574,7 @@ html {
   border-radius: 0.35rem;
   background: var(--pg-plate);
   color: var(--pg-ink);
-  font: 500 0.64rem/1.3 var(--pg-display);
+  font: 500 0.64rem/1.3 var(--pg-text);
   text-align: left;
   cursor: pointer;
   transition: border-color 0.2s var(--pg-ease), background-color 0.2s var(--pg-ease);
@@ -588,17 +625,33 @@ html {
 [data-md-color-scheme="slate"] .md-main::before {
   opacity: 0.45;
 }
-.md-main:has(.pg-story)::before {
+.md-main:has(.pg-demo)::before {
   display: none;
 }
 .md-typeset {
   font-size: 0.875rem;
-  line-height: 1.68;
+  line-height: 1.65;
   color: var(--pg-ink);
-  font-variant-numeric: oldstyle-nums proportional-nums;
+  font-variant-numeric: proportional-nums lining-nums;
 }
-.md-typeset :is(p, ul, ol, dl, blockquote, .footnote) {
-  max-width: var(--pg-measure);
+/* Reading text fills the column, so its edges line up with code plates, math,
+   figures, and rules; justified, with hyphenation to keep the spacing even. */
+.md-typeset :is(p, li, dd) {
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  text-wrap: pretty;
+}
+/* Identifiers never take a hyphen that is not in their name. */
+.md-typeset :is(p, li, dd) :is(code, kbd, samp) {
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+/* A phone column holds too few words per line to justify without gaps. */
+@media screen and (max-width: 29.984375em) {
+  .md-typeset :is(p, li, dd) {
+    text-align: left;
+  }
 }
 .md-typeset :is(h1, h2, h3, h4, h5, h6) {
   font-family: var(--pg-display);
@@ -609,10 +662,10 @@ html {
 .md-typeset h1 {
   margin: 0 0 1.2rem;
   max-width: 20ch;
-  font-size: clamp(2.2rem, 3.6vw, 3.1rem);
+  font-size: clamp(1.8rem, 2.9vw, 2.5rem);
   font-weight: 600;
-  line-height: 1.02;
-  letter-spacing: -0.035em;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
 }
 .md-typeset h1 + .pg-chain + p,
 .md-typeset h1 + p {
@@ -624,21 +677,21 @@ html {
   margin: 3.4rem 0 0.9rem;
   padding-top: 1.1rem;
   border-top: 1px solid var(--pg-rule);
-  font-size: 1.45rem;
+  font-size: 1.25rem;
   font-weight: 600;
-  line-height: 1.15;
-  letter-spacing: -0.022em;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 .md-typeset h3 {
   margin: 2.4rem 0 0.6rem;
-  font-size: 1.08rem;
+  font-size: 0.98rem;
   font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: -0.012em;
+  line-height: 1.3;
+  letter-spacing: 0;
 }
 .md-typeset h4 {
   margin: 1.8rem 0 0.4rem;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -662,6 +715,14 @@ html {
 .md-typeset a.headerlink,
 .md-typeset .pg-chain a {
   text-decoration: none;
+}
+/* Line numbers in code read as a quiet gutter, not a column of links. */
+.md-typeset .linenos a {
+  color: var(--pg-ink-3);
+  text-decoration: none;
+}
+.md-typeset .linenos a:hover {
+  color: var(--pg-ink);
 }
 .md-typeset strong {
   font-weight: 600;
@@ -697,7 +758,7 @@ html {
   border-radius: 999px;
   border: 1px solid var(--pg-rule);
   background: var(--pg-plate);
-  font: 500 0.82em/1.4 var(--pg-display);
+  font: 500 0.82em/1.4 var(--pg-text);
   color: var(--pg-ink);
   white-space: nowrap;
 }
@@ -774,7 +835,7 @@ html {
   border-bottom: 1.5px solid var(--pg-rule-strong);
   box-shadow: none;
   background: transparent;
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
   font-size: 0.7rem;
   font-variant-numeric: tabular-nums lining-nums;
 }
@@ -806,7 +867,6 @@ html {
 .md-typeset details {
   margin: 1.8em 0;
   padding: 0 1.1rem;
-  max-width: calc(var(--pg-measure) + 2.2rem);
   border: 1px solid transparent;
   border-radius: 0.35rem;
   background: var(--pg-periwinkle-wash);
@@ -837,7 +897,7 @@ html {
   padding: 0.75rem 1.1rem 0.15rem 2.6rem;
   border: 0;
   background: transparent;
-  font: 600 0.74rem/1.4 var(--pg-display);
+  font: 600 0.74rem/1.4 var(--pg-text);
   color: var(--pg-ink);
 }
 .md-typeset :is(.admonition-title, summary)::before {
@@ -853,6 +913,215 @@ html {
 }
 .md-typeset :is(.admonition, details) > :last-child {
   margin-bottom: 0.9rem;
+}
+
+/* ==========================================================================
+   Source viewer: an API page's "Source code in …" row opens its code in a
+   dialog over the blurred page (reading.js). Without the script the row
+   expands in place as a plain details element.
+   ========================================================================== */
+/* `[class]` outranks the notes' transparent-border rule above. */
+.md-typeset details.mkdocstrings-source[class] {
+  margin: 1.2em 0;
+  padding: 0;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: transparent;
+  transition: border-color 0.2s var(--pg-ease);
+}
+.md-typeset details.mkdocstrings-source[class]:hover {
+  border-color: color-mix(in srgb, var(--pg-ink) 45%, transparent);
+}
+.md-typeset details.mkdocstrings-source > summary {
+  margin: 0;
+  padding: 0.62rem 2.6rem 0.62rem 2.3rem;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--pg-ink-2);
+  font: 500 0.68rem/1.4 var(--pg-text);
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.2s var(--pg-ease);
+}
+.md-typeset details.mkdocstrings-source > summary:hover {
+  color: var(--pg-ink);
+}
+.md-typeset details.mkdocstrings-source > summary:focus-visible {
+  outline: 2px solid var(--pg-link);
+  outline-offset: 2px;
+}
+.md-typeset details.mkdocstrings-source > summary::before {
+  top: 50%;
+  left: 0.9rem;
+  width: 0.85rem;
+  height: 0.85rem;
+  translate: 0 -50%;
+  background-color: var(--pg-ink-3) !important;
+}
+.md-typeset details.mkdocstrings-source > summary::after {
+  top: 50%;
+  right: 0.9rem;
+  translate: 0 -50%;
+}
+.md-typeset details.mkdocstrings-source > summary code {
+  margin-left: 0.15rem;
+  font-size: 0.62rem;
+}
+.md-typeset details.mkdocstrings-source[open] > summary {
+  border-bottom: 1px solid var(--pg-rule);
+  border-radius: 0.35rem 0.35rem 0 0;
+}
+.md-typeset details.mkdocstrings-source > .highlight {
+  margin: 0;
+}
+/* With the script, the row opens the viewer: its chevron becomes an expand mark. */
+.md-typeset details.pg-source-row > summary::after {
+  width: 0.8rem;
+  height: 0.8rem;
+  transform: none;
+  -webkit-mask-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 21v-2H6.41l4.5-4.5-1.41-1.41-4.5 4.5V14H3v7zm4.5-10.09 4.5-4.5V10h2V3h-7v2h3.59l-4.5 4.5z"/></svg>');
+  mask-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 21v-2H6.41l4.5-4.5-1.41-1.41-4.5 4.5V14H3v7zm4.5-10.09 4.5-4.5V10h2V3h-7v2h3.59l-4.5 4.5z"/></svg>');
+}
+
+.pg-source {
+  width: min(72rem, 100vw - 3rem);
+  max-width: none;
+  height: min(100svh - 3rem, 64rem);
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.6rem;
+  background: var(--pg-ground);
+  color: var(--pg-ink);
+  box-shadow: 0 2.4rem 5rem -1.2rem rgba(12, 31, 64, 0.38);
+}
+.pg-source[open] {
+  animation: pg-source-in 0.26s var(--pg-ease);
+}
+.pg-source::backdrop {
+  background: rgba(12, 31, 64, 0.26);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+}
+.pg-source[open]::backdrop {
+  animation: pg-source-fade 0.26s ease-out;
+}
+[data-md-color-scheme="slate"] .pg-source {
+  box-shadow: 0 2.4rem 5rem -1.2rem rgba(0, 0, 0, 0.6);
+}
+[data-md-color-scheme="slate"] .pg-source::backdrop {
+  background: rgba(4, 12, 28, 0.55);
+}
+html:has(.pg-source[open]) {
+  overflow: hidden;
+  scrollbar-gutter: stable;
+}
+.pg-source__frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.pg-source__bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 0.8rem 0.7rem 1.2rem;
+  border-bottom: 1px solid var(--pg-rule);
+}
+.md-typeset .pg-source__title {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.8rem;
+  min-width: 0;
+  margin: 0;
+  text-align: left;
+}
+.pg-source__name {
+  color: var(--pg-ink);
+  font: 600 0.82rem/1.3 var(--pg-display);
+  letter-spacing: -0.01em;
+}
+.md-typeset .pg-source__title code {
+  padding: 0;
+  background: transparent;
+  color: var(--pg-ink-3);
+  font-size: 0.62rem;
+}
+.pg-source__close {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pg-ground);
+  box-shadow: inset 0 0 0 1px var(--pg-rule);
+  color: var(--pg-ink);
+  cursor: pointer;
+  transition: box-shadow 0.2s var(--pg-ease);
+}
+.pg-source__close:hover {
+  box-shadow: inset 0 0 0 1px var(--pg-ink);
+}
+.pg-source__close:focus-visible {
+  outline: 2px solid var(--pg-link);
+  outline-offset: 2px;
+}
+.pg-source__close svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.pg-source__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--pg-plate);
+}
+/* The code pane takes focus on open so arrow and page keys scroll it at once;
+   the dialog itself frames it, so it needs no ring of its own. */
+.pg-source__body:focus {
+  outline: none;
+}
+.md-typeset .pg-source__body .highlight {
+  margin: 0;
+}
+.md-typeset .pg-source__body :is(.highlighttable, pre, pre > code) {
+  margin: 0;
+  border-radius: 0;
+}
+@keyframes pg-source-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.8rem) scale(0.985);
+  }
+}
+@keyframes pg-source-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media screen and (max-width: 44.984375em) {
+  .pg-source {
+    width: calc(100vw - 1rem);
+    height: calc(100svh - 1rem);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pg-source[open],
+  .pg-source[open]::backdrop {
+    animation: none;
+  }
 }
 
 /* ==========================================================================
@@ -909,7 +1178,7 @@ html {
   display: inline-block;
   margin-right: 0.9rem;
   color: var(--pg-navy);
-  font: 400 0.66rem/1 var(--pg-mono);
+  font: 500 0.66rem/1 var(--pg-text);
 }
 .md-typeset figure.scm-plot figcaption code {
   background: #eceef9;
@@ -955,7 +1224,7 @@ html {
   border-radius: 999px;
   background: var(--pg-navy);
   color: var(--pg-soft-white);
-  font: 400 0.52rem/1.4 var(--pg-mono);
+  font: 500 0.52rem/1.4 var(--pg-text);
 }
 @media (prefers-reduced-motion: reduce) {
   .pg-loupe {
@@ -976,7 +1245,8 @@ html {
 .pg-chain__count {
   flex: none;
   color: var(--pg-ink);
-  font: 400 0.66rem/1 var(--pg-mono);
+  font: 500 0.66rem/1 var(--pg-text);
+  font-variant-numeric: tabular-nums;
 }
 .pg-chain__count span {
   color: var(--pg-ink-3);
@@ -1049,7 +1319,7 @@ html {
   border-radius: 0.25rem;
   background: var(--pg-ink);
   color: var(--pg-ground);
-  font: 500 0.6rem/1.2 var(--pg-display);
+  font: 500 0.6rem/1.2 var(--pg-text);
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -1079,8 +1349,11 @@ html {
   transform: translate(0, 0);
 }
 @media screen and (max-width: 44.984375em) {
+  /* Station labels are a hover aid; on a phone the hidden ones near the end
+     would otherwise widen the page. */
   .pg-chain {
     gap: 0.6rem;
+    overflow-x: clip;
   }
   .pg-chain__node a {
     padding: 0.2rem;
@@ -1140,7 +1413,7 @@ html {
   margin-top: 2.6rem;
 }
 .md-typeset .doc-section-title {
-  font: 600 0.74rem var(--pg-display);
+  font: 600 0.74rem var(--pg-text);
   color: var(--pg-ink);
 }
 
@@ -1149,7 +1422,7 @@ html {
    as plates of their own, images under the loupe.
    ========================================================================== */
 .jupyter-wrapper {
-  --jp-ui-font-family: var(--pg-display);
+  --jp-ui-font-family: var(--pg-text);
   --jp-content-font-family: var(--pg-text);
   --jp-code-font-family: var(--pg-mono);
   --jp-content-font-color1: var(--pg-ink);
@@ -1216,7 +1489,7 @@ html {
 .jupyter-wrapper .jp-RenderedHTMLCommon table {
   border-top: 1.5px solid var(--pg-rule-strong);
   border-bottom: 1.5px solid var(--pg-rule-strong);
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1238,7 +1511,7 @@ html {
   padding: 0.6rem 0;
 }
 .md-footer__direction {
-  font: 400 0.62rem var(--pg-mono);
+  font: 400 0.62rem var(--pg-text);
   opacity: 0.7;
 }
 .md-footer__title {
@@ -1247,13 +1520,13 @@ html {
 .md-footer-meta {
   background: transparent;
   border-top: 1px solid rgba(247, 247, 247, 0.14);
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
 }
 .md-footer-meta__inner {
   padding: 0.6rem 0.4rem;
 }
 .md-copyright {
-  font: 400 0.62rem var(--pg-mono);
+  font: 400 0.62rem var(--pg-text);
   color: rgba(247, 247, 247, 0.72);
 }
 .md-social__link svg {
@@ -1263,7 +1536,7 @@ html {
   background: var(--pg-plate);
   color: var(--pg-ink);
   box-shadow: var(--pg-shadow);
-  font-family: var(--pg-display);
+  font-family: var(--pg-text);
 }
 
 /* Wide display equations scroll instead of clipping their annotations. */
@@ -1275,4 +1548,13 @@ html {
 }
 .md-typeset mjx-container[display="true"] {
   margin: 0.8em 0 !important;
+}
+/* MathJax's hidden screen-reader copy of each formula is as wide as the
+   formula's source, not its rendering; bound it so inline math near a line's
+   end cannot widen the page. */
+.md-typeset mjx-container {
+  position: relative;
+}
+.md-typeset mjx-assistive-mml {
+  max-width: 100%;
 }

@@ -7,59 +7,30 @@ hide:
   - footer
 ---
 
-```python exec="1" html="1"
-from scm_docs import world, world_json
-
-print(world_json(world(scenario=1, seed=0), seed=0))
-```
-
-<section class="pg-story" data-pg-story aria-label="One draw, from code to proof">
-<div class="pg-story__steps">
-<div class="pg-story__step" data-step="code">
-<h2>One call draws a world.</h2>
-<p>A named scenario's prior and a seed.</p>
-</div>
-<div class="pg-story__step" data-step="series">
-<h2>It returns the data a modeller sees.</h2>
-<p>Spend, controls, and sales, week by week.</p>
-</div>
-<div class="pg-story__step" data-step="graph">
-<h2>And the graph that caused it.</h2>
-<p>Hidden demand drives both spend and sales.</p>
-</div>
-<div class="pg-story__step" data-step="decomposition">
-<h2>Every week splits into its causes.</h2>
-<p>Baseline, each channel, and indirect effects add back to sales.</p>
-</div>
-<div class="pg-story__step" data-step="identity">
-<h2>Exactly.</h2>
-<p>The largest gap between sales and the sum of its parts.</p>
-</div>
-</div>
-<div class="pg-story__stage">
-<svg class="pg-stage" data-pg-stage viewBox="0 0 800 560" role="img" aria-label="The drawn world: its code, series, graph, and decomposition"></svg>
-<ol class="pg-story__progress" aria-hidden="true">
-<li data-step="code">Code</li>
-<li data-step="series">Data</li>
-<li data-step="graph">Graph</li>
-<li data-step="decomposition">Causes</li>
-<li data-step="identity">Proof</li>
+<section class="pg-demo" data-pg-demo aria-labelledby="pg-demo-title" markdown>
+<div class="pg-demo__field" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="pg-demo__text">
+<h2 id="pg-demo-title">One world, or a whole corpus.</h2>
+<p class="pg-demo__lead">Write one world as a folder you can open, its data beside the true decomposition and graph. Or draw many and save them as one compressed <code>.npz</code>, every world padded to a common shape.</p>
+<ol class="pg-demo__chapters" aria-label="Demo chapters">
+<li><button type="button" data-pg-chapter>Sample a world</button></li>
+<li><button type="button" data-pg-chapter>Write its bundle</button></li>
+<li><button type="button" data-pg-chapter>Open the data</button></li>
+<li><button type="button" data-pg-chapter>Draw a corpus</button></li>
+<li><button type="button" data-pg-chapter>Load it back</button></li>
+<li><button type="button" data-pg-chapter>Look inside the file</button></li>
 </ol>
 </div>
-</section>
-
-<section class="pg-proof" markdown>
-
-## Every figure here is executed.
+<div class="pg-demo__stage" markdown>
 
 ```python exec="1" html="1"
-from scm_docs import world, viz_html
-import pymc_generator as pg
+from scm_docs import editor_demo
 
-w = world(scenario=1, seed=0)
-print(viz_html(pg.viz.plot_decomposition, w, caption="The same world, rendered by <code>pg.viz.plot_decomposition</code> while this page was built. Hover to read it under the loupe."))
+print(editor_demo(scenario=1, seed=0))
 ```
 
+<div class="pg-demo__meta"><span>Illustrative demo. The code, files, and data come from this page's build.</span><button class="pg-demo__play" type="button" data-pg-play hidden>Pause</button></div>
+</div>
 </section>
 
 <section class="pg-index" markdown>

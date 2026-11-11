@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-11T15:12:50Z",
+  "generatedAt": "2026-11-12T00:30:00Z",
   "title": "Design System: pymc-generator",
   "extensions": {
     "colorMeta": {
@@ -80,15 +80,15 @@
       },
       "body": {
         "displayName": "Reading Body",
-        "purpose": "Explanatory prose held to the 66ch publication measure."
+        "purpose": "Explanatory prose justified across the full content column, edges shared with code plates, equations, and figures."
       },
       "label": {
         "displayName": "Interface Label",
-        "purpose": "Compact actions and controls."
+        "purpose": "Inter for actions, navigation, plate labels, and table heads."
       },
       "mono": {
-        "displayName": "Evidence Mono",
-        "purpose": "Code, seeds, coefficients, figure labels, and measurements."
+        "displayName": "Code Mono",
+        "purpose": "Code, inline code, notebook cells and outputs; nothing else."
       }
     },
     "shadows": [
@@ -110,7 +110,12 @@
       {
         "name": "hero-lens",
         "value": "0 10px 28px rgba(12, 31, 64, 0.22)",
-        "purpose": "Lifts the cursor-following causal-world lens in the light scheme."
+        "purpose": "Lifts the home figure's magnifying lens in the light scheme."
+      },
+      {
+        "name": "demo-window",
+        "value": "0 0 0 1px var(--pg-rule), 0 40px 80px -36px rgba(12, 31, 64, 0.42)",
+        "purpose": "Floats the home demo window over its colour field; dark uses rgba(0, 0, 0, 0.6)."
       }
     ],
     "motion": [
@@ -130,13 +135,13 @@
         "purpose": "Subtle vertical movement for inactive chapter-chain stations."
       },
       {
-        "name": "world-story-morph",
-        "value": "1100ms with 1 - (1 - t)^4",
-        "purpose": "Scroll-selected transformation from code to series, graph, decomposition, and identity."
+        "name": "demo-playback",
+        "value": "about 33s, once on first view, with six seekable chapters; 16ms per typed character; 0.35s entrances and a 0.45s explorer fold with the publication ease",
+        "purpose": "Plays the home demo from an empty notebook through one world's bundle and sheet to a saved corpus, its archive listing, and every world as a sheet."
       },
       {
         "name": "reduced-motion",
-        "value": "0ms story duration; loupe transitions and chain drift removed",
+        "value": "home figure still; demo shows its final frame and its chapters show still frames; loupe transitions and chain drift removed",
         "purpose": "Preserves evidence while honoring reduced-motion preference."
       }
     ],
@@ -146,7 +151,7 @@
         "value": "44.984375em"
       },
       {
-        "name": "story-stack",
+        "name": "hero-stack",
         "value": "59.984375em"
       },
       {
@@ -170,7 +175,7 @@
       "refersTo": "button-primary",
       "description": "Navy pill action for starting the documentation path.",
       "html": "<a class='ds-button ds-button--primary' href='#'>Get started</a>",
-      "css": ".ds-button { display: inline-flex; align-items: center; padding: 0.7rem 1.25rem; border-radius: 999px; background: var(--pg-ground); box-shadow: inset 0 0 0 1px var(--pg-rule); color: var(--pg-ink); font: 500 0.75rem/1 var(--pg-display); text-decoration: none; transition: background-color 0.2s var(--pg-ease), box-shadow 0.2s var(--pg-ease), color 0.2s; } .ds-button:hover { box-shadow: inset 0 0 0 1px var(--pg-ink); color: var(--pg-ink); } .ds-button:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; } .ds-button--primary { background: var(--pg-ink); box-shadow: none; color: var(--pg-ground); } .ds-button--primary:hover { background: var(--pg-link); box-shadow: none; color: var(--pg-ground); }"
+      "css": ".ds-button { display: inline-flex; align-items: center; padding: 0.7rem 1.25rem; border-radius: 999px; background: var(--pg-ground); box-shadow: inset 0 0 0 1px var(--pg-rule); color: var(--pg-ink); font: 500 0.75rem/1 var(--pg-text); text-decoration: none; transition: background-color 0.2s var(--pg-ease), box-shadow 0.2s var(--pg-ease), color 0.2s; } .ds-button:hover { box-shadow: inset 0 0 0 1px var(--pg-ink); color: var(--pg-ink); } .ds-button:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; } .ds-button--primary { background: var(--pg-ink); box-shadow: none; color: var(--pg-ground); } .ds-button--primary:hover { background: var(--pg-link); box-shadow: none; color: var(--pg-ground); }"
     },
     {
       "name": "Secondary Hero Button",
@@ -178,7 +183,7 @@
       "refersTo": "button-secondary",
       "description": "Paper pill for the adjacent reading path.",
       "html": "<a class='ds-button-secondary' href='#'>Read the model</a>",
-      "css": ".ds-button-secondary { display: inline-flex; align-items: center; padding: 0.7rem 1.25rem; border-radius: 999px; background: var(--pg-ground); box-shadow: inset 0 0 0 1px var(--pg-rule); color: var(--pg-ink); font: 500 0.75rem/1 var(--pg-display); text-decoration: none; transition: background-color 0.2s var(--pg-ease), box-shadow 0.2s var(--pg-ease), color 0.2s; } .ds-button-secondary:hover { box-shadow: inset 0 0 0 1px var(--pg-ink); color: var(--pg-ink); } .ds-button-secondary:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; }"
+      "css": ".ds-button-secondary { display: inline-flex; align-items: center; padding: 0.7rem 1.25rem; border-radius: 999px; background: var(--pg-ground); box-shadow: inset 0 0 0 1px var(--pg-rule); color: var(--pg-ink); font: 500 0.75rem/1 var(--pg-text); text-decoration: none; transition: background-color 0.2s var(--pg-ease), box-shadow 0.2s var(--pg-ease), color 0.2s; } .ds-button-secondary:hover { box-shadow: inset 0 0 0 1px var(--pg-ink); color: var(--pg-ink); } .ds-button-secondary:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; }"
     },
     {
       "name": "Atlas Navigation",
@@ -186,7 +191,7 @@
       "refersTo": "atlas-navigation",
       "description": "Single-row section navigation with a peach current-page station.",
       "html": "<nav class='ds-atlas-nav' aria-label='Sections'><a href='#'>Getting started</a><a class='is-active' href='#' aria-current='page'>Guide</a><a href='#'>Examples</a></nav>",
-      "css": ".ds-atlas-nav { display: flex; gap: 1.5rem; font-family: var(--pg-display); white-space: nowrap; } .ds-atlas-nav a { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--pg-ink-2); font: 500 0.72rem/1 var(--pg-display); text-decoration: none; transition: color 0.2s var(--pg-ease); } .ds-atlas-nav a::before { content: ''; width: 0.38rem; height: 0.38rem; border: 1.2px solid transparent; border-radius: 50%; transition: background-color 0.2s, border-color 0.2s; } .ds-atlas-nav a:hover, .ds-atlas-nav a:focus-visible, .ds-atlas-nav a.is-active { color: var(--pg-ink); } .ds-atlas-nav a:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; } .ds-atlas-nav a.is-active::before { background: var(--pg-peach); border-color: var(--pg-ink); }"
+      "css": ".ds-atlas-nav { display: flex; gap: 1.5rem; font-family: var(--pg-text); white-space: nowrap; } .ds-atlas-nav a { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--pg-ink-2); font: 500 0.72rem/1 var(--pg-text); text-decoration: none; transition: color 0.2s var(--pg-ease); } .ds-atlas-nav a::before { content: ''; width: 0.38rem; height: 0.38rem; border: 1.2px solid transparent; border-radius: 50%; transition: background-color 0.2s, border-color 0.2s; } .ds-atlas-nav a:hover, .ds-atlas-nav a:focus-visible, .ds-atlas-nav a.is-active { color: var(--pg-ink); } .ds-atlas-nav a:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; } .ds-atlas-nav a.is-active::before { background: var(--pg-peach); border-color: var(--pg-ink); }"
     },
     {
       "name": "Search Field",
@@ -194,7 +199,7 @@
       "refersTo": "search-field",
       "description": "Quiet header search field that opens into a bordered paper control.",
       "html": "<label class='ds-search'><input aria-label='Search documentation' placeholder='Search docs'></label>",
-      "css": ".ds-search { display: inline-flex; padding: 0.45rem 0.75rem; border-radius: 999px; background: var(--pg-ground); box-shadow: inset 0 0 0 1px var(--pg-rule); } .ds-search input { width: 14rem; border: 0; outline: 0; background: transparent; color: var(--pg-ink); font-family: var(--pg-display); font-size: 0.72rem; } .ds-search input::placeholder { color: var(--pg-ink-3); } .ds-search:focus-within { box-shadow: inset 0 0 0 1px var(--pg-ink); } .ds-search input:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; }"
+      "css": ".ds-search { display: inline-flex; padding: 0.45rem 0.75rem; border-radius: 999px; background: var(--pg-ground); box-shadow: inset 0 0 0 1px var(--pg-rule); } .ds-search input { width: 14rem; border: 0; outline: 0; background: transparent; color: var(--pg-ink); font-family: var(--pg-text); font-size: 0.72rem; } .ds-search input::placeholder { color: var(--pg-ink-3); } .ds-search:focus-within { box-shadow: inset 0 0 0 1px var(--pg-ink); } .ds-search input:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; }"
     },
     {
       "name": "Code Plate",
@@ -210,7 +215,7 @@
       "refersTo": "figure-plate",
       "description": "Numbered white evidence plate with a hairline-separated caption.",
       "html": "<figure class='ds-figure-plate'><svg viewBox='0 0 300 84' aria-label='Executed series' role='img'><path d='M8 58 L52 34 L96 50 L140 22 L184 46 L228 18 L292 38' fill='none' stroke='currentColor' stroke-width='2'/></svg><figcaption><span>Plate 1</span> Executed outcome series</figcaption></figure>",
-      "css": ".ds-figure-plate { margin: 0; padding: 1.1rem 1.2rem 0.9rem; border: 1px solid var(--pg-rule); border-radius: 0.35rem; background: #ffffff; color: var(--pg-ink); } .ds-figure-plate svg { display: block; width: 100%; height: auto; } .ds-figure-plate figcaption { margin-top: 0.8rem; padding-top: 0.7rem; border-top: 1px solid rgba(12, 31, 64, 0.12); color: var(--pg-ink-2); font: 0.74rem/1.5 var(--pg-text); } .ds-figure-plate figcaption span { margin-right: 0.9rem; color: var(--pg-navy); font: 0.66rem/1 var(--pg-mono); }"
+      "css": ".ds-figure-plate { margin: 0; padding: 1.1rem 1.2rem 0.9rem; border: 1px solid var(--pg-rule); border-radius: 0.35rem; background: #ffffff; color: var(--pg-ink); } .ds-figure-plate svg { display: block; width: 100%; height: auto; } .ds-figure-plate figcaption { margin-top: 0.8rem; padding-top: 0.7rem; border-top: 1px solid rgba(12, 31, 64, 0.12); color: var(--pg-ink-2); font: 0.74rem/1.5 var(--pg-text); } .ds-figure-plate figcaption span { margin-right: 0.9rem; color: var(--pg-navy); font: 500 0.66rem/1 var(--pg-text); }"
     },
     {
       "name": "Chapter Chain",
@@ -226,18 +231,18 @@
       "refersTo": "resume-mark",
       "description": "Optional reading-position control with a peach flag and hairline border.",
       "html": "<button class='ds-resume' type='button'><span aria-hidden='true'></span>Resume at The identity</button>",
-      "css": ".ds-resume { display: flex; align-items: center; gap: 0.45rem; padding: 0.5rem 0.6rem; border: 1px solid var(--pg-rule); border-radius: 0.35rem; background: var(--pg-plate); color: var(--pg-ink); font: 500 0.64rem/1.3 var(--pg-display); text-align: left; cursor: pointer; transition: border-color 0.2s var(--pg-ease), background-color 0.2s var(--pg-ease); } .ds-resume > span { width: 0.55rem; height: 0.7rem; background: var(--pg-peach); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%); } .ds-resume:hover { border-color: var(--pg-ink); } .ds-resume:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; }"
+      "css": ".ds-resume { display: flex; align-items: center; gap: 0.45rem; padding: 0.5rem 0.6rem; border: 1px solid var(--pg-rule); border-radius: 0.35rem; background: var(--pg-plate); color: var(--pg-ink); font: 500 0.64rem/1.3 var(--pg-text); text-align: left; cursor: pointer; transition: border-color 0.2s var(--pg-ease), background-color 0.2s var(--pg-ease); } .ds-resume > span { width: 0.55rem; height: 0.7rem; background: var(--pg-peach); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%); } .ds-resume:hover { border-color: var(--pg-ink); } .ds-resume:focus-visible { outline: 2px solid var(--pg-link); outline-offset: 3px; }"
     }
   ],
   "narrative": {
     "northStar": "The Executed Paper",
-    "overview": "The Executed Paper makes a causal model read as an inspectable research publication. Navy typography, source-style figures, and quiet hairlines establish scholarly precision; aqua and periwinkle blooms make the white ground feel observed rather than inert. Evidence is always present as executed output: a world field, a plotted plate, a decomposition, or a measured reading position.\n\nThe system is intentionally airy and terse. It uses one display voice for structure, a serif reading voice for explanation, and mono only where the reader is inspecting code, measurements, or data labels. White and soft-white surfaces are separated by rules instead of card piles; color is concentrated in figures, focused states, and the active peach marker.\n\nLight and dark schemes preserve the same publication hierarchy. Dark mode uses navy as the field and lifts plates tonally rather than changing the information model. Motion gives the real generated world and its explanatory sequence a single continuous instrument, while reduced-motion readers receive the same evidence without animation.",
+    "overview": "The Executed Paper makes a causal model read as an inspectable research publication. Navy typography, source-style figures, and quiet hairlines establish scholarly precision; aqua and periwinkle blooms make the white ground feel observed rather than inert. The home page opens on one abstract figure, a network world in a single ink; past it, evidence is always present as executed output: the demo window's code, files, and data, a plotted plate, a decomposition, or a measured reading position.\n\nThe system is intentionally airy and terse. It follows the PyMC Labs type pairing: Archivo Expanded for headings and large text, Inter for reading, captions, and the interface, and a monospace only where the reader is reading code. White and soft-white surfaces are separated by rules instead of card piles; color is concentrated in figures, focused states, and the active peach marker.\n\nLight and dark schemes preserve the same publication hierarchy. Dark mode uses navy as the field and lifts plates tonally rather than changing the information model. Motion belongs to the home figure and the demo window, while reduced-motion readers receive a still figure, the demo's final frame, and the same evidence without animation.",
     "keyCharacteristics": [
-      "Executed figures and the site share a single publication palette and data-label face; causal graphs are the exception and follow Graphviz (see Do's).",
+      "Executed figures and the site share a single publication palette and the same two faces (Inter labels, Archivo Expanded titles); causal graphs are the exception and follow Graphviz (see Do's).",
       "Hairline rails and node chains make navigation a reading instrument.",
       "Peach identifies the current, selected, or magnified point of attention.",
       "Plates remain flat; depth belongs to the loupe and the floating resume mark.",
-      "The responsive composition preserves evidence first, with the story stage moving ahead of its prose on narrow screens."
+      "The responsive composition preserves evidence first, with the demo window stacking its file list above its pane on narrow screens."
     ],
     "rules": [
       {
@@ -246,32 +251,32 @@
         "section": "colors"
       },
       {
-        "name": "The Three Voices Rule",
-        "body": "Host Grotesk structures, Source Serif 4 explains, and Fragment Mono measures. Mono is reserved for code, data, and measurement.",
+        "name": "The Two Faces Rule",
+        "body": "Archivo Expanded heads, Inter reads and labels. A monospace appears only inside code; it is never a label, caption, or measurement face.",
         "section": "typography"
       },
       {
         "name": "The Evidence Column Rule",
-        "body": "Explanatory text stays within the 66ch measure; full-width evidence plates and the home field may exceed it when the data needs room to be inspected.",
+        "body": "Explanatory text, code plates, equations, and evidence plates share one column and both of its edges; text is justified to meet them rather than held to a narrower measure.",
         "section": "layout"
       },
       {
         "name": "The Lens-Only Lift Rule",
-        "body": "Do not add ambient shadows to publication plates. Depth is reserved for an instrument that temporarily magnifies or resumes reading.",
+        "body": "Do not add ambient shadows to publication plates. Depth is reserved for an instrument that temporarily magnifies or resumes reading, and for the home demo window, which is a staged screen rather than a plate.",
         "section": "elevation"
       }
     ],
     "dos": [
       "Do use the same navy/aqua/periwinkle/peach figure language in package plots, executed notebooks, and site plates.",
       "Do draw causal graphs in Graphviz's manner, as PyMC's `model_to_graphviz` does: top-to-bottom ranks, black ovals labelled `name ~ type`, plain black arrows, a Times-like serif (STIX), and grey fills by observability (white for latent factors and the baseline, gray90 controls, gray80 channels, gray70 outcome). Dashes mark isolated nulls and the baseline edge; no other colour.",
-      "Do keep explanations in the serif reading column and reserve Fragment Mono for code, seeds, coefficients, captions, and other measurements.",
+      "Do keep explanations in Inter in the reading column, headings in Archivo Expanded, and a monospace for code alone.",
       "Do make a focused or current causal datum peach, with a navy outline where the mark needs to remain precise.",
       "Do preserve both light and dark publication schemes; change the ground and plate tone, not the information hierarchy.",
-      "Do honor `prefers-reduced-motion` by retaining the world and proof while removing loupe transitions, chain drift, and story interpolation."
+      "Do honor `prefers-reduced-motion` by holding the home figure still, showing the demo's final frame, and removing loupe transitions and chain drift."
     ],
     "donts": [
       "Don't introduce colors outside the PyMC Labs navy, aqua, periwinkle, soft-white, and peach families or their tints and shades.",
-      "Don't use mono as a display substitute; it is for code, measurements, and figure data labels.",
+      "Don't use a monospace for labels, captions, or measurements, or Archivo Expanded for running text.",
       "Don't turn ordinary documentation content into shadowed cards; use white plates, tonal washes, and hairlines instead.",
       "Don't use peach as generic decoration; reserve it for the active, selected, inspected, or outcome datum.",
       "Don't create a second figure style for notebooks or package output; executed evidence must look like it belongs to the same publication."
