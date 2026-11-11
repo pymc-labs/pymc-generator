@@ -6,6 +6,21 @@ read the migration notes before upgrading.
 
 ## [Unreleased]
 
+### Security
+
+- Refreshed certificate trust stores with certifi 2026.10.19, uv 0.13.5 in
+  CI/docs/releases, and PyPI publishing action 1.14.3. Existing environments
+  still need to be recreated; source updates do not rebuild deployments.
+- Updated Pillow to 13.0.0, filelock to 4.2.10, Tornado to 6.6.1, and
+  virtualenv to 21.15.6, retaining the locked numerical stack. Recovery smoke
+  and report requirements use the same updated Pillow, filelock, and Tornado.
+- Updated CodeQL initialization and analysis together to 4.39.3 and grouped
+  future CodeQL Dependabot version updates so incompatible action versions
+  are not proposed separately. Artifact upload/download actions include
+  their latest retry fixes.
+- Updated setuptools to 84.1.0 in locked build and recovery environments,
+  and nbconvert to 7.17.2 in the documentation stack, for their security fixes.
+
 ### Added
 
 - **Statistical comparisons against an existing corpus.** Added explicit quantile
