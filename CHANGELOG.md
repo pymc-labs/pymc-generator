@@ -18,6 +18,8 @@ read the migration notes before upgrading.
   future CodeQL Dependabot version updates so incompatible action versions
   are not proposed separately. Artifact upload/download actions include
   their latest retry fixes.
+- Updated setuptools to 84.1.0 in locked build and recovery environments,
+  and nbconvert to 7.17.2 in the documentation stack, for their security fixes.
 
 ### Added
 
