@@ -246,9 +246,10 @@ where the floor binds.
 
 ## A drawn graph
 
-Here is one graph, drawn live. Latent `D` confounds treatment through `D→C` (red)
+Here is one graph, drawn live. Latent `D` confounds treatment through `D→C`
 while also affecting outcome through `D→Y` — the exact mechanism that biases
-naive attribution.
+naive attribution. Latent nodes are white; what a modeller observes is grey,
+darkest at the outcome.
 
 ```python exec="1" source="block" html="1"
 from scm_docs import world, viz_html

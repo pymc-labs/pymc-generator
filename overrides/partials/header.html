@@ -1,0 +1,55 @@
+{#- One header row: wordmark, the site's sections and search; then version,
+    colour scheme, and repository. The section list keeps Material's `tabs`
+    component name so instant navigation swaps its active state. -#}
+{% import "partials/tabs-item.html" as item with context %}
+<header class="md-header pg-header" data-md-component="header">
+  <nav class="md-header__inner md-grid pg-header__inner" aria-label="{{ lang.t('header') }}">
+    <label class="md-header__button md-icon pg-header__menu" for="__drawer" aria-label="{{ lang.t('nav') }}">
+      {% set icon = config.theme.icon.menu or "material/menu" %}
+      {% include ".icons/" ~ icon ~ ".svg" %}
+    </label>
+    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" class="pg-wordmark" aria-label="{{ config.site_name }}, home" data-md-component="logo">
+      {% include "partials/logo.html" %}
+      <span>{{ config.site_name }}</span>
+    </a>
+    {% if "navigation.tabs" in features %}
+      <div class="pg-sections" data-md-component="tabs">
+        <ul class="md-tabs__list">
+          {% for nav_item in nav %}
+            {% if not nav_item.is_homepage %}
+              {{ item.render(nav_item) }}
+            {% endif %}
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    {% if "material/search" in config.plugins %}
+      {% set search = config.plugins["material/search"] | attr("config") %}
+      {% if search.enabled %}
+        <label class="md-header__button md-icon pg-header__search" for="__search" aria-label="{{ lang.t('search') }}">
+          {% set icon = config.theme.icon.search or "material/magnify" %}
+          {% include ".icons/" ~ icon ~ ".svg" %}
+        </label>
+        {% include "partials/search.html" %}
+      {% endif %}
+    {% endif %}
+    <div class="pg-header__tools">
+      {% if config.extra.package_version %}
+        <span class="pg-version">v{{ config.extra.package_version }} alpha</span>
+      {% endif %}
+      {% if config.theme.palette and not config.theme.palette is mapping %}
+        {% include "partials/palette.html" %}
+      {% endif %}
+      {% if not config.theme.palette is mapping %}
+        {% include "partials/javascripts/palette.html" %}
+      {% endif %}
+      {% if config.repo_url %}
+        <a href="{{ config.repo_url }}" class="pg-repo">
+          <span>GitHub</span>
+          {% include ".icons/material/arrow-top-right.svg" %}
+        </a>
+      {% endif %}
+    </div>
+  </nav>
+  <div class="pg-readline" aria-hidden="true"></div>
+</header>

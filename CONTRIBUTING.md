@@ -69,6 +69,16 @@ uv sync --locked --extra dev --extra docs
 .venv/bin/python -m mkdocs build --strict   # fails on documentation build warnings
 ```
 
+The theme lives in `overrides/` (Material template overrides, including the
+home page template), `docs/stylesheets/`, and `docs/javascripts/`;
+`PRODUCT.md` and `DESIGN.md` record the product and visual decisions behind
+it. `mkdocs serve` watches `docs/` and `mkdocs.yml` only; add
+`--watch overrides` when editing templates, and restart the server after
+editing `docs_gen/` or the package, which the build imports once. Figures share
+one style: `pymc_generator.viz` renders in it, executed Markdown blocks get it
+through `docs_gen/scm_docs.py`, and each published notebook calls
+`viz.use_style()` in its import cell. Keep that call when adding a notebook.
+
 Edit the `.ipynb` files directly: they are the canonical sources, not generated
 copies of Python string literals. Commit source cells without outputs, execution
 counters, or widget state. Clear them before committing:

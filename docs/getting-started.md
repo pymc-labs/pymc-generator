@@ -181,27 +181,10 @@ loaded = pg.load_corpus("corpus.npz")
 
 ## Where to next
 
-<div class="pg-grid" markdown>
+<div class="pg-index" markdown>
 
-<div class="pg-card" markdown>
-<div class="pg-card__icon">🧠</div>
-### [The causal model](guide/foundation.md)
-Understand the five node families, eight edge types, and the structural
-equations behind every world.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">🧮</div>
-### [The exact decomposition](guide/decomposition.md)
-How outcome splits — exactly — into direct, baseline, and indirect effects, and
-how to verify it yourself.
-</div>
-
-<div class="pg-card" markdown>
-<div class="pg-card__icon">📓</div>
-### [Examples notebook](examples/index.ipynb)
-A runnable end-to-end tour, including several time series and a full validation
-pass.
-</div>
+- [The causal model](guide/foundation.md)
+- [The exact decomposition](guide/decomposition.md)
+- [End-to-end tour](examples/index.ipynb)
 
 </div>

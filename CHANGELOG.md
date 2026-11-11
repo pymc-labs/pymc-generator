@@ -333,8 +333,50 @@ read the migration notes before upgrading.
   floating-point rounding rather than byte for byte (the main-reproduction test
   allows a 1e-10 relative tolerance for them only).
 
+- **Documentation site redesign.** The site now reads as a research publication
+  in the PyMC Labs palette and type: Archivo Expanded for headings, Inter for
+  text and interface, and a monospace for code only. The home page opens on a
+  single-ink network world, dithered to a few pixel tones, that a magnifying
+  lens resolves at full resolution; clicking it breaks the world into a flowing
+  ribbon that slowly gathers back. Below it, one screen plays a short editor
+  demo once, with chapters you can jump between: a notebook samples a world,
+  writes its bundle, and opens `dataset.csv` as a sheet, then draws a
+  twelve-world corpus, saves it as one compressed `.npz`, loads it back, lists
+  the arrays inside, and opens every world as a sheet. The code, files, and data
+  come from running those cells during the docs build. A short index of the
+  guides closes the page. Every page carries a reading rail that fills as you
+  scroll and remembers where you stopped, a chain of the section's pages under
+  the title, and a loupe on every executed figure. Reading text is justified
+  across the full column, so its edges line up with code, equations, and
+  figures. On API pages, "Source code in …" opens the code in a viewer over the
+  blurred page, where it scrolls on its own. Executed figures are inline SVG in
+  the house style.
+- **`pymc_generator.viz.use_style()`.** Applies the package's figure style to
+  Matplotlib globally so your own figures match the bundle figures; the example
+  notebooks call it.
+
 ### Changed — migration notes
 
+- **Bundle and diagnostic figures use the house style.** Every `viz.plot_*`
+  figure renders in the PyMC Labs palette and type, with bundled brand faces
+  (Inter for labels, ticks, and legends; Archivo Expanded for titles; both SIL
+  Open Font License) and plain axes, inside a temporary style context that
+  leaves global Matplotlib settings untouched. Heatmaps use brand sequential
+  and diverging colormaps instead of `viridis` / `RdBu_r`. Figure content and
+  file names are unchanged. `viz.EDGE_STYLE` is replaced by `viz.EDGE_COLORS`
+  (colours only; the legend labels it carried are gone).
+- **The DAG figure and `dag.dot` follow Graphviz's look.** `viz.plot_dag` now
+  draws, as PyMC's `model_to_graphviz` does, top-to-bottom ranks of black ovals
+  labelled `name ~ type` (Latent, Control, Channel, Baseline, Outcome) with plain
+  black arrows, a Times-like serif, and grey fills by observability: white for
+  latent factors and the baseline, darker greys for controls, channels, and the
+  outcome. Channel mechanisms and roles sit in small grey print inside the
+  oval; isolated nulls and the baseline edge are dashed. The layered layout is
+  computed in Matplotlib, so no Graphviz install is needed, and the figure size
+  now follows the graph instead of a fixed 9 × 5.2 inches. `dag.dot` uses the
+  same labels, fills, and top-to-bottom direction (it was left-to-right) and
+  keeps the coefficient edge labels; `describe.dag_nodes` exposes the shared
+  node labels.
 - **Feature-enabled same-seed outputs can differ from the #27 pre-release (#28).**
   Restoring main's default graphs also affects feature-enabled configurations
   that use no opt-in mechanism setting — composable trajectories, fractional

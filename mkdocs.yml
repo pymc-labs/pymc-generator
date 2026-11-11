@@ -17,13 +17,13 @@ site_url: https://pymc-labs.github.io/pymc-generator/
 
 theme:
   name: material
+  custom_dir: overrides
   logo: assets/logo.svg
   favicon: assets/logo.svg
   icon:
     repo: fontawesome/brands/github
-  font:
-    text: Inter
-    code: JetBrains Mono
+  # Faces are loaded by overrides/main.html (display, reading, and figure mono).
+  font: false
   palette:
     - media: "(prefers-color-scheme)"
       toggle:
@@ -63,11 +63,14 @@ theme:
     - announce.dismiss
 
 extra_css:
-  - stylesheets/extra.css
+  - stylesheets/site.css
+  - stylesheets/home.css
 
 extra_javascript:
   - javascripts/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+  - javascripts/reading.js
+  - javascripts/home.js
 
 extra:
   social:

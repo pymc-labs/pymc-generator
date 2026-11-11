@@ -1,0 +1,27 @@
+{% extends "main.html" %}
+
+{#- The home page opens on a single figure: a world of nodes drawn in one ink
+    and dithered to a few pixel tones, which a lens under the cursor resolves
+    at full resolution. Clicking the world, or its hint button, breaks it into
+    a flowing ribbon that gathers back on its own. Without scripts the field
+    stays an empty ground and the hint stays hidden. -#}
+{% block hero %}
+  <section class="pg-hero" aria-labelledby="pg-hero-title">
+    <canvas class="pg-field" data-pg-field aria-hidden="true"></canvas>
+    <div class="pg-hero__inner md-grid">
+      <div class="pg-hero__copy">
+        <h1 id="pg-hero-title">Simulate causal worlds. Know the answer.</h1>
+        <p class="pg-hero__lead">Random Pearlian DAGs, each compiled into one PyMC graph. One draw returns the data and its exact causal decomposition, reproducibly from a seed.</p>
+        <div class="pg-hero__actions">
+          <a class="pg-button pg-button--primary" href="{{ 'getting-started/' | url }}">Get started</a>
+          <a class="pg-button" href="{{ 'guide/foundation/' | url }}">Read the model</a>
+        </div>
+      </div>
+    </div>
+    <button class="pg-hero__hint" type="button" data-pg-hint hidden>Break the world apart</button>
+  </section>
+{% endblock %}
+
+{% block content %}
+  {{ page.content }}
+{% endblock %}

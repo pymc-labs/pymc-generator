@@ -1,0 +1,1560 @@
+/* ==========================================================================
+   pymc-generator — the site as a scientific publication.
+   Brand palette (PyMC Labs): Deep Navy, Pastel Aqua, Soft Periwinkle,
+   Soft White, Peach Orange. Navy is the ink; plates are white on soft white;
+   aqua and periwinkle own whole fields; peach marks the one thing in focus.
+   ========================================================================== */
+
+:root {
+  --pg-navy: #0c1f40;
+  --pg-aqua: #b4e7dd;
+  --pg-periwinkle: #9faae2;
+  --pg-soft-white: #f7f7f7;
+  --pg-peach: #f6ae72;
+
+  /* Brand faces: Archivo (served at its expanded width only) for headings and
+     large text, Inter for body, captions, and interface. Mono is for code. */
+  --pg-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --pg-text: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --pg-mono: "Fragment Mono", "SFMono-Regular", Menlo, monospace;
+
+  --pg-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --pg-read: 0;
+}
+
+/* Light: soft white paper, white plates, navy ink. */
+[data-md-color-scheme="default"] {
+  --pg-ground: #ffffff;
+  --pg-plate: var(--pg-soft-white);
+  --pg-ink: var(--pg-navy);
+  --pg-ink-2: #3b4a66;
+  --pg-ink-3: #5c6880;
+  --pg-rule: rgba(12, 31, 64, 0.14);
+  --pg-rule-strong: var(--pg-navy);
+  --pg-link: #3d57b0;
+  --pg-aqua-wash: #e4f5f1;
+  --pg-periwinkle-wash: #eceef9;
+  --pg-peach-wash: #fdeee1;
+  --pg-field: var(--pg-aqua);
+  --pg-code-keyword: #3d57b0;
+  --pg-code-string: #1a7566;
+  --pg-code-number: #a8501f;
+  --pg-code-comment: #66728a;
+  --pg-code-function: var(--pg-navy);
+  --pg-code-name: #2b3f6b;
+  --pg-shadow: 0 12px 32px -12px rgba(12, 31, 64, 0.28);
+}
+
+/* Dark: the navy itself is the ground; plates lift slightly from it. */
+[data-md-color-scheme="slate"] {
+  --pg-ground: var(--pg-navy);
+  --pg-plate: #11284d;
+  --pg-ink: #f2f4f8;
+  --pg-ink-2: #c5ccda;
+  --pg-ink-3: #9ba7bf;
+  --pg-rule: rgba(247, 247, 247, 0.14);
+  --pg-rule-strong: #f2f4f8;
+  --pg-link: var(--pg-aqua);
+  --pg-aqua-wash: #12344a;
+  --pg-periwinkle-wash: #1a2c57;
+  --pg-peach-wash: #3a2a2a;
+  --pg-field: #163a52;
+  --pg-code-keyword: #aeb8ec;
+  --pg-code-string: var(--pg-aqua);
+  --pg-code-number: var(--pg-peach);
+  --pg-code-comment: #8f9bb4;
+  --pg-code-function: #f2f4f8;
+  --pg-code-name: #d6dcf5;
+  --pg-shadow: 0 14px 36px -12px rgba(0, 0, 0, 0.55);
+  --md-hue: 219;
+}
+
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--pg-ground);
+  --md-default-fg-color: var(--pg-ink);
+  --md-default-fg-color--light: var(--pg-ink-2);
+  --md-default-fg-color--lighter: var(--pg-ink-3);
+  --md-default-fg-color--lightest: var(--pg-rule);
+  --md-primary-fg-color: var(--pg-ground);
+  --md-primary-fg-color--light: var(--pg-ground);
+  --md-primary-fg-color--dark: var(--pg-ground);
+  --md-primary-bg-color: var(--pg-ink);
+  --md-primary-bg-color--light: var(--pg-ink-2);
+  --md-accent-fg-color: var(--pg-link);
+  --md-accent-fg-color--transparent: var(--pg-periwinkle-wash);
+  --md-typeset-color: var(--pg-ink);
+  --md-typeset-a-color: var(--pg-link);
+  --md-code-bg-color: var(--pg-plate);
+  --md-code-fg-color: var(--pg-ink);
+  --md-code-hl-keyword-color: var(--pg-code-keyword);
+  --md-code-hl-string-color: var(--pg-code-string);
+  --md-code-hl-number-color: var(--pg-code-number);
+  --md-code-hl-comment-color: var(--pg-code-comment);
+  --md-code-hl-function-color: var(--pg-code-function);
+  --md-code-hl-name-color: var(--pg-code-name);
+  --md-code-hl-constant-color: var(--pg-code-number);
+  --md-code-hl-special-color: var(--pg-code-number);
+  --md-code-hl-operator-color: var(--pg-ink-2);
+  --md-code-hl-punctuation-color: var(--pg-ink-3);
+  --md-code-hl-generic-color: var(--pg-ink-2);
+  --md-code-hl-variable-color: var(--pg-code-name);
+  --md-code-hl-color: var(--pg-periwinkle-wash);
+  --md-footer-bg-color: var(--pg-navy);
+  --md-footer-bg-color--dark: #081631;
+  --md-footer-fg-color: var(--pg-soft-white);
+  --md-footer-fg-color--light: rgba(247, 247, 247, 0.78);
+  --md-footer-fg-color--lighter: rgba(247, 247, 247, 0.6);
+  --md-text-font-family: var(--pg-text);
+  --md-code-font-family: var(--pg-mono);
+}
+
+/* One rem everywhere; Material's wide-screen bumps would scale the measure. */
+html {
+  font-size: 125%;
+}
+@media screen and (min-width: 100em) {
+  html {
+    font-size: 125%;
+  }
+}
+@media screen and (min-width: 125em) {
+  html {
+    font-size: 125%;
+  }
+}
+
+body {
+  font-family: var(--pg-text);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "kern", "liga";
+}
+
+::selection {
+  background: var(--pg-aqua);
+  color: var(--pg-navy);
+}
+
+:focus-visible {
+  outline: 2px solid var(--pg-link);
+  outline-offset: 3px;
+}
+
+html {
+  scrollbar-color: var(--pg-ink-3) transparent;
+  scrollbar-width: thin;
+}
+
+.md-grid {
+  max-width: 70rem;
+}
+
+/* ==========================================================================
+   Header: one row. Wordmark, sections, search, scheme, repository.
+   ========================================================================== */
+.md-header.pg-header {
+  background: var(--pg-ground);
+  color: var(--pg-ink);
+  box-shadow: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.3s var(--pg-ease), background-color 0.3s var(--pg-ease);
+}
+.md-header.pg-header.md-header--shadow {
+  border-bottom-color: var(--pg-rule);
+  box-shadow: none;
+}
+.pg-header__inner {
+  height: 3.2rem;
+  padding: 0 1.4rem;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pg-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-right: 1.4rem;
+  color: var(--pg-ink);
+  font: 700 0.85rem/1 var(--pg-display);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.pg-wordmark img,
+.pg-wordmark svg {
+  width: 1.3rem;
+  height: 1.3rem;
+}
+.pg-sections {
+  flex: none;
+  min-width: 0;
+}
+.pg-sections .md-tabs__list {
+  display: flex;
+  gap: 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  white-space: nowrap;
+}
+.pg-sections .md-tabs__item {
+  height: auto;
+  padding: 0;
+  margin: 0;
+  display: block;
+}
+.pg-sections .md-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  opacity: 1;
+  color: var(--pg-ink-2);
+  font: 500 0.72rem/1 var(--pg-text);
+  transition: color 0.2s var(--pg-ease);
+}
+.pg-sections .md-tabs__link::before {
+  content: "";
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 50%;
+  border: 1.2px solid transparent;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.pg-sections .md-tabs__link:hover {
+  color: var(--pg-ink);
+}
+.pg-sections .md-tabs__item--active .md-tabs__link {
+  color: var(--pg-ink);
+}
+.pg-sections .md-tabs__item--active .md-tabs__link::before {
+  background: var(--pg-peach);
+  border-color: var(--pg-ink);
+}
+.pg-header__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: auto;
+}
+.pg-header .md-header__button {
+  color: var(--pg-ink);
+  margin: 0;
+}
+.pg-header .md-header__button:hover {
+  opacity: 1;
+  color: var(--pg-link);
+}
+.pg-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  padding: 0.42rem 0.8rem 0.42rem 0.9rem;
+  border-radius: 999px;
+  background: var(--pg-ink);
+  color: var(--pg-ground);
+  font: 500 0.68rem/1 var(--pg-text);
+  white-space: nowrap;
+  transition: background-color 0.2s var(--pg-ease);
+}
+.pg-repo:hover {
+  background: var(--pg-link);
+  color: var(--pg-ground);
+}
+.pg-repo svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: currentColor;
+}
+.pg-readline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--pg-peach);
+  transform: scaleX(var(--pg-read));
+  transform-origin: left center;
+  pointer-events: none;
+}
+
+/* Search: an icon beside the sections; the field opens over the right side of
+   the header row when asked for. */
+.md-search__form {
+  border-radius: 999px;
+  background: var(--pg-ground);
+  box-shadow: inset 0 0 0 1px var(--pg-rule);
+}
+.md-search__form:hover {
+  background: var(--pg-ground);
+}
+.md-search__input {
+  font-family: var(--pg-text);
+  font-size: 0.72rem;
+  color: var(--pg-ink);
+}
+.md-search__input::placeholder {
+  color: var(--pg-ink-3);
+}
+.md-search__icon {
+  color: var(--pg-ink-3);
+}
+[data-md-toggle="search"]:checked ~ .md-header .md-search__form {
+  border-radius: 0.6rem 0.6rem 0 0;
+}
+@media screen and (min-width: 60em) {
+  .pg-header .md-header__button.pg-header__search {
+    display: inline-block;
+    margin-left: 0.6rem;
+  }
+  .pg-header .md-search {
+    position: absolute;
+    right: 1rem;
+    top: 0.5rem;
+    z-index: 2;
+  }
+  .pg-header .md-search__inner {
+    width: 0;
+    overflow: hidden;
+    visibility: hidden;
+    opacity: 0;
+    transition: width 0.3s var(--pg-ease), opacity 0.2s var(--pg-ease), visibility 0s 0.3s;
+  }
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+    width: min(34.4rem, 70vw);
+    overflow: visible;
+    visibility: visible;
+    opacity: 1;
+    transition: width 0.3s var(--pg-ease), opacity 0.2s var(--pg-ease);
+  }
+}
+.pg-version {
+  margin-right: 0.5rem;
+  color: var(--pg-ink-3);
+  font: 400 0.64rem/1 var(--pg-text);
+  white-space: nowrap;
+}
+.md-search__output {
+  border-radius: 0 0 0.6rem 0.6rem;
+}
+.md-search__suggest {
+  font-family: var(--pg-text);
+  font-size: 0.72rem;
+}
+.md-search-result {
+  font-family: var(--pg-text);
+}
+.md-search-result__article h1,
+.md-search-result__article h2 {
+  font-family: var(--pg-display);
+}
+.md-search-result__teaser {
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+.md-search-result .md-typeset {
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+.md-search-result__meta {
+  background: var(--pg-ground);
+  color: var(--pg-ink-3);
+  font-family: var(--pg-text);
+}
+.md-search-result mark {
+  background: var(--pg-aqua);
+  color: var(--pg-navy);
+}
+
+@media screen and (max-width: 76.234375em) {
+  .pg-sections {
+    display: none;
+  }
+  .pg-wordmark {
+    margin-right: auto;
+  }
+}
+@media screen and (min-width: 76.25em) {
+  .pg-header__menu {
+    display: none;
+  }
+}
+@media screen and (max-width: 44.984375em) {
+  .pg-version {
+    display: none;
+  }
+  .pg-repo span {
+    display: none;
+  }
+  .pg-repo {
+    padding: 0.42rem;
+  }
+}
+/* Archivo Expanded runs wide: on a phone the wordmark scales with the screen
+   and the header tightens so the tools stay on it; below 340px the mark stands
+   alone (the link keeps its accessible name). */
+@media screen and (max-width: 29.984375em) {
+  .pg-header__inner {
+    padding: 0 0.6rem;
+    gap: 0.2rem;
+  }
+  .pg-wordmark {
+    gap: 0.35rem;
+    font-size: clamp(0.6rem, 3.5vw, 0.85rem);
+  }
+  .pg-repo {
+    margin-left: 0.2rem;
+  }
+}
+@media screen and (max-width: 21.24em) {
+  .pg-wordmark span {
+    display: none;
+  }
+}
+
+/* Instant-navigation loader: a series traced across the top of the page. */
+.md-progress {
+  height: 0.5rem;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 10' preserveAspectRatio='none'%3E%3Cpolyline fill='none' stroke='%23F6AE72' stroke-width='1.6' vector-effect='non-scaling-stroke' points='0,6 8,5 16,7 24,4 32,6 40,3 48,5 56,2 64,6 72,4 80,7 88,3 96,5 104,2 112,4 120,6 128,3 136,5 144,1 152,4 160,6 168,3 176,5 184,2 192,6 200,4 208,7 216,3 224,5 232,2 240,4'/%3E%3C/svg%3E")
+    left center / 100% 100% no-repeat;
+  transform: none;
+  clip-path: inset(0 calc(100% - var(--md-progress-value) * 1%) 0 0);
+  transition: clip-path 0.5s var(--pg-ease), opacity 0.25s;
+}
+
+/* ==========================================================================
+   Navigation rails.
+   ========================================================================== */
+.md-nav {
+  font-family: var(--pg-text);
+  font-size: 0.68rem;
+}
+.md-nav__title {
+  color: var(--pg-ink-3);
+  font-weight: 500;
+  background: transparent;
+  box-shadow: none;
+}
+.md-nav__link {
+  color: var(--pg-ink-2);
+  transition: color 0.2s var(--pg-ease);
+}
+.md-nav__link:hover,
+.md-nav__link:focus {
+  color: var(--pg-ink);
+}
+.md-nav__item .md-nav__link--active,
+.md-nav__item .md-nav__link--active code {
+  color: var(--pg-ink);
+}
+
+/* The section index on the left: pages strung on one line, the current one
+   marked in peach. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary .md-nav--primary > .md-nav__list > .md-nav__item--section > .md-nav > .md-nav__list,
+  .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list {
+    position: relative;
+    margin-left: 0.25rem;
+    /* Room for the stations: Material clips this list (overflow hidden for its
+       expand animation), so a dot at its edge would lose its left side. */
+    padding-left: 1.05rem;
+  }
+  .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list::before {
+    content: "";
+    position: absolute;
+    left: 0.275rem;
+    top: 0.75rem;
+    bottom: 0.75rem;
+    width: 1px;
+    background: var(--pg-rule);
+  }
+  .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link {
+    position: relative;
+  }
+  .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link::before {
+    content: "";
+    position: absolute;
+    left: -0.95rem;
+    top: 50%;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin-top: -0.2rem;
+    border-radius: 50%;
+    background: var(--pg-ground);
+    border: 1.2px solid var(--pg-ink-3);
+  }
+  .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav > .md-nav__list > .md-nav__item > .md-nav__link--active::before {
+    background: var(--pg-peach);
+    border-color: var(--pg-ink);
+  }
+  .md-sidebar--primary .md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav__link {
+    position: static;
+    margin-bottom: 0.5rem;
+    background: transparent;
+    box-shadow: none;
+    color: var(--pg-ink);
+    font: 600 0.74rem/1.3 var(--pg-display);
+    letter-spacing: -0.01em;
+  }
+}
+
+/* The contents rail on the right: headings as stations on a line that fills
+   as you read. */
+.md-sidebar--secondary .md-nav--secondary {
+  position: relative;
+}
+@media screen and (min-width: 60em) {
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list {
+    position: relative;
+    margin-left: 0.3rem;
+    padding-left: 1.05rem;
+  }
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list::before {
+    content: "";
+    position: absolute;
+    left: 0.275rem;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 1px;
+    background: linear-gradient(
+      to bottom,
+      var(--pg-ink) calc(var(--pg-read) * 100%),
+      var(--pg-rule) calc(var(--pg-read) * 100%)
+    );
+  }
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link {
+    position: relative;
+  }
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link::before {
+    content: "";
+    position: absolute;
+    left: -0.95rem;
+    top: 0.55em;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--pg-ground);
+    border: 1.2px solid var(--pg-ink-3);
+    transition: background-color 0.25s var(--pg-ease), border-color 0.25s var(--pg-ease);
+  }
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link--passed::before {
+    background: var(--pg-ink);
+    border-color: var(--pg-ink);
+  }
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link--active::before {
+    background: var(--pg-peach);
+    border-color: var(--pg-ink);
+  }
+}
+/* Rail titles head their rail as small Archivo Expanded headings, flush with
+   its stations, on the page's own ground: no sticky white band. */
+@media screen and (min-width: 60em) {
+  .md-sidebar--secondary .md-nav--secondary .md-nav__title {
+    position: static;
+    margin: 0 0 0.5rem 0.3rem;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--pg-ink);
+    font: 600 0.74rem/1.3 var(--pg-display);
+    letter-spacing: -0.01em;
+    text-transform: none;
+  }
+}
+
+/* Resume mark: where you stopped on this page last time. */
+.pg-resume {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin: 0 0 0.9rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: var(--pg-plate);
+  color: var(--pg-ink);
+  font: 500 0.64rem/1.3 var(--pg-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s var(--pg-ease), background-color 0.2s var(--pg-ease);
+}
+.pg-resume:hover {
+  border-color: var(--pg-ink);
+}
+.pg-resume__flag {
+  flex: none;
+  width: 0.55rem;
+  height: 0.7rem;
+  background: var(--pg-peach);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%);
+}
+.pg-resume--floating {
+  position: fixed;
+  left: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 3;
+  width: auto;
+  max-width: calc(100vw - 1.6rem);
+  box-shadow: var(--pg-shadow);
+}
+
+/* ==========================================================================
+   Reading column.
+   ========================================================================== */
+.md-content__inner {
+  padding-top: 1.6rem;
+}
+/* Every page opens on the same soft field as the home page, then turns to
+   white paper for reading. */
+.md-main {
+  position: relative;
+  isolation: isolate;
+}
+.md-main::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 30rem;
+  pointer-events: none;
+  background:
+    radial-gradient(42rem 20rem at 82% -4rem, color-mix(in srgb, var(--pg-aqua) 55%, transparent), transparent 72%),
+    radial-gradient(30rem 16rem at 6% -2rem, color-mix(in srgb, var(--pg-periwinkle) 28%, transparent), transparent 72%);
+}
+[data-md-color-scheme="slate"] .md-main::before {
+  opacity: 0.45;
+}
+.md-main:has(.pg-demo)::before {
+  display: none;
+}
+.md-typeset {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--pg-ink);
+  font-variant-numeric: proportional-nums lining-nums;
+}
+/* Reading text fills the column, so its edges line up with code plates, math,
+   figures, and rules; justified, with hyphenation to keep the spacing even. */
+.md-typeset :is(p, li, dd) {
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  text-wrap: pretty;
+}
+/* Identifiers never take a hyphen that is not in their name. */
+.md-typeset :is(p, li, dd) :is(code, kbd, samp) {
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+/* A phone column holds too few words per line to justify without gaps. */
+@media screen and (max-width: 29.984375em) {
+  .md-typeset :is(p, li, dd) {
+    text-align: left;
+  }
+}
+.md-typeset :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--pg-display);
+  color: var(--pg-ink);
+  font-variant-numeric: lining-nums;
+  text-wrap: balance;
+}
+.md-typeset h1 {
+  margin: 0 0 1.2rem;
+  max-width: 20ch;
+  font-size: clamp(1.8rem, 2.9vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+}
+.md-typeset h1 + .pg-chain + p,
+.md-typeset h1 + p {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--pg-ink-2);
+}
+.md-typeset h2 {
+  margin: 3.4rem 0 0.9rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--pg-rule);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.md-typeset h3 {
+  margin: 2.4rem 0 0.6rem;
+  font-size: 0.98rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+.md-typeset h4 {
+  margin: 1.8rem 0 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.md-typeset .headerlink {
+  color: var(--pg-ink-3);
+  font-weight: 400;
+}
+.md-typeset a {
+  color: var(--pg-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: color-mix(in srgb, var(--pg-link) 40%, transparent);
+  transition: text-decoration-color 0.2s, color 0.2s;
+}
+.md-typeset a:hover {
+  color: var(--pg-ink);
+  text-decoration-color: var(--pg-ink);
+}
+.md-typeset :is(h1, h2, h3, h4) a,
+.md-typeset a.headerlink,
+.md-typeset .pg-chain a {
+  text-decoration: none;
+}
+/* Line numbers in code read as a quiet gutter, not a column of links. */
+.md-typeset .linenos a {
+  color: var(--pg-ink-3);
+  text-decoration: none;
+}
+.md-typeset .linenos a:hover {
+  color: var(--pg-ink);
+}
+.md-typeset strong {
+  font-weight: 600;
+}
+.md-typeset hr {
+  border-bottom-color: var(--pg-rule);
+}
+.md-typeset blockquote {
+  border-left: 1px solid var(--pg-ink);
+  color: var(--pg-ink-2);
+  font-style: italic;
+}
+
+/* Inline code: mono on a faint periwinkle wash, set slightly small. */
+.md-typeset code {
+  font-size: 0.84em;
+  padding: 0.08em 0.32em;
+  border-radius: 0.2rem;
+  background: var(--pg-periwinkle-wash);
+  color: var(--pg-ink);
+  word-break: normal;
+}
+.md-typeset a code {
+  color: inherit;
+}
+
+/* Vocabulary pills (treatments / covariates / latent) as node labels. */
+.pg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.04em 0.5em 0.06em 0.4em;
+  border-radius: 999px;
+  border: 1px solid var(--pg-rule);
+  background: var(--pg-plate);
+  font: 500 0.82em/1.4 var(--pg-text);
+  color: var(--pg-ink);
+  white-space: nowrap;
+}
+.pg-pill::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  border: 1px solid var(--pg-ink);
+  background: var(--pg-aqua);
+}
+
+/* ==========================================================================
+   Code plates.
+   ========================================================================== */
+.md-typeset pre {
+  margin: 1.4em 0;
+}
+.md-typeset pre > code {
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: var(--pg-plate);
+  font-size: 0.7rem;
+  line-height: 1.7;
+  font-variant-ligatures: none;
+}
+.md-typeset .highlight span.filename {
+  border: 1px solid var(--pg-rule);
+  border-bottom: 0;
+  border-radius: 0.35rem 0.35rem 0 0;
+  background: var(--pg-ground);
+  font: 400 0.64rem var(--pg-mono);
+  color: var(--pg-ink-2);
+}
+.md-typeset .highlight .c,
+.md-typeset .highlight .c1,
+.md-typeset .highlight .cm {
+  font-style: italic;
+}
+.md-clipboard {
+  color: var(--pg-ink-3);
+}
+.md-clipboard:hover,
+.md-clipboard:focus {
+  color: var(--pg-ink);
+}
+/* An executed block's printed output: the same plate, a shade toward the
+   ground, so source and result read as a pair. */
+.md-typeset .result {
+  margin: 0.4rem 0 1.4em;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.md-typeset .result pre > code,
+.md-typeset .exec-result pre > code {
+  background: var(--pg-ground);
+}
+.md-typeset .exec-result {
+  margin-top: 0.4rem;
+}
+
+/* ==========================================================================
+   Tables: book tables. A rule above, a rule under the head, a rule below.
+   ========================================================================== */
+.md-typeset__scrollwrap {
+  margin: 1.6em 0;
+}
+.md-typeset table:not([class]) {
+  border: 0;
+  border-radius: 0;
+  border-top: 1.5px solid var(--pg-rule-strong);
+  border-bottom: 1.5px solid var(--pg-rule-strong);
+  box-shadow: none;
+  background: transparent;
+  font-family: var(--pg-text);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.md-typeset table:not([class]) th {
+  border-bottom: 1px solid var(--pg-rule-strong);
+  background: transparent;
+  color: var(--pg-ink);
+  font-weight: 600;
+  min-width: 0;
+  padding: 0.7em 1em 0.6em;
+}
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--pg-rule);
+  padding: 0.65em 1em;
+  vertical-align: top;
+}
+.md-typeset table:not([class]) tr:first-child td {
+  border-top: 0;
+}
+.md-typeset table:not([class]) tbody tr:hover {
+  background: color-mix(in srgb, var(--pg-aqua) 18%, transparent);
+  box-shadow: none;
+}
+
+/* ==========================================================================
+   Notes and asides: tinted fields, no stripes.
+   ========================================================================== */
+.md-typeset .admonition,
+.md-typeset details {
+  margin: 1.8em 0;
+  padding: 0 1.1rem;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  background: var(--pg-periwinkle-wash);
+  box-shadow: none;
+  font-size: 0.8rem;
+  color: var(--pg-ink);
+}
+.md-typeset .admonition:focus-within,
+.md-typeset details:focus-within {
+  box-shadow: none;
+}
+/* Material colours each admonition type with a selector one class stronger. */
+.md-typeset :is(.admonition, details)[class] {
+  border-color: transparent;
+}
+.md-typeset :is(.admonition, details)[class] > :is(.admonition-title, summary) {
+  background-color: transparent;
+}
+.md-typeset :is(.admonition, details)[class]:is(.tip, .success, .example, .abstract) {
+  background: var(--pg-aqua-wash);
+}
+.md-typeset :is(.admonition, details)[class]:is(.warning, .danger, .failure, .bug, .caution, .attention, .error) {
+  background: var(--pg-peach-wash);
+  border-color: color-mix(in srgb, var(--pg-peach) 70%, transparent);
+}
+.md-typeset :is(.admonition-title, summary) {
+  margin: 0 -1.1rem;
+  padding: 0.75rem 1.1rem 0.15rem 2.6rem;
+  border: 0;
+  background: transparent;
+  font: 600 0.74rem/1.4 var(--pg-text);
+  color: var(--pg-ink);
+}
+.md-typeset :is(.admonition-title, summary)::before {
+  left: 1.1rem;
+  top: 0.82rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  background-color: var(--pg-ink) !important;
+}
+.md-typeset summary::after {
+  top: 0.8rem;
+  color: var(--pg-ink-2);
+}
+.md-typeset :is(.admonition, details) > :last-child {
+  margin-bottom: 0.9rem;
+}
+
+/* ==========================================================================
+   Source viewer: an API page's "Source code in …" row opens its code in a
+   dialog over the blurred page (reading.js). Without the script the row
+   expands in place as a plain details element.
+   ========================================================================== */
+/* `[class]` outranks the notes' transparent-border rule above. */
+.md-typeset details.mkdocstrings-source[class] {
+  margin: 1.2em 0;
+  padding: 0;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: transparent;
+  transition: border-color 0.2s var(--pg-ease);
+}
+.md-typeset details.mkdocstrings-source[class]:hover {
+  border-color: color-mix(in srgb, var(--pg-ink) 45%, transparent);
+}
+.md-typeset details.mkdocstrings-source > summary {
+  margin: 0;
+  padding: 0.62rem 2.6rem 0.62rem 2.3rem;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--pg-ink-2);
+  font: 500 0.68rem/1.4 var(--pg-text);
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.2s var(--pg-ease);
+}
+.md-typeset details.mkdocstrings-source > summary:hover {
+  color: var(--pg-ink);
+}
+.md-typeset details.mkdocstrings-source > summary:focus-visible {
+  outline: 2px solid var(--pg-link);
+  outline-offset: 2px;
+}
+.md-typeset details.mkdocstrings-source > summary::before {
+  top: 50%;
+  left: 0.9rem;
+  width: 0.85rem;
+  height: 0.85rem;
+  translate: 0 -50%;
+  background-color: var(--pg-ink-3) !important;
+}
+.md-typeset details.mkdocstrings-source > summary::after {
+  top: 50%;
+  right: 0.9rem;
+  translate: 0 -50%;
+}
+.md-typeset details.mkdocstrings-source > summary code {
+  margin-left: 0.15rem;
+  font-size: 0.62rem;
+}
+.md-typeset details.mkdocstrings-source[open] > summary {
+  border-bottom: 1px solid var(--pg-rule);
+  border-radius: 0.35rem 0.35rem 0 0;
+}
+.md-typeset details.mkdocstrings-source > .highlight {
+  margin: 0;
+}
+/* With the script, the row opens the viewer: its chevron becomes an expand mark. */
+.md-typeset details.pg-source-row > summary::after {
+  width: 0.8rem;
+  height: 0.8rem;
+  transform: none;
+  -webkit-mask-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 21v-2H6.41l4.5-4.5-1.41-1.41-4.5 4.5V14H3v7zm4.5-10.09 4.5-4.5V10h2V3h-7v2h3.59l-4.5 4.5z"/></svg>');
+  mask-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 21v-2H6.41l4.5-4.5-1.41-1.41-4.5 4.5V14H3v7zm4.5-10.09 4.5-4.5V10h2V3h-7v2h3.59l-4.5 4.5z"/></svg>');
+}
+
+.pg-source {
+  width: min(72rem, 100vw - 3rem);
+  max-width: none;
+  height: min(100svh - 3rem, 64rem);
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.6rem;
+  background: var(--pg-ground);
+  color: var(--pg-ink);
+  box-shadow: 0 2.4rem 5rem -1.2rem rgba(12, 31, 64, 0.38);
+}
+.pg-source[open] {
+  animation: pg-source-in 0.26s var(--pg-ease);
+}
+.pg-source::backdrop {
+  background: rgba(12, 31, 64, 0.26);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+}
+.pg-source[open]::backdrop {
+  animation: pg-source-fade 0.26s ease-out;
+}
+[data-md-color-scheme="slate"] .pg-source {
+  box-shadow: 0 2.4rem 5rem -1.2rem rgba(0, 0, 0, 0.6);
+}
+[data-md-color-scheme="slate"] .pg-source::backdrop {
+  background: rgba(4, 12, 28, 0.55);
+}
+html:has(.pg-source[open]) {
+  overflow: hidden;
+  scrollbar-gutter: stable;
+}
+.pg-source__frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.pg-source__bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 0.8rem 0.7rem 1.2rem;
+  border-bottom: 1px solid var(--pg-rule);
+}
+.md-typeset .pg-source__title {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.8rem;
+  min-width: 0;
+  margin: 0;
+  text-align: left;
+}
+.pg-source__name {
+  color: var(--pg-ink);
+  font: 600 0.82rem/1.3 var(--pg-display);
+  letter-spacing: -0.01em;
+}
+.md-typeset .pg-source__title code {
+  padding: 0;
+  background: transparent;
+  color: var(--pg-ink-3);
+  font-size: 0.62rem;
+}
+.pg-source__close {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pg-ground);
+  box-shadow: inset 0 0 0 1px var(--pg-rule);
+  color: var(--pg-ink);
+  cursor: pointer;
+  transition: box-shadow 0.2s var(--pg-ease);
+}
+.pg-source__close:hover {
+  box-shadow: inset 0 0 0 1px var(--pg-ink);
+}
+.pg-source__close:focus-visible {
+  outline: 2px solid var(--pg-link);
+  outline-offset: 2px;
+}
+.pg-source__close svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.pg-source__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--pg-plate);
+}
+/* The code pane takes focus on open so arrow and page keys scroll it at once;
+   the dialog itself frames it, so it needs no ring of its own. */
+.pg-source__body:focus {
+  outline: none;
+}
+.md-typeset .pg-source__body .highlight {
+  margin: 0;
+}
+.md-typeset .pg-source__body :is(.highlighttable, pre, pre > code) {
+  margin: 0;
+  border-radius: 0;
+}
+@keyframes pg-source-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.8rem) scale(0.985);
+  }
+}
+@keyframes pg-source-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media screen and (max-width: 44.984375em) {
+  .pg-source {
+    width: calc(100vw - 1rem);
+    height: calc(100svh - 1rem);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pg-source[open],
+  .pg-source[open]::backdrop {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   Plates: every executed figure is numbered and can be read under a loupe.
+   ========================================================================== */
+.md-content__inner {
+  counter-reset: plate;
+}
+.md-typeset figure.scm-plot {
+  counter-increment: plate;
+  position: relative;
+  width: 100%;
+  max-width: none;
+  margin: 2.2rem 0;
+  padding: 1.1rem 1.2rem 0.9rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: #ffffff;
+  box-shadow: none;
+  text-align: left;
+}
+.md-typeset figure.scm-plot :is(svg, img) {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  margin: 0;
+  border-radius: 0;
+}
+.md-typeset figure.scm-plot svg * {
+  stroke-linejoin: round;
+  stroke-linecap: butt;
+}
+/* Graph figures name STIX, Matplotlib's Times-compatible face; browsers fall
+   back to Times for the same Graphviz look. */
+.md-typeset figure.scm-plot svg text[style*="STIXGeneral"] {
+  font-family: "STIXGeneral", "STIX Two Text", "Times New Roman", Times, serif !important;
+}
+.md-typeset figure.scm-plot figcaption {
+  display: block;
+  max-width: none;
+  margin: 0.8rem 0 0;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(12, 31, 64, 0.12);
+  color: #3b4a66;
+  font-family: var(--pg-text);
+  font-size: 0.74rem;
+  font-style: normal;
+  line-height: 1.5;
+  text-align: left;
+}
+.md-typeset figure.scm-plot figcaption::before {
+  content: "Plate " counter(plate);
+  display: inline-block;
+  margin-right: 0.9rem;
+  color: var(--pg-navy);
+  font: 500 0.66rem/1 var(--pg-text);
+}
+.md-typeset figure.scm-plot figcaption code {
+  background: #eceef9;
+  color: var(--pg-navy);
+}
+
+.pg-loupe-host {
+  position: relative;
+}
+.pg-loupe-host:hover {
+  cursor: crosshair;
+}
+.pg-loupe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  width: 184px;
+  height: 184px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px var(--pg-navy), 0 16px 34px -10px rgba(12, 31, 64, 0.38);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s var(--pg-ease);
+}
+.pg-loupe.is-visible {
+  opacity: 1;
+}
+.pg-loupe > :is(svg, img) {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+.pg-loupe__reading {
+  position: absolute;
+  left: 50%;
+  bottom: 0.7rem;
+  transform: translateX(-50%);
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--pg-navy);
+  color: var(--pg-soft-white);
+  font: 500 0.52rem/1.4 var(--pg-text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pg-loupe {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   The chapter chain under each title.
+   ========================================================================== */
+.pg-chain {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: -0.2rem 0 1.8rem;
+  max-width: 46rem;
+}
+.pg-chain__count {
+  flex: none;
+  color: var(--pg-ink);
+  font: 500 0.66rem/1 var(--pg-text);
+  font-variant-numeric: tabular-nums;
+}
+.pg-chain__count span {
+  color: var(--pg-ink-3);
+}
+.md-typeset ol.pg-chain__list {
+  position: relative;
+  display: flex;
+  flex: 1;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.md-typeset .pg-chain__list::before {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  right: 0.3rem;
+  top: 50%;
+  height: 1px;
+  background: var(--pg-rule);
+}
+.md-typeset .pg-chain__list > li.pg-chain__node {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.md-typeset .pg-chain__list > li.pg-chain__node::before {
+  display: none;
+}
+.pg-chain__node a {
+  position: relative;
+  display: block;
+  padding: 0.35rem;
+  color: var(--pg-ink);
+}
+.pg-chain__dot {
+  display: block;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  border: 1.3px solid var(--pg-ink-3);
+  background: var(--pg-ground);
+  animation: pg-drift 7s ease-in-out infinite alternate;
+  animation-delay: calc(var(--i) * -0.9s);
+  transition: transform 0.25s var(--pg-ease), border-color 0.2s, background-color 0.2s;
+}
+.pg-chain__node.is-before .pg-chain__dot {
+  background: var(--pg-ink);
+  border-color: var(--pg-ink);
+}
+.pg-chain__node.is-current .pg-chain__dot {
+  width: 0.82rem;
+  height: 0.82rem;
+  background: var(--pg-peach);
+  border-color: var(--pg-ink);
+}
+.pg-chain__node a:hover .pg-chain__dot,
+.pg-chain__node a:focus-visible .pg-chain__dot {
+  border-color: var(--pg-ink);
+  transform: scale(1.25);
+}
+.pg-chain__label {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.15rem);
+  transform: translate(-50%, -0.2rem);
+  padding: 0.2rem 0.45rem;
+  border-radius: 0.25rem;
+  background: var(--pg-ink);
+  color: var(--pg-ground);
+  font: 500 0.6rem/1.2 var(--pg-text);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s var(--pg-ease), transform 0.18s var(--pg-ease);
+  z-index: 2;
+}
+.pg-chain__node a:hover .pg-chain__label,
+.pg-chain__node a:focus-visible .pg-chain__label {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.pg-chain__node:first-child .pg-chain__label {
+  left: 0;
+  transform: translate(0, -0.2rem);
+}
+.pg-chain__node:first-child a:hover .pg-chain__label,
+.pg-chain__node:first-child a:focus-visible .pg-chain__label {
+  transform: translate(0, 0);
+}
+.pg-chain__node:last-child .pg-chain__label {
+  left: auto;
+  right: 0;
+  transform: translate(0, -0.2rem);
+}
+.pg-chain__node:last-child a:hover .pg-chain__label,
+.pg-chain__node:last-child a:focus-visible .pg-chain__label {
+  transform: translate(0, 0);
+}
+@media screen and (max-width: 44.984375em) {
+  /* Station labels are a hover aid; on a phone the hidden ones near the end
+     would otherwise widen the page. */
+  .pg-chain {
+    gap: 0.6rem;
+    overflow-x: clip;
+  }
+  .pg-chain__node a {
+    padding: 0.2rem;
+  }
+  .pg-chain__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+  }
+  .pg-chain__node.is-current .pg-chain__dot {
+    width: 0.66rem;
+    height: 0.66rem;
+  }
+}
+@keyframes pg-drift {
+  0% {
+    translate: 0 -1.5px;
+  }
+  100% {
+    translate: 0 1.5px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pg-chain__dot {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   API reference (mkdocstrings).
+   ========================================================================== */
+.md-typeset .doc-heading code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.92em;
+}
+.md-typeset .doc-signature pre > code,
+.md-typeset .doc-signature {
+  border-radius: 0.35rem;
+}
+.md-typeset code.doc-symbol {
+  border-radius: 999px;
+  padding: 0.05em 0.5em;
+  font: 400 0.62rem/1.5 var(--pg-mono);
+  background: var(--pg-aqua-wash);
+  color: var(--pg-ink);
+}
+.md-typeset code.doc-symbol-class {
+  background: var(--pg-periwinkle-wash);
+}
+.md-typeset code.doc-symbol-attribute {
+  background: var(--pg-peach-wash);
+}
+.md-typeset .doc-contents {
+  padding-left: 0;
+}
+.md-typeset .doc-object + .doc-object {
+  margin-top: 2.6rem;
+}
+.md-typeset .doc-section-title {
+  font: 600 0.74rem var(--pg-text);
+  color: var(--pg-ink);
+}
+
+/* ==========================================================================
+   Executed notebooks (mkdocs-jupyter): source cells as code plates, outputs
+   as plates of their own, images under the loupe.
+   ========================================================================== */
+.jupyter-wrapper {
+  --jp-ui-font-family: var(--pg-text);
+  --jp-content-font-family: var(--pg-text);
+  --jp-code-font-family: var(--pg-mono);
+  --jp-content-font-color1: var(--pg-ink);
+  --jp-content-link-color: var(--pg-link);
+  --jp-layout-color0: transparent;
+  --jp-cell-editor-background: var(--pg-plate);
+  --jp-cell-editor-border-color: var(--pg-rule);
+  --jp-cell-prompt-not-active-font-color: var(--pg-ink-3);
+}
+.jupyter-wrapper .jp-InputPrompt,
+.jupyter-wrapper .jp-OutputPrompt {
+  display: none;
+}
+.jupyter-wrapper .jp-Cell {
+  padding: 0;
+}
+.jupyter-wrapper .jp-InputArea-editor,
+.jupyter-wrapper .highlight-ipynb {
+  border-radius: 0.35rem;
+}
+.jupyter-wrapper .jp-RenderedImage {
+  margin: 0.6rem 0 1.2rem;
+  padding: 0.8rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: #ffffff;
+}
+.jupyter-wrapper .jp-RenderedImage img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+/* Notebook source uses its own Pygments classes; map them to the site's. */
+.jupyter-wrapper .highlight-ipynb :is(.k, .kn, .kc, .kd, .kp, .kr, .kt, .ow) {
+  color: var(--pg-code-keyword);
+}
+.jupyter-wrapper .highlight-ipynb :is(.s, .s1, .s2, .sa, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr, .ss) {
+  color: var(--pg-code-string);
+}
+.jupyter-wrapper .highlight-ipynb :is(.m, .mi, .mf, .mh, .mo, .il) {
+  color: var(--pg-code-number);
+}
+.jupyter-wrapper .highlight-ipynb :is(.c, .c1, .cm, .ch, .cs, .cp) {
+  color: var(--pg-code-comment);
+  font-style: italic;
+}
+.jupyter-wrapper .highlight-ipynb :is(.nf, .fm, .nb, .bp, .nc, .nn) {
+  color: var(--pg-code-function);
+}
+.jupyter-wrapper .highlight-ipynb :is(.n, .nv, .na) {
+  color: var(--pg-ink);
+}
+.jupyter-wrapper .highlight-ipynb :is(.o, .p) {
+  color: var(--pg-ink-2);
+}
+.jupyter-wrapper .jp-RenderedText pre,
+.jupyter-wrapper .jp-OutputArea-output pre {
+  font-family: var(--pg-mono);
+  font-size: 0.66rem;
+  line-height: 1.6;
+  color: var(--pg-ink-2);
+}
+.jupyter-wrapper .jp-RenderedHTMLCommon table {
+  border-top: 1.5px solid var(--pg-rule-strong);
+  border-bottom: 1.5px solid var(--pg-rule-strong);
+  font-family: var(--pg-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Footer: the navy field the publication closes on.
+   ========================================================================== */
+.md-footer {
+  margin-top: 4rem;
+  background: var(--pg-navy);
+  color: var(--pg-soft-white);
+}
+[data-md-color-scheme="slate"] .md-footer {
+  background: #081631;
+}
+.md-footer__inner {
+  padding: 1.6rem 0.8rem;
+}
+.md-footer__link {
+  padding: 0.6rem 0;
+}
+.md-footer__direction {
+  font: 400 0.62rem var(--pg-text);
+  opacity: 0.7;
+}
+.md-footer__title {
+  font: 600 0.95rem/1.3 var(--pg-display);
+}
+.md-footer-meta {
+  background: transparent;
+  border-top: 1px solid rgba(247, 247, 247, 0.14);
+  font-family: var(--pg-text);
+}
+.md-footer-meta__inner {
+  padding: 0.6rem 0.4rem;
+}
+.md-copyright {
+  font: 400 0.62rem var(--pg-text);
+  color: rgba(247, 247, 247, 0.72);
+}
+.md-social__link svg {
+  fill: rgba(247, 247, 247, 0.8);
+}
+.md-top {
+  background: var(--pg-plate);
+  color: var(--pg-ink);
+  box-shadow: var(--pg-shadow);
+  font-family: var(--pg-text);
+}
+
+/* Wide display equations scroll instead of clipping their annotations. */
+.md-typeset div.arithmatex {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding-bottom: 0.25rem;
+}
+.md-typeset mjx-container[display="true"] {
+  margin: 0.8em 0 !important;
+}
+/* MathJax's hidden screen-reader copy of each formula is as wide as the
+   formula's source, not its rendering; bound it so inline math near a line's
+   end cannot widen the page. */
+.md-typeset mjx-container {
+  position: relative;
+}
+.md-typeset mjx-assistive-mml {
+  max-width: 100%;
+}

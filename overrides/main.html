@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{#- The brand's two faces: Archivo at its expanded width for headings and
+    large text, Inter for body text, captions, and the interface. A monospace
+    is kept for code alone. Only the expanded width of Archivo is loaded, so
+    the browser sets every Archivo run expanded without per-rule stretch. -#}
+{% block fonts %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,400..700&family=Inter:opsz,wght@14..32,400..700&family=Fragment+Mono&display=swap">
+{% endblock %}
+
+{#- Sections live in the header row; there is no second tab bar. -#}
+{% block tabs %}{% endblock %}

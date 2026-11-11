@@ -8,3 +8,7 @@ check, and per-treatment signal metrics. The output is the inspection
 ::: pymc_generator.describe.describe_scm
 
 ::: pymc_generator.describe.world_to_dot
+
+::: pymc_generator.describe.dag_nodes
+
+::: pymc_generator.describe.DagNode

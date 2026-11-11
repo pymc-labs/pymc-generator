@@ -89,7 +89,7 @@ pymc-generator = "pymc_generator.cli:main"
 include = ["pymc_generator*"]
 
 [tool.setuptools.package-data]
-pymc_generator = ["py.typed"]
+pymc_generator = ["py.typed", "fonts/*.ttf", "fonts/OFL-*.txt"]
 
 [tool.setuptools.dynamic]
 version = {attr = "pymc_generator._version.__version__"}
@@ -180,4 +180,3 @@ module = [
     "matplotlib.*",
 ]
 ignore_missing_imports = true
-
