@@ -29,15 +29,18 @@ source and writes nothing.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+import unicodedata
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 import numpy as np
 
 from .diagnostics import (
     _MIN_PAIRS,
     _WORLD_COUNTERFACTUAL,
+    ACTIVITY_STATISTICS,
     _acf_world,
     _cell,
     _check_zero_padding,
@@ -47,18 +50,25 @@ from .diagnostics import (
     _numeric_float64,
     _render_table,
     _require_finite,
+    _series_lags,
     _validate_lags,
     _validate_world_selector,
     _worlds_source,
+    activity_runs,
+    lagged_dependence,
+    temporal_statistics,
 )
 from .outcomes import DEFAULT_QUANTILES
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    import os
+
     import pandas as pd
 
     from .worlds import SCM
 
 __all__ = [
+    "DEFAULT_STATISTICS",
     "DESCRIPTOR_STATUSES",
     "DESCRIPTOR_VERSION",
     "METADATA_COLUMNS",
@@ -83,8 +93,8 @@ VALID, INELIGIBLE, UNDEFINED = 0, 1, 2
 #: Integer per-world metadata usable as strata; never a distance feature.
 METADATA_COLUMNS: tuple[str, ...] = ("n_treatments_active", "n_covariates_active", "n_time_steps")
 
-#: Per-series statistics, reduced over the active nodes of a role.
-NODE_STATISTICS: tuple[str, ...] = (
+#: Legacy per-series statistics, unchanged by opt-in diagnostic additions.
+_LEGACY_NODE_STATISTICS: tuple[str, ...] = (
     "level_to_variation",
     "cv",
     "zero_fraction",
@@ -93,10 +103,30 @@ NODE_STATISTICS: tuple[str, ...] = (
     "acf",
     "diff_acf",
 )
+#: Opt-in temporal statistics on original-unit levels and first differences.
+_TEMPORAL_STATISTICS: tuple[str, ...] = (
+    "level_std",
+    "difference_std",
+    "time_correlation",
+    "overlap_pearson",
+    "diff_overlap_pearson",
+)
+#: Per-series statistics, reduced over the active nodes of a role.
+NODE_STATISTICS: tuple[str, ...] = (
+    _LEGACY_NODE_STATISTICS + _TEMPORAL_STATISTICS + ACTIVITY_STATISTICS
+)
 #: Per-role statistics (one value per role, no reducer).
 ROLE_STATISTICS: tuple[str, ...] = ("constant_fraction",)
+#: Legacy pair statistics retain their unordered within-role pair universe.
+_LEGACY_PAIR_STATISTICS: tuple[str, ...] = ("abs_pearson", "diff_abs_pearson")
+#: Signed lagged pair statistics, selected with explicit ``dependence_lags``.
+_LAGGED_PAIR_STATISTICS: tuple[str, ...] = ("lagged_pearson", "diff_lagged_pearson")
 #: Pairwise statistics, reduced over the eligible pairs of a pair role.
-PAIR_STATISTICS: tuple[str, ...] = ("abs_pearson", "diff_abs_pearson")
+PAIR_STATISTICS: tuple[str, ...] = _LEGACY_PAIR_STATISTICS + _LAGGED_PAIR_STATISTICS
+#: Original default feature selection; new diagnostics are strictly opt-in.
+DEFAULT_STATISTICS: tuple[str, ...] = (
+    _LEGACY_NODE_STATISTICS + ROLE_STATISTICS + _LEGACY_PAIR_STATISTICS
+)
 #: Every selectable statistic family, in feature order.
 STATISTICS: tuple[str, ...] = NODE_STATISTICS + ROLE_STATISTICS + PAIR_STATISTICS
 
@@ -137,6 +167,31 @@ _STAT_TEXT: dict[str, str] = {
     "constant_fraction": "fraction of active series that are constant (exact range floor)",
     "abs_pearson": "|Pearson correlation| of the level series",
     "diff_abs_pearson": "|Pearson correlation| of the first-differenced series",
+    "level_std": "population standard deviation of levels in original units",
+    "difference_std": "population standard deviation of first differences in original units",
+    "time_correlation": "signed Pearson correlation of levels with the time index",
+    "overlap_pearson": "signed Pearson correlation of separately centered overlapping levels",
+    "diff_overlap_pearson": (
+        "signed Pearson correlation of separately centered overlapping first differences"
+    ),
+    "leading_inactive_length": "length of the leading exactly-zero spell, or zero",
+    "trailing_inactive_length": "length of the trailing exactly-zero spell, or zero",
+    "longest_active_length": "length of the longest exactly-nonzero spell, or zero",
+    "longest_inactive_length": "length of the longest exactly-zero spell, or zero",
+    "active_spell_count": "number of exactly-nonzero spells, including censored spells",
+    "inactive_spell_count": "number of exactly-zero spells, including censored spells",
+    "complete_active_spell_count": "number of complete interior exactly-nonzero spells",
+    "complete_inactive_spell_count": "number of complete interior exactly-zero spells",
+    "censored_active_spell_count": "number of boundary-censored exactly-nonzero spells",
+    "censored_inactive_spell_count": "number of boundary-censored exactly-zero spells",
+    "complete_active_length_median": "median length of complete interior exactly-nonzero spells",
+    "complete_inactive_length_median": "median length of complete interior exactly-zero spells",
+    "switching_rate": "fraction of adjacent time steps switching exact-zero activity state",
+    "interior_inactive_fraction": (
+        "total length of complete interior exactly-zero spells divided by the full window length"
+    ),
+    "lagged_pearson": "signed lagged Pearson correlation of levels",
+    "diff_lagged_pearson": "signed lagged Pearson correlation of first differences",
 }
 
 _PAIR_TEXT: dict[str, str] = {
@@ -172,7 +227,8 @@ class FeatureDefinition:
     view
         ``levels`` or ``differences``.
     lag
-        Lag for autocorrelation statistics, otherwise ``None``.
+        Lag for autocorrelation, overlap correlation or lagged pair statistics,
+        otherwise ``None``. Signed pair lags use left[t] versus right[t + lag].
     reducer
         Reducer across nodes/pairs from :data:`REDUCERS`; ``None`` for a
         single-series or per-role statistic.
@@ -202,6 +258,7 @@ def _node_token(statistic: str, lag: int | None) -> str:
 def _definitions(
     statistics: tuple[str, ...],
     lags: tuple[int, ...],
+    dependence_lags: tuple[int, ...],
     reducers: tuple[str, ...],
     include_truth: bool,
 ) -> tuple[FeatureDefinition, ...]:
@@ -212,7 +269,7 @@ def _definitions(
         for stat in NODE_STATISTICS:
             if stat not in statistics:
                 continue
-            if stat in ("acf", "diff_acf"):
+            if stat in ("acf", "diff_acf", "overlap_pearson", "diff_overlap_pearson"):
                 items.extend((stat, lag) for lag in lags)
             else:
                 items.append((stat, None))
@@ -229,7 +286,11 @@ def _definitions(
                         name=f"{role}_{token}_{reducer}",
                         role=role,
                         statistic=stat,
-                        view="differences" if stat == "diff_acf" else "levels",
+                        view=(
+                            "differences"
+                            if stat in ("diff_acf", "difference_std", "diff_overlap_pearson")
+                            else "levels"
+                        ),
                         lag=lag,
                         reducer=reducer,
                         observable=True,
@@ -244,7 +305,11 @@ def _definitions(
                 name=f"outcome_{token}",
                 role="outcome",
                 statistic=stat,
-                view="differences" if stat == "diff_acf" else "levels",
+                view=(
+                    "differences"
+                    if stat in ("diff_acf", "difference_std", "diff_overlap_pearson")
+                    else "levels"
+                ),
                 lag=lag,
                 reducer=None,
                 observable=True,
@@ -268,20 +333,36 @@ def _definitions(
     for stat in PAIR_STATISTICS:
         if stat not in statistics:
             continue
+        pair_lags: tuple[int | None, ...] = (
+            dependence_lags if stat in _LAGGED_PAIR_STATISTICS else (None,)
+        )
         for pair_role in PAIR_ROLES:
-            for reducer in reducers:
-                out.append(
-                    FeatureDefinition(
-                        name=f"{pair_role}_{stat}_{reducer}",
-                        role=pair_role,
-                        statistic=stat,
-                        view="differences" if stat == "diff_abs_pearson" else "levels",
-                        lag=None,
-                        reducer=reducer,
-                        observable=True,
-                        description=f"{reducer} {_PAIR_TEXT[pair_role]} of {_STAT_TEXT[stat]}",
+            for lag in pair_lags:
+                token = _node_token(stat, lag)
+                pair_text = _PAIR_TEXT[pair_role]
+                lag_text = ""
+                if lag is not None:
+                    if pair_role in ("treatment_pair", "covariate_pair") and lag != 0:
+                        role = "treatments" if pair_role == "treatment_pair" else "covariates"
+                        pair_text = f"over both ordered distinct directions of active {role}"
+                    lag_text = f" at lag {lag} (left[t] versus right[t + lag])"
+                for reducer in reducers:
+                    out.append(
+                        FeatureDefinition(
+                            name=f"{pair_role}_{token}_{reducer}",
+                            role=pair_role,
+                            statistic=stat,
+                            view=(
+                                "differences"
+                                if stat in ("diff_abs_pearson", "diff_lagged_pearson")
+                                else "levels"
+                            ),
+                            lag=lag,
+                            reducer=reducer,
+                            observable=True,
+                            description=f"{reducer} {pair_text} of {_STAT_TEXT[stat]}{lag_text}",
+                        )
                     )
-                )
     if include_truth:
         for name, key in TRUTH_FEATURES.items():
             out.append(
@@ -605,6 +686,311 @@ class WorldDescriptors:
 # ---------------------------------------------------------------------------
 
 
+#: ``dataset.csv`` layout of :func:`~pymc_generator.bundles.write_scm_bundle`:
+#: role -> exact label pattern, read when no roles are given. The bundle's
+#: ``week`` column is never read as time.
+_BUNDLE_LAYOUT: dict[str, str] = {
+    "treatments": r"treatment_C\d+",
+    "covariates": r"covariate_Z\d+",
+    "outcome": r"outcome_Y",
+}
+
+#: One series of a role, in messages.
+_ROLE_NOUN: dict[str, str] = {
+    "treatments": "treatment",
+    "covariates": "covariate",
+    "outcome": "outcome",
+    "time": "time",
+}
+
+
+def _column_positions(labels: Iterable[Hashable]) -> dict[Hashable, list[int]]:
+    """Positions of each column label, labels in table order.
+
+    Labels match exactly (hash and equality), so a MultiIndex column is named
+    by its full tuple and never by a partial key.
+    """
+    positions: dict[Hashable, list[int]] = {}
+    for position, label in enumerate(labels):
+        positions.setdefault(label, []).append(position)
+    return positions
+
+
+def _bundle_roles(labels: Iterable[Hashable]) -> dict[str, list[Hashable]]:
+    """Bundle-layout labels per role, each in table order (``labels`` are unique).
+
+    Only ``str`` labels are read, matched exactly. A label that matches only
+    once Unicode format characters (category ``Cf``: zero-width spaces,
+    byte-order marks) are removed and ``strip()`` and ``casefold()`` applied is
+    a near miss: it raises, since skipping it would silently drop a series.
+    """
+    found: dict[str, list[Hashable]] = {role: [] for role in _BUNDLE_LAYOUT}
+    for label in labels:
+        if not isinstance(label, str):
+            continue
+        role = next((r for r, p in _BUNDLE_LAYOUT.items() if re.fullmatch(p, label)), None)
+        if role is not None:
+            found[role].append(label)
+            continue
+        folded = "".join(c for c in label if unicodedata.category(c) != "Cf").strip().casefold()
+        # The patterns hold only ASCII letters, '_' and '\d': casefolding them is exact.
+        near = next(
+            (r for r, p in _BUNDLE_LAYOUT.items() if re.fullmatch(p.casefold(), folded)), None
+        )
+        if near is not None:
+            raise ValueError(
+                f"column {label!r} reads as a bundle {_ROLE_NOUN[near]} label only once "
+                "whitespace, case and invisible characters are ignored; rename it to the exact "
+                "bundle label (treatment_C1, covariate_Z1, outcome_Y, ...) or pass treatments=, "
+                "covariates= and outcome= explicitly"
+            )
+    return found
+
+
+def _label_list(value: Any, role: str) -> list[Hashable]:
+    """Ordered column labels (a list, tuple, pandas Index, 1-D array, ...) as a list."""
+    if isinstance(value, (str, bytes)):
+        raise TypeError(
+            f"{role} must be a sequence of column labels, not a bare string; write "
+            f"{role}=[{value!r}]"
+        )
+    if (
+        isinstance(value, (Mapping, set, frozenset))
+        or not isinstance(value, Iterable)
+        or (isinstance(value, np.ndarray) and value.ndim != 1)
+    ):
+        raise TypeError(
+            f"{role} must be an ordered collection of column labels (a list, tuple, pandas "
+            f"Index or 1-D array), got {type(value).__name__}"
+        )
+    # Labels of a numpy array are numpy scalars; messages show them as Python values.
+    labels = [
+        label.item() if isinstance(label, np.generic) and label.dtype.kind in "biufcSU" else label
+        for label in value
+    ]
+    for label in labels:
+        if not isinstance(label, Hashable):
+            raise TypeError(f"{role} holds {label!r}, which is not a column label")
+    return labels
+
+
+def _explicit_roles(
+    treatments: Any,
+    covariates: Any,
+    outcome: Any,
+    positions: Mapping[Hashable, list[int]],
+    multiindex: bool,
+) -> dict[str, list[Hashable]]:
+    given = {"treatments": treatments, "covariates": covariates, "outcome": outcome}
+    missing = [role for role, value in given.items() if value is None]
+    if missing:
+        raise ValueError(
+            f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing: give "
+            "treatments, covariates and outcome together, or none of them to read the bundle "
+            "layout (treatment_C1.., covariate_Z1.., outcome_Y)"
+        )
+    roles = {role: _label_list(given[role], role) for role in ("treatments", "covariates")}
+    _check_one_label(outcome, "outcome", positions, multiindex)
+    roles["outcome"] = [outcome]
+    return roles
+
+
+def _check_one_label(
+    value: Any, role: str, positions: Mapping[Hashable, list[int]], multiindex: bool
+) -> None:
+    """``value`` is one label: never a list, a tuple only when it is a column label."""
+    if isinstance(value, tuple) and value in positions:
+        return
+    if isinstance(value, (list, tuple)) or not isinstance(value, Hashable):
+        flatten = (
+            "; name a MultiIndex column by its full tuple, or flatten the columns first"
+            if multiindex
+            else ""
+        )
+        raise TypeError(
+            f"{role} must be one column label, got {type(value).__name__} {value!r}; a dataset "
+            f"has one {_ROLE_NOUN[role]} column{flatten}"
+        )
+
+
+def _check_labels(
+    positions: Mapping[Hashable, list[int]],
+    used: Sequence[tuple[str, Hashable]],
+    multiindex: bool,
+) -> None:
+    """Every used label names exactly one column, and plays one role."""
+    for role, label in used:
+        noun = _ROLE_NOUN[role]
+        count = len(positions.get(label, ()))
+        if count == 0:
+            shown = list(positions)
+            hint = "; MultiIndex columns are named by their full tuple" if multiindex else ""
+            raise KeyError(
+                f"{noun} column {label!r} not found; the columns are "
+                f"{shown[:12]}{' ...' if len(shown) > 12 else ''}{hint}"
+            )
+        if count > 1:
+            raise ValueError(
+                f"{noun} column {label!r} appears {count} times; rename or drop the "
+                "duplicates so that each label names one series"
+            )
+    seen: dict[Hashable, str] = {}
+    for role, label in used:
+        if label in seen:
+            where = f"twice in {role}" if seen[label] == role else f"as {seen[label]} and {role}"
+            raise ValueError(f"column {label!r} is used {where}; each column plays one role")
+        seen[label] = role
+
+
+def _dataset_series(
+    frame: Any, labels: Sequence[Hashable], positions: Mapping[Hashable, list[int]]
+) -> tuple[dict[Hashable, Any], Any]:
+    """One pandas Series per used label, and the row labels errors name.
+
+    Mapping values are taken by position, so their row labels are positions.
+    """
+    import pandas as pd
+
+    if isinstance(frame, pd.DataFrame):
+        return {label: frame.iloc[:, positions[label][0]] for label in labels}, frame.index
+    lengths: dict[Hashable, int] = {}
+    for label in labels:
+        try:
+            ndim = np.ndim(frame[label])
+        except ValueError:  # a ragged nested sequence
+            ndim = -1
+        if ndim != 1:
+            got = "a scalar" if ndim == 0 else "a ragged sequence" if ndim < 0 else f"{ndim}-D"
+            raise ValueError(
+                f"mapping value {label!r} must be one-dimensional, one entry per time step; "
+                f"got {got}"
+            )
+        lengths[label] = len(frame[label])
+    if len(set(lengths.values())) > 1:
+        raise ValueError(
+            f"mapping values differ in length {lengths}; every series needs one entry per time step"
+        )
+    indexed = [label for label in labels if isinstance(frame[label], pd.Series)]
+    for label in indexed[1:]:
+        if not frame[label].index.equals(frame[indexed[0]].index):
+            raise ValueError(
+                f"Series {label!r} and {indexed[0]!r} have different indexes; mapping values "
+                "are taken by position, so align them first (reindex every Series to one index)"
+            )
+    series = {
+        label: frame[label].reset_index(drop=True)
+        if isinstance(frame[label], pd.Series)
+        else pd.Series(frame[label])
+        for label in labels
+    }
+    return series, pd.RangeIndex(next(iter(lengths.values())))
+
+
+def _row_label(rows: Any, position: int) -> str:
+    label = rows[position]
+    return repr(label.item() if isinstance(label, np.generic) else label)
+
+
+def _refuse_rows(bad: np.ndarray, where: str, what: str, rows: Any) -> None:
+    if bad.any():
+        count = int(np.count_nonzero(bad))
+        raise ValueError(
+            f"{where} has {count} {what} value{'s' if count > 1 else ''}; the first is at row "
+            f"{_row_label(rows, int(np.flatnonzero(bad)[0]))}. Impute or trim them first"
+        )
+
+
+def _series_values(series: Any, label: Hashable, role: str, rows: Any) -> np.ndarray:
+    """Validated values of one column, in the numpy dtype pandas converts it to."""
+    from pandas.api.types import is_bool_dtype, is_numeric_dtype
+
+    where = f"column {label!r} ({role})"
+    if is_bool_dtype(series.dtype):
+        raise TypeError(
+            f"{where} is boolean (dtype {series.dtype}); series must be numeric levels, so "
+            "cast flags first (for example .astype(float))"
+        )
+    if not is_numeric_dtype(series.dtype):
+        raise TypeError(
+            f"{where} is not numeric (dtype {series.dtype}); convert it first. If it was read "
+            "from CSV, check sep=, decimal= and thousands= (for example decimal=',' for values "
+            "written as 1,5)"
+        )
+    # Before conversion: a nullable column with missing values converts to
+    # objects or NaN depending on the pandas version.
+    _refuse_rows(series.isna().to_numpy(dtype=bool), where, "missing", rows)
+    values: np.ndarray = series.to_numpy()
+    if values.dtype == object:  # e.g. Arrow decimals
+        values = series.to_numpy(dtype=np.float64)
+    if values.dtype.kind not in "fiu":
+        raise TypeError(f"{where} must hold real numbers, got dtype {values.dtype}")
+    _refuse_rows(~np.isfinite(values), where, "non-finite", rows)
+    if not values.any():
+        drop = "" if role == "outcome" else f"drop the inactive {_ROLE_NOUN[role]}: "
+        raise ValueError(
+            f"{where} is zero at every time step; {drop}an all-zero series has no level or "
+            "variation to describe"
+        )
+    return values
+
+
+def _check_time(series: Any, label: Hashable, rows: Any) -> None:
+    """Time stamps must parse, be finite and strictly increase down the rows."""
+    import pandas as pd
+    from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
+
+    where = f"time column {label!r}"
+    dtype = series.dtype
+    numeric = is_numeric_dtype(dtype) and not is_bool_dtype(dtype)
+    if isinstance(dtype, pd.PeriodDtype):
+        stamps = series.dt.to_timestamp()
+    elif numeric or is_datetime64_any_dtype(dtype) or dtype.kind == "m":  # "m": timedeltas
+        stamps = series
+    else:
+        try:
+            stamps = pd.to_datetime(series, format="ISO8601", utc=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"{where} is not ISO 8601 date text{_unparsed_row(series, rows)}; read it with "
+                "parse_dates= and date_format= (from_csv), or convert it to datetimes or "
+                "numbers first"
+            ) from exc
+    if numeric:  # missing values read as NaN
+        bad = ~np.isfinite(stamps.to_numpy(dtype=np.float64, na_value=np.nan))
+    else:
+        bad = stamps.isna().to_numpy(dtype=bool)
+    if bad.any():
+        raise ValueError(
+            f"{where} is missing or non-finite at row "
+            f"{_row_label(rows, int(np.flatnonzero(bad)[0]))}; every row needs a finite time"
+        )
+    later = (
+        stamps.iloc[1:].reset_index(drop=True) > stamps.iloc[:-1].reset_index(drop=True)
+    ).to_numpy(dtype=bool)
+    if not later.all():
+        first = int(np.flatnonzero(~later)[0]) + 1
+        raise ValueError(
+            f"{where} does not strictly increase: row {_row_label(rows, first)} is not later "
+            "than the row before it. Rows must be in time order, one per time step: sort the "
+            "rows by time (and merge repeated time steps) first"
+        )
+
+
+def _unparsed_row(series: Any, rows: Any) -> str:
+    """``": row R holds V"`` for the first value ISO 8601 parsing refuses, else ``""``."""
+    import pandas as pd
+
+    try:
+        parsed = pd.to_datetime(series, format="ISO8601", utc=True, errors="coerce")
+    except (ValueError, TypeError):
+        return ""
+    bad = parsed.isna().to_numpy(dtype=bool) & series.notna().to_numpy(dtype=bool)
+    if not bad.any():
+        return ""
+    first = int(np.flatnonzero(bad)[0])
+    return f": row {_row_label(rows, first)} holds {series.iloc[first]!r}"
+
+
 @dataclass(frozen=True)
 class ObservedWorlds:
     """Observed datasets as worlds: series only, no generating process.
@@ -613,6 +999,31 @@ class ObservedWorlds:
     single ``(n_time_steps, n_treatments)`` table is passed as
     ``treatment_raw[None]``. All worlds in one instance share a horizon;
     describe other horizons separately and :meth:`WorldDescriptors.concat`.
+
+    A dataset table is read with :meth:`from_frame` (a DataFrame or a mapping
+    of columns) or :meth:`from_csv`, and one world is written as a table with
+    :meth:`to_frame`. The table format:
+
+    * **Layout.** One table is one dataset, so one world: one row per time
+      step, one column per series. Rows are assumed to be in time order and
+      equally spaced; only an optional ``time`` column is checked (strictly
+      increasing).
+    * **Roles.** ``treatments`` and ``covariates`` list one or more column
+      labels each and ``outcome`` names one; all three roles are required.
+      Give all three, or none to read the bundle layout of
+      :func:`~pymc_generator.bundles.write_scm_bundle`: ``str`` labels that
+      are exactly ``treatment_C<k>``, ``covariate_Z<k>`` and ``outcome_Y``,
+      each role in table order. A label that matches only once whitespace,
+      case or invisible characters are ignored is refused, never skipped. No
+      column is read as time unless named with ``time=``, not even ``week``.
+    * **Values.** Real-valued (integer or float) columns of any numpy, pandas
+      nullable or Arrow dtype, with no missing or non-finite value and not
+      zero at every step (an all-zero series is an inactive one: drop it).
+      Booleans, text and complex numbers are refused. Raw levels are described
+      as given: nothing is scaled, differenced or imputed.
+    * **Resolution.** Each role keeps the resolution of its columns' common
+      dtype (``np.result_type``): float32 columns stay float32-resolution,
+      float32 mixed with float64 is float64-resolution.
 
     Parameters
     ----------
@@ -635,6 +1046,13 @@ class ObservedWorlds:
     each role's input dtype as ``(treatment, covariates, outcome)`` — float32
     data stay float32-resolution — which sets the rounding floor used to
     recognize constant series.
+
+    :meth:`to_frame` writes each role in the float dtype of its resolution,
+    so ``from_frame(o.to_frame(i))`` reproduces world ``i``'s active columns
+    and resolution exactly. Through a CSV file, :meth:`from_csv` reads
+    float64 values written by pandas back bit for bit, but a float32 world
+    comes back as the float64 values of its printed decimals (float64
+    resolution).
     """
 
     treatment_raw: Any
@@ -710,6 +1128,260 @@ class ObservedWorlds:
     def n_time_steps(self) -> int:
         return int(self.treatment_raw.shape[1])
 
+    # -- dataset tables -----------------------------------------------------
+    @classmethod
+    def from_frame(
+        cls,
+        frame: pd.DataFrame | Mapping[Hashable, Any],
+        *,
+        treatments: Iterable[Hashable] | None = None,
+        covariates: Iterable[Hashable] | None = None,
+        outcome: Hashable | None = None,
+        time: Hashable | None = None,
+    ) -> ObservedWorlds:
+        """Read one dataset, as one world, from a table with one row per time step.
+
+        Parameters
+        ----------
+        frame
+            A pandas DataFrame, or a mapping ``label -> 1-D array-like``.
+            Mapping values are taken by position: they must have equal
+            lengths and, when several are Series, identical indexes; errors
+            then name rows by position.
+        treatments, covariates
+            Column labels, in the order of the result's columns: a list,
+            tuple, pandas Index or 1-D array; never a bare string, a set or a
+            mapping.
+        outcome
+            One column label. A tuple is one label only when the table has
+            it as a column (MultiIndex columns are named by their full tuple).
+        time
+            Optional column label of the time stamps, checked and not
+            stored: datetimes (time-zone aware or not), timedeltas and
+            numbers are used as they are, periods as their start times, and
+            text is parsed as ISO 8601 (offsets converted to UTC). Every row
+            needs a finite stamp, strictly later than the row before.
+
+        Returns
+        -------
+        ObservedWorlds
+            One world, every column active: ``treatment_raw`` of shape
+            ``(1, T, len(treatments))``, ``covariates`` of shape
+            ``(1, T, len(covariates))`` and ``outcome_raw`` of shape ``(1, T)``.
+
+        Notes
+        -----
+        Checks run in this order and their errors name the column (and, for
+        values, the count and the first row label): every used label is one
+        column of the table (labels match exactly, so a MultiIndex column is
+        named by its full tuple); no label plays two roles, ``time``
+        included; at least one treatment and one covariate; then per column,
+        booleans (numpy, pandas ``boolean``, Arrow) and other non-numeric
+        dtypes are refused, missing values are refused before conversion,
+        values convert with ``Series.to_numpy()`` (as float64 when that gives
+        objects), and non-finite values and all-zero columns are refused;
+        finally ``time``.
+        """
+        import pandas as pd
+
+        if not isinstance(frame, (pd.DataFrame, Mapping)):
+            raise TypeError(
+                "frame must be a pandas DataFrame or a mapping of column label -> 1-D values, "
+                f"got {type(frame).__name__}"
+            )
+        if isinstance(frame, pd.DataFrame):
+            positions = _column_positions(frame.columns)
+            multiindex = isinstance(frame.columns, pd.MultiIndex)
+        else:
+            positions = _column_positions(frame)
+            multiindex = False
+        defaults = treatments is None and covariates is None and outcome is None
+        if defaults:
+            roles = _bundle_roles(positions)
+        else:
+            roles = _explicit_roles(treatments, covariates, outcome, positions, multiindex)
+        used = [(role, label) for role, labels in roles.items() for label in labels]
+        if time is not None:
+            _check_one_label(time, "time", positions, multiindex)
+            used.append(("time", time))
+        _check_labels(positions, used, multiindex)
+        for role, labels in roles.items():
+            if labels:
+                continue
+            noun = _ROLE_NOUN[role]
+            if defaults:
+                raise ValueError(
+                    f"no {noun} column: with no roles given the bundle layout is read "
+                    "(treatment_C1.., covariate_Z1.., outcome_Y) and no label is a bundle "
+                    f"{noun} label; name your columns with treatments=[...], covariates=[...] "
+                    "and outcome=..."
+                )
+            raise ValueError(f"{role} is empty; a dataset needs at least one {noun} column")
+        series, rows = _dataset_series(frame, [label for _, label in used], positions)
+        if len(rows) == 0:
+            raise ValueError("the dataset has no rows; it needs one row per time step")
+        values = {
+            role: [_series_values(series[label], label, role, rows) for label in labels]
+            for role, labels in roles.items()
+        }
+        if time is not None:
+            _check_time(series[time], time, rows)
+        treatment, covariate = (
+            np.stack(values[role], axis=1, dtype=np.result_type(*values[role]))
+            for role in ("treatments", "covariates")
+        )
+        return cls(
+            treatment_raw=treatment[None],
+            covariates=covariate[None],
+            outcome_raw=np.array(values["outcome"][0])[None],
+        )
+
+    @classmethod
+    def from_csv(
+        cls,
+        path: str | os.PathLike[str] | IO[Any],
+        *,
+        treatments: Iterable[Hashable] | None = None,
+        covariates: Iterable[Hashable] | None = None,
+        outcome: Hashable | None = None,
+        time: Hashable | None = None,
+        **read_csv_kwargs: Any,
+    ) -> ObservedWorlds:
+        """Read one dataset from a CSV file: :func:`pandas.read_csv`, then :meth:`from_frame`.
+
+        Parameters
+        ----------
+        path
+            A path, URL or buffer, as :func:`pandas.read_csv` takes it.
+        treatments, covariates, outcome, time
+            Column roles, as in :meth:`from_frame`: all three of
+            ``treatments``, ``covariates`` and ``outcome``, or none of them to
+            read the bundle layout.
+        **read_csv_kwargs
+            Passed to :func:`pandas.read_csv`: ``sep=``, ``decimal=`` and
+            ``thousands=`` for the number format, ``parse_dates=`` and
+            ``date_format=`` for a time column, ``index_col=`` to name rows in
+            errors, ``dtype_backend=``, ...
+
+        Returns
+        -------
+        ObservedWorlds
+
+        Notes
+        -----
+        Unless ``float_precision`` is given, floats are parsed with
+        ``float_precision="round_trip"``, so float64 values written by pandas
+        read back bit for bit; the default parser misses the last bit of many
+        of them. Engines and options that cannot take it (``engine="python"``
+        or ``"pyarrow"``, regex or multi-character separators, ``skipfooter``,
+        ...) read without it. ``sep=None`` sniffs the separator, which only the
+        python engine does: it reads with ``engine="python"`` unless an engine
+        is given, and decodes with ``encoding="utf-8-sig"`` unless an encoding
+        is given or the source is an already decoded text stream, so that a
+        byte-order mark does not stay in the first label. The python engine is
+        not exact for float64.
+        """
+        import pandas as pd
+
+        kwargs = dict(read_csv_kwargs)
+        sniff = "sep" in kwargs and kwargs["sep"] is None
+        if sniff:
+            if kwargs.get("engine") is None:
+                kwargs["engine"] = "python"
+            # The sniffing reader keeps a byte-order mark in the first label;
+            # utf-8-sig drops it and reads plain UTF-8 identically. A text
+            # stream that is already decoded keeps its own encoding.
+            if "encoding" not in kwargs and getattr(path, "encoding", None) is None:
+                kwargs["encoding"] = "utf-8-sig"
+        if sniff or "float_precision" in kwargs:
+            frame = pd.read_csv(path, **kwargs)
+        else:
+            try:
+                frame = pd.read_csv(path, float_precision="round_trip", **kwargs)
+            except ValueError as exc:
+                # pandas refuses the option while validating options, before
+                # reading: a buffer is still at its start for the second read.
+                if "float_precision" not in str(exc):
+                    raise
+                frame = pd.read_csv(path, **kwargs)
+        return cls.from_frame(
+            frame, treatments=treatments, covariates=covariates, outcome=outcome, time=time
+        )
+
+    def to_frame(self, world: int = 0) -> pd.DataFrame:
+        """One world as a dataset table in the bundle layout.
+
+        Columns: ``week`` (``0 .. T-1``, int64), ``treatment_C1``, ... (the
+        active treatments in slot order), ``covariate_Z1``, ... (the active
+        covariates) and ``outcome_Y``. Each role is written in the float dtype
+        whose machine epsilon is its stored resolution (float16, float32 or
+        float64), so ``ObservedWorlds.from_frame(o.to_frame(i))`` reproduces
+        world ``i``'s active columns and resolution exactly. Written to CSV
+        and read back, a float32 world becomes the float64 values of its
+        printed decimals.
+
+        Parameters
+        ----------
+        world
+            Position of the world, ``0 <= world < n_worlds``.
+
+        Returns
+        -------
+        pandas.DataFrame
+
+        Raises
+        ------
+        ValueError
+            When ``world`` is not an integer position, or the world is not a
+            dataset :meth:`from_frame` reads back: no active treatment, no
+            active covariate, no outcome, or an active column or the outcome
+            zero at every time step.
+        """
+        import pandas as pd
+
+        if (
+            isinstance(world, (bool, np.bool_))
+            or not isinstance(world, (int, np.integer))
+            or not 0 <= world < self.n_worlds
+        ):
+            raise ValueError(f"world must be an integer in [0, {self.n_worlds}), got {world!r}")
+        position = int(world)
+        active = {
+            "treatment": np.flatnonzero(self.treatment_active_mask[position]),
+            "covariate": np.flatnonzero(self.covariate_active_mask[position]),
+        }
+        for noun, slots in active.items():
+            if slots.size == 0:
+                raise ValueError(
+                    f"world {position} has no active {noun}; a dataset needs at least one"
+                )
+        if self.outcome_raw is None:
+            raise ValueError("these worlds have no outcome; a dataset needs one")
+        treatment_dtype, covariate_dtype, outcome_dtype = (
+            _resolution_dtype(eps) for eps in self.resolution
+        )
+        data: dict[str, np.ndarray] = {"week": np.arange(self.n_time_steps, dtype=np.int64)}
+        for noun, prefix, block, dtype in (
+            ("treatment", "treatment_C", self.treatment_raw[position], treatment_dtype),
+            ("covariate", "covariate_Z", self.covariates[position], covariate_dtype),
+        ):
+            for k, slot in enumerate(active[noun].tolist(), start=1):
+                if not block[:, slot].any():
+                    raise ValueError(
+                        f"world {position}: active {noun} column {slot} is zero at every time "
+                        f"step; mark it inactive in {noun}_active_mask (from_frame refuses "
+                        "all-zero columns)"
+                    )
+                data[f"{prefix}{k}"] = block[:, slot].astype(dtype)
+        outcome = self.outcome_raw[position]
+        if not outcome.any():
+            raise ValueError(
+                f"world {position}: the outcome is zero at every time step (from_frame refuses "
+                "all-zero columns)"
+            )
+        data["outcome_Y"] = outcome.astype(outcome_dtype)
+        return pd.DataFrame(data)
+
 
 # ---------------------------------------------------------------------------
 # Chunked extraction
@@ -726,6 +1398,14 @@ def _resolution(dtype: np.dtype) -> float:
     if np.issubdtype(dtype, np.floating):
         return max(float(np.finfo(dtype).eps), eps64)
     return eps64
+
+
+def _resolution_dtype(eps: float) -> np.dtype:
+    """The float dtype (float16, float32 or float64) whose machine epsilon is ``eps``."""
+    for dtype in (np.float16, np.float32, np.float64):
+        if float(np.finfo(dtype).eps) == eps:
+            return np.dtype(dtype)
+    raise ValueError(f"no float16, float32 or float64 dtype has machine epsilon {eps}")
 
 
 @dataclass(frozen=True)
@@ -941,9 +1621,17 @@ def _reduce(
     rows = valid.any(axis=1)
     if rows.any():
         masked = np.where(valid[rows], values[rows], np.nan)
-        with np.errstate(invalid="ignore"):
+        with np.errstate(invalid="ignore", over="ignore"):
             if reducer == "median":
                 reduced = np.nanmedian(masked, axis=1)
+                # NumPy averages the two middle values by summing first.
+                # Repair only overflowed finite midpoints; real infinities
+                # and all ordinary legacy reductions keep their semantics.
+                for row in np.flatnonzero(np.isinf(reduced)):
+                    ordered = np.sort(masked[row, ~np.isnan(masked[row])])
+                    low, high = ordered[(ordered.size - 1) // 2], ordered[ordered.size // 2]
+                    if np.isfinite(low) and np.isfinite(high):
+                        reduced[row] = low / 2.0 + high / 2.0
             elif reducer == "min":
                 reduced = np.nanmin(masked, axis=1)
             else:
@@ -1088,6 +1776,7 @@ def _chunk_features(
     definitions: tuple[FeatureDefinition, ...],
     statistics: tuple[str, ...],
     lags: tuple[int, ...],
+    dependence_lags: tuple[int, ...],
 ) -> tuple[np.ndarray, np.ndarray]:
     n_worlds, n_time, n_treat = chunk.treatment.shape
     n_cov = chunk.covariates.shape[2]
@@ -1100,12 +1789,6 @@ def _chunk_features(
         ],
         axis=1,
     )
-    # Exact power-of-two rescaling of every series to max|x| in [0.5, 1): each
-    # statistic here is invariant to positive rescaling, and squared sums then
-    # neither overflow nor underflow for magnitudes from 1e-300 to 1e300. A
-    # contiguous block also makes results independent of chunk_size.
-    _, exponent = np.frexp(np.abs(raw).max(axis=2))
-    block = np.ascontiguousarray(np.ldexp(raw, -exponent[..., None]))
     eligible = np.concatenate(
         [
             chunk.treatment_mask,
@@ -1122,25 +1805,88 @@ def _chunk_features(
 
     values = np.full((n_worlds, len(definitions)), np.nan)
     status = np.full((n_worlds, len(definitions)), UNDEFINED, dtype=np.uint8)
-    slots, slot_valid = _compute_slots(block, eligible)
     # Each series is judged at its own source resolution: a float32 covariate
     # never loosens the floor for a float64 treatment in the same world.
     resolution = np.empty(eligible.shape, dtype=np.float64)
     for role, eps in zip(("treatment", "covariate", "outcome"), chunk.resolution):
         resolution[:, columns[role]] = np.reshape(np.asarray(eps, dtype=np.float64), (-1, 1))
-    flat = _flatness(block, slots, resolution)
-    needs_nodes = any(s in statistics for s in NODE_STATISTICS)
-    nodes = _node_statistics(block, eligible, lags, slots, slot_valid, flat) if needs_nodes else {}
-    constant = flat.level & slot_valid[..., 1]
+    nodes: dict[tuple[str, int | None], tuple[np.ndarray, np.ndarray]] = {}
     pearson: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    for stat, offset, degenerate in (
-        ("abs_pearson", 0, flat.level),
-        ("diff_abs_pearson", 1, flat.steps),
-    ):
-        # Too-short views are undefined below; skip the empty-slice arithmetic.
-        if stat in statistics and n_time - offset >= _MIN_PAIRS:
-            view = np.diff(block, axis=2) if offset else block
-            pearson[stat] = (_abs_pearson(view, ~degenerate), ~degenerate)
+    if any(s in statistics for s in DEFAULT_STATISTICS):
+        # Preserve legacy scale-invariant calculations exactly. New amplitude
+        # and activity diagnostics below must instead receive original levels.
+        _, exponent = np.frexp(np.abs(raw).max(axis=2))
+        block = np.ascontiguousarray(np.ldexp(raw, -exponent[..., None]))
+        slots, slot_valid = _compute_slots(block, eligible)
+        flat = _flatness(block, slots, resolution)
+        if any(s in statistics for s in _LEGACY_NODE_STATISTICS):
+            nodes = _node_statistics(block, eligible, lags, slots, slot_valid, flat)
+        constant = flat.level & slot_valid[..., 1]
+        for stat, offset, degenerate in (
+            ("abs_pearson", 0, flat.level),
+            ("diff_abs_pearson", 1, flat.steps),
+        ):
+            # Too-short views are undefined below; skip the empty-slice arithmetic.
+            if stat in statistics and n_time - offset >= _MIN_PAIRS:
+                view = np.diff(block, axis=2) if offset else block
+                pearson[stat] = (_abs_pearson(view, ~degenerate), ~degenerate)
+
+    source_values = raw.transpose(0, 2, 1)
+    if any(s in statistics for s in _TEMPORAL_STATISTICS):
+        temporal = temporal_statistics(
+            source_values, lags=lags, eligible=eligible, resolution=resolution
+        )
+        for stat in _TEMPORAL_STATISTICS:
+            if stat not in statistics:
+                continue
+            if stat in ("overlap_pearson", "diff_overlap_pearson"):
+                for position, lag in enumerate(temporal.lags):
+                    nodes[(stat, lag)] = (
+                        temporal.values[stat][..., position],
+                        temporal.valid[stat][..., position],
+                    )
+            else:
+                nodes[(stat, None)] = (temporal.values[stat], temporal.valid[stat])
+    if any(s in statistics for s in ACTIVITY_STATISTICS):
+        # Exact nonzero activity is a property of raw data. Rescaling can
+        # underflow tiny nonzero values within a wide-range series into zero.
+        activity = activity_runs(source_values, eligible=eligible)
+        for stat in ACTIVITY_STATISTICS:
+            if stat in statistics:
+                nodes[(stat, None)] = (activity.values[stat], activity.valid[stat])
+
+    lagged: dict[tuple[str, str, int | None], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    lagged_statistics = tuple(s for s in _LAGGED_PAIR_STATISTICS if s in statistics)
+    if lagged_statistics:
+        views = tuple(
+            "differences" if s == "diff_lagged_pearson" else "levels" for s in lagged_statistics
+        )
+        lag_groups = (
+            tuple(lag for lag in dependence_lags if lag == 0),
+            tuple(lag for lag in dependence_lags if lag != 0),
+        )
+        for pair_role in PAIR_ROLES:
+            for pair_lags in lag_groups:
+                if not pair_lags:
+                    continue
+                i, j = _pair_index(pair_role, n_treat, n_cov)
+                if pair_lags[0] != 0 and pair_role in ("treatment_pair", "covariate_pair"):
+                    i, j = np.concatenate((i, j)), np.concatenate((j, i))
+                dependence = lagged_dependence(
+                    source_values,
+                    pairs=np.column_stack((i, j)),
+                    lags=pair_lags,
+                    views=views,
+                    eligible=eligible,
+                    resolution=resolution,
+                )
+                for view_position, stat in enumerate(lagged_statistics):
+                    for lag_position, lag in enumerate(dependence.lags):
+                        lagged[(stat, pair_role, lag)] = (
+                            dependence.correlation[:, view_position, :, lag_position],
+                            dependence.valid[:, view_position, :, lag_position],
+                            dependence.eligible,
+                        )
 
     for f, d in enumerate(definitions):
         if d.role == "truth":
@@ -1175,6 +1921,12 @@ def _chunk_features(
             values[has, f] = (constant[:, cols] & active)[has].sum(axis=1) / n_active[has]
             status[has, f] = VALID
             status[~has, f] = INELIGIBLE
+            continue
+        if d.statistic in _LAGGED_PAIR_STATISTICS:
+            pair_values, pair_valid, pair_eligible = lagged[(d.statistic, d.role, d.lag)]
+            values[:, f], status[:, f] = _reduce(
+                pair_values, pair_valid, pair_eligible, str(d.reducer)
+            )
             continue
         # pair statistics
         n_view = n_time - (1 if d.statistic == "diff_abs_pearson" else 0)
@@ -1229,8 +1981,9 @@ def _id_override(values: Any, n: int, what: str, *, minimum: int) -> np.ndarray:
 def world_descriptors(
     source: Mapping[str, Any] | Sequence[SCM] | ObservedWorlds,
     *,
-    statistics: Sequence[str] = STATISTICS,
+    statistics: Sequence[str] = DEFAULT_STATISTICS,
     lags: Sequence[int] = (1,),
+    dependence_lags: Sequence[int] | None = None,
     reducers: Sequence[str] = REDUCERS,
     include_truth: bool = False,
     worlds: Any = None,
@@ -1249,11 +2002,23 @@ def world_descriptors(
         :class:`~pymc_generator.worlds.SCM` worlds sharing one horizon, or
         :class:`ObservedWorlds`.
     statistics
-        Statistic families from :data:`STATISTICS`. Per-series statistics are
+        Statistic families from :data:`STATISTICS`. Defaults to the unchanged
+        legacy families in :data:`DEFAULT_STATISTICS`; temporal, activity and
+        signed lagged pair features are opt-in. Per-series statistics are
         computed for every active treatment, covariate and the outcome;
         treatment/covariate values are then reduced with every reducer.
     lags
-        Lags for ``acf`` (levels) and ``diff_acf`` (first differences).
+        Positive lags for legacy ``acf`` / ``diff_acf`` and opt-in
+        ``overlap_pearson`` / ``diff_overlap_pearson``. Legacy ACF keeps its
+        global-mean, full-denominator definition; overlap correlations center
+        each overlapping segment separately.
+    dependence_lags
+        Explicit signed integer lags for ``lagged_pearson`` and
+        ``diff_lagged_pearson``; required and nonempty when either is selected.
+        At lag h, correlate left[t] with right[t + h]. Treatment-covariate and
+        treatment-outcome pairs always put treatment on the left. Within-role
+        nonzero lags reduce both ordered distinct directions; lag zero uses
+        unordered pairs. No causal or carryover interpretation is implied.
     reducers
         Reducers across active nodes and pairs, from :data:`REDUCERS`.
     include_truth
@@ -1287,6 +2052,13 @@ def world_descriptors(
     roughness, spike and ACF reuse its definitions. Level-to-variation and CV are
     invariant to multiplying a series by a positive constant but not to
     shifting it.
+    Opt-in ``level_std`` and ``difference_std`` retain original units and scale
+    with the absolute input multiplier. ``time_correlation`` is signed Pearson
+    correlation with ``0, ..., T-1``. Activity summaries use exact raw nonzero
+    values, include boundary-censored spells in total counts and longest
+    lengths, and exclude them from complete-spell medians. No complete spell
+    makes its median undefined, not zero. ``interior_inactive_fraction`` divides
+    complete interior inactive length by the full window length.
 
     Degenerate series are detected from exact ranges, never from a computed
     ``std``, whose rounding residue misses true constants. With ``eps`` the
@@ -1297,11 +2069,12 @@ def world_descriptors(
     float64 summation error) and it takes both signs. Nonzero constants give
     ``level_to_variation = inf`` (an all-zero series has none: it is undefined),
     ``cv = 0``, roughness and spike 0, and undefined ACF and correlations; ramps
-    give roughness and spike 0 and undefined differenced statistics. No absolute
-    epsilon is applied, and each series is rescaled exactly by a power of two
-    first, so magnitudes from ``1e-300`` to ``1e300`` describe identically.
-    Statuses are exactly independent of ``chunk_size``; values agree to
-    floating-point rounding.
+    give roughness and spike 0 and undefined differenced correlations. No absolute
+    epsilon is applied. Legacy scale-invariant statistics first rescale each
+    series exactly by a power of two, so magnitudes from ``1e-300`` to ``1e300``
+    describe identically. New diagnostics handle their own safe scaling without
+    changing amplitude units or exact activity states. Statuses are exactly
+    independent of ``chunk_size``; values agree to floating-point rounding.
     """
     stats = _validate_choice(statistics, STATISTICS, "statistics")
     reds = _validate_choice(reducers, REDUCERS, "reducers")
@@ -1383,6 +2156,13 @@ def world_descriptors(
         raise ValueError("source has no time steps to describe")
     # Canonical lag order, so equal requests produce equal definitions.
     lag_axis = tuple(sorted(_validate_lags(lags, n_time_steps)))
+    dependence_axis = (
+        () if dependence_lags is None else tuple(sorted(_series_lags(dependence_lags, signed=True)))
+    )
+    if any(s in stats for s in _LAGGED_PAIR_STATISTICS) and not dependence_axis:
+        raise ValueError(
+            "dependence_lags must explicitly select signed integer lags for lagged pair statistics"
+        )
     idx = _validate_world_selector(worlds, n_total)
     n = int(idx.size)
 
@@ -1397,7 +2177,7 @@ def world_descriptors(
     else:
         groups = np.full(n, -1, dtype=np.int64)
 
-    definitions = _definitions(stats, lag_axis, reds, include_truth)
+    definitions = _definitions(stats, lag_axis, dependence_axis, reds, include_truth)
     if not definitions:
         raise ValueError(
             f"no features to compute: statistics {list(stats)} with lags {list(lag_axis)} "
@@ -1411,7 +2191,9 @@ def world_descriptors(
         rows = slice(start, min(start + int(chunk_size), n))
         chunk_idx = idx[rows]
         chunk = extract(chunk_idx)
-        values[rows], status[rows] = _chunk_features(chunk, definitions, stats, lag_axis)
+        values[rows], status[rows] = _chunk_features(
+            chunk, definitions, stats, lag_axis, dependence_axis
+        )
         n_treat_active[rows] = chunk.treatment_mask.sum(axis=1)
         n_cov_active[rows] = chunk.covariate_mask.sum(axis=1)
 

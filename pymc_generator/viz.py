@@ -1,9 +1,9 @@
 """Matplotlib renders for world bundles and for generated-data diagnostics.
 
-Two families live here. The bundle figures (DAG, timeseries, decomposition,
-treatments) render ONE world; the diagnostics figures render a
-:class:`~pymc_generator.diagnostics.DataDiagnostics` report over many worlds
-(dependence, series distributions, temporal structure, VIF, contributions).
+The bundle figures (DAG, timeseries, decomposition, treatments) render ONE
+world. Diagnostics figures describe generated data; standalone comparison
+figures contrast query diagnostics or aligned series with an existing reference
+population without generating or fitting a model.
 
 matplotlib is imported lazily inside each function so importing the package —
 or generating corpora — never touches it. Headless callers (the CLI does this)
@@ -18,6 +18,7 @@ ground truth kept for auditing and are labelled as such, never model inputs.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -37,6 +38,10 @@ from .worlds import (
     parameter_text,
     treatment_role,
 )
+
+if TYPE_CHECKING:
+    from .diagnostics import ActivityRuns, LaggedDependence, TemporalStatistics
+    from .series_comparison import NearestSeries, SeriesComparison, SimilarityAssessment
 
 # Validated categorical palette — slots are assigned in FIXED order per entity
 # and reused consistently across every figure of a bundle.
@@ -1250,3 +1255,607 @@ def plot_contribution_diagnostics(
     else:
         footnote = f"complete {sibling_set!r} cut against {closure.parent}"
     _finish(fig, path, banner=False, footnote=footnote)
+
+
+# ---------------------------------------------------------------------------
+# Existing-reference comparison figures
+# ---------------------------------------------------------------------------
+
+
+def _comparison_indices(
+    size: int,
+    indices: Sequence[int] | None,
+    *,
+    what: str,
+    limit: int | None = MAX_SERIES_PANELS,
+) -> tuple[int, ...]:
+    """Select integer positions without silently truncating a population."""
+    if indices is None:
+        chosen = tuple(range(size))
+    else:
+        if np.ma.isMaskedArray(indices):
+            raise TypeError(f"{what} must not be a masked array")
+        raw = np.asarray(indices)
+        if raw.ndim != 1 or raw.dtype.kind not in "iu":
+            raise TypeError(f"{what} must be a one-dimensional sequence of integer positions")
+        if raw.size == 0:
+            raise ValueError(f"{what} is empty")
+        if np.any(raw < 0) or np.any(raw >= size):
+            raise ValueError(f"{what} must be within [0, {size})")
+        chosen = tuple(int(value) for value in raw)
+        if len(set(chosen)) != len(chosen):
+            raise ValueError(f"{what} repeats an entry")
+    if limit is not None and len(chosen) > limit:
+        raise ValueError(
+            f"{len(chosen)} {what} exceed this figure's bound of {limit}; narrow {what}=..."
+        )
+    return chosen
+
+
+def _comparison_band(band: Sequence[float]) -> tuple[float, float]:
+    if isinstance(band, str) or np.ma.isMaskedArray(band):
+        raise TypeError("band must be a pair of quantiles")
+    if len(band) != 2:
+        raise ValueError("band must contain exactly two quantiles")
+    lower, upper = (_plot_quantile(value) for value in band)
+    if lower > upper:
+        raise ValueError("band quantiles must be ordered from lower to upper")
+    return lower, upper
+
+
+def _compatible_series_reports(
+    reference: TemporalStatistics | ActivityRuns, query: TemporalStatistics | ActivityRuns
+) -> None:
+    if reference.n_time_steps != query.n_time_steps:
+        raise ValueError("reference and query must have the same number of time steps")
+    if reference.eligible.shape[1] != query.eligible.shape[1]:
+        raise ValueError("reference and query must have the same series columns")
+    if reference.values.keys() != query.values.keys():
+        raise ValueError("reference and query statistic schemas are incompatible")
+    for report in (reference, query):
+        if (
+            report.values.keys() != report.valid.keys()
+            or report.values.keys() != report.counts.keys()
+        ):
+            raise ValueError("statistic values, validity and counts must have the same schema")
+
+
+def _comparison_grid(n_panels: int) -> tuple[int, int, tuple[float, float]]:
+    """Keep ordinary comparison figures readable in the documentation column."""
+    ncols, nrows, figsize = _panel_grid(n_panels)
+    if ncols > 2 and n_panels <= 12:
+        ncols = 2
+        nrows = int(np.ceil(n_panels / ncols))
+        figsize = (ncols * _PANEL_WIDTH_INCHES, nrows * _PANEL_HEIGHT_INCHES)
+    return ncols, nrows, figsize
+
+
+def _comparison_ecdf(ax, reference: np.ndarray, query: np.ndarray) -> None:
+    """Two descriptive distributions, never pooled across series columns."""
+    if not np.isfinite(reference).any() and not np.isfinite(query).any():
+        _empty_panel(ax, "N/A — no valid reference or query values")
+        return
+    for name, values, color in (
+        ("reference", reference, PALETTE[0]),
+        ("query", query, PALETTE[1]),
+    ):
+        ordered = np.sort(values[np.isfinite(values)])
+        if ordered.size:
+            ax.step(
+                ordered,
+                np.arange(1, ordered.size + 1) / ordered.size,
+                where="post",
+                color=color,
+                lw=1.4,
+                marker="o" if ordered.size == 1 else None,
+                label=f"{name} ({ordered.size} worlds)",
+            )
+        else:
+            ax.text(
+                0.02,
+                0.9 if name == "reference" else 0.8,
+                f"{name}: N/A",
+                transform=ax.transAxes,
+                fontsize=8,
+                color=MUTED,
+            )
+    ax.set_ylim(0.0, 1.05)
+    ax.set_ylabel("fraction ≤ value", fontsize=8, color=MUTED)
+    ax.legend(fontsize=7, loc="best")
+    _style_ax(ax)
+
+
+def _comparison_profile(
+    ax,
+    lags: Sequence[int],
+    reference: np.ndarray,
+    query: np.ndarray,
+    query_worlds: tuple[int, ...],
+    band: tuple[float, float],
+) -> None:
+    """Reference world quantiles and individual query worlds, with gaps intact."""
+    if not np.isfinite(reference).any() and not np.isfinite(query).any():
+        _empty_panel(ax, "N/A — no valid lag correlations")
+        return
+    order = np.argsort(lags)
+    x = np.asarray(lags)[order]
+    reference, query = reference[:, order], query[:, order]
+    reference_counts = np.isfinite(reference).sum(axis=0)
+    query_counts = np.isfinite(query).sum(axis=0)
+    quantiles = np.full((3, x.size), np.nan)
+    for position in range(x.size):
+        values = reference[:, position]
+        values = values[np.isfinite(values)]
+        if values.size:
+            quantiles[:, position] = np.quantile(values, (band[0], 0.5, band[1]))
+    ax.fill_between(
+        x,
+        quantiles[0],
+        quantiles[2],
+        color=PALETTE[0],
+        alpha=0.18,
+        label=f"reference q{100 * band[0]:g}–q{100 * band[1]:g}",
+    )
+    ax.vlines(x, quantiles[0], quantiles[2], color=PALETTE[0], alpha=0.6, lw=1)
+    ax.plot(x, quantiles[1], color=PALETTE[0], marker="o", ms=3, lw=1.4, label="reference median")
+    if not reference_counts.any():
+        ax.text(0.02, 0.94, "reference: N/A", transform=ax.transAxes, fontsize=7, color=MUTED)
+    unavailable_worlds = []
+    for world, values in zip(query_worlds, query, strict=True):
+        if np.isfinite(values).any():
+            ax.plot(
+                x,
+                values,
+                marker="o",
+                ms=3,
+                lw=1.1,
+                color=PALETTE[1],
+                alpha=0.8,
+                label=f"query world {world}",
+            )
+        else:
+            unavailable_worlds.append(world)
+    if unavailable_worlds or not query_worlds:
+        ax.text(
+            0.02,
+            0.04,
+            f"query worlds {unavailable_worlds}: N/A" if query_worlds else "query: N/A",
+            transform=ax.transAxes,
+            fontsize=7,
+            color=MUTED,
+        )
+    ticks = _tick_stride(x.size)
+    ax.set_xticks(x[ticks])
+    ax.set_xticklabels(
+        [f"{x[i]}\n{reference_counts[i]}/{query_counts[i]}" for i in ticks],
+        fontsize=7,
+    )
+    for position in ticks:
+        if reference_counts[position] == 0 and query_counts[position] == 0:
+            ax.text(
+                x[position],
+                0.08,
+                "N/A",
+                transform=ax.get_xaxis_transform(),
+                ha="center",
+                fontsize=7,
+                color=MUTED,
+            )
+    ax.set_xlabel("lag; valid worlds reference / query", fontsize=8, color=MUTED)
+    ax.set_ylabel("overlap Pearson r", fontsize=8, color=MUTED)
+    ax.set_ylim(-1.08, 1.08)
+    ax.legend(fontsize=6, loc="best")
+    _style_ax(ax)
+
+
+def plot_temporal_comparison(
+    reference: TemporalStatistics,
+    query: TemporalStatistics,
+    path: str,
+    *,
+    series: Sequence[int] | None = None,
+    query_worlds: Sequence[int] | None = None,
+    statistics: Sequence[str] = (
+        "overlap_pearson",
+        "diff_overlap_pearson",
+        "level_std",
+        "difference_std",
+        "time_correlation",
+    ),
+    band: Sequence[float] = (0.1, 0.9),
+) -> None:
+    """Compare corresponding series columns over equal-length windows.
+
+    Lag panels show reference across-world quantiles and each selected query
+    world's overlap-centered profile. Scalar panels are world ECDFs. Invalid,
+    ineligible and scale-unavailable moments stay missing. ``band`` is a pair
+    of descriptive quantiles, not an uncertainty interval. At most
+    ``MAX_SERIES_PANELS`` series × statistics panels and selected query worlds.
+    """
+    import matplotlib.pyplot as plt
+
+    _compatible_series_reports(reference, query)
+    if reference.lags != query.lags:
+        raise ValueError("reference and query lags are incompatible")
+    chosen = _comparison_indices(reference.eligible.shape[1], series, what="series")
+    worlds = _comparison_indices(query.eligible.shape[0], query_worlds, what="query_worlds")
+    names = _plot_names(statistics, tuple(reference.values), "statistics")
+    interval = _comparison_band(band)
+    panels = [(column, name) for column in chosen for name in names]
+    if len(panels) > MAX_SERIES_PANELS:
+        raise ValueError(
+            f"{len(panels)} panels exceed this figure's bound of {MAX_SERIES_PANELS}; "
+            "narrow series=... or statistics=..."
+        )
+    ncols, nrows, figsize = _comparison_grid(max(1, len(panels)))
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = np.asarray(axes).ravel()
+    world_indices = np.asarray(worlds, dtype=int)
+    for ax, (column, name) in zip(flat, panels, strict=False):
+        profiles = name in ("overlap_pearson", "diff_overlap_pearson")
+        values = []
+        for report in (reference, query):
+            eligible = report.eligible[:, column]
+            if profiles:
+                eligible = eligible[:, None]
+            mask = report.valid[name][:, column] & eligible
+            values.append(np.where(mask, report.values[name][:, column], np.nan))
+        reference_values, query_values = values
+        if profiles:
+            _comparison_profile(
+                ax, reference.lags, reference_values, query_values[world_indices], worlds, interval
+            )
+        else:
+            _comparison_ecdf(ax, reference_values, query_values[world_indices])
+        ax.set_title(f"series {column} — {name}", fontsize=9, color=INK, loc="left")
+    if not panels:
+        _empty_panel(flat[0], "N/A — no series columns")
+    for ax in flat[max(1, len(panels)) :]:
+        ax.axis("off")
+    fig.suptitle("query temporal statistics versus reference", fontsize=11, color=INK)
+    _finish(
+        fig,
+        path,
+        banner=False,
+        footnote="Reference quantiles are descriptive; missing values are never replaced by zero.",
+    )
+
+
+def plot_activity_runs(
+    reference: ActivityRuns,
+    query: ActivityRuns,
+    path: str,
+    *,
+    series: Sequence[int] | None = None,
+    query_worlds: Sequence[int] | None = None,
+    statistics: Sequence[str] = (
+        "longest_active_length",
+        "longest_inactive_length",
+        "complete_inactive_length_median",
+        "interior_inactive_fraction",
+    ),
+) -> None:
+    """Run-summary ECDFs and literal selected query ``[start, stop)`` timelines.
+
+    Activity means exact nonzero, not an estimated threshold. Arrow endpoints
+    mark boundary censoring; vertical rules mark the full window boundaries.
+    Corresponding columns and window lengths must agree. The combined summary
+    and timeline grid is bounded by ``MAX_SERIES_PANELS``.
+    """
+    import matplotlib.pyplot as plt
+
+    _compatible_series_reports(reference, query)
+    chosen = _comparison_indices(reference.eligible.shape[1], series, what="series")
+    worlds = _comparison_indices(query.eligible.shape[0], query_worlds, what="query_worlds")
+    names = _plot_names(statistics, tuple(reference.values), "statistics")
+    panels: list[tuple[int, str, int | None]] = [
+        (column, name, None) for column in chosen for name in names
+    ]
+    panels.extend((column, "timeline", world) for column in chosen for world in worlds)
+    if len(panels) > MAX_SERIES_PANELS:
+        raise ValueError(
+            f"{len(panels)} panels exceed this figure's bound of {MAX_SERIES_PANELS}; "
+            "narrow series=..., statistics=... or query_worlds=..."
+        )
+    ncols, nrows, figsize = _comparison_grid(max(1, len(panels)))
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = np.asarray(axes).ravel()
+    world_indices = np.asarray(worlds, dtype=int)
+    for ax, (column, name, world) in zip(flat, panels, strict=False):
+        if world is None:
+            values = [
+                np.where(
+                    report.valid[name][:, column] & report.eligible[:, column],
+                    report.values[name][:, column],
+                    np.nan,
+                )
+                for report in (reference, query)
+            ]
+            _comparison_ecdf(ax, values[0], values[1][world_indices])
+            heading = f"series {column} — {name}"
+        else:
+            heading = f"query world {world}, series {column}"
+            if not query.eligible[world, column]:
+                _empty_panel(ax, "N/A — query series is ineligible")
+            else:
+                for record in query.records:
+                    if record["world"] != world or record["series"] != column:
+                        continue
+                    start, stop = int(record["start"]), int(record["stop"])
+                    state = int(record["active"])
+                    color = PALETTE[1] if state else MUTED
+                    ax.hlines(state, start, stop, color=color, lw=5)
+                    for boundary, censored, arrow in (
+                        (start, record["left_censored"], "<"),
+                        (stop, record["right_censored"], ">"),
+                    ):
+                        ax.scatter(
+                            [boundary],
+                            [state],
+                            marker=arrow if censored else "|",
+                            color=color,
+                            s=35,
+                            clip_on=False,
+                            zorder=3,
+                        )
+                ax.axvline(0, color=GRID, lw=1, ls="--")
+                ax.axvline(query.n_time_steps, color=GRID, lw=1, ls="--")
+                ax.set_xlim(0, query.n_time_steps)
+                ax.set_ylim(-0.35, 1.35)
+                ax.set_yticks([0, 1], ["inactive", "active"])
+                ax.set_xlabel("time position; stop exclusive", fontsize=8, color=MUTED)
+                _style_ax(ax)
+        ax.set_title(heading, fontsize=9, color=INK, loc="left")
+    if not panels:
+        _empty_panel(flat[0], "N/A — no series columns")
+    for ax in flat[max(1, len(panels)) :]:
+        ax.axis("off")
+    fig.suptitle("query activity runs versus reference", fontsize=11, color=INK)
+    _finish(
+        fig,
+        path,
+        banner=False,
+        footnote="Arrows mark censored boundaries. Undefined complete-run medians remain unavailable.",
+    )
+
+
+def _world_pair_profiles(report: LaggedDependence, view: str, pairs: tuple[int, ...]) -> np.ndarray:
+    """Reduce valid pairs within each world before any across-world summary."""
+    selected = np.asarray(pairs, dtype=int)
+    view_index = report.views.index(view)
+    values = np.take(report.correlation[:, view_index], selected, axis=1)
+    valid = np.take(report.valid[:, view_index], selected, axis=1)
+    eligible = np.take(report.eligible, selected, axis=1)
+    available = valid & eligible[..., None] & np.isfinite(values)
+    result = np.full((values.shape[0], values.shape[2]), np.nan)
+    for world, lag in np.ndindex(result.shape):
+        retained = values[world, :, lag][available[world, :, lag]]
+        if retained.size:
+            result[world, lag] = np.median(retained)
+    return result
+
+
+def plot_dependence_comparison(
+    reference: LaggedDependence,
+    query: LaggedDependence,
+    path: str,
+    *,
+    views: Sequence[str] | None = None,
+    pairs: Sequence[int] | None = None,
+    query_worlds: Sequence[int] | None = None,
+    band: Sequence[float] = (0.1, 0.9),
+) -> None:
+    """Signed-lag profiles of within-world median pair correlations.
+
+    Pair definitions, lags and computed views must match. Every world contributes
+    at most one pair-median value per view and lag, irrespective of how many
+    pairs are available in it. Tick annotations count CONTRIBUTING WORLDS,
+    not pairs. Positive lag compares left[t] with right[t+lag]; independently
+    sampled channels are never combined. Reference bands are descriptive.
+    """
+    import matplotlib.pyplot as plt
+
+    if reference.lags != query.lags:
+        raise ValueError("reference and query lags are incompatible")
+    if reference.views != query.views:
+        raise ValueError("reference and query views are incompatible")
+    if not np.array_equal(reference.pairs, query.pairs):
+        raise ValueError("reference and query ordered pair definitions are incompatible")
+    names = _plot_keys(reference.views, views, MAX_SERIES_PANELS, what="views")
+    chosen = _comparison_indices(reference.pairs.shape[0], pairs, what="pairs", limit=None)
+    worlds = _comparison_indices(query.eligible.shape[0], query_worlds, what="query_worlds")
+    interval = _comparison_band(band)
+    ncols, nrows, figsize = _comparison_grid(len(names))
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = np.asarray(axes).ravel()
+    for ax, view in zip(flat, names, strict=False):
+        reference_values = _world_pair_profiles(reference, view, chosen)
+        query_values = _world_pair_profiles(query, view, chosen)
+        _comparison_profile(
+            ax,
+            reference.lags,
+            reference_values,
+            query_values[np.asarray(worlds, dtype=int)],
+            worlds,
+            interval,
+        )
+        ax.set_title(f"{view} — within-world median over pairs", fontsize=9, color=INK, loc="left")
+    for ax in flat[len(names) :]:
+        ax.axis("off")
+    fig.suptitle("query lagged dependence versus reference", fontsize=11, color=INK)
+    _finish(
+        fig,
+        path,
+        banner=False,
+        footnote="Positive lag: left[t] versus right[t+lag]. Descriptive association, not causation.",
+    )
+
+
+def plot_series_matches(
+    comparison: SeriesComparison,
+    matches: NearestSeries,
+    path: str,
+    *,
+    metric: str,
+    query_indices: Sequence[int] | None = None,
+) -> None:
+    """Aligned query/reference waveforms from the comparison that made matches.
+
+    The retained matrices are used without renormalizing or changing their
+    alignment. Matches from ANY other comparison are rejected, even when its
+    matrices happen to be equal. An unavailable index (-1) never selects a
+    reference row. At most ``MAX_SERIES_PANELS`` query rows are drawn.
+    """
+    import matplotlib.pyplot as plt
+
+    if matches.comparison is not comparison:
+        raise ValueError("matches must come from this exact comparison object")
+    if metric not in comparison.metrics:
+        raise ValueError(f"metric {metric!r} is unavailable; choose from {comparison.metrics}")
+    chosen = _comparison_indices(comparison.query.shape[0], query_indices, what="query_indices")
+    ncols, nrows, figsize = _comparison_grid(max(1, len(chosen)))
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = np.asarray(axes).ravel()
+    time = np.arange(comparison.query.shape[1])
+    for ax, index in zip(flat, chosen, strict=False):
+        ax.plot(time, comparison.query[index], color=PALETTE[1], lw=1.4, label=f"query {index}")
+        reference_index = int(matches.indices[metric][index])
+        score = float(matches.scores[metric][index])
+        count = int(matches.candidate_counts[metric][index])
+        available = (
+            0 <= reference_index < comparison.reference.shape[0]
+            and np.isfinite(score)
+            and count > 0
+        )
+        if available:
+            ax.plot(
+                time,
+                comparison.reference[reference_index],
+                color=PALETTE[0],
+                lw=1.2,
+                alpha=0.85,
+                label=f"reference {reference_index}",
+            )
+            detail = f"{metric}={score:.4g}; {count} candidates"
+        else:
+            detail = f"{metric}: N/A; no available reference match"
+            ax.text(0.02, 0.04, "reference: N/A", transform=ax.transAxes, fontsize=8, color=MUTED)
+        ax.set_title(f"query {index}\n{detail}", fontsize=9, color=INK, loc="left")
+        ax.set_xlabel("aligned time position", fontsize=8, color=MUTED)
+        ax.set_ylabel("values used for matching", fontsize=8, color=MUTED)
+        ax.legend(fontsize=7, loc="best")
+        _style_ax(ax)
+    if not chosen:
+        _empty_panel(flat[0], "N/A — no query series")
+    for ax in flat[max(1, len(chosen)) :]:
+        ax.axis("off")
+    fig.suptitle("query waveforms and their reference matches", fontsize=11, color=INK)
+    _finish(fig, path, banner=False, footnote="Matching does not establish a shared data origin.")
+
+
+def plot_similarity_scores(
+    assessment: SimilarityAssessment,
+    path: str,
+    *,
+    metrics: Sequence[str] | None = None,
+    query_indices: Sequence[int] | None = None,
+) -> None:
+    """Held-out matching-score ECDFs with query score/midrank markers.
+
+    Vertical marker spans are the empirical lower/upper fractions at ties, not
+    uncertainty intervals. Percentiles follow the RAW score CDF: high MSE
+    percentiles mean high error, while high correlation percentiles mean high
+    correlation. These descriptive ranks are not origin probabilities.
+    """
+    import matplotlib.pyplot as plt
+
+    query_matches, calibration_matches = assessment.query_matches, assessment.calibration_matches
+    query_comparison = query_matches.comparison
+    calibration_comparison = calibration_matches.comparison
+    if (
+        query_comparison.metrics != calibration_comparison.metrics
+        or query_comparison.lags != calibration_comparison.lags
+        or query_comparison.normalization != calibration_comparison.normalization
+    ):
+        raise ValueError("query and calibration metric definitions are incompatible")
+    if not (
+        np.array_equal(query_comparison.reference, calibration_comparison.reference)
+        and np.array_equal(
+            query_comparison.reference_scale_available,
+            calibration_comparison.reference_scale_available,
+        )
+    ):
+        raise ValueError("query and calibration matches must use the same reference bank")
+    names = _plot_keys(assessment.metrics, metrics, MAX_SERIES_PANELS, what="metrics")
+    chosen = _comparison_indices(
+        query_comparison.query.shape[0], query_indices, what="query_indices"
+    )
+    indices = np.asarray(chosen, dtype=int)
+    ncols, nrows, figsize = _comparison_grid(len(names))
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = np.asarray(axes).ravel()
+    for ax, metric in zip(flat, names, strict=False):
+        scores = calibration_matches.scores[metric]
+        ordered = np.sort(scores[np.isfinite(scores)])
+        if ordered.size != assessment.finite_reference_counts[metric]:
+            plt.close(fig)
+            raise ValueError("finite_reference_counts disagree with the held-out scores")
+        if ordered.size == 0:
+            _empty_panel(ax, "N/A — no finite held-out matching scores")
+        else:
+            ax.step(
+                ordered,
+                np.arange(1, ordered.size + 1) / ordered.size,
+                where="post",
+                color=PALETTE[0],
+                lw=1.4,
+                marker="o" if ordered.size == 1 else None,
+                label=f"held-out reference scores ({ordered.size})",
+            )
+            query_scores = query_matches.scores[metric][indices]
+            percentiles = assessment.percentiles[metric][indices]
+            available = (
+                np.isfinite(query_scores)
+                & np.isfinite(percentiles)
+                & (query_matches.candidate_counts[metric][indices] > 0)
+            )
+            if available.any():
+                ax.vlines(
+                    query_scores[available],
+                    assessment.lower[metric][indices][available],
+                    assessment.upper[metric][indices][available],
+                    color=PALETTE[1],
+                    lw=1.5,
+                )
+                ax.scatter(
+                    query_scores[available],
+                    percentiles[available],
+                    color=PALETTE[1],
+                    s=22,
+                    label="query score / empirical midrank",
+                    zorder=3,
+                )
+            if not available.all():
+                ax.text(
+                    0.02,
+                    0.04,
+                    f"{np.count_nonzero(~available)} query scores: N/A",
+                    transform=ax.transAxes,
+                    fontsize=8,
+                    color=MUTED,
+                )
+            ax.set_ylim(0.0, 1.05)
+            ax.set_xlabel("raw best-match score", fontsize=8, color=MUTED)
+            ax.set_ylabel("empirical fraction ≤ score", fontsize=8, color=MUTED)
+            ax.legend(fontsize=7, loc="best")
+            _style_ax(ax)
+        ax.set_title(metric, fontsize=9, color=INK, loc="left")
+    for ax in flat[len(names) :]:
+        ax.axis("off")
+    fig.suptitle("query matching scores versus held-out reference scores", fontsize=11, color=INK)
+    _finish(
+        fig,
+        path,
+        banner=False,
+        footnote="Empirical ranks and tie spans are descriptive, not calibrated origin probabilities.",
+    )

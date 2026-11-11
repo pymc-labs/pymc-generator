@@ -22,6 +22,12 @@ The four analyses are independent: call any of them, in any order, on any
 descriptor table. None generates data or changes a prior; improving a prior
 stays an explicit loop you run — change a setting, generate, describe, compare.
 
+To compare a dataset with an **already-existing corpus**, including explicit
+window selection, caller-defined groups, additional temporal/activity/lag
+statistics, and standalone comparison plots, see
+[existing-corpus comparisons](corpus-comparison.md). Those extensions do not
+generate or tune a reference and leave the original descriptor defaults intact.
+
 ## Describe two collections
 
 Collection names are arbitrary labels. Here two priors differ only in the range
@@ -122,7 +128,10 @@ pg.compare_descriptors(a, target, features=features).query_frame()
 
 Observed data yield the same observable features as a corpus with the same
 series; generating-process features (`include_truth=True`) are refused rather
-than invented.
+than invented. A dataset stored as a CSV file or a DataFrame loads with
+`ObservedWorlds.from_csv` / `from_frame`; to ask how typical it is of a corpus
+or a generator, with a calibrated p-value, see
+[how typical is a dataset?](dataset-typicality.md).
 
 ## Joining your own measurements
 

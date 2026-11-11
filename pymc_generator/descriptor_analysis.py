@@ -27,7 +27,8 @@ separately and never enter a statistic. A missing generation group
 (``group_id == -1``) is reported as unknown, never treated as a group of one.
 
 The only random numbers drawn are the optional, seeded subsamples of
-:func:`nearest_worlds`.
+:func:`nearest_worlds`. Calibrated inference about one dataset against a
+reference lives in :mod:`pymc_generator.dataset_typicality`.
 """
 
 from __future__ import annotations
