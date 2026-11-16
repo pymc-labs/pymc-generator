@@ -68,6 +68,8 @@ docs = [
     "mkdocstrings[python]>=1.0.6",
     "markdown-exec>=1.12.3",
     "mkdocs-jupyter>=0.26.3",
+    # Security floor for nbconvert's Beautiful Soup selector dependency.
+    "soupsieve>=4.1.1",
     "pymdown-extensions>=11.0.1",
     # Python bindings; the system Graphviz executable is installed separately.
     "graphviz>=0.20",
