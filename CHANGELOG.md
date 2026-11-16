@@ -8,6 +8,11 @@ read the migration notes before upgrading.
 
 ### Security
 
+- Updated the documentation-only Soup Sieve dependency to 4.1.1 and require
+  at least that version for `[docs]` installs, fixing selector denial-of-service
+  vulnerabilities including GHSA-mmhr-3c5m-f64f and GHSA-98qm-p6jx-5wj2.
+  Numerical dependencies remain unchanged. Re-sync documentation environments
+  with `uv sync --locked --extra docs` to install the fixes.
 - Refreshed certificate trust stores with certifi 2026.10.19, uv 0.13.5 in
   CI/docs/releases, and PyPI publishing action 1.14.3. Existing environments
   still need to be recreated; source updates do not rebuild deployments.
