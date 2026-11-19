@@ -40,7 +40,7 @@
    lines beside the figure. */
 .pg-hero h1 {
   max-width: 21ch;
-  margin: 0 0 1.3rem;
+  margin: 0 0 1.9rem;
   color: var(--pg-ink);
   font: 600 clamp(1.7rem, 2.75vw, 2.4rem) / 1.1 var(--pg-display);
   letter-spacing: -0.02em;
@@ -50,12 +50,6 @@
   display: block;
   margin-bottom: 0.5rem;
   color: var(--pg-link);
-}
-.pg-hero__lead {
-  max-width: 29rem;
-  margin: 0 0 1.9rem;
-  color: var(--pg-ink-2);
-  font: 400 1rem/1.55 var(--pg-text);
 }
 .pg-hero__actions {
   display: flex;
