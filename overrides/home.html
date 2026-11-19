@@ -1,16 +1,36 @@
 {% extends "main.html" %}
 
-{#- The home page opens on a single figure: a world of nodes drawn in one ink
-    and dithered to a few pixel tones, which a lens under the cursor resolves
-    at full resolution. Clicking the world, or its hint button, breaks it into
-    a flowing ribbon that gathers back on its own. Without scripts the field
-    stays an empty ground and the hint stays hidden. -#}
+{#- The home page's title is the full descriptive name, without the site-name
+    suffix Material adds to inner pages. -#}
+{% block htmltitle %}
+  <title>{{ page.meta.title | d(config.site_name, true) }}</title>
+{% endblock %}
+
+{#- Link previews (chat apps, social cards) read these; the description is the
+    same sentence as the meta description, from the page's front matter. -#}
+{% block extrahead %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ page.meta.title | d(config.site_name, true) }}">
+  <meta property="og:description" content="{{ page.meta.description | d(config.site_description, true) }}">
+  {% if page.canonical_url %}
+    <meta property="og:url" content="{{ page.canonical_url }}">
+  {% endif %}
+  <meta name="twitter:card" content="summary">
+{% endblock %}
+
+{#- The home page opens on the product's name and what it is, beside a single
+    figure: a world of nodes drawn in one ink and dithered to a few pixel
+    tones, which a lens under the cursor resolves at full resolution. Clicking
+    the world, or its hint button, breaks it into a flowing ribbon that gathers
+    back on its own. Without scripts the field stays an empty ground and the
+    hint stays hidden. -#}
 {% block hero %}
   <section class="pg-hero" aria-labelledby="pg-hero-title">
     <canvas class="pg-field" data-pg-field aria-hidden="true"></canvas>
     <div class="pg-hero__inner md-grid">
       <div class="pg-hero__copy">
-        <h1 id="pg-hero-title">Simulate causal worlds. Know the answer.</h1>
+        <h1 id="pg-hero-title"><span class="pg-hero__name">pymc-generator:</span> Open Source Structural Causal Model Simulation with Exact Decompositions in Python</h1>
         <p class="pg-hero__lead">Random Pearlian DAGs, each compiled into one PyMC graph. One draw returns the data and its exact causal decomposition, reproducibly from a seed.</p>
         <div class="pg-hero__actions">
           <a class="pg-button pg-button--primary" href="{{ 'getting-started/' | url }}">Get started</a>

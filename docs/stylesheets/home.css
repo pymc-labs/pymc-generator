@@ -1,6 +1,7 @@
 /* ==========================================================================
-   Home: the dithered network field, the code-to-proof story, and a short
-   index. Shares every token with site.css.
+   Home: the product's name beside the dithered network field, what the
+   library is, the code-to-proof demo, the documentation index, and how to
+   install. Shares every token with site.css.
    ========================================================================== */
 
 /* --- Hero field -------------------------------------------------------- */
@@ -27,20 +28,28 @@
   display: flex;
   align-items: center;
   height: 100%;
-  padding: 0 1.4rem 6rem;
+  padding: 0 1rem 6rem;
   pointer-events: none;
 }
 .pg-hero__copy {
   max-width: 34rem;
   pointer-events: auto;
 }
+/* The title is the full descriptive name: the product on its own line, then
+   what it is, at the headline size so the sentence holds in four or five
+   lines beside the figure. */
 .pg-hero h1 {
-  max-width: 10.5ch;
+  max-width: 21ch;
   margin: 0 0 1.3rem;
   color: var(--pg-ink);
-  font: 600 clamp(2.3rem, 4.4vw, 3.8rem) / 1.02 var(--pg-display);
+  font: 600 clamp(1.7rem, 2.75vw, 2.4rem) / 1.1 var(--pg-display);
   letter-spacing: -0.02em;
   text-wrap: balance;
+}
+.pg-hero__name {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--pg-link);
 }
 .pg-hero__lead {
   max-width: 29rem;
@@ -143,6 +152,139 @@
   margin-top: 0;
 }
 
+/* The home page's sections are their own rows; Material's heading rule and
+   justified text belong to the reading pages. */
+.md-typeset :is(.pg-about, .pg-index, .pg-install) :is(h2, h3) {
+  padding-top: 0;
+  border-top: 0;
+}
+.md-typeset :is(.pg-about, .pg-index, .pg-install) :is(p, li, dd) {
+  text-align: left;
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+.md-typeset :is(.pg-about, .pg-index, .pg-install) h2 {
+  margin: 0 0 1.2rem;
+  font-size: clamp(1.4rem, 2.3vw, 2rem);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+}
+
+/* --- What it is: the definition, three plain blocks, and the facts -------- */
+.pg-about {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: clamp(2rem, 6vw, 6rem);
+  align-items: start;
+  padding: 4.5rem 0 3.5rem;
+  border-top: 1px solid var(--pg-rule);
+}
+.md-typeset .pg-about__main {
+  max-width: 44rem;
+}
+.md-typeset .pg-about__statement {
+  margin: 0 0 1.1rem;
+  color: var(--pg-ink);
+  font: 500 1.3rem/1.35 var(--pg-text);
+  letter-spacing: -0.01em;
+  text-wrap: pretty;
+}
+.md-typeset .pg-about__statement code {
+  padding: 0;
+  background: none;
+  font: inherit;
+}
+.md-typeset .pg-about__main > p:not(.pg-about__statement) {
+  max-width: 38rem;
+  margin: 0 0 2rem;
+  color: var(--pg-ink-2);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.pg-about__blocks {
+  display: grid;
+  gap: 0.7rem;
+}
+.md-typeset .pg-about__block {
+  padding: 1.1rem 1.3rem 1.2rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: var(--pg-plate);
+}
+.md-typeset .pg-about__block h3 {
+  margin: 0 0 0.45rem;
+  font: 600 0.9rem/1.3 var(--pg-text);
+  letter-spacing: 0;
+}
+.md-typeset .pg-about__block p {
+  margin: 0;
+  color: var(--pg-ink-2);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+.md-typeset .pg-about__block code {
+  background: var(--pg-ground);
+}
+/* The facts: a quiet list beside the definition, each label over its value. */
+.md-typeset .pg-about__facts {
+  padding-top: 0.4rem;
+}
+.md-typeset .pg-about__facts dl {
+  margin: 0 0 1.6rem;
+}
+.md-typeset .pg-about__facts dt {
+  margin: 0;
+  color: var(--pg-ink-3);
+  font: 500 0.68rem/1.3 var(--pg-text);
+}
+.md-typeset .pg-about__facts dd {
+  margin: 0.25rem 0 1.15rem;
+  padding-bottom: 1.15rem;
+  border-bottom: 1px solid var(--pg-rule);
+  color: var(--pg-ink);
+  font: 500 0.82rem/1.4 var(--pg-text);
+}
+.md-typeset .pg-about__facts dd:last-child {
+  margin-bottom: 0;
+}
+.md-typeset a.pg-button {
+  color: var(--pg-ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+.md-typeset a.pg-button:hover {
+  color: var(--pg-ink);
+}
+.md-typeset a.pg-button--primary,
+.md-typeset a.pg-button--primary:hover {
+  color: var(--pg-ground);
+}
+@media screen and (max-width: 59.984375em) {
+  .pg-about {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2.2rem;
+    padding: 3rem 0 2.5rem;
+  }
+  .md-typeset .pg-about__facts dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1.4rem;
+  }
+  .md-typeset .pg-about__facts dt {
+    grid-column: 1;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--pg-rule);
+  }
+  .md-typeset .pg-about__facts dd,
+  .md-typeset .pg-about__facts dd:last-child {
+    grid-column: 2;
+    margin: 0;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--pg-rule);
+    border-bottom: 0;
+  }
+}
+
 /* --- The demo: one world to a bundle, many worlds to one archive --------- */
 .pg-demo {
   --demo-window: #ffffff;
@@ -227,8 +369,8 @@
   margin: 0 0 0.6rem;
   padding-top: 0;
   border-top: 0;
-  font-size: clamp(1.4rem, 2.3vw, 2rem);
-  line-height: 1.08;
+  font-size: clamp(1.3rem, 1.9vw, 1.65rem);
+  line-height: 1.12;
   letter-spacing: -0.015em;
 }
 .md-typeset .pg-demo__lead {
@@ -236,6 +378,8 @@
   margin: 0 0 1.8rem;
   color: var(--pg-ink-2);
   text-align: left;
+  hyphens: manual;
+  -webkit-hyphens: manual;
   font: 400 1rem/1.55 var(--pg-text);
 }
 /* Chapters: stations on a hairline, as the site's chains are; the current one
@@ -798,51 +942,119 @@
   }
 }
 
-/* --- The index ------------------------------------------------------------ */
-.md-typeset .pg-index h2 {
-  margin-top: 5rem;
-  padding-top: 0;
-  border-top: 0;
-  font-size: clamp(1.4rem, 2.3vw, 2rem);
-  letter-spacing: -0.015em;
-}
-.md-typeset .pg-index ul {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
-  gap: 0 2.4rem;
-  max-width: none;
-  margin: 1.2rem 0 2rem;
-  padding: 0;
-  list-style: none;
-}
-.md-typeset .pg-index ul > li {
-  margin: 0;
+/* --- The index: every way in, as a grid of whole-box links ---------------- */
+.pg-index {
+  padding: 4.5rem 0 1rem;
   border-top: 1px solid var(--pg-rule);
 }
-.md-typeset .pg-index li::before {
-  display: none;
+.md-typeset .pg-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0 0 0.7rem;
 }
-.md-typeset .pg-index li a {
+.md-typeset .pg-cards--lead {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.md-typeset .pg-cards > p {
+  display: contents;
+}
+.md-typeset a.pg-card {
+  display: block;
+  padding: 1.15rem 1.3rem 1.25rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.35rem;
+  background: var(--pg-ground);
+  color: var(--pg-ink-2);
+  font: 400 0.8rem/1.6 var(--pg-text);
+  text-decoration: none;
+  transition: border-color 0.2s var(--pg-ease), background-color 0.2s var(--pg-ease);
+}
+/* Each title carries a node, as the site's chains do; it turns peach when the
+   card is the one under the pointer or the keyboard. */
+.md-typeset a.pg-card strong {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.9rem 0;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
   color: var(--pg-ink);
-  font: 500 0.9rem/1.2 var(--pg-text);
-  text-decoration: none;
+  font: 600 0.9rem/1.3 var(--pg-text);
 }
-.md-typeset .pg-index li a::before {
+.md-typeset a.pg-card strong::before {
   content: "";
   flex: none;
   width: 0.62rem;
   height: 0.62rem;
-  border-radius: 50%;
   border: 1.3px solid var(--pg-ink);
+  border-radius: 50%;
   background: var(--pg-ground);
   transition: background-color 0.2s, transform 0.25s var(--pg-ease);
 }
-.md-typeset .pg-index li a:hover::before,
-.md-typeset .pg-index li a:focus-visible::before {
+.md-typeset .pg-cards--lead a.pg-card {
+  background: var(--pg-plate);
+}
+.md-typeset .pg-cards--lead a.pg-card strong {
+  font-size: 1rem;
+}
+.md-typeset a.pg-card:hover,
+.md-typeset a.pg-card:focus-visible {
+  border-color: var(--pg-ink);
+  color: var(--pg-ink-2);
+}
+.md-typeset a.pg-card:hover strong::before,
+.md-typeset a.pg-card:focus-visible strong::before {
   background: var(--pg-peach);
   transform: scale(1.3);
+}
+@media screen and (max-width: 59.984375em) {
+  .md-typeset .pg-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media screen and (max-width: 37.484375em) {
+  .md-typeset .pg-cards,
+  .md-typeset .pg-cards--lead {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Install: the commands beside the two ways on --------------------------- */
+.pg-install {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+  gap: clamp(1.6rem, 5vw, 4.5rem);
+  align-items: center;
+  margin: 3.5rem 0 4.5rem;
+  padding: 2.4rem 2.6rem;
+  border: 1px solid var(--pg-rule);
+  border-radius: 0.5rem;
+  background: var(--pg-aqua-wash);
+}
+.md-typeset .pg-install h2 {
+  margin-bottom: 0.8rem;
+  font-size: clamp(1.3rem, 1.9vw, 1.65rem);
+}
+.md-typeset .pg-install__text p {
+  margin: 0 0 1.4rem;
+  color: var(--pg-ink-2);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.md-typeset .pg-install__text p:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0;
+}
+.md-typeset .pg-install__code pre {
+  margin: 0;
+}
+.md-typeset .pg-install__code pre > code {
+  background: var(--pg-ground);
+}
+@media screen and (max-width: 59.984375em) {
+  .pg-install {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 1.6rem 1.3rem;
+  }
 }
