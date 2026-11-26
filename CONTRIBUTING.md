@@ -104,8 +104,11 @@ recovery. Site deployment is controlled by `.github/workflows/docs.yml`.
 
 Each push to `main` publishes the build to GitHub Pages and, as `site.tar.gz`
 on the `docs-latest` prerelease (not a package release; keep its tag and asset
-name), to the website, which serves it at `site_url`. A `WEBSITE_DISPATCH_TOKEN`
-secret, if set, makes the website redeploy at once.
+name), to the website, which serves it at `site_url`. If the
+`website-dispatch` environment (allow only `main`) holds a
+`WEBSITE_DISPATCH_TOKEN` with Actions: write on `pymc-labs/website`, the
+workflow then starts the website's production deploy. That token can start
+website workflows but cannot push code.
 
 ## Reproducibility contract
 
