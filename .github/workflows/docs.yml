@@ -7,9 +7,11 @@ on:
     branches: [ main ]
 
 # PR builds are independent; a newer commit only supersedes the same ref.
+# Runs on main queue instead, so a publish is never cancelled half-way
+# through replacing the website's docs archive.
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -90,42 +92,52 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    concurrency:
-      group: docs-publish-website
-      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: website-docs
 
+      # Mirrors the checks and caps of the website's deploy, so a build it would
+      # refuse never replaces a good asset. Output is captured before it is
+      # searched: `tar | grep --quiet` under pipefail fails when tar gets SIGPIPE.
       - name: Refuse an archive the website would reject
         run: |
           set -euo pipefail
           base="https://www.pymc-labs.com/resources/pymc-generator/"
+          fail() { echo "::error::$1" >&2; exit 1; }
+          max_entries=5000
+          max_compressed=$((50 * 1024 * 1024))
+          max_unpacked=$((200 * 1024 * 1024))
+          max_file=$((25 * 1024 * 1024))
+
+          compressed=$(stat --format=%s site.tar.gz)
+          [ "$compressed" -le "$max_compressed" ] || fail "Archive is $compressed bytes, over $max_compressed"
+          unpacked=$(gzip --decompress --stdout site.tar.gz | wc --bytes)
+          [ "$unpacked" -le "$max_unpacked" ] || fail "Archive unpacks to $unpacked bytes, over $max_unpacked"
+
+          listing="$(tar --list --verbose --gzip --file site.tar.gz)"
           entries="$(tar --list --gzip --file site.tar.gz)"
-          if grep --quiet --extended-regexp '^/|(^|/)\.\.(/|$)' <<<"$entries"; then
-            echo "::error::Archive contains absolute or parent-directory paths" >&2
-            exit 1
-          fi
-          if tar --list --verbose --gzip --file site.tar.gz | grep --quiet --invert-match --extended-regexp '^[-d]'; then
-            echo "::error::Archive contains links or special files" >&2
-            exit 1
-          fi
+          count=$(wc --lines <<<"$entries")
+          [ "$count" -le "$max_entries" ] || fail "Archive has $count entries, over $max_entries"
+          bad_paths="$(grep --extended-regexp '^/|(^|/)\.\.(/|$)' <<<"$entries" || true)"
+          [ -z "$bad_paths" ] || fail "Archive contains absolute or parent-directory paths: $(head -n 1 <<<"$bad_paths")"
+          special="$(awk '$1 !~ /^[-d]/' <<<"$listing")"
+          [ -z "$special" ] || fail "Archive contains links or special files: $(head -n 1 <<<"$special")"
+          big="$(awk -v max="$max_file" '$3 > max' <<<"$listing")"
+          [ -z "$big" ] || fail "Archive has a file over $max_file bytes: $(head -n 1 <<<"$big")"
           for required in ./index.html ./sitemap.xml; do
             grep --quiet --line-regexp --fixed-strings "$required" <<<"$entries" \
-              || { echo "::error::Archive has no top-level ${required#./}" >&2; exit 1; }
+              || fail "Archive has no top-level ${required#./}"
           done
-          if ! tar --extract --gzip --file site.tar.gz --to-stdout ./index.html \
-            | grep --quiet --fixed-strings "<link rel=\"canonical\" href=\"$base"; then
-            echo "::error::index.html canonical does not start with $base; check site_url in mkdocs.yml" >&2
-            exit 1
-          fi
-          locs="$(tar --extract --gzip --file site.tar.gz --to-stdout ./sitemap.xml | grep --only-matching '<loc>[^<]*' || true)"
-          if [ -z "$locs" ] || grep --quiet --invert-match --fixed-strings "<loc>$base" <<<"$locs"; then
-            echo "::error::sitemap.xml is empty or lists URLs outside $base" >&2
-            exit 1
-          fi
-          echo "$(wc -l <<<"$entries") entries, $(du -h site.tar.gz | cut -f1)"
+
+          index="$(tar --extract --gzip --file site.tar.gz --to-stdout ./index.html)"
+          [[ $index == *"<link rel=\"canonical\" href=\"$base"* ]] \
+            || fail "index.html canonical does not start with $base; check site_url in mkdocs.yml"
+          sitemap="$(tar --extract --gzip --file site.tar.gz --to-stdout ./sitemap.xml)"
+          locs="$(grep --only-matching '<loc>[^<]*' <<<"$sitemap" || true)"
+          foreign="$(grep --invert-match --fixed-strings "<loc>$base" <<<"$locs" || true)"
+          [ -n "$locs" ] && [ -z "$foreign" ] || fail "sitemap.xml is empty or lists URLs outside $base"
+          echo "$count entries, $compressed bytes compressed, $unpacked unpacked"
 
       - name: Replace the docs-latest release asset
         env:
