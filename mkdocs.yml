@@ -13,7 +13,7 @@ docs_dir: docs
 # build neither renders nor executes them (see CONTRIBUTING.md).
 exclude_docs: |
   examples/dev/
-site_url: https://pymc-labs.github.io/pymc-generator/
+site_url: https://www.pymc-labs.com/resources/pymc-generator/
 
 theme:
   name: material

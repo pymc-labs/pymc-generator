@@ -362,6 +362,11 @@ read the migration notes before upgrading.
 
 ### Changed — migration notes
 
+- **The documentation's home is now
+  <https://www.pymc-labs.com/resources/pymc-generator/>.** Every page's
+  canonical link and the sitemap use that address. The GitHub Pages copy at
+  `pymc-labs.github.io/pymc-generator/` stays online with the same content, so
+  existing links keep working.
 - **Bundle and diagnostic figures use the house style.** Every `viz.plot_*`
   figure renders in the PyMC Labs palette and type, with bundled brand faces
   (Inter for labels, ticks, and legends; Archivo Expanded for titles; both SIL

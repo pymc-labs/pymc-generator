@@ -7,9 +7,11 @@ on:
     branches: [ main ]
 
 # PR builds are independent; a newer commit only supersedes the same ref.
+# Runs on main queue instead, so a publish is never cancelled half-way
+# through replacing the website's docs archive.
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -48,6 +50,22 @@ jobs:
         with:
           path: site
 
+      # The website (pymc-labs/website) serves this same build at
+      # https://www.pymc-labs.com/resources/pymc-generator/ (`site_url`).
+      # Files sit at the archive root, as the website's deploy expects.
+      - name: Package site for the website
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
+        run: tar --create --gzip --file site.tar.gz --directory site --owner=0 --group=0 --numeric-owner .
+
+      - name: Upload website archive
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: website-docs
+          path: site.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   deploy:
     # Never publish a private repository's generated site.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
@@ -63,3 +81,102 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
+
+  publish-website-docs:
+    # Replaces site.tar.gz on the rolling `docs-latest` prerelease, which the
+    # website deploy downloads. Only this job can write repository contents,
+    # and it runs no repository code. The tag matches no workflow trigger
+    # (releases use v* tags; other pushes filter on branches).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
+    needs: docs-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: website-docs
+
+      # Mirrors the checks and caps of the website's deploy, so a build it would
+      # refuse never replaces a good asset. Output is captured before it is
+      # searched: `tar | grep --quiet` under pipefail fails when tar gets SIGPIPE.
+      - name: Refuse an archive the website would reject
+        run: |
+          set -euo pipefail
+          base="https://www.pymc-labs.com/resources/pymc-generator/"
+          fail() { echo "::error::$1" >&2; exit 1; }
+          max_entries=5000
+          max_compressed=$((50 * 1024 * 1024))
+          max_unpacked=$((200 * 1024 * 1024))
+          max_file=$((25 * 1024 * 1024))
+
+          compressed=$(stat --format=%s site.tar.gz)
+          [ "$compressed" -le "$max_compressed" ] || fail "Archive is $compressed bytes, over $max_compressed"
+          unpacked=$(gzip --decompress --stdout site.tar.gz | wc --bytes)
+          [ "$unpacked" -le "$max_unpacked" ] || fail "Archive unpacks to $unpacked bytes, over $max_unpacked"
+
+          listing="$(tar --list --verbose --gzip --file site.tar.gz)"
+          entries="$(tar --list --gzip --file site.tar.gz)"
+          count=$(wc --lines <<<"$entries")
+          [ "$count" -le "$max_entries" ] || fail "Archive has $count entries, over $max_entries"
+          bad_paths="$(grep --extended-regexp '^/|(^|/)\.\.(/|$)' <<<"$entries" || true)"
+          [ -z "$bad_paths" ] || fail "Archive contains absolute or parent-directory paths: $(head -n 1 <<<"$bad_paths")"
+          special="$(awk '$1 !~ /^[-d]/' <<<"$listing")"
+          [ -z "$special" ] || fail "Archive contains links or special files: $(head -n 1 <<<"$special")"
+          big="$(awk -v max="$max_file" '$3 > max' <<<"$listing")"
+          [ -z "$big" ] || fail "Archive has a file over $max_file bytes: $(head -n 1 <<<"$big")"
+          for required in ./index.html ./sitemap.xml; do
+            grep --quiet --line-regexp --fixed-strings "$required" <<<"$entries" \
+              || fail "Archive has no top-level ${required#./}"
+          done
+
+          index="$(tar --extract --gzip --file site.tar.gz --to-stdout ./index.html)"
+          [[ $index == *"<link rel=\"canonical\" href=\"$base"* ]] \
+            || fail "index.html canonical does not start with $base; check site_url in mkdocs.yml"
+          sitemap="$(tar --extract --gzip --file site.tar.gz --to-stdout ./sitemap.xml)"
+          locs="$(grep --only-matching '<loc>[^<]*' <<<"$sitemap" || true)"
+          foreign="$(grep --invert-match --fixed-strings "<loc>$base" <<<"$locs" || true)"
+          [ -n "$locs" ] && [ -z "$foreign" ] || fail "sitemap.xml is empty or lists URLs outside $base"
+          echo "$count entries, $compressed bytes compressed, $unpacked unpacked"
+
+      - name: Replace the docs-latest release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          notes="Built documentation for www.pymc-labs.com/resources/pymc-generator/, not a software release.
+          The website deploy downloads site.tar.gz from here; install the package from PyPI or a v* release instead.
+
+          Built from ${GITHUB_SHA} by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          if gh release view docs-latest >/dev/null 2>&1; then
+            gh release edit docs-latest --prerelease --latest=false --notes "$notes"
+          else
+            gh release create docs-latest --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Documentation build for the website (not a release)" --notes "$notes"
+          fi
+          gh release upload docs-latest site.tar.gz --clobber
+
+  notify-website:
+    # Starts the website's Deploy Production workflow on its main branch,
+    # which picks up the new docs. WEBSITE_DISPATCH_TOKEN needs only
+    # Actions: write on pymc-labs/website: it can start workflows there but
+    # cannot push code. Keep it as a secret of the `website-dispatch`
+    # environment, restricted to main. Without it, the docs reach www on the
+    # website's next deploy or a manual run of that workflow.
+    needs: publish-website-docs
+    runs-on: ubuntu-latest
+    environment: website-dispatch
+    permissions: {}
+    steps:
+      - name: Start the website's production deploy
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::WEBSITE_DISPATCH_TOKEN is not set; skipping. Run Deploy Production in pymc-labs/website to put these docs on www.pymc-labs.com."
+            exit 0
+          fi
+          gh api --method POST \
+            repos/pymc-labs/website/actions/workflows/deploy-production.yml/dispatches \
+            -f ref=main
