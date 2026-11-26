@@ -102,6 +102,11 @@ four-chain MCMC fits. Allow for their runtime and inspect their actual warnings
 and diagnostics; successful execution does not imply successful statistical
 recovery. Site deployment is controlled by `.github/workflows/docs.yml`.
 
+Each push to `main` publishes the build to GitHub Pages and, as `site.tar.gz`
+on the `docs-latest` prerelease (not a package release; keep its tag and asset
+name), to the website, which serves it at `site_url`. A `WEBSITE_DISPATCH_TOKEN`
+secret, if set, makes the website redeploy at once.
+
 ## Reproducibility contract
 
 The same seed and configuration must reproduce numerical arrays in the same
